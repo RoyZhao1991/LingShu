@@ -156,6 +156,35 @@ final class ArchitectureGuardTests: XCTestCase {
         }
     }
 
+    func testInfrastructureFilesStayBelowHardSplitThreshold() throws {
+        // 800 行硬上限：CodexBridge 已按数据类型 / 诊断过滤 / 子进程支撑拆分。
+        let infraFiles = try swiftFiles(under: "Sources/Infrastructure")
+        for file in infraFiles {
+            XCTAssertLessThanOrEqual(
+                try lineCount(of: file),
+                800,
+                "\(file.lastPathComponent) exceeds the 800-line hard split threshold"
+            )
+        }
+    }
+
+    func testViewFilesLiveUnderViewsFolder() throws {
+        // 视图文件必须在 Sources/Views 下，不得散落在 Sources 根目录。
+        let rootSwift = try FileManager.default.contentsOfDirectory(
+            at: projectRoot.appendingPathComponent("Sources"),
+            includingPropertiesForKeys: nil
+        ).filter { $0.pathExtension == "swift" }
+
+        for file in rootSwift {
+            let text = try String(contentsOf: file, encoding: .utf8)
+            let looksLikeView = text.contains(": View {") || text.contains("some View")
+            XCTAssertFalse(
+                looksLikeView && file.lastPathComponent != "LingShuMac.swift",
+                "\(file.lastPathComponent) is a SwiftUI view and must live under Sources/Views"
+            )
+        }
+    }
+
     func testStateFilesKeepOperationalSubdomainsSplitOut() throws {
         let mainState = projectRoot.appendingPathComponent("Sources/State/LingShuState.swift")
         XCTAssertLessThanOrEqual(
