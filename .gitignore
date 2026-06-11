@@ -1,0 +1,17 @@
+# Build artifacts
+.build/
+build/
+dist/
+XcodeDerived/
+XcodeAppDerived/
+DerivedData/
+.swiftpm/
+*.xcresult
+*.log
+
+# Xcode user state
+xcuserdata/
+*.xcuserstate
+
+# macOS
+.DS_Store

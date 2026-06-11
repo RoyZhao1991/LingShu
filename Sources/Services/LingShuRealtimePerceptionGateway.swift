@@ -1,0 +1,458 @@
+import Combine
+import Foundation
+
+enum LingShuPerceptionSignalKind: String, Codable, CaseIterable, Equatable, Hashable, Sendable {
+    case audioChunk
+    case audioTranscript
+    case videoFrame
+    case videoObservation
+    case speechOutput
+
+    var label: String {
+        switch self {
+        case .audioChunk: "音频流"
+        case .audioTranscript: "语音转写"
+        case .videoFrame: "视频帧"
+        case .videoObservation: "视觉摘要"
+        case .speechOutput: "语音输出"
+        }
+    }
+}
+
+enum LingShuPerceptionProviderMode: String, Codable, Equatable, Sendable {
+    case local
+    case realtimeModel
+    case externalAdapter
+
+    var label: String {
+        switch self {
+        case .local: "本地解析"
+        case .realtimeModel: "模型直连"
+        case .externalAdapter: "外部适配"
+        }
+    }
+}
+
+struct LingShuAudioStreamPacket: Equatable, Sendable {
+    let timestamp: Date
+    let pcm16Data: Data
+    let sampleRate: Double
+    let channelCount: Int
+    let frameCount: Int
+
+    var byteCount: Int {
+        pcm16Data.count
+    }
+}
+
+struct LingShuVideoFramePacket: Equatable, Sendable {
+    let timestamp: Date
+    let jpegData: Data
+    let width: Int
+    let height: Int
+
+    var byteCount: Int {
+        jpegData.count
+    }
+}
+
+struct LingShuPerceptionEnvelope: Codable, Equatable, Identifiable, Sendable {
+    var id: UUID = UUID()
+    var timestamp: Date
+    var kind: LingShuPerceptionSignalKind
+    var source: String
+    var textPayload: String?
+    var binaryPayload: Data?
+    var metadata: [String: String]
+}
+
+struct LingShuRealtimePerceptionEndpoint: Codable, Equatable, Identifiable, Sendable {
+    var id: String
+    var displayName: String
+    var endpoint: URL
+    var apiKey: String
+    var protocolName: String
+    var supportedSignals: [LingShuPerceptionSignalKind]
+
+    var mode: LingShuPerceptionProviderMode {
+        protocolName.lowercased().contains("adapter") ? .externalAdapter : .realtimeModel
+    }
+}
+
+struct LingShuPerceptionRoute: Equatable, Identifiable, Sendable {
+    var id: String
+    var displayName: String
+    var mode: LingShuPerceptionProviderMode
+    var supportedSignals: [LingShuPerceptionSignalKind]
+
+    static let local = LingShuPerceptionRoute(
+        id: "local-system-perception",
+        displayName: "本地解析",
+        mode: .local,
+        supportedSignals: LingShuPerceptionSignalKind.allCases
+    )
+}
+
+struct LingShuRealtimePerceptionModelReply: Codable, Equatable, Sendable {
+    var summary: String
+    var confidence: Double?
+    var transcript: String?
+    var intentHint: String?
+    var metadata: [String: String]?
+}
+
+struct LingShuPerceptionInvocationContract: Equatable, Sendable {
+    var url: URL
+    var method: String
+    var headers: [String: String]
+    var body: Data
+    var protocolName: String
+}
+
+final class LingShuHTTPRealtimePerceptionProvider: @unchecked Sendable {
+    private let endpoint: LingShuRealtimePerceptionEndpoint
+    private let session: URLSession
+
+    init(
+        endpoint: LingShuRealtimePerceptionEndpoint,
+        session: URLSession = .shared
+    ) {
+        self.endpoint = endpoint
+        self.session = session
+    }
+
+    func makeInvocationContract(for envelope: LingShuPerceptionEnvelope) throws -> LingShuPerceptionInvocationContract {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        let body = try encoder.encode(envelope)
+        var headers = [
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "X-LingShu-Protocol": endpoint.protocolName
+        ]
+
+        let trimmedAPIKey = endpoint.apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedAPIKey.isEmpty {
+            headers["Authorization"] = "Bearer \(trimmedAPIKey)"
+        }
+
+        return LingShuPerceptionInvocationContract(
+            url: endpoint.endpoint,
+            method: "POST",
+            headers: headers,
+            body: body,
+            protocolName: endpoint.protocolName
+        )
+    }
+
+    func analyze(_ envelope: LingShuPerceptionEnvelope) async throws -> LingShuRealtimePerceptionModelReply {
+        let contract = try makeInvocationContract(for: envelope)
+        var request = URLRequest(url: contract.url)
+        request.httpMethod = contract.method
+        request.httpBody = contract.body
+        for (key, value) in contract.headers {
+            request.setValue(value, forHTTPHeaderField: key)
+        }
+
+        let (data, response) = try await session.data(for: request)
+        if let httpResponse = response as? HTTPURLResponse,
+           !(200..<300).contains(httpResponse.statusCode) {
+            throw LingShuModelGatewayError.requestFailed(httpResponse.statusCode, String(data: data, encoding: .utf8) ?? "")
+        }
+
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return try decoder.decode(LingShuRealtimePerceptionModelReply.self, from: data)
+    }
+}
+
+@MainActor
+final class LingShuRealtimePerceptionGateway: ObservableObject {
+    @Published private(set) var activeRoute: LingShuPerceptionRoute = .local
+    @Published private(set) var availableRoutes: [LingShuPerceptionRoute] = [.local]
+    @Published private(set) var statusText = "本地解析"
+    @Published private(set) var eventCount = 0
+    @Published private(set) var rawForwardedCount = 0
+    @Published private(set) var lastEventSummary = "等待感知输入"
+    @Published private(set) var lastModelFeedback = ""
+    @Published private(set) var latestSnapshot: LingShuPerceptionSituationSnapshot = .idle
+    @Published private(set) var ownerIdentitySnapshot: LingShuOwnerIdentitySnapshot
+
+    private var remoteProviders: [String: LingShuHTTPRealtimePerceptionProvider] = [:]
+    private var lastRawForwardAt: [LingShuPerceptionSignalKind: Date] = [:]
+    private var latestTranscription: LingShuVoiceTranscriptionResult?
+    private var latestVisionObservation: LingShuVisionObservation?
+    private var latestModelReply: LingShuRealtimePerceptionModelReply?
+    private let perceptionThreadCoordinator = LingShuPerceptionThreadCoordinator()
+    private let ownerIdentityService: LingShuOwnerIdentityService
+    private let rawForwardInterval: TimeInterval = 0.8
+
+    init(ownerIdentityService: LingShuOwnerIdentityService = LingShuOwnerIdentityService()) {
+        self.ownerIdentityService = ownerIdentityService
+        ownerIdentitySnapshot = ownerIdentityService.currentSnapshot
+    }
+
+    var isRemoteRouteActive: Bool {
+        activeRoute.mode != .local
+    }
+
+    var promptContext: String {
+        [ownerIdentitySnapshot.promptContext, latestSnapshot.promptContext]
+            .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+            .joined(separator: "\n")
+    }
+
+    var ownerIdentityLockEnabled: Bool {
+        ownerIdentitySnapshot.lockEnabled
+    }
+
+    var isOwnerIdentityLocked: Bool {
+        ownerIdentitySnapshot.isLocked
+    }
+
+    func setOwnerIdentityLockEnabled(_ enabled: Bool) {
+        ownerIdentitySnapshot = ownerIdentityService.setLockEnabled(enabled)
+    }
+
+    func beginOwnerEnrollment(ownerName: String) {
+        ownerIdentitySnapshot = ownerIdentityService.beginEnrollment(ownerName: ownerName)
+    }
+
+    func resetOwnerIdentity() {
+        ownerIdentitySnapshot = ownerIdentityService.reset()
+    }
+
+    func configureRemoteEndpoints(_ endpoints: [LingShuRealtimePerceptionEndpoint]) {
+        remoteProviders = Dictionary(uniqueKeysWithValues: endpoints.map {
+            ($0.id, LingShuHTTPRealtimePerceptionProvider(endpoint: $0))
+        })
+
+        availableRoutes = [.local] + endpoints.map {
+            LingShuPerceptionRoute(
+                id: $0.id,
+                displayName: $0.displayName,
+                mode: $0.mode,
+                supportedSignals: $0.supportedSignals
+            )
+        }
+
+        if !availableRoutes.contains(where: { $0.id == activeRoute.id }) {
+            activeRoute = .local
+        }
+    }
+
+    func selectRoute(id: String) {
+        guard let route = availableRoutes.first(where: { $0.id == id }) else { return }
+        activeRoute = route
+        statusText = route.mode.label
+        lastModelFeedback = ""
+    }
+
+    func ingestAudioTranscript(_ text: String, isFinal: Bool) {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+
+        latestTranscription = LingShuVoiceTranscriptionResult(
+            text: trimmed,
+            isFinal: isFinal,
+            confidence: nil,
+            provider: .externalRealtimeAdapter,
+            intentHint: nil,
+            timestamp: Date()
+        )
+        refreshSnapshot()
+
+        ingest(.init(
+            timestamp: Date(),
+            kind: .audioTranscript,
+            source: "mac.microphone",
+            textPayload: trimmed,
+            binaryPayload: nil,
+            metadata: ["final": isFinal ? "true" : "false"]
+        ))
+    }
+
+    func ingestAudioTranscription(_ result: LingShuVoiceTranscriptionResult) {
+        let trimmed = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+
+        latestTranscription = result
+        refreshSnapshot()
+
+        var metadata = [
+            "final": result.isFinal ? "true" : "false",
+            "providerID": result.provider.id,
+            "provider": result.provider.displayName,
+            "providerKind": result.provider.kind.rawValue,
+            "deployment": result.provider.deployment,
+            "primaryLanguage": result.provider.primaryLanguage,
+            "streaming": result.provider.supportsStreaming ? "true" : "false",
+            "localInference": result.provider.supportsLocalInference ? "true" : "false",
+            "vad": result.provider.supportsVoiceActivityDetection ? "true" : "false",
+            "semanticHints": result.provider.supportsSemanticHints ? "true" : "false"
+        ]
+        if let confidence = result.confidence {
+            metadata["confidence"] = String(format: "%.3f", confidence)
+        }
+        if let intentHint = result.intentHint {
+            metadata["intentHint"] = intentHint
+        }
+
+        ingest(.init(
+            timestamp: result.timestamp,
+            kind: .audioTranscript,
+            source: "mac.microphone.\(result.provider.kind.rawValue)",
+            textPayload: trimmed,
+            binaryPayload: nil,
+            metadata: metadata
+        ))
+    }
+
+    func ingestAudioChunk(_ packet: LingShuAudioStreamPacket) {
+        ownerIdentitySnapshot = ownerIdentityService.ingestAudioPacket(packet)
+
+        guard shouldForwardRawSignal(.audioChunk) else {
+            recordLocal(kind: .audioChunk, summary: "音频流本地保活：\(packet.byteCount) bytes")
+            return
+        }
+
+        ingest(.init(
+            timestamp: packet.timestamp,
+            kind: .audioChunk,
+            source: "mac.microphone",
+            textPayload: nil,
+            binaryPayload: packet.pcm16Data,
+            metadata: [
+                "encoding": "pcm_s16le",
+                "sampleRate": String(Int(packet.sampleRate)),
+                "channelCount": String(packet.channelCount),
+                "frameCount": String(packet.frameCount),
+                "byteCount": String(packet.byteCount)
+            ]
+        ))
+    }
+
+    func ingestVisionObservation(_ observation: LingShuVisionObservation) {
+        latestVisionObservation = observation
+        ownerIdentitySnapshot = ownerIdentityService.ingestVisionObservation(observation)
+        refreshSnapshot()
+
+        ingest(.init(
+            timestamp: observation.timestamp,
+            kind: .videoObservation,
+            source: "mac.camera.local-vision",
+            textPayload: observation.summary,
+            binaryPayload: nil,
+            metadata: [
+                "faceCount": String(observation.faceCount),
+                "recognizedText": observation.recognizedText,
+                "brightness": String(format: "%.3f", observation.brightness),
+                "motion": String(format: "%.3f", observation.motion),
+                "frameSize": "\(observation.frameWidth)x\(observation.frameHeight)"
+            ]
+        ))
+    }
+
+    func ingestVideoFrame(_ packet: LingShuVideoFramePacket) {
+        ownerIdentitySnapshot = ownerIdentityService.ingestVideoFrame(packet)
+
+        guard shouldForwardRawSignal(.videoFrame) else {
+            recordLocal(kind: .videoFrame, summary: "视频帧本地保活：\(packet.width)x\(packet.height)")
+            return
+        }
+
+        ingest(.init(
+            timestamp: packet.timestamp,
+            kind: .videoFrame,
+            source: "mac.camera",
+            textPayload: nil,
+            binaryPayload: packet.jpegData,
+            metadata: [
+                "encoding": "jpeg",
+                "width": String(packet.width),
+                "height": String(packet.height),
+                "byteCount": String(packet.byteCount)
+            ]
+        ))
+    }
+
+    func ingestSpeechOutput(_ text: String) {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+
+        ingest(.init(
+            timestamp: Date(),
+            kind: .speechOutput,
+            source: "mac.speaker",
+            textPayload: trimmed,
+            binaryPayload: nil,
+            metadata: [:]
+        ))
+    }
+
+    private func ingest(_ envelope: LingShuPerceptionEnvelope) {
+        guard activeRoute.supportedSignals.contains(envelope.kind) else {
+            recordLocal(kind: envelope.kind, summary: "\(activeRoute.displayName) 不处理 \(envelope.kind.label)")
+            return
+        }
+
+        eventCount += 1
+        let payloadLabel = envelope.textPayload ?? envelope.metadata["byteCount"].map { "\($0) bytes" } ?? "已接收"
+        lastEventSummary = "\(envelope.kind.label)：\(payloadLabel)"
+
+        guard activeRoute.mode != .local,
+              let provider = remoteProviders[activeRoute.id] else {
+            statusText = "本地解析 \(eventCount)"
+            return
+        }
+
+        statusText = "模型解析中"
+        rawForwardedCount += envelope.binaryPayload == nil ? 0 : 1
+
+        Task {
+            do {
+                let reply = try await provider.analyze(envelope)
+                await MainActor.run {
+                    self.latestModelReply = reply
+                    self.refreshSnapshot()
+                    self.lastModelFeedback = reply.summary
+                    self.statusText = "模型解析在线"
+                }
+            } catch {
+                await MainActor.run {
+                    self.lastModelFeedback = "模型解析失败，已保留本地解析：\(error.localizedDescription)"
+                    self.statusText = "模型解析中断"
+                }
+            }
+        }
+    }
+
+    private func shouldForwardRawSignal(_ kind: LingShuPerceptionSignalKind) -> Bool {
+        guard activeRoute.mode != .local else { return false }
+
+        let now = Date()
+        if let lastForwardAt = lastRawForwardAt[kind],
+           now.timeIntervalSince(lastForwardAt) < rawForwardInterval {
+            return false
+        }
+
+        lastRawForwardAt[kind] = now
+        return true
+    }
+
+    private func recordLocal(kind: LingShuPerceptionSignalKind, summary: String) {
+        eventCount += 1
+        lastEventSummary = summary
+        if activeRoute.mode == .local {
+            statusText = "本地解析 \(eventCount)"
+        }
+    }
+
+    private func refreshSnapshot() {
+        latestSnapshot = perceptionThreadCoordinator.makeSnapshot(
+            transcription: latestTranscription,
+            vision: latestVisionObservation,
+            modelReply: latestModelReply
+        )
+    }
+}

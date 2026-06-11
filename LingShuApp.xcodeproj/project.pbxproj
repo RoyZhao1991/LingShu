@@ -1,0 +1,611 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		7A0000000000000000000101 /* LingShuMac.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A0000000000000000000201 /* LingShuMac.swift */; };
+		7A0000000000000000000102 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 7A0000000000000000000202 /* Assets.xcassets */; };
+		7A0000000000000000000103 /* LingShuMainThreadRuntime.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A0000000000000000000203 /* LingShuMainThreadRuntime.swift */; };
+		7A0000000000000000000104 /* LingShuAgentRuntime.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A0000000000000000000204 /* LingShuAgentRuntime.swift */; };
+		7A0000000000000000000105 /* LingShuMemoryRepository.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A0000000000000000000205 /* LingShuMemoryRepository.swift */; };
+		7A0000000000000000000106 /* LingShuTaskThread.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A0000000000000000000206 /* LingShuTaskThread.swift */; };
+		7A0000000000000000000107 /* LingShuAgentScheduler.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A0000000000000000000207 /* LingShuAgentScheduler.swift */; };
+		7A0000000000000000000108 /* LingShuPermissionPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A0000000000000000000208 /* LingShuPermissionPolicy.swift */; };
+		7A0000000000000000000109 /* LingShuModelGateway.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A0000000000000000000209 /* LingShuModelGateway.swift */; };
+		7A0000000000000000000110 /* LingShuExternalAgentRegistry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A0000000000000000000210 /* LingShuExternalAgentRegistry.swift */; };
+		7A0000000000000000000111 /* LingShuHeartbeatPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A0000000000000000000211 /* LingShuHeartbeatPolicy.swift */; };
+		7A0000000000000000000112 /* LingShuCapabilityRole.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A0000000000000000000212 /* LingShuCapabilityRole.swift */; };
+		7A0000000000000000000113 /* LingShuExternalAgentGateway.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A0000000000000000000213 /* LingShuExternalAgentGateway.swift */; };
+		7A0000000000000000000114 /* LingShuLocalIntentResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A0000000000000000000214 /* LingShuLocalIntentResolver.swift */; };
+		7A0000000000000000000115 /* LingShuRemoteSessionPool.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A0000000000000000000215 /* LingShuRemoteSessionPool.swift */; };
+		7A0000000000000000000116 /* LingShuTaskExecutionJournal.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A0000000000000000000216 /* LingShuTaskExecutionJournal.swift */; };
+		7A0000000000000000000117 /* LingShuRemoteConnectionHealth.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A0000000000000000000217 /* LingShuRemoteConnectionHealth.swift */; };
+		7A0000000000000000000118 /* LingShuTaskExecutionRecordViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A0000000000000000000218 /* LingShuTaskExecutionRecordViews.swift */; };
+		7A0000000000000000000119 /* LingShuExecutionConsoleView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A0000000000000000000219 /* LingShuExecutionConsoleView.swift */; };
+		7A0000000000000000000120 /* LingShuRemoteModelClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A0000000000000000000220 /* LingShuRemoteModelClient.swift */; };
+		7A0000000000000000000121 /* LingShuRoutePlanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A0000000000000000000221 /* LingShuRoutePlanner.swift */; };
+		7A0000000000000000000122 /* LingShuExecutionCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A0000000000000000000222 /* LingShuExecutionCoordinator.swift */; };
+		7A0000000000000000000123 /* LingShuTaskRuntimeCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A0000000000000000000223 /* LingShuTaskRuntimeCoordinator.swift */; };
+		7A0000000000000000000124 /* LingShuDomainModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A0000000000000000000224 /* LingShuDomainModels.swift */; };
+		7A0000000000000000000125 /* CodexBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A0000000000000000000225 /* CodexBridge.swift */; };
+		7A0000000000000000000126 /* VoiceIOManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A0000000000000000000226 /* VoiceIOManager.swift */; };
+		7A0000000000000000000127 /* LingShuState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A0000000000000000000227 /* LingShuState.swift */; };
+		7A0000000000000000000128 /* LingShuPrimarySurfaces.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A0000000000000000000228 /* LingShuPrimarySurfaces.swift */; };
+		7A0000000000000000000129 /* LingShuShellViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A0000000000000000000229 /* LingShuShellViews.swift */; };
+		7A0000000000000000000130 /* LingShuCommandCenterViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A0000000000000000000230 /* LingShuCommandCenterViews.swift */; };
+		7A0000000000000000000131 /* LingShuExtensions.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A0000000000000000000231 /* LingShuExtensions.swift */; };
+		7A0000000000000000000132 /* LingShuDialogueViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A0000000000000000000232 /* LingShuDialogueViews.swift */; };
+		7A0000000000000000000133 /* LingShuCallChainViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A0000000000000000000233 /* LingShuCallChainViews.swift */; };
+		7A0000000000000000000134 /* LingShuSettingsSurfaces.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A0000000000000000000234 /* LingShuSettingsSurfaces.swift */; };
+		7A0000000000000000000135 /* ReturnSubmittingTextEditor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A0000000000000000000235 /* ReturnSubmittingTextEditor.swift */; };
+		7A0000000000000000000136 /* JarvisChatViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A0000000000000000000236 /* JarvisChatViews.swift */; };
+		7A0000000000000000000137 /* HolographicStatusViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A0000000000000000000237 /* HolographicStatusViews.swift */; };
+		7A0000000000000000000138 /* OperationsShellViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A0000000000000000000238 /* OperationsShellViews.swift */; };
+		7A0000000000000000000139 /* ModelConfigurationViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A0000000000000000000239 /* ModelConfigurationViews.swift */; };
+		7A0000000000000000000140 /* A2AGovernanceViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A0000000000000000000240 /* A2AGovernanceViews.swift */; };
+		7A0000000000000000000141 /* CapabilityPackageViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A0000000000000000000241 /* CapabilityPackageViews.swift */; };
+		7A0000000000000000000142 /* DomainSafetyRoadmapViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A0000000000000000000242 /* DomainSafetyRoadmapViews.swift */; };
+		7A0000000000000000000143 /* LingShuMemoryService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A0000000000000000000243 /* LingShuMemoryService.swift */; };
+		7A0000000000000000000144 /* VisionIOManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A0000000000000000000244 /* VisionIOManager.swift */; };
+		7A0000000000000000000145 /* LingShuPerceptionViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A0000000000000000000245 /* LingShuPerceptionViews.swift */; };
+		7A0000000000000000000146 /* LingShuRealtimePerceptionGateway.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A0000000000000000000247 /* LingShuRealtimePerceptionGateway.swift */; };
+		7A0000000000000000000147 /* LingShuEngineeringArtifactService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A0000000000000000000248 /* LingShuEngineeringArtifactService.swift */; };
+		7A0000000000000000000148 /* LingShuIntentClarificationPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A0000000000000000000249 /* LingShuIntentClarificationPolicy.swift */; };
+		7A0000000000000000000149 /* LingShuVoiceModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A0000000000000000000250 /* LingShuVoiceModels.swift */; };
+		7A0000000000000000000150 /* LingShuSpeechOutputGateway.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A0000000000000000000251 /* LingShuSpeechOutputGateway.swift */; };
+		7A0000000000000000000151 /* LingShuVoiceTranscriptNormalizer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A0000000000000000000252 /* LingShuVoiceTranscriptNormalizer.swift */; };
+		7A0000000000000000000152 /* LingShuEmbeddedASRRuntime.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A0000000000000000000253 /* LingShuEmbeddedASRRuntime.swift */; };
+		7A0000000000000000000153 /* LingShuEmbeddedTTSRuntime.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A0000000000000000000254 /* LingShuEmbeddedTTSRuntime.swift */; };
+		7A0000000000000000000154 /* LingShuPerceptionActions.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A0000000000000000000255 /* LingShuPerceptionActions.swift */; };
+		7A0000000000000000000155 /* LingShuPerceptionPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A0000000000000000000256 /* LingShuPerceptionPanel.swift */; };
+		7A0000000000000000000156 /* LingShuCameraPreviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A0000000000000000000257 /* LingShuCameraPreviewView.swift */; };
+		7A0000000000000000000157 /* LingShuCrawlerArtifactBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A0000000000000000000258 /* LingShuCrawlerArtifactBuilder.swift */; };
+		7A0000000000000000000158 /* LingShuPresentationArtifactBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A0000000000000000000259 /* LingShuPresentationArtifactBuilder.swift */; };
+		7A0000000000000000000159 /* LingShuArtifactManifestWriter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A0000000000000000000260 /* LingShuArtifactManifestWriter.swift */; };
+		7A0000000000000000000160 /* LingShuArtifactFileWriter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A0000000000000000000261 /* LingShuArtifactFileWriter.swift */; };
+		7A0000000000000000000161 /* LingShuMemoryTextToolkit.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A0000000000000000000262 /* LingShuMemoryTextToolkit.swift */; };
+		7A0000000000000000000162 /* LingShuState+TaskExecution.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A0000000000000000000263 /* LingShuState+TaskExecution.swift */; };
+		7A0000000000000000000163 /* LingShuState+RemoteConnection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A0000000000000000000264 /* LingShuState+RemoteConnection.swift */; };
+		7A0000000000000000000164 /* LingShuPerceptionThreadCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A0000000000000000000265 /* LingShuPerceptionThreadCoordinator.swift */; };
+		7A0000000000000000000165 /* LingShuChatHistoryStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A0000000000000000000266 /* LingShuChatHistoryStore.swift */; };
+		7A0000000000000000000166 /* LingShuState+ChatHistory.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A0000000000000000000267 /* LingShuState+ChatHistory.swift */; };
+		7A0000000000000000000167 /* LingShuOwnerIdentityService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A0000000000000000000268 /* LingShuOwnerIdentityService.swift */; };
+		7A0000000000000000000168 /* LingShuOwnerIdentityViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A0000000000000000000269 /* LingShuOwnerIdentityViews.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		7A0000000000000000000201 /* LingShuMac.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LingShuMac.swift; sourceTree = "<group>"; };
+		7A0000000000000000000202 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		7A0000000000000000000203 /* LingShuMainThreadRuntime.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LingShuMainThreadRuntime.swift; sourceTree = "<group>"; };
+		7A0000000000000000000204 /* LingShuAgentRuntime.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LingShuAgentRuntime.swift; sourceTree = "<group>"; };
+		7A0000000000000000000205 /* LingShuMemoryRepository.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LingShuMemoryRepository.swift; sourceTree = "<group>"; };
+		7A0000000000000000000206 /* LingShuTaskThread.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LingShuTaskThread.swift; sourceTree = "<group>"; };
+		7A0000000000000000000207 /* LingShuAgentScheduler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LingShuAgentScheduler.swift; sourceTree = "<group>"; };
+		7A0000000000000000000208 /* LingShuPermissionPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LingShuPermissionPolicy.swift; sourceTree = "<group>"; };
+		7A0000000000000000000209 /* LingShuModelGateway.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LingShuModelGateway.swift; sourceTree = "<group>"; };
+		7A0000000000000000000210 /* LingShuExternalAgentRegistry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LingShuExternalAgentRegistry.swift; sourceTree = "<group>"; };
+		7A0000000000000000000211 /* LingShuHeartbeatPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LingShuHeartbeatPolicy.swift; sourceTree = "<group>"; };
+		7A0000000000000000000212 /* LingShuCapabilityRole.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LingShuCapabilityRole.swift; sourceTree = "<group>"; };
+		7A0000000000000000000213 /* LingShuExternalAgentGateway.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LingShuExternalAgentGateway.swift; sourceTree = "<group>"; };
+		7A0000000000000000000214 /* LingShuLocalIntentResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LingShuLocalIntentResolver.swift; sourceTree = "<group>"; };
+		7A0000000000000000000215 /* LingShuRemoteSessionPool.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LingShuRemoteSessionPool.swift; sourceTree = "<group>"; };
+		7A0000000000000000000216 /* LingShuTaskExecutionJournal.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LingShuTaskExecutionJournal.swift; sourceTree = "<group>"; };
+		7A0000000000000000000217 /* LingShuRemoteConnectionHealth.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LingShuRemoteConnectionHealth.swift; sourceTree = "<group>"; };
+		7A0000000000000000000218 /* LingShuTaskExecutionRecordViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LingShuTaskExecutionRecordViews.swift; sourceTree = "<group>"; };
+		7A0000000000000000000219 /* LingShuExecutionConsoleView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LingShuExecutionConsoleView.swift; sourceTree = "<group>"; };
+		7A0000000000000000000220 /* LingShuRemoteModelClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LingShuRemoteModelClient.swift; sourceTree = "<group>"; };
+		7A0000000000000000000221 /* LingShuRoutePlanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LingShuRoutePlanner.swift; sourceTree = "<group>"; };
+		7A0000000000000000000222 /* LingShuExecutionCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LingShuExecutionCoordinator.swift; sourceTree = "<group>"; };
+		7A0000000000000000000223 /* LingShuTaskRuntimeCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LingShuTaskRuntimeCoordinator.swift; sourceTree = "<group>"; };
+		7A0000000000000000000224 /* LingShuDomainModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/Domain/LingShuDomainModels.swift; sourceTree = "<group>"; };
+		7A0000000000000000000225 /* CodexBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/Infrastructure/Codex/CodexBridge.swift; sourceTree = "<group>"; };
+		7A0000000000000000000226 /* VoiceIOManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/Services/VoiceIOManager.swift; sourceTree = "<group>"; };
+		7A0000000000000000000227 /* LingShuState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/State/LingShuState.swift; sourceTree = "<group>"; };
+		7A0000000000000000000228 /* LingShuPrimarySurfaces.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/Views/LingShuPrimarySurfaces.swift; sourceTree = "<group>"; };
+		7A0000000000000000000229 /* LingShuShellViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/Views/LingShuShellViews.swift; sourceTree = "<group>"; };
+		7A0000000000000000000230 /* LingShuCommandCenterViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/Views/LingShuCommandCenterViews.swift; sourceTree = "<group>"; };
+		7A0000000000000000000231 /* LingShuExtensions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/Support/LingShuExtensions.swift; sourceTree = "<group>"; };
+		7A0000000000000000000232 /* LingShuDialogueViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/Views/LingShuDialogueViews.swift; sourceTree = "<group>"; };
+		7A0000000000000000000233 /* LingShuCallChainViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/Views/LingShuCallChainViews.swift; sourceTree = "<group>"; };
+		7A0000000000000000000234 /* LingShuSettingsSurfaces.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/Views/LingShuSettingsSurfaces.swift; sourceTree = "<group>"; };
+		7A0000000000000000000235 /* ReturnSubmittingTextEditor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/Views/ReturnSubmittingTextEditor.swift; sourceTree = "<group>"; };
+		7A0000000000000000000236 /* JarvisChatViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/Views/JarvisChatViews.swift; sourceTree = "<group>"; };
+		7A0000000000000000000237 /* HolographicStatusViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/Views/HolographicStatusViews.swift; sourceTree = "<group>"; };
+		7A0000000000000000000238 /* OperationsShellViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/Views/OperationsShellViews.swift; sourceTree = "<group>"; };
+		7A0000000000000000000239 /* ModelConfigurationViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/Views/ModelConfigurationViews.swift; sourceTree = "<group>"; };
+		7A0000000000000000000240 /* A2AGovernanceViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/Views/A2AGovernanceViews.swift; sourceTree = "<group>"; };
+		7A0000000000000000000241 /* CapabilityPackageViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/Views/CapabilityPackageViews.swift; sourceTree = "<group>"; };
+		7A0000000000000000000242 /* DomainSafetyRoadmapViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/Views/DomainSafetyRoadmapViews.swift; sourceTree = "<group>"; };
+		7A0000000000000000000243 /* LingShuMemoryService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/Services/LingShuMemoryService.swift; sourceTree = "<group>"; };
+		7A0000000000000000000244 /* VisionIOManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/Services/VisionIOManager.swift; sourceTree = "<group>"; };
+		7A0000000000000000000245 /* LingShuPerceptionViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/Views/LingShuPerceptionViews.swift; sourceTree = "<group>"; };
+		7A0000000000000000000246 /* LingShu.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = LingShu.entitlements; sourceTree = "<group>"; };
+		7A0000000000000000000247 /* LingShuRealtimePerceptionGateway.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/Services/LingShuRealtimePerceptionGateway.swift; sourceTree = "<group>"; };
+		7A0000000000000000000248 /* LingShuEngineeringArtifactService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/Services/LingShuEngineeringArtifactService.swift; sourceTree = "<group>"; };
+		7A0000000000000000000249 /* LingShuIntentClarificationPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/Domain/LingShuIntentClarificationPolicy.swift; sourceTree = "<group>"; };
+		7A0000000000000000000250 /* LingShuVoiceModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/Services/Voice/LingShuVoiceModels.swift; sourceTree = "<group>"; };
+		7A0000000000000000000251 /* LingShuSpeechOutputGateway.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/Services/Voice/LingShuSpeechOutputGateway.swift; sourceTree = "<group>"; };
+		7A0000000000000000000252 /* LingShuVoiceTranscriptNormalizer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/Services/Voice/LingShuVoiceTranscriptNormalizer.swift; sourceTree = "<group>"; };
+		7A0000000000000000000253 /* LingShuEmbeddedASRRuntime.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/Services/Voice/LingShuEmbeddedASRRuntime.swift; sourceTree = "<group>"; };
+		7A0000000000000000000254 /* LingShuEmbeddedTTSRuntime.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/Services/Voice/LingShuEmbeddedTTSRuntime.swift; sourceTree = "<group>"; };
+		7A0000000000000000000255 /* LingShuPerceptionActions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/Views/LingShuPerceptionActions.swift; sourceTree = "<group>"; };
+		7A0000000000000000000256 /* LingShuPerceptionPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/Views/LingShuPerceptionPanel.swift; sourceTree = "<group>"; };
+		7A0000000000000000000257 /* LingShuCameraPreviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/Views/LingShuCameraPreviewView.swift; sourceTree = "<group>"; };
+		7A0000000000000000000258 /* LingShuCrawlerArtifactBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/Services/LingShuCrawlerArtifactBuilder.swift; sourceTree = "<group>"; };
+		7A0000000000000000000259 /* LingShuPresentationArtifactBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/Services/LingShuPresentationArtifactBuilder.swift; sourceTree = "<group>"; };
+		7A0000000000000000000260 /* LingShuArtifactManifestWriter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/Services/LingShuArtifactManifestWriter.swift; sourceTree = "<group>"; };
+		7A0000000000000000000261 /* LingShuArtifactFileWriter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/Services/LingShuArtifactFileWriter.swift; sourceTree = "<group>"; };
+		7A0000000000000000000262 /* LingShuMemoryTextToolkit.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/Services/Memory/LingShuMemoryTextToolkit.swift; sourceTree = "<group>"; };
+		7A0000000000000000000263 /* LingShuState+TaskExecution.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Sources/State/LingShuState+TaskExecution.swift"; sourceTree = "<group>"; };
+		7A0000000000000000000264 /* LingShuState+RemoteConnection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Sources/State/LingShuState+RemoteConnection.swift"; sourceTree = "<group>"; };
+		7A0000000000000000000265 /* LingShuPerceptionThreadCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/Services/Perception/LingShuPerceptionThreadCoordinator.swift; sourceTree = "<group>"; };
+		7A0000000000000000000266 /* LingShuChatHistoryStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/Services/Memory/LingShuChatHistoryStore.swift; sourceTree = "<group>"; };
+		7A0000000000000000000267 /* LingShuState+ChatHistory.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Sources/State/LingShuState+ChatHistory.swift"; sourceTree = "<group>"; };
+		7A0000000000000000000268 /* LingShuOwnerIdentityService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/Services/Perception/LingShuOwnerIdentityService.swift; sourceTree = "<group>"; };
+		7A0000000000000000000269 /* LingShuOwnerIdentityViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/Views/LingShuOwnerIdentityViews.swift; sourceTree = "<group>"; };
+		7A0000000000000000000301 /* LingShu.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = LingShu.app; sourceTree = BUILT_PRODUCTS_DIR; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		7A0000000000000000000401 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		7A0000000000000000000501 = {
+			isa = PBXGroup;
+			children = (
+				7A0000000000000000000502 /* Sources */,
+				7A0000000000000000000202 /* Assets.xcassets */,
+				7A0000000000000000000246 /* LingShu.entitlements */,
+				7A0000000000000000000503 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		7A0000000000000000000502 /* Sources */ = {
+			isa = PBXGroup;
+			children = (
+				7A0000000000000000000201 /* LingShuMac.swift */,
+				7A0000000000000000000203 /* LingShuMainThreadRuntime.swift */,
+				7A0000000000000000000204 /* LingShuAgentRuntime.swift */,
+				7A0000000000000000000205 /* LingShuMemoryRepository.swift */,
+				7A0000000000000000000206 /* LingShuTaskThread.swift */,
+				7A0000000000000000000207 /* LingShuAgentScheduler.swift */,
+				7A0000000000000000000208 /* LingShuPermissionPolicy.swift */,
+				7A0000000000000000000209 /* LingShuModelGateway.swift */,
+				7A0000000000000000000210 /* LingShuExternalAgentRegistry.swift */,
+				7A0000000000000000000211 /* LingShuHeartbeatPolicy.swift */,
+				7A0000000000000000000212 /* LingShuCapabilityRole.swift */,
+				7A0000000000000000000213 /* LingShuExternalAgentGateway.swift */,
+				7A0000000000000000000214 /* LingShuLocalIntentResolver.swift */,
+				7A0000000000000000000215 /* LingShuRemoteSessionPool.swift */,
+				7A0000000000000000000216 /* LingShuTaskExecutionJournal.swift */,
+				7A0000000000000000000217 /* LingShuRemoteConnectionHealth.swift */,
+				7A0000000000000000000218 /* LingShuTaskExecutionRecordViews.swift */,
+				7A0000000000000000000219 /* LingShuExecutionConsoleView.swift */,
+				7A0000000000000000000220 /* LingShuRemoteModelClient.swift */,
+				7A0000000000000000000221 /* LingShuRoutePlanner.swift */,
+				7A0000000000000000000222 /* LingShuExecutionCoordinator.swift */,
+				7A0000000000000000000223 /* LingShuTaskRuntimeCoordinator.swift */,
+				7A0000000000000000000224 /* LingShuDomainModels.swift */,
+				7A0000000000000000000249 /* LingShuIntentClarificationPolicy.swift */,
+				7A0000000000000000000225 /* CodexBridge.swift */,
+				7A0000000000000000000226 /* VoiceIOManager.swift */,
+				7A0000000000000000000250 /* LingShuVoiceModels.swift */,
+				7A0000000000000000000251 /* LingShuSpeechOutputGateway.swift */,
+				7A0000000000000000000252 /* LingShuVoiceTranscriptNormalizer.swift */,
+				7A0000000000000000000253 /* LingShuEmbeddedASRRuntime.swift */,
+				7A0000000000000000000254 /* LingShuEmbeddedTTSRuntime.swift */,
+				7A0000000000000000000244 /* VisionIOManager.swift */,
+				7A0000000000000000000247 /* LingShuRealtimePerceptionGateway.swift */,
+				7A0000000000000000000248 /* LingShuEngineeringArtifactService.swift */,
+				7A0000000000000000000258 /* LingShuCrawlerArtifactBuilder.swift */,
+				7A0000000000000000000259 /* LingShuPresentationArtifactBuilder.swift */,
+				7A0000000000000000000260 /* LingShuArtifactManifestWriter.swift */,
+				7A0000000000000000000261 /* LingShuArtifactFileWriter.swift */,
+				7A0000000000000000000262 /* LingShuMemoryTextToolkit.swift */,
+				7A0000000000000000000266 /* LingShuChatHistoryStore.swift */,
+				7A0000000000000000000265 /* LingShuPerceptionThreadCoordinator.swift */,
+				7A0000000000000000000268 /* LingShuOwnerIdentityService.swift */,
+				7A0000000000000000000227 /* LingShuState.swift */,
+				7A0000000000000000000263 /* LingShuState+TaskExecution.swift */,
+				7A0000000000000000000264 /* LingShuState+RemoteConnection.swift */,
+				7A0000000000000000000267 /* LingShuState+ChatHistory.swift */,
+				7A0000000000000000000228 /* LingShuPrimarySurfaces.swift */,
+				7A0000000000000000000255 /* LingShuPerceptionActions.swift */,
+				7A0000000000000000000269 /* LingShuOwnerIdentityViews.swift */,
+				7A0000000000000000000256 /* LingShuPerceptionPanel.swift */,
+				7A0000000000000000000257 /* LingShuCameraPreviewView.swift */,
+				7A0000000000000000000229 /* LingShuShellViews.swift */,
+				7A0000000000000000000230 /* LingShuCommandCenterViews.swift */,
+				7A0000000000000000000231 /* LingShuExtensions.swift */,
+				7A0000000000000000000232 /* LingShuDialogueViews.swift */,
+				7A0000000000000000000233 /* LingShuCallChainViews.swift */,
+				7A0000000000000000000234 /* LingShuSettingsSurfaces.swift */,
+				7A0000000000000000000235 /* ReturnSubmittingTextEditor.swift */,
+				7A0000000000000000000236 /* JarvisChatViews.swift */,
+				7A0000000000000000000237 /* HolographicStatusViews.swift */,
+				7A0000000000000000000238 /* OperationsShellViews.swift */,
+				7A0000000000000000000239 /* ModelConfigurationViews.swift */,
+				7A0000000000000000000240 /* A2AGovernanceViews.swift */,
+				7A0000000000000000000241 /* CapabilityPackageViews.swift */,
+				7A0000000000000000000242 /* DomainSafetyRoadmapViews.swift */,
+				7A0000000000000000000243 /* LingShuMemoryService.swift */,
+				7A0000000000000000000245 /* LingShuPerceptionViews.swift */,
+			);
+			name = Sources;
+			sourceTree = "<group>";
+		};
+		7A0000000000000000000503 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				7A0000000000000000000301 /* LingShu.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		7A0000000000000000000601 /* LingShu */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 7A0000000000000000000A02 /* Build configuration list for PBXNativeTarget "LingShu" */;
+			buildPhases = (
+				7A0000000000000000000701 /* Sources */,
+				7A0000000000000000000401 /* Frameworks */,
+				7A0000000000000000000702 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = LingShu;
+			productName = LingShu;
+			productReference = 7A0000000000000000000301 /* LingShu.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		7A0000000000000000000901 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 2650;
+				LastUpgradeCheck = 2650;
+				TargetAttributes = {
+					7A0000000000000000000601 = {
+						CreatedOnToolsVersion = 26.5;
+					};
+				};
+			};
+			buildConfigurationList = 7A0000000000000000000A01 /* Build configuration list for PBXProject "LingShuApp" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+				"zh-Hans",
+			);
+			mainGroup = 7A0000000000000000000501;
+			minimizedProjectReferenceProxies = 1;
+			preferredProjectObjectVersion = 77;
+			productRefGroup = 7A0000000000000000000503 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				7A0000000000000000000601 /* LingShu */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		7A0000000000000000000702 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				7A0000000000000000000102 /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		7A0000000000000000000701 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				7A0000000000000000000101 /* LingShuMac.swift in Sources */,
+				7A0000000000000000000103 /* LingShuMainThreadRuntime.swift in Sources */,
+				7A0000000000000000000104 /* LingShuAgentRuntime.swift in Sources */,
+				7A0000000000000000000105 /* LingShuMemoryRepository.swift in Sources */,
+				7A0000000000000000000106 /* LingShuTaskThread.swift in Sources */,
+				7A0000000000000000000107 /* LingShuAgentScheduler.swift in Sources */,
+				7A0000000000000000000108 /* LingShuPermissionPolicy.swift in Sources */,
+				7A0000000000000000000109 /* LingShuModelGateway.swift in Sources */,
+				7A0000000000000000000110 /* LingShuExternalAgentRegistry.swift in Sources */,
+				7A0000000000000000000111 /* LingShuHeartbeatPolicy.swift in Sources */,
+				7A0000000000000000000112 /* LingShuCapabilityRole.swift in Sources */,
+				7A0000000000000000000113 /* LingShuExternalAgentGateway.swift in Sources */,
+				7A0000000000000000000114 /* LingShuLocalIntentResolver.swift in Sources */,
+				7A0000000000000000000115 /* LingShuRemoteSessionPool.swift in Sources */,
+				7A0000000000000000000116 /* LingShuTaskExecutionJournal.swift in Sources */,
+				7A0000000000000000000117 /* LingShuRemoteConnectionHealth.swift in Sources */,
+				7A0000000000000000000118 /* LingShuTaskExecutionRecordViews.swift in Sources */,
+				7A0000000000000000000119 /* LingShuExecutionConsoleView.swift in Sources */,
+				7A0000000000000000000120 /* LingShuRemoteModelClient.swift in Sources */,
+				7A0000000000000000000121 /* LingShuRoutePlanner.swift in Sources */,
+				7A0000000000000000000122 /* LingShuExecutionCoordinator.swift in Sources */,
+				7A0000000000000000000123 /* LingShuTaskRuntimeCoordinator.swift in Sources */,
+				7A0000000000000000000124 /* LingShuDomainModels.swift in Sources */,
+				7A0000000000000000000125 /* CodexBridge.swift in Sources */,
+				7A0000000000000000000126 /* VoiceIOManager.swift in Sources */,
+				7A0000000000000000000127 /* LingShuState.swift in Sources */,
+				7A0000000000000000000128 /* LingShuPrimarySurfaces.swift in Sources */,
+				7A0000000000000000000129 /* LingShuShellViews.swift in Sources */,
+				7A0000000000000000000130 /* LingShuCommandCenterViews.swift in Sources */,
+				7A0000000000000000000131 /* LingShuExtensions.swift in Sources */,
+				7A0000000000000000000132 /* LingShuDialogueViews.swift in Sources */,
+				7A0000000000000000000133 /* LingShuCallChainViews.swift in Sources */,
+				7A0000000000000000000134 /* LingShuSettingsSurfaces.swift in Sources */,
+				7A0000000000000000000135 /* ReturnSubmittingTextEditor.swift in Sources */,
+				7A0000000000000000000136 /* JarvisChatViews.swift in Sources */,
+				7A0000000000000000000137 /* HolographicStatusViews.swift in Sources */,
+				7A0000000000000000000138 /* OperationsShellViews.swift in Sources */,
+				7A0000000000000000000139 /* ModelConfigurationViews.swift in Sources */,
+				7A0000000000000000000140 /* A2AGovernanceViews.swift in Sources */,
+				7A0000000000000000000141 /* CapabilityPackageViews.swift in Sources */,
+				7A0000000000000000000142 /* DomainSafetyRoadmapViews.swift in Sources */,
+				7A0000000000000000000143 /* LingShuMemoryService.swift in Sources */,
+				7A0000000000000000000144 /* VisionIOManager.swift in Sources */,
+				7A0000000000000000000145 /* LingShuPerceptionViews.swift in Sources */,
+				7A0000000000000000000146 /* LingShuRealtimePerceptionGateway.swift in Sources */,
+				7A0000000000000000000147 /* LingShuEngineeringArtifactService.swift in Sources */,
+				7A0000000000000000000148 /* LingShuIntentClarificationPolicy.swift in Sources */,
+				7A0000000000000000000149 /* LingShuVoiceModels.swift in Sources */,
+				7A0000000000000000000150 /* LingShuSpeechOutputGateway.swift in Sources */,
+				7A0000000000000000000151 /* LingShuVoiceTranscriptNormalizer.swift in Sources */,
+				7A0000000000000000000152 /* LingShuEmbeddedASRRuntime.swift in Sources */,
+				7A0000000000000000000153 /* LingShuEmbeddedTTSRuntime.swift in Sources */,
+				7A0000000000000000000154 /* LingShuPerceptionActions.swift in Sources */,
+				7A0000000000000000000155 /* LingShuPerceptionPanel.swift in Sources */,
+				7A0000000000000000000156 /* LingShuCameraPreviewView.swift in Sources */,
+				7A0000000000000000000157 /* LingShuCrawlerArtifactBuilder.swift in Sources */,
+				7A0000000000000000000158 /* LingShuPresentationArtifactBuilder.swift in Sources */,
+				7A0000000000000000000159 /* LingShuArtifactManifestWriter.swift in Sources */,
+				7A0000000000000000000160 /* LingShuArtifactFileWriter.swift in Sources */,
+				7A0000000000000000000161 /* LingShuMemoryTextToolkit.swift in Sources */,
+				7A0000000000000000000162 /* LingShuState+TaskExecution.swift in Sources */,
+				7A0000000000000000000163 /* LingShuState+RemoteConnection.swift in Sources */,
+				7A0000000000000000000164 /* LingShuPerceptionThreadCoordinator.swift in Sources */,
+				7A0000000000000000000165 /* LingShuChatHistoryStore.swift in Sources */,
+				7A0000000000000000000166 /* LingShuState+ChatHistory.swift in Sources */,
+				7A0000000000000000000167 /* LingShuOwnerIdentityService.swift in Sources */,
+				7A0000000000000000000168 /* LingShuOwnerIdentityViews.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		7A0000000000000000000B01 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = macosx;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+			};
+			name = Debug;
+		};
+		7A0000000000000000000B02 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				SDKROOT = macosx;
+				SWIFT_COMPILATION_MODE = wholemodule;
+			};
+			name = Release;
+		};
+		7A0000000000000000000B03 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = LingShu.entitlements;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_INJECT_BASE_ENTITLEMENTS = NO;
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = KM7N84AC9Y;
+				ENABLE_DEBUG_DYLIB = NO;
+				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = "灵枢";
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.developer-tools";
+				INFOPLIST_KEY_NSPrincipalClass = NSApplication;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "Copyright © 2026 Roy Zhao. All rights reserved.";
+				INFOPLIST_KEY_NSCameraUsageDescription = "用于视觉解析，让灵枢读取摄像头画面并形成实时观察。";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "用于语音输入，将你的语音转换为文字指令。";
+				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "用于将语音识别为灵枢可处理的文字指令。";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.zhaoroy.LingShu;
+				PRODUCT_NAME = LingShu;
+				PROVISIONING_PROFILE_SPECIFIER = "";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 6.0;
+			};
+			name = Debug;
+		};
+		7A0000000000000000000B04 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = LingShu.entitlements;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_INJECT_BASE_ENTITLEMENTS = NO;
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = KM7N84AC9Y;
+				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = "灵枢";
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.developer-tools";
+				INFOPLIST_KEY_NSPrincipalClass = NSApplication;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "Copyright © 2026 Roy Zhao. All rights reserved.";
+				INFOPLIST_KEY_NSCameraUsageDescription = "用于视觉解析，让灵枢读取摄像头画面并形成实时观察。";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "用于语音输入，将你的语音转换为文字指令。";
+				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "用于将语音识别为灵枢可处理的文字指令。";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.zhaoroy.LingShu;
+				PRODUCT_NAME = LingShu;
+				PROVISIONING_PROFILE_SPECIFIER = "";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 6.0;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		7A0000000000000000000A01 /* Build configuration list for PBXProject "LingShuApp" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				7A0000000000000000000B01 /* Debug */,
+				7A0000000000000000000B02 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		7A0000000000000000000A02 /* Build configuration list for PBXNativeTarget "LingShu" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				7A0000000000000000000B03 /* Debug */,
+				7A0000000000000000000B04 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = 7A0000000000000000000901 /* Project object */;
+}
