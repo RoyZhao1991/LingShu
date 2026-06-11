@@ -54,11 +54,24 @@
 - 主人识别仅在本机存特征向量模板（`LingShuOwnerIdentityProfile`），不存原始人脸图像/语音样本，且永不上云。
 - 媒体离开本机的唯一出口是网关感知接口（HTTPS + X-Model-Token）。
 
-**云端侧待办（需要服务器访问账号）：**
-- 已观测到服务端把视频关键帧写到 `/tmp/video-parse-*/keyframe_*.jpg`（出现在 API 响应里）——需确认请求结束后即删，或改为内存处理。
-- 网关自带"日志"职责：需确认日志只记元数据（时间/模型/用量），不落 base64/媒体 payload。
-- 上游算力节点（ASR/OCR/grounding）同样需确认无落盘缓存。
-- 审计通过后建立周期复查（如每次网关升级后重验）。
+**云端侧审计（2026-06-11，已用服务器 root 账号核实）：**
+
+算力服务器 `10.99.134.25`，感知服务以 Docker 容器运行：
+- `vision-fast-service`（:8010，图片）、`realtime-hearing-service`（:8020，音频/视频）；对外 `model-gateway.datanet.bj.cn` 经反代转发到本机 nginx `/api/realtime/*`。
+- 代码路径：`/opt/preannotation/{image,media}_parse_service/app/main.py`，公共 IO 在 `preannotation_common/io_utils.py`。
+
+逐项核实结论：
+1. ✅ **即用即删生效**。`read_and_materialize` 把 base64/URL 输入落成 `/tmp` 临时文件，处理后在 `finally` 里 `cleanup_temp_file`（`os.unlink`）；视频另用 `tempfile.mkdtemp` 抽关键帧，`finally` 里 `shutil.rmtree(work_dir)`。响应里出现的 `/tmp/video-parse-*/keyframe_*.jpg` 路径在请求结束时已被删除。
+2. ✅ **实弹验证无残留**。发一次真实图片请求后扫描，两个感知容器 `/tmp` 均无任何 `.png/.jpg/.wav/.mp4` 残留（只剩一个 PyTorch 内部 `_remote_module_non_scriptable.py`，非媒体）。
+3. ✅ **日志不含媒体**。nginx 用默认 combined 格式，只记请求行/状态，不记请求体；journald 中无 base64/媒体 payload。
+4. ⚠️ **大文件上传路径有 31 天保留**。文件网关（:18080 → `/data/parse_inputs`）供大文件上传，有 `parse-file-cleanup.timer` 每日清理但保留期 `PARSE_FILE_RETENTION_DAYS=31`。当前目录为空；**LingShu 客户端走 base64，不经过此路径**，故不持有 LingShu 感知数据，但属共享标注平台基础设施。
+
+**结论**：对 LingShu 感知路径（base64 → 内存/临时文件 → 即删），云端零留存已切实生效并通过实弹验证。
+
+**可选加固（涉及重启生产容器，需逐项确认后执行）：**
+- 给两个感知容器加 `--tmpfs /tmp:rw,noexec,nosuid,size=2g`，让临时媒体只落 RAM、永不触盘、容器级即清——零留存的纵深防御。需 `docker stop/rm/run` 重建容器（现有 binds：`/data`、`/opt/offline/models`、`/root/.paddleocr`，restart=always）。
+- 若 LingShu 未来改用大文件上传路径，需为其单独设短保留期（如 1 天）或即用即删，与标注平台的 31 天隔离。
+- 建立周期复查：每次网关/容器镜像升级后重跑本审计。
 
 ## 已知注意点
 
