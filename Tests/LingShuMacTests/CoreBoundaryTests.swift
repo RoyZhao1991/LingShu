@@ -1120,16 +1120,26 @@ final class CoreBoundaryTests: XCTestCase {
         XCTAssertNil(decision)
     }
 
-    func testIntentClarificationPolicyAsksForUnderspecifiedPPT() {
+    func testIntentClarificationPolicyLandsNamedDeliverableWithoutAsking() {
+        // 落地优先：用户点名了交付物（PPT）就直接产出，不再反问主题/受众/格式。
         let policy = LingShuIntentClarificationPolicy()
         let decision = policy.clarification(
             for: "做个 PPT",
             memoryContext: .init(hotMatches: [], coldMatches: [], shouldLoadHistory: false, status: "无记忆")
         )
 
+        XCTAssertNil(decision, "点名了交付物应直接落地，而不是抛澄清三连问")
+    }
+
+    func testIntentClarificationPolicyStillAsksForObjectlessVagueAction() {
+        // 完全没有对象的模糊动作仍然需要问。
+        let policy = LingShuIntentClarificationPolicy()
+        let decision = policy.clarification(
+            for: "处理一下",
+            memoryContext: .init(hotMatches: [], coldMatches: [], shouldLoadHistory: false, status: "无记忆")
+        )
+
         XCTAssertNotNil(decision)
-        XCTAssertTrue(decision?.question.contains("主题") == true)
-        XCTAssertTrue(decision?.question.contains("格式") == true)
     }
 
     func testIntentClarificationPolicyCombinesClarifiedPrompt() {

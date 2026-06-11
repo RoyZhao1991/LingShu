@@ -43,17 +43,13 @@ struct LingShuIntentClarificationPolicy {
             )
         }
 
+        // 落地优先：用户给出动作但没有任何对象（如只说「处理一下」），才需要问；
+        // 一旦点名了交付物（PPT/代码/文档/页面…），即便主题/受众/格式没说全，也直接按
+        // 合理默认产出，事后再让用户改，而不是先抛三连问。
         if isVagueAction(normalized) {
             return .init(
                 question: "我需要先确认你的目标：你想让我处理哪件事，最终要交付什么？",
                 reason: "用户给出动作，但缺少对象、范围或交付口径。"
-            )
-        }
-
-        if isUnderspecifiedDeliverable(normalized) {
-            return .init(
-                question: "可以，我先确认三点：主题是什么，给谁看，最终要交付什么格式？",
-                reason: "用户要求产出物，但主题、受众或交付格式不明确。"
             )
         }
 
@@ -126,26 +122,6 @@ struct LingShuIntentClarificationPolicy {
         }
 
         return !hasConcreteTarget(normalized)
-    }
-
-    private func isUnderspecifiedDeliverable(_ normalized: String) -> Bool {
-        let exactDeliverables = [
-            "做个ppt", "做一个ppt", "做ppt", "写个ppt",
-            "做个演示", "做个汇报", "做个方案", "写个方案",
-            "写个代码", "写代码", "做个程序", "写个程序",
-            "做个页面", "做个文档", "写个文档"
-        ]
-        if exactDeliverables.contains(normalized) {
-            return true
-        }
-
-        if normalized.count <= 10,
-           ["ppt", "演示", "汇报", "方案", "文档", "代码", "程序", "页面"].contains(where: { normalized.contains($0) }),
-           !hasConcreteTarget(normalized) {
-            return true
-        }
-
-        return false
     }
 
     private func hasUnresolvedReference(
