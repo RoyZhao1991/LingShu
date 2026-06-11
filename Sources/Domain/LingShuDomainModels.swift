@@ -278,7 +278,20 @@ struct ModelProviderPreset: Identifiable {
         note: "复用本机 Codex 登录状态，不读取 token。"
     )
 
+    static let dataNetGateway = ModelProviderPreset(
+        id: "datanet-gateway",
+        name: "数据网络网关",
+        region: "国内·算力中心",
+        category: "统一网关",
+        endpoint: "https://model-gateway.datanet.bj.cn/v1",
+        protocolName: "OpenAI Chat",
+        authMode: "网关 Token",
+        defaultModels: ["swds-multimodal-parse", "swds-text-parse"],
+        note: "数据增值协作网络算力中心统一网关：鉴权、限额、Token 计量与后端模型路由由网关处理；图片/音频/视频走 /v1/perception 专项接口，不直连底层模型。"
+    )
+
     static let apiCatalog: [ModelProviderPreset] = [
+        dataNetGateway,
         .init(id: "openai", name: "OpenAI", region: "海外", category: "原厂 API", endpoint: "https://api.openai.com/v1", protocolName: "Responses / OpenAI", authMode: "API Key", defaultModels: ["gpt-5.5", "gpt-5", "gpt-4.1", "gpt-4o"], note: "适合作为灵枢主中枢和复杂推理模型。"),
         .init(id: "azure-openai", name: "Azure OpenAI", region: "海外/企业", category: "云厂商托管", endpoint: "https://{resource}.openai.azure.com/openai", protocolName: "Azure OpenAI", authMode: "API Key / Entra ID", defaultModels: ["gpt-5.5", "gpt-5", "gpt-4.1", "gpt-4o"], note: "适合企业账号、私有网络和合规场景。"),
         .init(id: "anthropic", name: "Anthropic Claude", region: "海外", category: "原厂 API", endpoint: "https://api.anthropic.com/v1", protocolName: "Anthropic", authMode: "API Key", defaultModels: ["claude-opus-4.1", "claude-opus-4", "claude-sonnet-4.5", "claude-haiku-4.5"], note: "适合长文档、规划、审查和高质量写作。"),

@@ -42,9 +42,11 @@ final class LingShuState: ObservableObject {
     @Published var missionStatus = "我在。能力池已注册，等待你的目标。"
     @Published var trustScore = 91
     @Published var coreState: LingShuCoreState = .standby
-    @Published var thinkingElapsedSeconds = 0
-    @Published var executionElapsedSeconds = 0
-    @Published var modelHeartbeatIdleSeconds = 0
+    // 每秒变化的计时量不做 @Published：它们只服务于超时判断与文案拼装，
+    // 界面上的实时读数由 TimelineView 局部自刷新，避免每秒让全部观察者失效。
+    var thinkingElapsedSeconds = 0
+    var executionElapsedSeconds = 0
+    var modelHeartbeatIdleSeconds = 0
     @Published var modelHeartbeatSource = "待机"
     @Published var mainMemoryStatus = "热记忆待检索"
     @Published var coldMemoryStatus = "冷备待检索"
@@ -56,10 +58,15 @@ final class LingShuState: ObservableObject {
     @Published var activeLayer = "灵枢中枢"
     @Published var runtimePhase: MissionRuntimePhase = .idle
     @Published var supervisionTick = 0
-    @Published var modelProvider = "Codex Auth"
-    @Published var modelName = "gpt-5.5"
-    @Published var endpoint = "codex://local-cli"
-    @Published var apiKey = ""
+    @Published var modelProvider = ModelProviderPreset.dataNetGateway.name
+    @Published var modelName = ModelProviderPreset.dataNetGateway.defaultModels[0]
+    @Published var endpoint = ModelProviderPreset.dataNetGateway.endpoint
+    @Published var apiKey = "" {
+        didSet {
+            guard apiKey != oldValue, let preset = selectedModelPreset else { return }
+            credentialStore.setAPIKey(apiKey, forProvider: preset.id)
+        }
+    }
     let defaultCodexCLIPath = CodexBridge.bundledCLIPath
     @Published var codexCLIPath = CodexBridge.bundledCLIPath
     @Published var codexWorkingDirectory = "/Users/example/app"
@@ -133,6 +140,7 @@ final class LingShuState: ObservableObject {
     private let permissionPolicy = LingShuPermissionPolicy()
     private let externalAgentRegistry = LingShuExternalAgentRegistry()
     private let externalAgentGateway = LingShuExternalAgentGateway()
+    let credentialStore = LingShuCredentialStore()
     let chatHistoryStore = LingShuChatHistoryStore()
     let remoteSessionPool = LingShuRemoteSessionPool()
     let remoteConnectionPolicy = LingShuRemoteConnectionPolicy()
@@ -162,6 +170,10 @@ final class LingShuState: ObservableObject {
 
     init() {
         restoreChatHistory()
+        if let preset = selectedModelPreset,
+           let storedKey = credentialStore.apiKey(forProvider: preset.id) {
+            apiKey = storedKey
+        }
         let report = mainThreadKernel.bootReport
         mainThreadSessionStatus = report.statusText
         mainThreadHeartbeatText = report.heartbeatText
@@ -759,6 +771,24 @@ final class LingShuState: ObservableObject {
         chatMessages[index].isLoading = true
     }
 
+    /// 网关计量：记录本轮调用消耗的 token，供前端展示用量。
+    func recordModelUsage(_ reply: LingShuRemoteModelReply, stage: String) {
+        guard let tokens = reply.totalTokens else { return }
+        appendTrace(kind: .system, actor: "用量", title: stage, detail: "本轮消耗 \(tokens) tokens（网关计量）。")
+    }
+
+    /// 感知专项接口客户端：仅当当前通道是数据网络网关且已配置 token 时可用。
+    /// 图片/音频/视频等感知任务统一走网关，不直连底层模型。
+    var cloudPerceptionClient: LingShuCloudPerceptionClient? {
+        guard let preset = selectedModelPreset,
+              preset.id == ModelProviderPreset.dataNetGateway.id,
+              !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              let url = URL(string: endpoint) else {
+            return nil
+        }
+        return LingShuCloudPerceptionClient(baseEndpoint: url, token: apiKey)
+    }
+
     func applyModelProvider(_ providerName: String) {
         guard providerName != "__choose_api_provider__" else { return }
         cancelMainRemoteHealthProbe(reason: "探活让路", detail: "收到用户指令，已停止后台探活，把主通道让给本轮任务。")
@@ -773,6 +803,10 @@ final class LingShuState: ObservableObject {
 
         if let firstModel = preset.defaultModels.first, !preset.defaultModels.contains(modelName) {
             modelName = firstModel
+        }
+
+        if let storedKey = credentialStore.apiKey(forProvider: preset.id) {
+            apiKey = storedKey
         }
 
         if preset.name == "Codex Auth" {
@@ -1836,6 +1870,7 @@ final class LingShuState: ObservableObject {
                     reply = try await self.remoteModelClient.send(request)
                 }
                 guard !Task.isCancelled, self.missionRunID == runID else { return }
+                self.recordModelUsage(reply, stage: "路由判断")
                 let rawReply = reply.text
                 let route = self.routePlanner.decodeRoutePayload(from: rawReply) ?? CodexRoutePayload(
                     needsAgents: false,
@@ -1964,6 +1999,7 @@ final class LingShuState: ObservableObject {
                     reply = try await self.remoteModelClient.send(request)
                 }
                 guard !Task.isCancelled, self.missionRunID == runID else { return }
+                self.recordModelUsage(reply, stage: "执行阶段")
                 self.remoteSessionPool.resolveNativeSession(
                     lease: executionLease,
                     nativeSessionID: nil,
@@ -2278,6 +2314,7 @@ final class LingShuState: ObservableObject {
                 )
                 self.backgroundAPITasks.removeValue(forKey: recordKey)
                 self.refreshRemoteSessionStatus()
+                self.recordModelUsage(reply, stage: "后台路由")
                 self.handleBackgroundRouteResult(route, userPrompt: userPrompt, taskRecordID: taskRecordID, threadID: threadID, sourceLabel: sourceLabel)
             } catch {
                 guard !Task.isCancelled else { return }
@@ -2482,6 +2519,7 @@ final class LingShuState: ObservableObject {
                     localContextSummary: reply.text
                 )
                 self.backgroundAPITasks.removeValue(forKey: recordKey)
+                self.recordModelUsage(reply, stage: "后台执行")
                 self.finishBackgroundExecution(userPrompt: userPrompt, route: route, taskRecordID: taskRecordID, threadID: threadID, rawReply: reply.text)
             } catch {
                 guard !Task.isCancelled else { return }

@@ -20,6 +20,8 @@ struct LingShuRemoteModelReply: Equatable {
     var statusCode: Int
     var format: LingShuModelGatewayRequestFormat
     var continuationToken: String?
+    /// usage.total_tokens（网关计量）。流式响应通常不携带，可能为 nil。
+    var totalTokens: Int?
 }
 
 struct LingShuRemoteModelClient {
@@ -60,7 +62,8 @@ struct LingShuRemoteModelClient {
             text: try gateway.decodeTextResponse(data: data, statusCode: httpResponse.statusCode),
             statusCode: httpResponse.statusCode,
             format: contract.format,
-            continuationToken: Self.decodeContinuationToken(data: data, format: contract.format)
+            continuationToken: Self.decodeContinuationToken(data: data, format: contract.format),
+            totalTokens: Self.decodeTotalTokens(data: data)
         )
     }
 
@@ -130,8 +133,17 @@ struct LingShuRemoteModelClient {
             text: try gateway.decodeTextResponse(data: fallbackData, statusCode: httpResponse.statusCode),
             statusCode: httpResponse.statusCode,
             format: contract.format,
-            continuationToken: continuationToken ?? Self.decodeContinuationToken(data: fallbackData, format: contract.format)
+            continuationToken: continuationToken ?? Self.decodeContinuationToken(data: fallbackData, format: contract.format),
+            totalTokens: Self.decodeTotalTokens(data: fallbackData)
         )
+    }
+
+    static func decodeTotalTokens(data: Data) -> Int? {
+        guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let usage = object["usage"] as? [String: Any] else {
+            return nil
+        }
+        return usage["total_tokens"] as? Int
     }
 
     private static func decodeContinuationToken(

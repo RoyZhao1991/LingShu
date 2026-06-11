@@ -365,6 +365,15 @@ struct LingShuModelGateway {
         for provider: String,
         apiKey: String
     ) -> [String: String] {
+        if provider.localizedCaseInsensitiveContains("数据网络")
+            || provider.lowercased().contains("datanet") {
+            return [
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+                "X-Model-Token": apiKey
+            ].filter { !$0.value.isEmpty }
+        }
+
         if provider.localizedCaseInsensitiveContains("Anthropic")
             || provider.localizedCaseInsensitiveContains("Claude") {
             return [
