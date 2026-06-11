@@ -167,6 +167,8 @@ final class LingShuState: ObservableObject {
     private var pendingIntentClarification: LingShuPendingIntentClarification?
     var isRestoringChatHistory = false
     var chatHistoryPersistTask: Task<Void, Never>?
+    /// 由根视图注入：返回当前实时态势感知上下文（无有效信号时返回空串）。
+    var livePerceptionContextProvider: (() -> String)?
 
     init() {
         restoreChatHistory()
@@ -769,6 +771,16 @@ final class LingShuState: ObservableObject {
         }
 
         chatMessages[index].isLoading = true
+    }
+
+    /// 记忆提示 + 实时态势感知的统一组装：有有效感知信号时注入对话上下文。
+    func composedPromptHint(baseMemory: String) -> String {
+        var hint = mainThreadKernel.promptHint(baseMemory: baseMemory)
+        if let perception = livePerceptionContextProvider?(),
+           !perception.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            hint += "\n实时态势感知（来自麦克风/摄像头，已通过感知网关解析）：\n\(perception)"
+        }
+        return hint
     }
 
     /// 网关计量：记录本轮调用消耗的 token，供前端展示用量。
@@ -1597,7 +1609,7 @@ final class LingShuState: ObservableObject {
         let permissionMode = decision.sandboxMode
         let timeout = codexTimeoutSeconds
         let fastMode = codexFastMode
-        let memoryPromptHint = mainThreadKernel.promptHint(baseMemory: memoryContext.promptHint)
+        let memoryPromptHint = composedPromptHint(baseMemory: memoryContext.promptHint)
         let routeLease = remoteSessionPool.lease(
             provider: modelProvider,
             model: model,
@@ -1806,7 +1818,7 @@ final class LingShuState: ObservableObject {
         let apiKey = apiKey
         let protocolName = selectedModelPreset?.protocolName ?? "OpenAI 兼容"
         let timeout = codexTimeoutSeconds
-        let memoryPromptHint = mainThreadKernel.promptHint(baseMemory: memoryContext.promptHint)
+        let memoryPromptHint = composedPromptHint(baseMemory: memoryContext.promptHint)
         let permission = permissionDecision(for: userPrompt)
         let routeSystemPrompt = routePlanner.routeSystemPrompt(permission: permission)
         let routeUserPrompt = routePlanner.routeUserPrompt(userPrompt: userPrompt, memoryContext: memoryPromptHint)
@@ -2186,7 +2198,7 @@ final class LingShuState: ObservableObject {
         let permissionMode = decision.sandboxMode
         let timeout = codexTimeoutSeconds
         let fastMode = codexFastMode
-        let memoryPromptHint = mainThreadKernel.promptHint(baseMemory: memoryContext.promptHint)
+        let memoryPromptHint = composedPromptHint(baseMemory: memoryContext.promptHint)
         let routeLease = remoteSessionPool.lease(
             provider: modelProvider,
             model: model,
@@ -2265,7 +2277,7 @@ final class LingShuState: ObservableObject {
         let apiKey = apiKey
         let protocolName = selectedModelPreset?.protocolName ?? "OpenAI 兼容"
         let timeout = codexTimeoutSeconds
-        let memoryPromptHint = mainThreadKernel.promptHint(baseMemory: memoryContext.promptHint)
+        let memoryPromptHint = composedPromptHint(baseMemory: memoryContext.promptHint)
         let permission = permissionDecision(for: userPrompt)
         let routeSystemPrompt = routePlanner.routeSystemPrompt(permission: permission)
         let routeUserPrompt = routePlanner.routeUserPrompt(userPrompt: userPrompt, memoryContext: memoryPromptHint)

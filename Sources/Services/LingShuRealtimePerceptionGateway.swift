@@ -109,9 +109,20 @@ struct LingShuPerceptionInvocationContract: Equatable, Sendable {
     var protocolName: String
 }
 
-final class LingShuHTTPRealtimePerceptionProvider: @unchecked Sendable {
+final class LingShuHTTPRealtimePerceptionProvider: LingShuRealtimePerceptionProviding, @unchecked Sendable {
     private let endpoint: LingShuRealtimePerceptionEndpoint
     private let session: URLSession
+
+    var routeID: String { endpoint.id }
+
+    func minimumForwardInterval(for kind: LingShuPerceptionSignalKind) -> TimeInterval {
+        switch kind {
+        case .audioChunk, .videoFrame:
+            return 0.8
+        case .audioTranscript, .videoObservation, .speechOutput:
+            return 0
+        }
+    }
 
     init(
         endpoint: LingShuRealtimePerceptionEndpoint,
@@ -145,7 +156,7 @@ final class LingShuHTTPRealtimePerceptionProvider: @unchecked Sendable {
         )
     }
 
-    func analyze(_ envelope: LingShuPerceptionEnvelope) async throws -> LingShuRealtimePerceptionModelReply {
+    func analyze(_ envelope: LingShuPerceptionEnvelope) async throws -> LingShuRealtimePerceptionModelReply? {
         let contract = try makeInvocationContract(for: envelope)
         var request = URLRequest(url: contract.url)
         request.httpMethod = contract.method
@@ -178,14 +189,14 @@ final class LingShuRealtimePerceptionGateway: ObservableObject {
     @Published private(set) var latestSnapshot: LingShuPerceptionSituationSnapshot = .idle
     @Published private(set) var ownerIdentitySnapshot: LingShuOwnerIdentitySnapshot
 
-    private var remoteProviders: [String: LingShuHTTPRealtimePerceptionProvider] = [:]
+    private var remoteProviders: [String: any LingShuRealtimePerceptionProviding] = [:]
+    private var cloudProvider: LingShuDataNetPerceptionProvider?
     private var lastRawForwardAt: [LingShuPerceptionSignalKind: Date] = [:]
     private var latestTranscription: LingShuVoiceTranscriptionResult?
     private var latestVisionObservation: LingShuVisionObservation?
     private var latestModelReply: LingShuRealtimePerceptionModelReply?
     private let perceptionThreadCoordinator = LingShuPerceptionThreadCoordinator()
     private let ownerIdentityService: LingShuOwnerIdentityService
-    private let rawForwardInterval: TimeInterval = 0.8
 
     init(ownerIdentityService: LingShuOwnerIdentityService = LingShuOwnerIdentityService()) {
         self.ownerIdentityService = ownerIdentityService
@@ -200,6 +211,11 @@ final class LingShuRealtimePerceptionGateway: ObservableObject {
         [ownerIdentitySnapshot.promptContext, latestSnapshot.promptContext]
             .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
             .joined(separator: "\n")
+    }
+
+    /// 是否存在可注入对话的有效感知信号；为 false 时不要把空态势塞进提示词浪费 token。
+    var hasLiveSignals: Bool {
+        latestTranscription != nil || latestVisionObservation != nil || latestModelReply != nil
     }
 
     var ownerIdentityLockEnabled: Bool {
@@ -224,21 +240,53 @@ final class LingShuRealtimePerceptionGateway: ObservableObject {
 
     func configureRemoteEndpoints(_ endpoints: [LingShuRealtimePerceptionEndpoint]) {
         remoteProviders = Dictionary(uniqueKeysWithValues: endpoints.map {
-            ($0.id, LingShuHTTPRealtimePerceptionProvider(endpoint: $0))
+            ($0.id, LingShuHTTPRealtimePerceptionProvider(endpoint: $0) as any LingShuRealtimePerceptionProviding)
         })
 
-        availableRoutes = [.local] + endpoints.map {
+        rebuildAvailableRoutes(endpointRoutes: endpoints.map {
             LingShuPerceptionRoute(
                 id: $0.id,
                 displayName: $0.displayName,
                 mode: $0.mode,
                 supportedSignals: $0.supportedSignals
             )
+        })
+    }
+
+    /// 注册/注销数据网络云感知路由。传 nil 注销；
+    /// 注册时如果当前还停留在本地解析，自动切到云感知。
+    func registerCloudPerceptionRoute(client: LingShuCloudPerceptionClient?) {
+        if let client {
+            let wasUnavailable = cloudProvider == nil
+            cloudProvider = LingShuDataNetPerceptionProvider(client: client)
+            rebuildAvailableRoutes()
+            if wasUnavailable, activeRoute.id == LingShuPerceptionRoute.local.id {
+                selectRoute(id: LingShuDataNetPerceptionProvider.routeID)
+                statusText = "云感知就绪"
+            }
+        } else {
+            cloudProvider = nil
+            rebuildAvailableRoutes()
         }
+    }
+
+    private func rebuildAvailableRoutes(endpointRoutes: [LingShuPerceptionRoute]? = nil) {
+        let existingEndpointRoutes = endpointRoutes
+            ?? availableRoutes.filter { $0.id != LingShuPerceptionRoute.local.id && $0.id != LingShuDataNetPerceptionProvider.routeID }
+        let cloudRoutes = cloudProvider == nil ? [] : [LingShuDataNetPerceptionProvider.route]
+        availableRoutes = [.local] + cloudRoutes + existingEndpointRoutes
 
         if !availableRoutes.contains(where: { $0.id == activeRoute.id }) {
             activeRoute = .local
+            statusText = LingShuPerceptionRoute.local.mode.label
         }
+    }
+
+    private func activeProvider() -> (any LingShuRealtimePerceptionProviding)? {
+        if activeRoute.id == LingShuDataNetPerceptionProvider.routeID {
+            return cloudProvider
+        }
+        return remoteProviders[activeRoute.id]
     }
 
     func selectRoute(id: String) {
@@ -401,7 +449,7 @@ final class LingShuRealtimePerceptionGateway: ObservableObject {
         lastEventSummary = "\(envelope.kind.label)：\(payloadLabel)"
 
         guard activeRoute.mode != .local,
-              let provider = remoteProviders[activeRoute.id] else {
+              let provider = activeProvider() else {
             statusText = "本地解析 \(eventCount)"
             return
         }
@@ -411,12 +459,18 @@ final class LingShuRealtimePerceptionGateway: ObservableObject {
 
         Task {
             do {
-                let reply = try await provider.analyze(envelope)
-                await MainActor.run {
-                    self.latestModelReply = reply
-                    self.refreshSnapshot()
-                    self.lastModelFeedback = reply.summary
-                    self.statusText = "模型解析在线"
+                if let reply = try await provider.analyze(envelope) {
+                    await MainActor.run {
+                        self.latestModelReply = reply
+                        self.refreshSnapshot()
+                        self.lastModelFeedback = reply.summary
+                        self.statusText = "模型解析在线"
+                    }
+                } else {
+                    // 信号被 provider 吸收（缓冲/不消费），不更新态势。
+                    await MainActor.run {
+                        self.statusText = "模型解析在线"
+                    }
                 }
             } catch {
                 await MainActor.run {
@@ -428,11 +482,13 @@ final class LingShuRealtimePerceptionGateway: ObservableObject {
     }
 
     private func shouldForwardRawSignal(_ kind: LingShuPerceptionSignalKind) -> Bool {
-        guard activeRoute.mode != .local else { return false }
+        guard activeRoute.mode != .local, let provider = activeProvider() else { return false }
 
+        let interval = provider.minimumForwardInterval(for: kind)
         let now = Date()
-        if let lastForwardAt = lastRawForwardAt[kind],
-           now.timeIntervalSince(lastForwardAt) < rawForwardInterval {
+        if interval > 0,
+           let lastForwardAt = lastRawForwardAt[kind],
+           now.timeIntervalSince(lastForwardAt) < interval {
             return false
         }
 

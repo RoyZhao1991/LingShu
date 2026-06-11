@@ -41,6 +41,11 @@ struct LingShuRootView: View {
         .preferredColorScheme(.dark)
         .onAppear {
             state.refreshCodexAuthStatusIfNeeded()
+            state.livePerceptionContextProvider = { [weak perceptionGateway] in
+                guard let perceptionGateway, perceptionGateway.hasLiveSignals else { return "" }
+                return perceptionGateway.promptContext
+            }
+            perceptionGateway.registerCloudPerceptionRoute(client: state.cloudPerceptionClient)
             if !didRunLaunchValidation,
                ProcessInfo.processInfo.arguments.contains("--lingshu-engineering-validation") {
                 didRunLaunchValidation = true
@@ -53,6 +58,12 @@ struct LingShuRootView: View {
                     LingShuWindowPlacement.bringWindowsToMainScreen()
                 }
             }
+        }
+        .onChange(of: state.apiKey) { _, _ in
+            perceptionGateway.registerCloudPerceptionRoute(client: state.cloudPerceptionClient)
+        }
+        .onChange(of: state.modelProvider) { _, _ in
+            perceptionGateway.registerCloudPerceptionRoute(client: state.cloudPerceptionClient)
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
             state.flushChatHistory()
