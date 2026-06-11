@@ -16,16 +16,17 @@ struct ChatBubbleView: View {
                     .foregroundStyle(message.isUser ? .white.opacity(0.72) : Color.lingHolo.opacity(0.84))
 
                 if message.isLoading && !message.isUser {
-                    HStack(alignment: .top, spacing: 8) {
+                    HStack(alignment: .center, spacing: 9) {
                         ProgressView()
                             .progressViewStyle(.circular)
                             .controlSize(.small)
                             .tint(Color.lingHolo)
-                            .frame(width: 18, height: 18, alignment: .leading)
+                            .frame(width: 16, height: 16, alignment: .leading)
 
-                        Text(message.text.isEmpty ? "我在判断。" : message.text)
+                        // 流式片段一到就显示；还没有内容时只显示安静的“思考中…”。
+                        Text(message.text.isEmpty ? "思考中…" : message.text)
                             .font(.system(size: 14.5, weight: .medium))
-                            .foregroundStyle(.white.opacity(0.88))
+                            .foregroundStyle(.white.opacity(message.text.isEmpty ? 0.5 : 0.88))
                             .fixedSize(horizontal: false, vertical: true)
                     }
                 } else {

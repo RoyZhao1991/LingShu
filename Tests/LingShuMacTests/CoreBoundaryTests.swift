@@ -809,14 +809,11 @@ final class CoreBoundaryTests: XCTestCase {
         XCTAssertEqual(schedule.dispatches.first(where: { $0.task.agent == "验证" })?.mode, .verifying)
     }
 
-    func testDialogueAcknowledgementProvidesImmediateReadableIntake() {
+    func testDialogueAcknowledgementIsQuietPlaceholder() {
+        // 思考占位不再用机械独白，返回空串，界面只显示安静的“思考中…”。
         let acknowledgement = LingShuDialogueAcknowledgement()
-
         let text = acknowledgement.intake(for: "给我做一个介绍你自己的 PPT")
-
-        XCTAssertTrue(text.contains("收到"))
-        XCTAssertTrue(text.contains("直接回答"))
-        XCTAssertTrue(text.contains("能力节点"))
+        XCTAssertTrue(text.isEmpty, "思考占位应为空串，避免每轮重复机械开场白")
     }
 
     func testDialogueAcknowledgementReportsExecutionDispatchForAgentRoute() {

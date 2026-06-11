@@ -8,10 +8,10 @@ struct LingShuExecutionContext: Equatable {
 }
 
 struct LingShuDialogueAcknowledgement {
+    /// 思考占位不再用机械的第一人称独白；返回空串，界面只显示一个安静的思考指示，
+    /// 等真实回复一到就替换。避免每轮都甩同一句“我先判断这件事…”的人机感。
     func intake(for prompt: String) -> String {
-        let normalized = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !normalized.isEmpty else { return "我在。" }
-        return "收到。我先判断这件事该直接回答，还是交给能力节点处理。"
+        ""
     }
 
     func routeReply(
