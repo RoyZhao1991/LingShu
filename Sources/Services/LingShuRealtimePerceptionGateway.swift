@@ -197,6 +197,8 @@ final class LingShuRealtimePerceptionGateway: ObservableObject {
     private var latestModelReply: LingShuRealtimePerceptionModelReply?
     private let perceptionThreadCoordinator = LingShuPerceptionThreadCoordinator()
     private let ownerIdentityService: LingShuOwnerIdentityService
+    /// 声线画像器：基频统计 → 说话人性别推测，画像注入对话上下文（非写死策略）。
+    private let speakerProfiler = LingShuSpeakerProfiler()
 
     init(ownerIdentityService: LingShuOwnerIdentityService = LingShuOwnerIdentityService()) {
         self.ownerIdentityService = ownerIdentityService
@@ -208,9 +210,19 @@ final class LingShuRealtimePerceptionGateway: ObservableObject {
     }
 
     var promptContext: String {
-        [ownerIdentitySnapshot.promptContext, latestSnapshot.promptContext]
+        [ownerIdentitySnapshot.promptContext, speakerProfileLine ?? "", latestSnapshot.promptContext]
             .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
             .joined(separator: "\n")
+    }
+
+    /// 当前说话人声线画像（基频/性别推测）；样本不足或过期时为 nil。
+    var speakerProfileLine: String? {
+        speakerProfiler.snapshot()?.promptLine
+    }
+
+    /// 最近的视觉环境一句话摘要，供情境上下文引用。
+    var latestVisionSummary: String? {
+        latestVisionObservation?.summary
     }
 
     /// 是否存在可注入对话的有效感知信号；为 false 时不要把空态势塞进提示词浪费 token。
@@ -358,6 +370,7 @@ final class LingShuRealtimePerceptionGateway: ObservableObject {
 
     func ingestAudioChunk(_ packet: LingShuAudioStreamPacket) {
         ownerIdentitySnapshot = ownerIdentityService.ingestAudioPacket(packet)
+        speakerProfiler.ingest(packet)
 
         guard shouldForwardRawSignal(.audioChunk) else {
             recordLocal(kind: .audioChunk, summary: "音频流本地保活：\(packet.byteCount) bytes")

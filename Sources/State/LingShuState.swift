@@ -131,11 +131,15 @@ final class LingShuState: ObservableObject {
 
     let mainThreadKernel = LingShuMainThreadKernel()
     let memoryService = LingShuMemoryService()
+    /// 专家档案库（模板+知识要点+评审清单）；协议化，可整体替换（可插拔）。
+    let expertProfileRegistry: any LingShuExpertProfileProviding = LingShuExpertProfileRegistry()
+    /// 协同管线开关：关闭则任务回退单次执行调用（应急逃生口）。
+    @Published var collaborationPipelineEnabled = true
     private let agentScheduler = LingShuAgentScheduler()
     private let taskThreadScheduler = LingShuTaskThreadScheduler(maxParallelThreads: 3)
     let routePlanner = LingShuRoutePlanner()
     private let executionCoordinator = LingShuExecutionCoordinator()
-    private let dialogueAcknowledgement = LingShuDialogueAcknowledgement()
+    let dialogueAcknowledgement = LingShuDialogueAcknowledgement()
     private let intentClarificationPolicy = LingShuIntentClarificationPolicy()
     private let taskRuntimeCoordinator = LingShuTaskRuntimeCoordinator()
     private let modelGateway = LingShuModelGateway()
@@ -150,6 +154,8 @@ final class LingShuState: ObservableObject {
     let taskExecutionJournal = LingShuTaskExecutionJournal()
     let engineeringArtifactService = LingShuEngineeringArtifactService()
     var missionRunID = 0
+    /// 本次会话启动时间：情境上下文用它计算连续使用时长。
+    let sessionStartedAt = Date()
     private var thinkingStartedAt: Date?
     private var executionStartedAt: Date?
     var lastModelHeartbeatAt: Date?
@@ -164,8 +170,11 @@ final class LingShuState: ObservableObject {
     private var activeRouteHandle: CodexExecutionHandle?
     private var activeExecutionHandle: CodexExecutionHandle?
     var activeAPITask: Task<Void, Never>?
+    /// 协同管线专用句柄与令牌：与聊天通道分离，执行期间用户仍可正常对话。
+    var executionPipelineTask: Task<Void, Never>?
+    var activePipelineToken: UUID?
     private var backgroundCodexHandles: [String: CodexExecutionHandle] = [:]
-    private var backgroundAPITasks: [String: Task<Void, Never>] = [:]
+    var backgroundAPITasks: [String: Task<Void, Never>] = [:]
     var isMainRemoteProbeInFlight = false
     var mainRemoteProbeRunID = 0
     var activeHealthProbeHandle: CodexExecutionHandle?
@@ -456,7 +465,7 @@ final class LingShuState: ObservableObject {
         )
     }
 
-    private func markTaskRuntimeExecuting(_ route: CodexRoutePayload, for userPrompt: String) {
+    func markTaskRuntimeExecuting(_ route: CodexRoutePayload, for userPrompt: String) {
         guard isCapabilityCollaborationRequest(userPrompt) else { return }
 
         let permission = taskPermissionBoundary(for: userPrompt)
@@ -469,7 +478,7 @@ final class LingShuState: ObservableObject {
         taskRuntime = taskRuntimeCoordinator.monitoring(taskRuntime)
     }
 
-    private func completeTaskRuntime(for userPrompt: String, reply: String, taskRecordID: String? = nil) {
+    func completeTaskRuntime(for userPrompt: String, reply: String, taskRecordID: String? = nil) {
         guard isCapabilityCollaborationRequest(userPrompt) else { return }
 
         taskRuntime = taskRuntimeCoordinator.delivered(taskRuntime)
@@ -641,6 +650,9 @@ final class LingShuState: ObservableObject {
     }
 
     func cancelActiveCodexCalls() {
+        executionPipelineTask?.cancel()
+        executionPipelineTask = nil
+        activePipelineToken = nil
         activeRouteHandle?.cancel()
         activeExecutionHandle?.cancel()
         activeHealthProbeHandle?.cancel()
@@ -712,6 +724,13 @@ final class LingShuState: ObservableObject {
            !perception.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             hint += "\n实时态势感知（来自麦克风/摄像头，已通过感知网关解析）：\n\(perception)"
         }
+        // 情境上下文常驻注入：时间/时段、连续使用时长、后台任务状态。
+        // 怎么用这些情境（深夜提醒休息、结合环境打趣）由模型自行判断，不写死策略。
+        hint += "\n" + LingShuSituationContext.compose(.init(
+            sessionStartedAt: sessionStartedAt,
+            activeTaskTitle: isModelExecuting ? activeTaskThread.map { String($0.prompt.prefix(40)) } : nil,
+            activeTaskStage: isModelExecuting ? missionTitle : nil
+        ))
         return hint
     }
 
@@ -1170,6 +1189,16 @@ final class LingShuState: ObservableObject {
         mainMemoryContext: MainThreadMemoryContext,
         isPotentialTask: Bool
     ) -> String {
+        // 执行期互动：非任务、非续接的消息不打断后台任务，直接并发直答（快路流式）。
+        // 灵枢的情境上下文带着后台任务进展，可以像朋友一样边干活边聊。
+        if !isPotentialTask, !LingShuMemoryTextToolkit.shouldRecallHistory(for: userPrompt), !usesCodexAuth, isModelConnected {
+            appendTaskRecordMessage(taskRecordID, actor: "灵枢", role: "中枢", kind: .router, text: "后台任务继续执行，这条消息我并发直接回答。")
+            let pending = ChatMessage(speaker: "灵枢", text: dialogueAcknowledgement.intake(for: userPrompt), isUser: false, isLoading: true, taskRecordID: taskRecordID)
+            chatMessages.append(pending)
+            requestDirectChatReply(for: userPrompt, memoryContext: mainMemoryContext, replacing: pending.id, taskRecordID: taskRecordID, concurrent: true)
+            return pending.text
+        }
+
         let memoryLookup = memoryService.taskMemoryLookup(for: userPrompt)
         let decision = taskThreadScheduler.decide(
             prompt: userPrompt,
@@ -1250,49 +1279,6 @@ final class LingShuState: ObservableObject {
         }
     }
 
-    private func mainThreadDirectAnswer(for prompt: String, memoryContext: MainThreadMemoryContext) -> String? {
-        let normalized = normalizeMemoryText(prompt)
-
-        if let localAnswer = LingShuLocalIntentResolver.answer(for: prompt) {
-            return localAnswer
-        }
-
-        let identityPrompts = ["你是谁", "你是什么", "你叫什么", "灵枢是谁"]
-        if identityPrompts.contains(normalized) || (normalized.contains("你是谁") && normalized.count <= 8) {
-            return "我是灵枢，有什么可以帮你的？"
-        }
-
-        let selfIdentityPrompts = ["我是谁", "你知道我是谁吗", "你知道我是谁么", "你知道我是谁", "我是什么人"]
-        if selfIdentityPrompts.contains(normalized) {
-            return userIdentityAnswer(from: memoryContext)
-        }
-
-        let greetingPrompts = ["你好", "您好", "在吗", "hello", "hi"]
-        if greetingPrompts.contains(normalized) {
-            return "我在。有什么可以帮你的？"
-        }
-
-        if isLingShuKnowledgeQuestion(prompt) {
-            let memoryNote = memoryContext.shouldLoadHistory
-                ? "\n\n我已参考主线程记忆：\(compactSummaryText(memoryContext.status, limit: 90))"
-                : ""
-
-            if normalized.contains("记忆") || normalized.contains("线程") || normalized.contains("冷备") || normalized.contains("压缩") {
-                return "灵枢的记忆分两层：主线程记忆负责判断当前消息是否续接历史主题；执行记忆负责恢复具体任务线程的目标、约束、已完成事项和风险。热记忆过长或过旧时会压缩并进入冷备库，后续可以通过检索冷备重新接起。\(memoryNote)"
-            }
-
-            if normalized.contains("agent") || normalized.contains("智能体") || normalized.contains("调用链") {
-                return "灵枢不会一开始展示所有 agent。主线程先判断当前任务是否需要协作；需要时才动态创建任务线程，并只在右侧调用链显示本轮真实参与的 agent。普通问答则由我基于记忆和知识库直接回应。\(memoryNote)"
-            }
-
-            if normalized.contains("能力") || normalized.contains("架构") || normalized.contains("流程") || normalized.contains("怎么工作") {
-                return "灵枢的核心不是亲自做工，而是承令、判断、分派、监督和验收。主线程负责理解意图和检索记忆；任务线程负责承接需要落地的工作；内部或外部 agent 负责具体执行；最终由我统一向你交付结果。\(memoryNote)"
-            }
-        }
-
-        return nil
-    }
-
     private func requestLocalKnowledgeReply(
         for userPrompt: String,
         memoryContext: MainThreadMemoryContext,
@@ -1366,15 +1352,6 @@ final class LingShuState: ObservableObject {
         }
 
         return answer
-    }
-
-    private func userIdentityAnswer(from memoryContext: MainThreadMemoryContext) -> String {
-        let memoryText = memoryContext.promptHint
-        if memoryText.contains("身份") || memoryText.contains("用户") || memoryText.contains("课题") || memoryText.contains("项目") {
-            return "从当前记忆看，你是正在与我协作推进任务的人。更具体的身份，我只以你明确告诉我的信息为准。"
-        }
-
-        return "我还没有足够可靠的身份记忆。现在我只知道，你是正在与我协作的人；你告诉我的身份，我会记住。"
     }
 
     func refreshCodexAuthStatusIfNeeded() {
@@ -2151,6 +2128,8 @@ final class LingShuState: ObservableObject {
                 )
                 if usesCodexAuth {
                     requestExecutionCodexReply(for: userPrompt, route: effectiveRoute, taskRecordID: taskRecordID)
+                } else if collaborationPipelineEnabled {
+                    startCollaborationPipeline(for: userPrompt, route: effectiveRoute, taskRecordID: taskRecordID)
                 } else {
                     requestAPIExecutionReply(for: userPrompt, route: effectiveRoute, taskRecordID: taskRecordID)
                 }
@@ -2785,7 +2764,7 @@ final class LingShuState: ObservableObject {
             && !isCapabilityCollaborationRequest(prompt)
     }
 
-    private func isDevelopmentQueueRequest(_ prompt: String) -> Bool {
+    func isDevelopmentQueueRequest(_ prompt: String) -> Bool {
         let normalized = prompt
             .lowercased()
             .replacingOccurrences(of: " ", with: "")
@@ -2818,7 +2797,7 @@ final class LingShuState: ObservableObject {
         return designSignals.contains { normalized.contains($0) }
     }
 
-    private func isProjectExecutionRequest(_ prompt: String) -> Bool {
+    func isProjectExecutionRequest(_ prompt: String) -> Bool {
         let normalized = prompt
             .lowercased()
             .replacingOccurrences(of: " ", with: "")
@@ -2835,7 +2814,7 @@ final class LingShuState: ObservableObject {
         return projectSignals.contains { normalized.contains($0) }
     }
 
-    private func isKnowledgeOnlyQuestion(_ prompt: String) -> Bool {
+    func isKnowledgeOnlyQuestion(_ prompt: String) -> Bool {
         let normalized = normalizeMemoryText(prompt)
         let questionSignals = [
             "是什么", "为什么", "怎么理解", "解释", "介绍一下", "描述一下",
@@ -2853,14 +2832,6 @@ final class LingShuState: ObservableObject {
             && !actionSignals.contains { normalized.contains($0) }
     }
 
-    private func isLingShuKnowledgeQuestion(_ prompt: String) -> Bool {
-        let normalized = normalizeMemoryText(prompt)
-        let subjectSignals = ["灵枢", "你", "agent", "智能体", "记忆", "线程", "冷备", "调用链", "能力架构", "流程"]
-        return isKnowledgeOnlyQuestion(prompt)
-            && subjectSignals.contains { normalized.contains($0) }
-            && !isDevelopmentQueueRequest(prompt)
-            && !isProjectExecutionRequest(prompt)
-    }
 
     func isCapabilityCollaborationRequest(_ prompt: String) -> Bool {
         let normalized = prompt
@@ -2977,7 +2948,7 @@ final class LingShuState: ObservableObject {
         memoryService.normalizeMemoryText(text)
     }
 
-    private func compactSummaryText(_ text: String, limit: Int) -> String {
+    func compactSummaryText(_ text: String, limit: Int) -> String {
         memoryService.compactSummaryText(text, limit: limit)
     }
 
@@ -3243,7 +3214,7 @@ final class LingShuState: ObservableObject {
         }
     }
 
-    private func completeRouteExecution(_ route: CodexRoutePayload) {
+    func completeRouteExecution(_ route: CodexRoutePayload) {
         enterCoreState(.standby, resetTimer: false)
         runtimePhase = .delivering
         activeLayer = "待机中"

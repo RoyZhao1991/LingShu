@@ -90,13 +90,18 @@ struct LingShuStreamLatencyProbe {
 extension LingShuState {
     static let directChatTaskEscapeMarker = "【任务】"
 
+    /// concurrent = true 表示"后台任务执行期间的并发闲聊"：不动 isModelReplying/
+    /// 核心状态机，任务句柄独立存放，完成后走轻量收尾——执行管线完全不受影响。
     func requestDirectChatReply(
         for userPrompt: String,
         memoryContext: MainThreadMemoryContext,
         replacing messageID: UUID,
-        taskRecordID: String?
+        taskRecordID: String?,
+        concurrent: Bool = false
     ) {
-        isModelReplying = true
+        if !concurrent {
+            isModelReplying = true
+        }
         let provider = modelProvider
         let model = modelName
         let endpoint = endpoint
@@ -129,12 +134,18 @@ extension LingShuState {
         appendTrace(
             kind: .route,
             actor: "直答通道",
-            title: "快路直答",
+            title: concurrent ? "并发直答" : "快路直答",
             detail: "本地判定为普通对话，跳过路由编排，由 \(provider) / \(model) 直接流式作答。"
         )
         appendTaskRecordMessage(taskRecordID, actor: "灵枢", role: "中枢", kind: .router, text: "本地判断这是普通对话，我直接回答（未创建能力节点任务）。")
 
-        activeAPITask = Task { [weak self] in
+        let concurrentTaskKey = "direct-chat-\(messageID.uuidString)"
+        // 并发模式下 missionRunID 可能被前台流程推进，不能作为失效判据。
+        let isStale: @MainActor () -> Bool = { [weak self] in
+            guard let self else { return true }
+            return concurrent ? false : self.missionRunID != runID
+        }
+        let chatTask = Task { [weak self] in
             guard let self else { return }
             var probe = LingShuStreamLatencyProbe()
             do {
@@ -160,7 +171,7 @@ extension LingShuState {
                     var escalated = false
                     reply = try await self.remoteModelClient.stream(request) { [weak self] delta in
                         Task { @MainActor in
-                            guard let self, self.missionRunID == runID, !escalated else { return }
+                            guard let self, !isStale(), !escalated else { return }
                             let event = streamParser.ingest(delta)
                             probe.observeDelta(hasContent: !event.contentDelta.isEmpty)
                             self.consumeModelStreamEvent(
@@ -177,7 +188,8 @@ extension LingShuState {
                                         userPrompt: userPrompt,
                                         memoryContext: memoryContext,
                                         messageID: messageID,
-                                        taskRecordID: taskRecordID
+                                        taskRecordID: taskRecordID,
+                                        concurrentTaskKey: concurrent ? concurrentTaskKey : nil
                                     )
                                 case .release(let text):
                                     self.appendStreamingBubbleText(text, to: messageID)
@@ -186,11 +198,11 @@ extension LingShuState {
                         }
                     } onHeartbeat: { [weak self] in
                         Task { @MainActor in
-                            guard let self, self.missionRunID == runID else { return }
+                            guard let self, !isStale() else { return }
                             self.recordModelHeartbeat(source: "直答通道", detail: "流式连接活跃。")
                         }
                     }
-                    guard !escalated, !Task.isCancelled, self.missionRunID == runID else { return }
+                    guard !escalated, !Task.isCancelled, !isStale() else { return }
                     let tailEvent = streamParser.finish()
                     if !tailEvent.contentDelta.isEmpty || !tailEvent.reasoningDelta.isEmpty {
                         self.consumeModelStreamEvent(tailEvent, actor: "直答通道", thinkingMessageID: messageID) { content in
@@ -204,7 +216,8 @@ extension LingShuState {
                             userPrompt: userPrompt,
                             memoryContext: memoryContext,
                             messageID: messageID,
-                            taskRecordID: taskRecordID
+                            taskRecordID: taskRecordID,
+                            concurrentTaskKey: concurrent ? concurrentTaskKey : nil
                         )
                         return
                     }
@@ -213,7 +226,7 @@ extension LingShuState {
                     probe.observeDelta(hasContent: true)
                 }
 
-                guard !Task.isCancelled, self.missionRunID == runID else { return }
+                guard !Task.isCancelled, !isStale() else { return }
                 self.recordModelUsage(reply, stage: "直答")
                 let finalText = self.currentReplyAdapter.normalizedReplyText(reply.text)
 
@@ -223,7 +236,8 @@ extension LingShuState {
                         userPrompt: userPrompt,
                         memoryContext: memoryContext,
                         messageID: messageID,
-                        taskRecordID: taskRecordID
+                        taskRecordID: taskRecordID,
+                        concurrentTaskKey: concurrent ? concurrentTaskKey : nil
                     )
                     return
                 }
@@ -235,6 +249,16 @@ extension LingShuState {
                     localContextSummary: finalText
                 )
                 self.appendTrace(kind: .system, actor: "直答通道", title: "本轮延迟", detail: probe.summary())
+
+                if concurrent {
+                    // 并发闲聊轻量收尾：不碰核心状态机（后台管线还在跑）。
+                    self.backgroundAPITasks.removeValue(forKey: concurrentTaskKey)
+                    self.rememberMainThreadTurn(prompt: userPrompt, reply: finalText, route: nil)
+                    self.appendTaskRecordMessage(taskRecordID, actor: "灵枢", role: "中枢", kind: .result, text: finalText)
+                    self.finishTaskRecord(taskRecordID, status: .answered, summary: "执行期并发直答，未打断后台任务。")
+                    self.finalizeStreamingBubble(messageID, text: finalText, taskRecordID: taskRecordID)
+                    return
+                }
 
                 // 复用路由收尾：记忆写入、任务记录、内核观测、气泡定稿全部走同一条路。
                 let payload = CodexRoutePayload(
@@ -252,13 +276,17 @@ extension LingShuState {
                     sourceLabel: "直答通道"
                 )
             } catch {
-                guard !Task.isCancelled, self.missionRunID == runID else { return }
+                guard !Task.isCancelled, !isStale() else { return }
                 let message = self.routePlanner.modelGatewayErrorMessage(error)
                 self.remoteSessionPool.markFailed(lease: chatLease)
                 self.refreshRemoteSessionStatus()
-                self.activeAPITask = nil
-                self.isModelReplying = false
-                self.enterCoreState(.abnormal)
+                if concurrent {
+                    self.backgroundAPITasks.removeValue(forKey: concurrentTaskKey)
+                } else {
+                    self.activeAPITask = nil
+                    self.isModelReplying = false
+                    self.enterCoreState(.abnormal)
+                }
                 let finalText = "主通道刚才没有稳定响应。你可以稍后再发一次，或者去配置页检查模型配置。"
                 self.appendTrace(kind: .warning, actor: "直答通道", title: "直答失败", detail: message)
                 self.appendTaskRecordMessage(taskRecordID, actor: "直答通道", role: "主通道", kind: .warning, text: message)
@@ -266,6 +294,11 @@ extension LingShuState {
                 self.finishTaskRecord(taskRecordID, status: .blocked, summary: finalText)
                 self.finalizeStreamingBubble(messageID, text: finalText, taskRecordID: taskRecordID)
             }
+        }
+        if concurrent {
+            backgroundAPITasks[concurrentTaskKey] = chatTask
+        } else {
+            activeAPITask = chatTask
         }
     }
 
@@ -275,7 +308,8 @@ extension LingShuState {
         userPrompt: String,
         memoryContext: MainThreadMemoryContext,
         messageID: UUID,
-        taskRecordID: String?
+        taskRecordID: String?,
+        concurrentTaskKey: String? = nil
     ) {
         appendTrace(
             kind: .route,
@@ -284,8 +318,13 @@ extension LingShuState {
             detail: "直答模型识别到这是交付型诉求，转入完整路由编排。"
         )
         appendTaskRecordMessage(taskRecordID, actor: "灵枢", role: "中枢", kind: .router, text: "这件事需要完整任务编排，我已切换到调度流程。")
-        activeAPITask?.cancel()
-        activeAPITask = nil
+        if let concurrentTaskKey {
+            backgroundAPITasks[concurrentTaskKey]?.cancel()
+            backgroundAPITasks.removeValue(forKey: concurrentTaskKey)
+        } else {
+            activeAPITask?.cancel()
+            activeAPITask = nil
+        }
         clearThinkingPreview(for: messageID)
         spokenStreamOffsets.removeValue(forKey: messageID)
         requestAPIGatewayRouteReply(
