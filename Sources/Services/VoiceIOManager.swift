@@ -5,8 +5,21 @@ import Foundation
 
 @MainActor
 final class VoiceIOManager: ObservableObject {
-    @Published var isRecording = false
-    @Published var isSpeaking = false
+    @Published var isRecording = false {
+        didSet {
+            if !isRecording { inputLevel = 0 }
+        }
+    }
+    @Published var isSpeaking = false {
+        didSet {
+            guard isSpeaking != oldValue else { return }
+            if isSpeaking {
+                startOutputMetering()
+            } else {
+                stopOutputMetering()
+            }
+        }
+    }
     @Published var transcript = ""
     @Published var inputStatusMessage = "收音待机"
     @Published var outputStatusMessage = "发声待机"
@@ -18,6 +31,12 @@ final class VoiceIOManager: ObservableObject {
     @Published var speechOutputEndpoint = LingShuSpeechOutputProviderDescriptor.customHTTPService.defaultEndpoint
     @Published var speechOutputAPIKey = ""
     @Published var speechPersona = LingShuSpeechPersona.softDominantMale
+    /// 实时输入电平 0...1（麦克风 RMS），供极简模式的输入波形使用。
+    @Published var inputLevel: Float = 0
+    /// 实时输出电平 0...1（TTS 播放音量计），供极简模式的输出波形使用。
+    @Published var outputLevel: Float = 0
+
+    var outputMeterTask: Task<Void, Never>?
 
     private let audioEngine = AVAudioEngine()
     private let speechRecognizer = SFSpeechRecognizer(locale: Locale(identifier: "zh_CN"))
@@ -27,7 +46,7 @@ final class VoiceIOManager: ObservableObject {
     private var embeddedASRProcess: Process?
     private var embeddedASROutputHandle: FileHandle?
     private var embeddedASRLineBuffer = ""
-    private var speechAudioPlayer: AVAudioPlayer?
+    var speechAudioPlayer: AVAudioPlayer?
     private var activeSpeechTask: Task<Void, Never>?
 
     var availableTranscriptionProviders: [LingShuVoiceTranscriptionProviderDescriptor] {
@@ -171,7 +190,7 @@ final class VoiceIOManager: ObservableObject {
             onBus: 0,
             bufferSize: 1024,
             format: recordingFormat,
-            block: Self.makeRecognitionAudioTap(request: request, onAudioChunk: onAudioChunk)
+            block: makeRecognitionAudioTap(request: request, onAudioChunk: onAudioChunk)
         )
 
         audioEngine.prepare()
@@ -511,6 +530,7 @@ final class VoiceIOManager: ObservableObject {
         let player = try AVAudioPlayer(data: audioData)
         speechAudioPlayer = player
         player.prepareToPlay()
+        player.isMeteringEnabled = true
         isSpeaking = true
         setOutputStatus("正在发声（\(provider.displayName)）")
         player.play()
@@ -567,6 +587,7 @@ final class VoiceIOManager: ObservableObject {
         let player = try AVAudioPlayer(data: audioData)
         speechAudioPlayer = player
         player.prepareToPlay()
+        player.isMeteringEnabled = true
         isSpeaking = true
         setOutputStatus("正在发声（\(provider.displayName)）")
         player.play()
@@ -656,22 +677,6 @@ final class VoiceIOManager: ObservableObject {
             ?? voices.first(where: { $0.language.hasPrefix("zh") })
     }
 
-    private nonisolated static func makeRecognitionAudioTap(
-        request: SFSpeechAudioBufferRecognitionRequest,
-        onAudioChunk: (@MainActor (LingShuAudioStreamPacket) -> Void)?
-    ) -> AVAudioNodeTapBlock {
-        { buffer, _ in
-            request.append(buffer)
-
-            if let onAudioChunk,
-               let packet = makePCM16Packet(from: buffer) {
-                Task { @MainActor in
-                    onAudioChunk(packet)
-                }
-            }
-        }
-    }
-
     private func outputStandbyStatus(for provider: LingShuSpeechOutputProviderDescriptor) -> String {
         switch provider.kind {
         case .appleSpeech:
@@ -751,38 +756,4 @@ final class VoiceIOManager: ObservableObject {
         return try Data(contentsOf: outputURL)
     }
 
-    private nonisolated static func makePCM16Packet(from buffer: AVAudioPCMBuffer) -> LingShuAudioStreamPacket? {
-        let frameCount = Int(buffer.frameLength)
-        let channelCount = max(1, Int(buffer.format.channelCount))
-        guard frameCount > 0 else { return nil }
-
-        var pcmData = Data(capacity: frameCount * channelCount * MemoryLayout<Int16>.size)
-
-        if let floatData = buffer.floatChannelData {
-            for frameIndex in 0..<frameCount {
-                for channelIndex in 0..<channelCount {
-                    let sample = max(-1.0, min(1.0, floatData[channelIndex][frameIndex]))
-                    var intSample = Int16(sample * Float(Int16.max)).littleEndian
-                    withUnsafeBytes(of: &intSample) { pcmData.append(contentsOf: $0) }
-                }
-            }
-        } else if let int16Data = buffer.int16ChannelData {
-            for frameIndex in 0..<frameCount {
-                for channelIndex in 0..<channelCount {
-                    var intSample = int16Data[channelIndex][frameIndex].littleEndian
-                    withUnsafeBytes(of: &intSample) { pcmData.append(contentsOf: $0) }
-                }
-            }
-        } else {
-            return nil
-        }
-
-        return LingShuAudioStreamPacket(
-            timestamp: Date(),
-            pcm16Data: pcmData,
-            sampleRate: buffer.format.sampleRate,
-            channelCount: channelCount,
-            frameCount: frameCount
-        )
-    }
 }

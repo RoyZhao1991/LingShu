@@ -16,15 +16,14 @@ enum LingShuPerceptionActions {
             return
         }
 
+        // 用户显式点击麦克风=立即进入实时对话，不再要求先喊触发词（触发词只用于后台免手唤醒）。
         state.voiceWakeListeningEnabled = true
-        state.isVoiceConversationActive = !state.requiresVoiceWakeWord && identityAllowsConversation(perceptionGateway)
+        state.isVoiceConversationActive = identityAllowsConversation(perceptionGateway)
         state.isListening = true
-        state.missionTitle = initialVoiceMissionTitle(state: state, perceptionGateway: perceptionGateway)
-        state.missionStatus = state.requiresVoiceWakeWord
-            ? "我正在等待触发词“\(effectiveWakeWord(for: state))”。"
-            : identityAllowsConversation(perceptionGateway)
-                ? "实时对话已开启。你说完一句，我会自动进入中枢判断。"
-                : "身份锁已开启。我会先确认面容和声线，再进入实时对话。"
+        state.missionTitle = identityAllowsConversation(perceptionGateway) ? "实时对话" : "身份待确认"
+        state.missionStatus = identityAllowsConversation(perceptionGateway)
+            ? "实时对话已开启。你说完一句，我会自动进入中枢判断。"
+            : "身份锁已开启。我会先确认面容和声线，再进入实时对话。"
 
         voice.requestAuthorization { allowed in
             guard allowed else {

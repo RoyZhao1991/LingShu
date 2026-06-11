@@ -68,21 +68,6 @@ struct LingShuDialogueSurface: View {
                     .frame(width: 520, height: 320)
             }
         }
-        .onReceive(state.$chatMessages) { messages in
-            speakLatestReplyIfNeeded(messages)
-        }
-    }
-
-    private func speakLatestReplyIfNeeded(_ messages: [ChatMessage]) {
-        guard state.voiceOutputEnabled,
-              let message = messages.last(where: { !$0.isUser && !$0.isLoading }),
-              message.id != state.lastSpokenMessageID else {
-            return
-        }
-
-        state.lastSpokenMessageID = message.id
-        voice.speak(message.text)
-        perceptionGateway.ingestSpeechOutput(message.text)
     }
 
     private func chatBottomSignature(_ messages: [ChatMessage]) -> String {

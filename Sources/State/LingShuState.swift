@@ -126,6 +126,8 @@ final class LingShuState: ObservableObject {
     ]
     @Published var supervisorEvents: [SupervisorEvent] = []
     @Published var pendingAttachments: [LingShuAttachment] = []
+    /// 极简语音模式：全屏只显示输入/输出两条音频波形，纯语音对话。
+    @Published var isMinimalVoiceMode = false
 
     let mainThreadKernel = LingShuMainThreadKernel()
     private let memoryService = LingShuMemoryService()

@@ -10,34 +10,18 @@ struct LingShuRootView: View {
     private let coreTimer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
 
     var body: some View {
-        VStack(spacing: 0) {
-            LingShuStableTopBar(
-                state: state,
-                voice: voice,
-                vision: vision,
-                perceptionGateway: perceptionGateway
-            )
-
-            Group {
-                switch state.selectedSurface {
-                case .chat:
-                    LingShuDialogueSurface(
-                        state: state,
-                        voice: voice,
-                        vision: vision,
-                        perceptionGateway: perceptionGateway
-                    )
-                case .runtime:
-                    LingShuRuntimeSurface(state: state, voice: voice)
-                case .operations:
-                    LingShuOperationsSurface(state: state)
-                case .settings:
-                    LingShuModelGatewaySurface(state: state)
-                }
+        Group {
+            if state.isMinimalVoiceMode {
+                LingShuMinimalVoiceView(
+                    state: state,
+                    voice: voice,
+                    vision: vision,
+                    perceptionGateway: perceptionGateway
+                )
+            } else {
+                standardLayout
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .background(LingShuStableBackground(accent: state.coreState.color))
         .preferredColorScheme(.dark)
         .onAppear {
             state.refreshCodexAuthStatusIfNeeded()
@@ -89,6 +73,54 @@ struct LingShuRootView: View {
                 perceptionGateway.ingestVideoFrame(packet)
             }
         }
+        .onReceive(state.$chatMessages) { messages in
+            speakLatestReplyIfNeeded(messages)
+        }
+    }
+
+    /// 灵枢新回复就播报。集中在根视图，确保普通界面和极简语音模式都会发声。
+    private func speakLatestReplyIfNeeded(_ messages: [ChatMessage]) {
+        let shouldSpeak = state.voiceOutputEnabled || state.isMinimalVoiceMode
+        guard shouldSpeak,
+              let message = messages.last(where: { !$0.isUser && !$0.isLoading }),
+              message.id != state.lastSpokenMessageID else {
+            return
+        }
+
+        state.lastSpokenMessageID = message.id
+        voice.speak(message.text)
+        perceptionGateway.ingestSpeechOutput(message.text)
+    }
+
+    private var standardLayout: some View {
+        VStack(spacing: 0) {
+            LingShuStableTopBar(
+                state: state,
+                voice: voice,
+                vision: vision,
+                perceptionGateway: perceptionGateway
+            )
+
+            Group {
+                switch state.selectedSurface {
+                case .chat:
+                    LingShuDialogueSurface(
+                        state: state,
+                        voice: voice,
+                        vision: vision,
+                        perceptionGateway: perceptionGateway
+                    )
+                case .runtime:
+                    LingShuRuntimeSurface(state: state, voice: voice)
+                case .operations:
+                    LingShuOperationsSurface(state: state)
+                case .settings:
+                    LingShuModelGatewaySurface(state: state)
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .background(LingShuStableBackground(accent: state.coreState.color))
     }
 
     private func traceVisionObservationIfNeeded(_ observation: LingShuVisionObservation?) {
@@ -179,6 +211,19 @@ struct LingShuStableTopBar: View {
                 LingShuHUDReadout(label: "STATE", value: state.coreStateDisplay, color: state.coreState.color)
             }
             LingShuHUDReadout(label: "TRUST", value: "\(state.trustScore)%", color: .lingHolo)
+
+            Button {
+                state.isMinimalVoiceMode = true
+            } label: {
+                Image(systemName: "waveform")
+                    .font(.system(size: 14, weight: .bold))
+                    .foregroundStyle(Color.lingVoid)
+                    .frame(width: 34, height: 30)
+                    .background(Color.lingHolo, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("进入极简语音模式（双波形纯语音对话）")
 
             Button {
                 state.startDemoMissionIfConnected()
