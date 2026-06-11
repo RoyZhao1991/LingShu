@@ -206,6 +206,50 @@ struct LingShuCoreHeader: View {
     }
 }
 
+/// 待发送附件托盘：每个 chip = 文件名（字面）+ 解析状态（底层服务状态：解析中/就绪/失败）。
+struct LingShuAttachmentTray: View {
+    @ObservedObject var state: LingShuState
+
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(state.pendingAttachments) { attachment in
+                    HStack(spacing: 7) {
+                        Image(systemName: attachment.kind.icon)
+                            .font(.system(size: 12, weight: .bold))
+                            .foregroundStyle(Color.lingHolo)
+
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(attachment.filename)
+                                .font(.system(size: 11.5, weight: .semibold))
+                                .foregroundStyle(.white.opacity(0.9))
+                                .lineLimit(1)
+                            Text(attachment.status ?? (attachment.extractedContext.isEmpty ? "已登记" : "已解析 · 可改写"))
+                                .font(.system(size: 9, weight: .bold, design: .monospaced))
+                                .foregroundStyle(attachment.status == nil ? Color.lingHolo.opacity(0.85) : .orange.opacity(0.85))
+                                .lineLimit(1)
+                        }
+
+                        Button {
+                            state.removeAttachment(attachment.id)
+                        } label: {
+                            Image(systemName: "xmark")
+                                .font(.system(size: 9, weight: .bold))
+                                .foregroundStyle(.white.opacity(0.6))
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 7)
+                    .frame(maxWidth: 220)
+                    .lingShuHUDPanel(cornerLength: 6, fillOpacity: 0.05)
+                }
+            }
+            .padding(.horizontal, 1)
+        }
+    }
+}
+
 struct LingShuInputDock: View {
     @ObservedObject var state: LingShuState
     @ObservedObject var voice: VoiceIOManager
@@ -214,6 +258,10 @@ struct LingShuInputDock: View {
 
     var body: some View {
         VStack(spacing: 10) {
+            if !state.pendingAttachments.isEmpty {
+                LingShuAttachmentTray(state: state)
+            }
+
             TextField("向灵枢下达需求、任务或约束...", text: $state.prompt, axis: .vertical)
                 .textFieldStyle(.plain)
                 .font(.system(size: 15.5, weight: .medium))
@@ -243,6 +291,18 @@ struct LingShuInputDock: View {
                 }
 
             HStack(spacing: 10) {
+                Button {
+                    state.presentAttachmentPicker()
+                } label: {
+                    Image(systemName: "paperclip")
+                        .font(.system(size: 16, weight: .bold))
+                        .foregroundStyle(state.pendingAttachments.isEmpty ? .white.opacity(0.86) : Color.lingVoid)
+                        .frame(width: 46, height: 42)
+                        .background(state.pendingAttachments.isEmpty ? Color.white.opacity(0.08) : Color.lingHolo, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                }
+                .buttonStyle(.plain)
+                .help("上传图片 / PPT / 文档给灵枢理解或修改")
+
                 Button {
                     toggleVoiceInput()
                 } label: {

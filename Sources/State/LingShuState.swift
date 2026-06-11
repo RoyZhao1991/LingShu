@@ -125,6 +125,7 @@ final class LingShuState: ObservableObject {
         "09:43  高风险操作将进入人工确认。"
     ]
     @Published var supervisorEvents: [SupervisorEvent] = []
+    @Published var pendingAttachments: [LingShuAttachment] = []
 
     let mainThreadKernel = LingShuMainThreadKernel()
     private let memoryService = LingShuMemoryService()
@@ -874,7 +875,21 @@ final class LingShuState: ObservableObject {
 
     @discardableResult
     func sendPrompt() -> String {
-        submitTextInput(prompt, source: .typed)
+        let attachmentContext = attachmentContextBlock()
+        guard !attachmentContext.isEmpty else {
+            return submitTextInput(prompt, source: .typed)
+        }
+
+        // 有附件时：用户消息原文照常入库展示，但发给模型的提示前置附件正文上下文。
+        let userText = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        let combined = userText.isEmpty
+            ? "\(attachmentContext)\n\n请按上述文件落地交付。"
+            : "\(attachmentContext)\n\n用户指令：\n\(userText)"
+        let displayText = userText.isEmpty ? "[上传了 \(pendingAttachments.count) 个文件]" : userText
+        chatMessages.append(.init(speaker: "你", text: displayText, isUser: true))
+        prompt = ""
+        clearAttachments()
+        return submitTextInput(combined, source: .typed, appendUserMessage: false)
     }
 
     @discardableResult
