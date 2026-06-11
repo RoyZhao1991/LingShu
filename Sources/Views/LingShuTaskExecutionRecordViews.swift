@@ -193,6 +193,14 @@ struct TaskExecutionRecordHistoryBlock: View {
 
 struct TaskExecutionArtifactRow: View {
     let artifact: LingShuTaskExecutionArtifact
+    @State private var isPreviewing = false
+
+    /// 仅本机存在的文件可预览（云端链接/非文件位置不可预览）。
+    private var localFileURL: URL? {
+        let path = artifact.location.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard path.hasPrefix("/"), FileManager.default.fileExists(atPath: path) else { return nil }
+        return URL(fileURLWithPath: path)
+    }
 
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
@@ -214,6 +222,17 @@ struct TaskExecutionArtifactRow: View {
                     Text(artifact.createdAt.taskRecordDisplayTime)
                         .font(.system(size: 10.5, weight: .medium, design: .monospaced))
                         .foregroundStyle(.white.opacity(0.34))
+                    Spacer()
+                    if localFileURL != nil {
+                        Button {
+                            isPreviewing = true
+                        } label: {
+                            Label("预览", systemImage: "eye")
+                                .font(.system(size: 10.5, weight: .bold))
+                                .foregroundStyle(Color.lingHolo)
+                        }
+                        .buttonStyle(.plain)
+                    }
                 }
 
                 Text(artifact.location)
@@ -221,6 +240,11 @@ struct TaskExecutionArtifactRow: View {
                     .foregroundStyle(.white.opacity(0.62))
                     .textSelection(.enabled)
                     .lineLimit(2)
+            }
+        }
+        .sheet(isPresented: $isPreviewing) {
+            if let url = localFileURL {
+                LingShuArtifactPreviewSheet(title: artifact.title, fileURL: url)
             }
         }
     }

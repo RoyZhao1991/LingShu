@@ -2353,7 +2353,7 @@ final class LingShuState: ObservableObject {
             }
         }
 
-        let finalText = effectiveRoute.userFacingAnswer
+        let finalText = LingShuExecutionCoordinator.sanitizeServerArtifactReferences(effectiveRoute.userFacingAnswer)
         rememberMainThreadTurn(prompt: userPrompt, reply: finalText, route: effectiveRoute)
         appendTaskRecordMessage(taskRecordID, actor: "灵枢", role: "中枢", kind: .result, text: finalText)
         materializeTaskArtifacts(for: userPrompt, route: effectiveRoute, reply: finalText, taskRecordID: taskRecordID)

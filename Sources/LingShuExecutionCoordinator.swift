@@ -134,7 +134,7 @@ struct LingShuExecutionCoordinator {
         route: CodexRoutePayload,
         context: LingShuExecutionContext
     ) -> String {
-        var finalReply = reply.trimmingCharacters(in: .whitespacesAndNewlines)
+        var finalReply = Self.sanitizeServerArtifactReferences(reply).trimmingCharacters(in: .whitespacesAndNewlines)
         guard shouldAskForContinuation(after: finalReply, prompt: userPrompt, route: route, context: context) else {
             return finalReply
         }
@@ -142,6 +142,46 @@ struct LingShuExecutionCoordinator {
         let continuation = continuationQuestion(for: userPrompt, context: context)
         finalReply = finalReply.isEmpty ? continuation : "\(finalReply)\n\n\(continuation)"
         return finalReply
+    }
+
+    /// 清除模型虚构/引用的“网关后端文件”：服务端路径、minio 预签名下载链接、文件下载段。
+    /// 灵枢的真实交付物是本机生成的产出物（见产出物清单），不应把用户拿不到、且违反零留存的
+    /// 云端链接当成交付。
+    static func sanitizeServerArtifactReferences(_ text: String) -> String {
+        let serverTokens = [
+            "minio.", "/v1/files/download", "x-amz-", "hermes-export",
+            "/opt/hermes", "/opt/preannotation", "ai-temp-film", "presigned"
+        ]
+        var keptLines: [String] = []
+        var skippingDownloadSection = false
+
+        for rawLine in text.components(separatedBy: "\n") {
+            let lower = rawLine.lowercased()
+            let trimmed = rawLine.trimmingCharacters(in: .whitespaces)
+
+            // 跳过“文件下载/下载链接”小节标题及其后续直到空行或下一个标题。
+            if trimmed.hasPrefix("#") || trimmed.hasPrefix("**") {
+                if trimmed.contains("文件下载") || trimmed.contains("下载链接") || lower.contains("download") {
+                    skippingDownloadSection = true
+                    continue
+                }
+                skippingDownloadSection = false
+            }
+            if skippingDownloadSection {
+                if trimmed.isEmpty { skippingDownloadSection = false }
+                continue
+            }
+
+            if serverTokens.contains(where: { lower.contains($0) }) {
+                continue
+            }
+            keptLines.append(rawLine)
+        }
+
+        return keptLines
+            .joined(separator: "\n")
+            .replacingOccurrences(of: "\n\n\n", with: "\n\n")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private func shouldAskForContinuation(
