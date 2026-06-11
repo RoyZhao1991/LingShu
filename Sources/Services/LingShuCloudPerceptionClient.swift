@@ -65,19 +65,21 @@ struct LingShuCloudPerceptionClient {
         }
     }
 
-    /// 图片快速理解（swds-vision-fast）。
+    /// 图片快速理解（swds-vision-fast）。语义理解默认开启——场景描述、人数与
+    /// 人物状态是情境引擎的输入，没有它视觉就只剩 OCR 和目标计数。
     func analyzeImage(
         imageURL: String? = nil,
         imageBase64: String? = nil,
         prompt: String = "请解析图片中的文字、人物、物体、场景和风险点。",
         includeOCR: Bool = true,
-        includeGrounding: Bool = true
+        includeGrounding: Bool = true,
+        includeSemantics: Bool = true
     ) async throws -> LingShuCloudPerceptionResult {
         var body: [String: Any] = [
             "prompt": prompt,
             "include_ocr": includeOCR,
             "include_grounding": includeGrounding,
-            "include_qwen_semantics": false
+            "include_qwen_semantics": includeSemantics
         ]
         try attachMedia(&body, urlKey: "image_url", base64Key: "image_base64", url: imageURL, base64: imageBase64)
         return try await invokePerception(route: "swds-vision-fast", body: body)
@@ -152,10 +154,12 @@ struct LingShuCloudPerceptionClient {
         }
 
         var semantics = ""
-        if let suggestions = object["semantic_suggestions"] as? [String: Any], !suggestions.isEmpty,
-           let data = try? JSONSerialization.data(withJSONObject: suggestions, options: [.sortedKeys]),
-           let text = String(data: data, encoding: .utf8) {
-            semantics = text
+        if let suggestions = object["semantic_suggestions"] as? [String: Any], !suggestions.isEmpty {
+            semantics = flattenSemantics(suggestions)
+        }
+        // 部分网关版本把语义结果放在顶层 semantic/scene 字段。
+        if semantics.isEmpty, let scene = object["semantic"] as? String {
+            semantics = scene.trimmingCharacters(in: .whitespacesAndNewlines)
         }
 
         var totalTokens: Int?
@@ -174,6 +178,27 @@ struct LingShuCloudPerceptionClient {
             totalTokens: totalTokens,
             model: object["model"] as? String ?? ""
         )
+    }
+
+    /// 把语义建议字典摊平成可读文本（按键排序保证稳定），剥掉 JSON 包装噪音。
+    static func flattenSemantics(_ object: [String: Any], depth: Int = 0) -> String {
+        guard depth < 3 else { return "" }
+        return object.keys.sorted().compactMap { key -> String? in
+            switch object[key] {
+            case let text as String:
+                let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                return trimmed.isEmpty ? nil : trimmed
+            case let nested as [String: Any]:
+                let flattened = flattenSemantics(nested, depth: depth + 1)
+                return flattened.isEmpty ? nil : flattened
+            case let array as [Any]:
+                let parts = array.compactMap { ($0 as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+                return parts.isEmpty ? nil : parts.joined(separator: "、")
+            default:
+                return nil
+            }
+        }
+        .joined(separator: "；")
     }
 
     // MARK: - 内部

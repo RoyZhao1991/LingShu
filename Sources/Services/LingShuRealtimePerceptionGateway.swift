@@ -192,6 +192,9 @@ final class LingShuRealtimePerceptionGateway: ObservableObject {
     private var remoteProviders: [String: any LingShuRealtimePerceptionProviding] = [:]
     private var cloudProvider: LingShuDataNetPerceptionProvider?
     private var lastRawForwardAt: [LingShuPerceptionSignalKind: Date] = [:]
+    /// 最近一帧（不受转发节流影响），供对话时按需做场景理解。
+    private var latestFrameForOnDemand: LingShuVideoFramePacket?
+    private var lastSceneUnderstandingAt = Date.distantPast
     private var latestTranscription: LingShuVoiceTranscriptionResult?
     private var latestVisionObservation: LingShuVisionObservation?
     private var latestModelReply: LingShuRealtimePerceptionModelReply?
@@ -416,6 +419,7 @@ final class LingShuRealtimePerceptionGateway: ObservableObject {
 
     func ingestVideoFrame(_ packet: LingShuVideoFramePacket) {
         ownerIdentitySnapshot = ownerIdentityService.ingestVideoFrame(packet)
+        latestFrameForOnDemand = packet
 
         guard shouldForwardRawSignal(.videoFrame) else {
             recordLocal(kind: .videoFrame, summary: "视频帧本地保活：\(packet.width)x\(packet.height)")
@@ -475,6 +479,9 @@ final class LingShuRealtimePerceptionGateway: ObservableObject {
                 if let reply = try await provider.analyze(envelope) {
                     await MainActor.run {
                         self.latestModelReply = reply
+                        if envelope.kind == .videoFrame {
+                            self.lastSceneUnderstandingAt = Date()
+                        }
                         self.refreshSnapshot()
                         self.lastModelFeedback = reply.summary
                         self.statusText = "模型解析在线"
@@ -492,6 +499,54 @@ final class LingShuRealtimePerceptionGateway: ObservableObject {
                 }
             }
         }
+    }
+
+    /// 对话发生时按需刷新场景理解：被动节流（8 秒抽帧）的结果可能已经陈旧，
+    /// 用户开口的瞬间值得拿最新一帧问一次云视觉——"台下有很多人"这类情境
+    /// 必须是当下的。尊重路由选择：本地解析模式绝不出网。
+    func refreshSceneUnderstandingIfStale(maxAge: TimeInterval = 20, now: Date = Date()) {
+        guard Self.shouldRefreshScene(
+            routeIsRemote: activeRoute.mode != .local && activeProvider() != nil,
+            frameAge: latestFrameForOnDemand.map { now.timeIntervalSince($0.timestamp) },
+            understandingAge: now.timeIntervalSince(lastSceneUnderstandingAt),
+            maxAge: maxAge
+        ), let provider = activeProvider(), let frame = latestFrameForOnDemand else { return }
+
+        lastSceneUnderstandingAt = now
+        let envelope = LingShuPerceptionEnvelope(
+            timestamp: frame.timestamp,
+            kind: .videoFrame,
+            source: "mac.camera.on-demand",
+            textPayload: nil,
+            binaryPayload: frame.jpegData,
+            metadata: [
+                "encoding": "jpeg",
+                "width": String(frame.width),
+                "height": String(frame.height),
+                "trigger": "conversation"
+            ]
+        )
+        Task {
+            do {
+                if let reply = try await provider.analyze(envelope) {
+                    await MainActor.run {
+                        self.latestModelReply = reply
+                        self.lastModelFeedback = reply.summary
+                        self.refreshSnapshot()
+                    }
+                }
+            } catch {
+                await MainActor.run {
+                    self.lastModelFeedback = "按需场景理解失败，已保留上一份态势：\(error.localizedDescription)"
+                }
+            }
+        }
+    }
+
+    /// 按需刷新的纯判定（可离线测试）：路由是远端 + 有新鲜帧（≤6s）+ 现有理解已陈旧。
+    nonisolated static func shouldRefreshScene(routeIsRemote: Bool, frameAge: TimeInterval?, understandingAge: TimeInterval, maxAge: TimeInterval) -> Bool {
+        guard routeIsRemote, let frameAge, frameAge <= 6 else { return false }
+        return understandingAge >= maxAge
     }
 
     private func shouldForwardRawSignal(_ kind: LingShuPerceptionSignalKind) -> Bool {

@@ -102,7 +102,7 @@ final class LingShuDataNetPerceptionProvider: LingShuRealtimePerceptionProviding
             guard let jpeg = envelope.binaryPayload, !jpeg.isEmpty else { return nil }
             let result = try await client.analyzeImage(
                 imageBase64: jpeg.base64EncodedString(),
-                prompt: "请解析画面中的文字、人物、物体、场景和风险点，用于实时态势感知。"
+                prompt: "请解析画面用于实时态势感知：1）一句话场景描述（在哪、正在发生什么）；2）人数与人物可见状态（注意力、疲惫、情绪线索）；3）显著文字与物体；4）风险点。简洁，不要客套。"
             )
             return Self.makeReply(from: result)
 
@@ -122,8 +122,14 @@ final class LingShuDataNetPerceptionProvider: LingShuRealtimePerceptionProviding
     }
 
     /// 云端感知结果 → 态势摘要。独立成静态方法以便离线测试。
+    /// 场景语义（在哪/几个人/什么状态）排第一位——它是情境化回应的关键输入，
+    /// OCR 与目标计数只是补充。
     static func makeReply(from result: LingShuCloudPerceptionResult) -> LingShuRealtimePerceptionModelReply {
         var parts: [String] = []
+        let semantics = result.semanticSuggestions.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !semantics.isEmpty {
+            parts.append("场景理解：\(String(semantics.prefix(280)))")
+        }
         let transcript = result.transcript.trimmingCharacters(in: .whitespacesAndNewlines)
         if !transcript.isEmpty {
             parts.append("听觉转写：\(transcript)")
@@ -136,6 +142,11 @@ final class LingShuDataNetPerceptionProvider: LingShuRealtimePerceptionProviding
         }
         if parts.isEmpty {
             parts.append(result.taskType == "audio" ? "本段音频未识别到有效语音" : "画面无显著文字或目标")
+        }
+        // 语义模块失败必须可见：场景理解是情境化回应的主输入，静默缺失会让
+        // "为什么灵枢看不懂场景"变成无法排查的谜。
+        if semantics.isEmpty, let semanticsWarning = result.warnings.first(where: { $0.contains("semantics") }) {
+            parts.append("（云端场景语义模块异常：\(String(semanticsWarning.prefix(120)))）")
         }
 
         var metadata: [String: String] = ["taskType": result.taskType, "model": result.model]

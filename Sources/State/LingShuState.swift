@@ -188,6 +188,8 @@ final class LingShuState: ObservableObject {
     var chatHistoryPersistTask: Task<Void, Never>?
     /// 由根视图注入：返回当前实时态势感知上下文（无有效信号时返回空串）。
     var livePerceptionContextProvider: (() -> String)?
+    /// 对话发生时按需刷新云端场景理解（根视图注册到感知网关）。
+    var perceptionSceneRefreshTrigger: (() -> Void)?
 
     init() {
         restoreChatHistory()
@@ -927,6 +929,8 @@ final class LingShuState: ObservableObject {
             title: "文本入队",
             detail: "\(source.displayName) 已落成文本，进入灵枢主线程判断。"
         )
+        // 用户开口的瞬间按需刷新场景理解（异步，不阻塞本轮；本地解析路由不出网）。
+        perceptionSceneRefreshTrigger?()
         let mainMemoryContext = prepareMainThreadMemory(for: trimmedPrompt)
         appendTaskRecordMessage(taskRecordID, actor: "记忆", role: "主线程记忆", kind: .memory, text: mainMemoryContext.status)
 

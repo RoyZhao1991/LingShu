@@ -320,11 +320,24 @@ final class LingShuPerceptionSelfTest {
         let start = Date()
         do {
             let models = try await client.listModels()
+            // 真实调一次视觉接口：语义模块（场景理解）是情境化回应的主输入，
+            // 必须单独验证健康度，不能只看模型列表。
+            let visionResult = try? await client.analyzeImage(imageBase64: Self.tinyProbeImageBase64)
             let elapsed = Int(Date().timeIntervalSince(start) * 1000)
+
+            if let visionResult,
+               let semanticsWarning = visionResult.warnings.first(where: { $0.contains("semantics") }) {
+                return .init(
+                    name: "云感知路由",
+                    verdict: .degraded,
+                    detail: "云感知在线（\(models.count) 个模型），OCR/检测正常，但场景语义模块服务端异常：\(String(semanticsWarning.prefix(140)))。场景理解暂不可用，需网关侧修复。",
+                    latencyMillis: elapsed
+                )
+            }
             return .init(
                 name: "云感知路由",
                 verdict: .pass,
-                detail: "云感知在线：\(models.count) 个感知模型可用（当前路由：\(gateway.activeRoute.displayName)）。",
+                detail: "云感知在线：\(models.count) 个感知模型可用，视觉接口实测通畅（当前路由：\(gateway.activeRoute.displayName)）。",
                 latencyMillis: elapsed
             )
         } catch {
@@ -337,6 +350,9 @@ final class LingShuPerceptionSelfTest {
             )
         }
     }
+
+    /// 8x8 灰色 PNG：云视觉健康探测用的最小合成图（非真实感知数据）。
+    private static let tinyProbeImageBase64 = "iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAAD0lEQVR4nGNowAEYhpYEAILzYAGc7g8kAAAAAElFTkSuQmCC"
 
     private static func ownerIdentityCheck(gateway: LingShuRealtimePerceptionGateway) -> LingShuPerceptionSelfTestItem {
         let snapshot = gateway.ownerIdentitySnapshot
