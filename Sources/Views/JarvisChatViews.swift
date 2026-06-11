@@ -314,12 +314,27 @@ struct ChatBubbleView: View {
                     .help("打开本轮任务的 agent 群聊式执行记录")
                 }
             }
-            .padding(14)
+            .padding(.vertical, 12)
+            .padding(.horizontal, 14)
             .frame(maxWidth: message.isUser ? 420 : 760, alignment: .leading)
-            .background(message.isUser ? Color.lingHolo.opacity(0.22) : Color.white.opacity(0.075), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .background(
+                LinearGradient(
+                    colors: message.isUser
+                        ? [Color.lingHolo.opacity(0.16), Color.lingHolo.opacity(0.05)]
+                        : [Color.white.opacity(0.06), Color.white.opacity(0.02)],
+                    startPoint: message.isUser ? .topTrailing : .topLeading,
+                    endPoint: message.isUser ? .bottomLeading : .bottomTrailing
+                )
+            )
+            .overlay(alignment: message.isUser ? .trailing : .leading) {
+                Rectangle()
+                    .fill(message.isUser ? Color.lingHolo.opacity(0.85) : Color.lingHoloAlt.opacity(0.6))
+                    .frame(width: 2)
+                    .shadow(color: (message.isUser ? Color.lingHolo : Color.lingHoloAlt).opacity(0.6), radius: 3)
+            }
             .overlay {
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .stroke(message.isUser ? Color.lingHolo.opacity(0.34) : Color.white.opacity(0.10))
+                Rectangle()
+                    .stroke(message.isUser ? Color.lingHolo.opacity(0.22) : Color.white.opacity(0.08), lineWidth: 0.8)
             }
 
             if !message.isUser {

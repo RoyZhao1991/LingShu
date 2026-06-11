@@ -15,3 +15,9 @@ xcuserdata/
 
 # macOS
 .DS_Store
+
+# Test-generated validation artifacts
+ValidationArtifacts/artifact-manifest-*
+ValidationArtifacts/presentation-*
+ValidationArtifacts/crawler-*
+ValidationArtifacts/software-*

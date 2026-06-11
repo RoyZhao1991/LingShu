@@ -10,20 +10,7 @@ struct LingShuDialogueSurface: View {
     var body: some View {
         HStack(alignment: .top, spacing: 16) {
             VStack(spacing: 14) {
-                VStack(spacing: 5) {
-                    Text(state.coreState.rawValue)
-                        .font(.system(size: 30, weight: .semibold))
-                        .foregroundStyle(state.coreState.color)
-                    Text(state.coreStateSubtitle)
-                        .font(.system(size: 12.5, weight: .semibold, design: .monospaced))
-                        .foregroundStyle(state.coreState.color.opacity(0.78))
-                    Text("你只需要下达指令；规划、审议、调度、执行、监控、验证等 agent 的实时状态在右侧调用链显示。")
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundStyle(.white.opacity(0.55))
-                        .multilineTextAlignment(.center)
-                        .lineLimit(2)
-                }
-                .padding(.top, 12)
+                LingShuCoreHeader(state: state, voice: voice)
 
                 ScrollViewReader { proxy in
                     ScrollView {
@@ -74,11 +61,7 @@ struct LingShuDialogueSurface: View {
                 LingShuInputDock(state: state, voice: voice, vision: vision, perceptionGateway: perceptionGateway)
             }
             .padding(18)
-            .background(Color.white.opacity(0.055), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-            .overlay {
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .stroke(Color.lingHolo.opacity(0.16))
-            }
+            .lingShuHUDPanel()
 
             LingShuCallChainPanel(state: state)
                 .frame(width: 390)
@@ -116,6 +99,68 @@ struct LingShuDialogueSurface: View {
 
 }
 
+/// 对话区头部：全息核心居中，两侧为任务/通道实时读数。
+/// 核心动画由 TimelineView 驱动；秒级读数包在 1 秒周期的 TimelineView 里局部刷新，
+/// 不依赖全局状态对象的 objectWillChange。
+struct LingShuCoreHeader: View {
+    @ObservedObject var state: LingShuState
+    @ObservedObject var voice: VoiceIOManager
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 18) {
+            VStack(alignment: .leading, spacing: 10) {
+                LingShuHUDReadout(label: "MISSION", value: state.missionTitle, color: state.coreState.color)
+                LingShuHUDReadout(label: "THREADS", value: "\(state.taskThreads.count) 条任务线程")
+                LingShuHUDReadout(label: "MEMORY", value: state.mainMemoryStatus)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            ZStack {
+                LingShuHoloCoreView(
+                    color: state.coreState.color,
+                    intensity: coreIntensity,
+                    isAbnormal: state.coreState == .abnormal
+                )
+                .frame(width: 150, height: 150)
+
+                VStack(spacing: 3) {
+                    Text(state.coreState.rawValue)
+                        .font(.system(size: 17, weight: .bold))
+                        .foregroundStyle(state.coreState.color)
+                    TimelineView(.periodic(from: .now, by: 1)) { _ in
+                        Text(state.coreStateSubtitle)
+                            .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                            .foregroundStyle(state.coreState.color.opacity(0.75))
+                    }
+                    LingShuVoiceWaveView(
+                        color: state.coreState.color,
+                        isActive: voice.isRecording || voice.isSpeaking
+                    )
+                }
+            }
+
+            VStack(alignment: .trailing, spacing: 10) {
+                LingShuHUDReadout(label: "CHANNEL", value: state.modelProvider, color: state.isModelConnected ? .lingHolo : .orange)
+                LingShuHUDReadout(label: "SESSIONS", value: state.remoteSessionStatus)
+                LingShuHUDReadout(label: "TRUST", value: "\(state.trustScore)%", color: .lingHolo)
+            }
+            .frame(maxWidth: .infinity, alignment: .trailing)
+        }
+        .padding(.top, 4)
+        .frame(height: 158)
+    }
+
+    private var coreIntensity: Double {
+        if voice.isRecording { return 1.0 }
+        switch state.coreState {
+        case .standby: return 0.12
+        case .thinking: return 1.0
+        case .executing: return 0.75
+        case .abnormal: return 0.45
+        }
+    }
+}
+
 struct LingShuInputDock: View {
     @ObservedObject var state: LingShuState
     @ObservedObject var voice: VoiceIOManager
@@ -131,10 +176,21 @@ struct LingShuInputDock: View {
                 .lineLimit(5...8)
                 .padding(14)
                 .frame(minHeight: 126, alignment: .topLeading)
-                .background(Color.white.opacity(0.075), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-                .overlay {
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .stroke(Color.lingHolo.opacity(0.22))
+                .lingShuHUDPanel(
+                    accent: voice.isRecording ? .red : .lingHolo,
+                    cornerLength: 10,
+                    fillOpacity: 0.06
+                )
+                .overlay(alignment: .bottomTrailing) {
+                    if voice.isRecording {
+                        HStack(spacing: 6) {
+                            LingShuVoiceWaveView(color: .red, isActive: true, barCount: 7)
+                            Text("正在聆听")
+                                .font(.system(size: 10, weight: .bold, design: .monospaced))
+                                .foregroundStyle(.red.opacity(0.85))
+                        }
+                        .padding(10)
+                    }
                 }
                 .submitLabel(.send)
                 .onSubmit {

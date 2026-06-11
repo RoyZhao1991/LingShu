@@ -94,19 +94,7 @@ struct LingShuRootView: View {
 
 struct LingShuStableBackground: View {
     var body: some View {
-        ZStack {
-            Color.lingVoid
-            LinearGradient(
-                colors: [
-                    Color.lingHolo.opacity(0.14),
-                    Color.clear,
-                    Color.black.opacity(0.35)
-                ],
-                startPoint: .topTrailing,
-                endPoint: .bottomLeading
-            )
-        }
-        .ignoresSafeArea()
+        LingShuHUDBackground()
     }
 }
 
@@ -117,21 +105,25 @@ struct LingShuStableTopBar: View {
     @ObservedObject var perceptionGateway: LingShuRealtimePerceptionGateway
 
     var body: some View {
-        HStack(spacing: 14) {
-            HStack(spacing: 12) {
-                Image(systemName: "sparkles")
-                    .font(.system(size: 19, weight: .bold))
-                    .foregroundStyle(Color.lingVoid)
-                    .frame(width: 36, height: 36)
-                    .background(Color.lingHolo, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        HStack(spacing: 16) {
+            HStack(spacing: 11) {
+                ZStack {
+                    LingShuHoloCoreView(
+                        color: state.coreState.color,
+                        intensity: state.coreState == .standby ? 0.12 : 0.8,
+                        isAbnormal: state.coreState == .abnormal
+                    )
+                    .frame(width: 34, height: 34)
+                }
 
-                VStack(alignment: .leading, spacing: 2) {
+                VStack(alignment: .leading, spacing: 1) {
                     Text("灵枢")
-                        .font(.system(size: 20, weight: .semibold))
+                        .font(.system(size: 18, weight: .semibold))
                         .foregroundStyle(.white)
-                    Text("对话式 AI 中枢，能力节点在后台协作。")
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(.white.opacity(0.52))
+                    Text("LINGSHU · GENERAL AGENT HUB")
+                        .font(.system(size: 8.5, weight: .bold, design: .monospaced))
+                        .tracking(1.8)
+                        .foregroundStyle(Color.lingHolo.opacity(0.6))
                         .lineLimit(1)
                 }
             }
@@ -145,51 +137,57 @@ struct LingShuStableTopBar: View {
 
             Spacer()
 
-            HStack(spacing: 7) {
+            HStack(spacing: 2) {
                 ForEach(AppSurface.allCases) { surface in
+                    let isSelected = state.selectedSurface == surface
                     Button {
                         state.selectedSurface = surface
                     } label: {
-                        Label(surface.rawValue, systemImage: surface.icon)
-                            .font(.system(size: 13, weight: .semibold))
-                            .padding(.horizontal, 12)
-                            .frame(height: 34)
-                            .foregroundStyle(state.selectedSurface == surface ? Color.lingVoid : .white.opacity(0.76))
-                            .background(
-                                state.selectedSurface == surface ? Color.lingHolo : Color.white.opacity(0.07),
-                                in: RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            )
-                            .overlay {
-                                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                    .stroke(Color.white.opacity(state.selectedSurface == surface ? 0 : 0.08))
-                            }
+                        VStack(spacing: 5) {
+                            Label(surface.rawValue, systemImage: surface.icon)
+                                .font(.system(size: 12.5, weight: .semibold))
+                                .foregroundStyle(isSelected ? Color.lingHolo : .white.opacity(0.6))
+                            Rectangle()
+                                .fill(isSelected ? Color.lingHolo : .clear)
+                                .frame(height: 2)
+                                .shadow(color: isSelected ? Color.lingHolo.opacity(0.8) : .clear, radius: 4)
+                        }
+                        .padding(.horizontal, 13)
+                        .padding(.top, 9)
+                        .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
                 }
             }
 
-            LingShuCompactStatus(title: "状态", value: state.coreStateDisplay, color: state.coreState.color)
-            LingShuCompactStatus(title: "可信", value: "\(state.trustScore)%")
+            TimelineView(.periodic(from: .now, by: 1)) { _ in
+                LingShuHUDReadout(label: "STATE", value: state.coreStateDisplay, color: state.coreState.color)
+            }
+            LingShuHUDReadout(label: "TRUST", value: "\(state.trustScore)%", color: .lingHolo)
 
             Button {
                 state.startDemoMissionIfConnected()
             } label: {
                 Image(systemName: "play.fill")
-                    .font(.system(size: 14, weight: .bold))
-                    .foregroundStyle(Color.lingVoid)
-                    .frame(width: 36, height: 34)
-                    .background(Color.lingHolo, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    .font(.system(size: 13, weight: .bold))
+                    .foregroundStyle(Color.lingHolo)
+                    .frame(width: 34, height: 30)
+                    .overlay { LingShuHUDCorners(accent: .lingHolo, cornerLength: 7) }
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .help("演示一次多 Agent 流转")
         }
         .padding(.horizontal, 22)
-        .padding(.vertical, 12)
-        .background(Color.black.opacity(0.72))
+        .padding(.vertical, 10)
+        .background(Color.black.opacity(0.6))
         .overlay(alignment: .bottom) {
-            Rectangle()
-                .fill(Color.lingHolo.opacity(0.18))
-                .frame(height: 1)
+            LinearGradient(
+                colors: [.clear, Color.lingHolo.opacity(0.55), .clear],
+                startPoint: .leading,
+                endPoint: .trailing
+            )
+            .frame(height: 1)
         }
     }
 }
