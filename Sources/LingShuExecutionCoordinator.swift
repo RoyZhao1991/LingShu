@@ -148,6 +148,8 @@ struct LingShuExecutionCoordinator {
     /// 灵枢的真实交付物是本机生成的产出物（见产出物清单），不应把用户拿不到、且违反零留存的
     /// 云端链接当成交付。
     static func sanitizeServerArtifactReferences(_ text: String) -> String {
+        // 先剥离 MiniMax M3 的内联思考，再清洗服务端文件引用。
+        let text = LingShuReasoningText.stripThinkTags(text)
         let serverTokens = [
             "minio.", "/v1/files/download", "x-amz-", "hermes-export",
             "/opt/hermes", "/opt/preannotation", "ai-temp-film", "presigned"

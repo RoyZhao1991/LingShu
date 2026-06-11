@@ -58,9 +58,9 @@ final class LingShuState: ObservableObject {
     @Published var activeLayer = "灵枢中枢"
     @Published var runtimePhase: MissionRuntimePhase = .idle
     @Published var supervisionTick = 0
-    @Published var modelProvider = ModelProviderPreset.dataNetGateway.name
-    @Published var modelName = ModelProviderPreset.dataNetGateway.defaultModels[0]
-    @Published var endpoint = ModelProviderPreset.dataNetGateway.endpoint
+    @Published var modelProvider = ModelProviderPreset.minimaxOfficial.name
+    @Published var modelName = ModelProviderPreset.minimaxOfficial.defaultModels[0]
+    @Published var endpoint = ModelProviderPreset.minimaxOfficial.endpoint
     @Published var apiKey = "" {
         didSet {
             guard apiKey != oldValue, let preset = selectedModelPreset else { return }
@@ -237,7 +237,9 @@ final class LingShuState: ObservableObject {
     }
 
     var shouldUseLocalStreamingDialogue: Bool {
-        !usesCodexAuth && localStreamingDialogueEnabled && usesLocalModelGateway
+        guard !usesCodexAuth, localStreamingDialogueEnabled else { return false }
+        // 本地模型和 MiniMax 官方都走标准 OpenAI 流式（delta.content）。
+        return usesLocalModelGateway || selectedModelPreset?.id == ModelProviderPreset.minimaxOfficial.id
     }
 
     var availableModelNames: [String] {
@@ -762,14 +764,19 @@ final class LingShuState: ObservableObject {
 
     /// 感知专项接口客户端：仅当当前通道是数据网络网关且已配置 token 时可用。
     /// 图片/音频/视频等感知任务统一走网关，不直连底层模型。
+    /// 感知专项接口固定走数据网络网关，独立于主通道：主通道切到 MiniMax 官方后，
+    /// 图片/音频/视频仍用数据网关的凭据（按 datanet-gateway 从钥匙串取），互不影响。
     var cloudPerceptionClient: LingShuCloudPerceptionClient? {
-        guard let preset = selectedModelPreset,
-              preset.id == ModelProviderPreset.dataNetGateway.id,
-              !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-              let url = URL(string: endpoint) else {
+        let gateway = ModelProviderPreset.dataNetGateway
+        // 当前主通道就是数据网关时用当前 apiKey，否则从钥匙串取数据网关自己的 key。
+        let currentKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        let token = (selectedModelPreset?.id == gateway.id && !currentKey.isEmpty)
+            ? currentKey
+            : credentialStore.apiKey(forProvider: gateway.id)
+        guard let token, !token.isEmpty, let url = URL(string: gateway.endpoint) else {
             return nil
         }
-        return LingShuCloudPerceptionClient(baseEndpoint: url, token: apiKey)
+        return LingShuCloudPerceptionClient(baseEndpoint: url, token: token)
     }
 
     func applyModelProvider(_ providerName: String) {

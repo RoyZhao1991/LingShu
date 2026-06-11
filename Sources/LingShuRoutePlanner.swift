@@ -99,7 +99,10 @@ struct LingShuRoutePlanner {
     }
 
     private func extractJSONObject(from rawReply: String) -> String? {
-        let trimmed = rawReply.trimmingCharacters(in: .whitespacesAndNewlines)
+        // 先剥离推理标签（MiniMax M3 会先输出 <think>…</think> 再给 JSON），否则
+        // think 内容里若出现 { 会污染 JSON 提取。
+        let stripped = LingShuReasoningText.stripThinkTags(rawReply)
+        let trimmed = stripped.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let start = trimmed.firstIndex(of: "{"),
               let end = trimmed.lastIndex(of: "}"),
               start <= end else {

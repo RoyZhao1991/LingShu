@@ -280,6 +280,18 @@ struct ModelProviderPreset: Identifiable {
         note: "复用本机 Codex 登录状态，不读取 token。"
     )
 
+    static let minimaxOfficial = ModelProviderPreset(
+        id: "minimax-official",
+        name: "MiniMax 官方",
+        region: "国内·官方直连",
+        category: "纯推理通道",
+        endpoint: "https://api.minimaxi.com/v1",
+        protocolName: "OpenAI Chat",
+        authMode: "API Key",
+        defaultModels: ["MiniMax-M3", "MiniMax-M2.7"],
+        note: "MiniMax 官方直连，纯文本推理、标准流式、无 agent 框架注入（prompt 基数约 178 而非网关的 1.34 万）。文本与中枢调度走这里；图片/音频/视频感知仍走数据网络网关专项接口。"
+    )
+
     static let dataNetGateway = ModelProviderPreset(
         id: "datanet-gateway",
         name: "数据网络网关",
@@ -289,10 +301,11 @@ struct ModelProviderPreset: Identifiable {
         protocolName: "OpenAI Chat",
         authMode: "网关 Token",
         defaultModels: ["swds-multimodal-parse", "swds-text-parse"],
-        note: "数据增值协作网络算力中心统一网关：鉴权、限额、Token 计量与后端模型路由由网关处理；图片/音频/视频走 /v1/perception 专项接口，不直连底层模型。"
+        note: "数据增值协作网络算力中心统一网关：图片/音频/视频走 /v1/perception 专项接口。注意：其 chat 端点每次注入约 1.34 万 token 的 agent 框架，文本推理建议优先用 MiniMax 官方直连。"
     )
 
     static let apiCatalog: [ModelProviderPreset] = [
+        minimaxOfficial,
         dataNetGateway,
         .init(id: "openai", name: "OpenAI", region: "海外", category: "原厂 API", endpoint: "https://api.openai.com/v1", protocolName: "Responses / OpenAI", authMode: "API Key", defaultModels: ["gpt-5.5", "gpt-5", "gpt-4.1", "gpt-4o"], note: "适合作为灵枢主中枢和复杂推理模型。"),
         .init(id: "azure-openai", name: "Azure OpenAI", region: "海外/企业", category: "云厂商托管", endpoint: "https://{resource}.openai.azure.com/openai", protocolName: "Azure OpenAI", authMode: "API Key / Entra ID", defaultModels: ["gpt-5.5", "gpt-5", "gpt-4.1", "gpt-4o"], note: "适合企业账号、私有网络和合规场景。"),
