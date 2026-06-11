@@ -10,6 +10,7 @@ struct LingShuEngineeringArtifactService {
     enum Capability: Equatable {
         case software
         case presentation
+        case document
     }
 
     func inferCapabilities(prompt: String, route: CodexRoutePayload? = nil) -> [Capability] {
@@ -29,6 +30,37 @@ struct LingShuEngineeringArtifactService {
             || text.contains("陈述")
             || text.contains("deck") {
             capabilities.append(.presentation)
+        }
+
+        // 明确点名文件格式/文件名时直接触发；泛文档名词（文档/报告/资料等）须配合生成动词，
+        // 避免“查个资料”“看下这份报告”这类非生成请求误产出一堆文件。
+        let explicitFileSignal = text.contains(".md")
+            || text.contains(".txt")
+            || text.contains(".html")
+            || text.contains(".json")
+            || text.contains(".csv")
+            || text.contains("readme")
+            || text.contains("本地文件")
+        let documentSignal = text.contains("markdown")
+            || text.contains("pdf")
+            || text.contains("txt")
+            || text.contains("html")
+            || text.contains("json")
+            || text.contains("csv")
+            || text.contains("文档")
+            || text.contains("报告")
+            || text.contains("说明书")
+            || text.contains("手册")
+            || text.contains("资料")
+            || text.contains("表格")
+            || text.contains("清单")
+        let generationVerb = text.contains("生成")
+            || text.contains("做一") || text.contains("做个") || text.contains("帮我做")
+            || text.contains("写一") || text.contains("写个") || text.contains("帮我写")
+            || text.contains("编写") || text.contains("制作") || text.contains("导出")
+            || text.contains("整理") || text.contains("出一") || text.contains("给我一")
+        if explicitFileSignal || (documentSignal && generationVerb) {
+            capabilities.append(.document)
         }
 
         if text.contains("爬虫")
@@ -64,6 +96,8 @@ struct LingShuEngineeringArtifactService {
                 artifacts.append(contentsOf: makeCrawlerArtifacts(root: root, stamp: stamp, prompt: prompt, reply: reply))
             case .presentation:
                 artifacts.append(contentsOf: makePresentationArtifacts(root: root, stamp: stamp, prompt: prompt, reply: reply))
+            case .document:
+                artifacts.append(contentsOf: makeDocumentArtifacts(root: root, stamp: stamp, prompt: prompt, reply: reply))
             }
         }
 

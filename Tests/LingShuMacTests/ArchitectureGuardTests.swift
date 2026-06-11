@@ -14,6 +14,7 @@ final class ArchitectureGuardTests: XCTestCase {
         XCTAssertTrue(document.contains("灵枢主线程只做判断、记忆恢复、能力编排、权限裁决、验收和统一回复"))
         XCTAssertTrue(document.contains("实时感知能力必须分三层"))
         XCTAssertTrue(document.contains("设计部是通用设计交付能力"))
+        XCTAssertTrue(document.contains("文本、Markdown、PDF、PPTX、HTML、JSON、CSV"))
         XCTAssertTrue(document.contains("每条用户消息必须创建任务执行记录"))
         XCTAssertTrue(document.contains("默认热加载最近 3 天的聊天历史"))
         XCTAssertTrue(document.contains("身份锁开启后，触发词命中也必须先通过面容和声线联合确认"))
@@ -112,6 +113,7 @@ final class ArchitectureGuardTests: XCTestCase {
             "Sources/Services/LingShuEngineeringArtifactService.swift",
             "Sources/Services/LingShuCrawlerArtifactBuilder.swift",
             "Sources/Services/LingShuPresentationArtifactBuilder.swift",
+            "Sources/Services/LingShuLocalDocumentArtifactBuilder.swift",
             "Sources/Services/LingShuArtifactManifestWriter.swift",
             "Sources/Services/LingShuArtifactFileWriter.swift"
         ].map { projectRoot.appendingPathComponent($0) }

@@ -1589,6 +1589,63 @@ final class CoreBoundaryTests: XCTestCase {
         XCTAssertEqual(process.terminationStatus, 0)
     }
 
+    func testEngineeringArtifactServiceCreatesLocalDocumentArtifacts() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lingshu-artifact-doc-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+
+        let service = LingShuEngineeringArtifactService()
+        let artifacts = service.materializeArtifacts(
+            prompt: "生成一份 markdown、PDF 和 CSV 说明书",
+            reply: "这是灵枢整理后的本地文档内容。",
+            workingDirectory: root.path,
+            now: Date(timeIntervalSince1970: 1_800_000_200)
+        )
+
+        let markdown = try XCTUnwrap(artifacts.first { $0.location.hasSuffix("lingshu-document.md") })
+        let text = try XCTUnwrap(artifacts.first { $0.location.hasSuffix("lingshu-document.txt") })
+        let html = try XCTUnwrap(artifacts.first { $0.location.hasSuffix("lingshu-document.html") })
+        let pdf = try XCTUnwrap(artifacts.first { $0.location.hasSuffix("lingshu-document.pdf") })
+        let json = try XCTUnwrap(artifacts.first { $0.location.hasSuffix("lingshu-document.json") })
+        let csv = try XCTUnwrap(artifacts.first { $0.location.hasSuffix("lingshu-document.csv") })
+
+        for artifact in [markdown, text, html, pdf, json, csv] {
+            XCTAssertTrue(FileManager.default.fileExists(atPath: artifact.location), artifact.location)
+        }
+
+        let markdownText = try String(contentsOfFile: markdown.location, encoding: .utf8)
+        XCTAssertTrue(markdownText.contains("原始需求"))
+        XCTAssertTrue(markdownText.contains("这是灵枢整理后的本地文档内容"))
+
+        let htmlText = try String(contentsOfFile: html.location, encoding: .utf8)
+        XCTAssertTrue(htmlText.contains("LingShu local artifact"))
+
+        let jsonText = try String(contentsOfFile: json.location, encoding: .utf8)
+        XCTAssertTrue(jsonText.contains("LingShuLocalDocumentArtifactBuilder"))
+
+        let csvText = try String(contentsOfFile: csv.location, encoding: .utf8)
+        XCTAssertTrue(csvText.contains("local-document"))
+
+        let pdfData = try Data(contentsOf: URL(fileURLWithPath: pdf.location))
+        XCTAssertEqual(String(decoding: pdfData.prefix(4), as: UTF8.self), "%PDF")
+
+        // JSON 必须是合法 JSON（用 JSONSerialization 生成，能抗特殊字符）。
+        let jsonData = try Data(contentsOf: URL(fileURLWithPath: json.location))
+        let parsed = try JSONSerialization.jsonObject(with: jsonData) as? [String: Any]
+        XCTAssertEqual(parsed?["type"] as? String, "local-document")
+    }
+
+    func testDocumentCapabilityNeedsGenerationIntentForGenericNouns() {
+        let service = LingShuEngineeringArtifactService()
+        // 泛文档名词但没有生成动词：研究/查阅类请求，不应产出文件。
+        XCTAssertFalse(service.inferCapabilities(prompt: "帮我查一下这个项目的资料").contains(.document))
+        XCTAssertFalse(service.inferCapabilities(prompt: "看一下这份报告说了什么").contains(.document))
+        // 配合生成动词或点名格式：应触发。
+        XCTAssertTrue(service.inferCapabilities(prompt: "帮我写一份项目报告").contains(.document))
+        XCTAssertTrue(service.inferCapabilities(prompt: "导出一个 readme").contains(.document))
+    }
+
     private func makeOwnerVisionObservation(index: Int) -> LingShuVisionObservation {
         LingShuVisionObservation(
             timestamp: Date(timeIntervalSince1970: 1_800_000_100 + Double(index)),

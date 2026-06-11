@@ -1,17 +1,19 @@
+import AppKit
+import AVKit
+import QuickLookUI
 import SwiftUI
 import WebKit
-import QuickLookUI
 
-/// 把本地产出物文件渲染进灵枢内预览。HTML 演示页用 WKWebView 直接渲染；
-/// 其他文件（PPTX/PDF 等）用系统 QuickLook 预览，或调用系统应用打开。
+/// 把本地产出物文件渲染进灵枢内预览。
+/// HTML 用 WKWebView；图片、音频、视频走本机原生预览；其他文件走 QuickLook。
 struct LingShuArtifactPreviewSheet: View {
     let title: String
     let fileURL: URL
 
     @Environment(\.dismiss) private var dismiss
 
-    private var isWebRenderable: Bool {
-        ["html", "htm"].contains(fileURL.pathExtension.lowercased())
+    private var previewKind: LingShuArtifactPreviewKind {
+        LingShuArtifactPreviewKind(fileExtension: fileURL.pathExtension)
     }
 
     var body: some View {
@@ -48,14 +50,39 @@ struct LingShuArtifactPreviewSheet: View {
             .padding(12)
             .background(Color.black.opacity(0.6))
 
-            if isWebRenderable {
+            switch previewKind {
+            case .web:
                 LingShuWebView(fileURL: fileURL)
-            } else {
+            case .image:
+                LingShuImagePreviewView(fileURL: fileURL)
+            case .media:
+                LingShuMediaPreviewView(fileURL: fileURL)
+            case .quickLook:
                 LingShuQuickLookView(fileURL: fileURL)
             }
         }
         .frame(width: 900, height: 620)
         .background(Color.lingVoid)
+    }
+}
+
+private enum LingShuArtifactPreviewKind {
+    case web
+    case image
+    case media
+    case quickLook
+
+    init(fileExtension: String) {
+        let ext = fileExtension.lowercased()
+        if ["html", "htm"].contains(ext) {
+            self = .web
+        } else if ["png", "jpg", "jpeg", "gif", "bmp", "webp", "heic", "tif", "tiff"].contains(ext) {
+            self = .image
+        } else if ["mp3", "m4a", "wav", "aiff", "aac", "flac", "mov", "mp4", "m4v", "avi", "mkv"].contains(ext) {
+            self = .media
+        } else {
+            self = .quickLook
+        }
     }
 }
 
@@ -89,5 +116,64 @@ struct LingShuQuickLookView: NSViewRepresentable {
 
     func updateNSView(_ view: QLPreviewView, context: Context) {
         view.previewItem = fileURL as NSURL
+    }
+}
+
+/// 本地图片预览，避免把图片上传到云端或外部服务。
+struct LingShuImagePreviewView: NSViewRepresentable {
+    let fileURL: URL
+
+    func makeNSView(context: Context) -> NSScrollView {
+        let scrollView = NSScrollView()
+        scrollView.drawsBackground = true
+        scrollView.backgroundColor = NSColor.black.withAlphaComponent(0.35)
+        scrollView.hasVerticalScroller = true
+        scrollView.hasHorizontalScroller = true
+
+        let imageView = NSImageView()
+        imageView.imageScaling = .scaleProportionallyUpOrDown
+        imageView.imageAlignment = .alignCenter
+        imageView.image = NSImage(contentsOf: fileURL)
+        scrollView.documentView = imageView
+        return scrollView
+    }
+
+    func updateNSView(_ scrollView: NSScrollView, context: Context) {
+        guard let imageView = scrollView.documentView as? NSImageView else { return }
+        imageView.image = NSImage(contentsOf: fileURL)
+        imageView.frame = scrollView.bounds
+    }
+}
+
+/// 本地音视频预览，保留系统播放控件，不自动播放。
+struct LingShuMediaPreviewView: NSViewRepresentable {
+    let fileURL: URL
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator()
+    }
+
+    func makeNSView(context: Context) -> AVPlayerView {
+        let view = AVPlayerView()
+        view.controlsStyle = .inline
+        view.player = context.coordinator.player(for: fileURL)
+        return view
+    }
+
+    func updateNSView(_ view: AVPlayerView, context: Context) {
+        view.player = context.coordinator.player(for: fileURL)
+    }
+
+    final class Coordinator {
+        private var currentURL: URL?
+        private var currentPlayer: AVPlayer?
+
+        func player(for url: URL) -> AVPlayer {
+            if currentURL != url {
+                currentURL = url
+                currentPlayer = AVPlayer(url: url)
+            }
+            return currentPlayer ?? AVPlayer(url: url)
+        }
     }
 }

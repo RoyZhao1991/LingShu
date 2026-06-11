@@ -3,6 +3,7 @@ import Foundation
 @preconcurrency import Speech
 
 // 麦克风/播放的实时电平与音频缓冲处理。从 VoiceIOManager 拆出以守住 800 行硬上限。
+@MainActor
 extension VoiceIOManager {
     /// 输出电平驱动：AVAudioPlayer 路径用真实音量计；Apple 合成器无音量计时用与语音同步的活跃动画值。
     func startOutputMetering() {
