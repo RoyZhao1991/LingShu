@@ -3,60 +3,97 @@ import SwiftUI
 struct LingShuOperationsSurface: View {
     @ObservedObject var state: LingShuState
 
+    private let gridColumns = [GridItem(.adaptive(minimum: 156), spacing: 12)]
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
-                SectionHeader(icon: "building.columns", title: "隐藏运维界面", subtitle: "能力池、调用链、审计与能力域")
+                SectionHeader(icon: "building.columns", title: "能力运维", subtitle: "能力节点实时状态 · 运行策略 · 会话池 · 事件流")
 
-                HStack(alignment: .top, spacing: 16) {
-                    LingShuOpsCard(title: "治理链路", icon: "building.columns", lines: ["规划：任务草案", "审议：风险与权限", "调度：分派与汇总"])
-                    LingShuOpsCard(title: "能力节点", icon: "hammer", lines: ["规划 / 审议 / 调度", "执行 / 监控 / 验证", "记忆 / 安全 / 知识"])
-                    LingShuOpsCard(title: "运行策略", icon: "checkmark.shield", lines: ["灵枢统一回复", "节点只进调用链", "高风险人工确认"])
-                }
-
-                VStack(alignment: .leading, spacing: 10) {
-                    Text("事件日志")
-                        .font(.system(size: 16, weight: .semibold))
-                        .foregroundStyle(.white)
-                    ForEach(state.eventLog.prefix(10), id: \.self) { item in
-                        Text(item)
-                            .font(.system(size: 12.5, weight: .medium, design: .monospaced))
-                            .foregroundStyle(.white.opacity(0.62))
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(10)
-                            .background(Color.white.opacity(0.055), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                // 能力节点矩阵：每个节点 = 角色名（字面）+ 实时运行态（服务状态）+ 负载条。
+                Text("能力节点 · \(state.activeWorkerCount) 执行 / \(state.activeSupervisorCount) 监控 / \(state.agents.count) 注册")
+                    .font(.system(size: 11.5, weight: .bold, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.5))
+                LazyVGrid(columns: gridColumns, spacing: 12) {
+                    ForEach(state.agents) { agent in
+                        LingShuDualLayerCell(
+                            label: agent.shortName,
+                            value: agent.domain,
+                            stateText: agentStateText(agent.state),
+                            stateColor: agentStateColor(agent.state),
+                            load: agent.load
+                        )
                     }
                 }
-                .padding(16)
-                .background(Color.white.opacity(0.055), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+
+                // 运行策略：每条策略的开关真实状态。
+                Text("运行策略")
+                    .font(.system(size: 11.5, weight: .bold, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.5))
+                LazyVGrid(columns: gridColumns, spacing: 12) {
+                    policyCell("人工确认", on: state.requireHumanApproval, onText: "高风险拦截", offText: "已放行")
+                    policyCell("本地审计", on: state.enableLocalAudit, onText: "记录在册", offText: "未记录")
+                    policyCell("语音播报", on: state.voiceOutputEnabled, onText: "已开启", offText: "静默")
+                    policyCell("流式多轮", on: state.localStreamingDialogueEnabled, onText: "流式", offText: "整段")
+                    LingShuDualLayerCell(
+                        label: "会话池",
+                        value: state.remoteSessionStatus,
+                        stateText: state.remoteSessionPool.stats().running > 0 ? "运行中" : "空闲",
+                        stateColor: state.remoteSessionPool.stats().running > 0 ? .lingHolo : .white.opacity(0.45)
+                    )
+                    LingShuDualLayerCell(
+                        label: "主通道",
+                        value: state.modelProvider,
+                        stateText: state.isModelConnected ? "已接入" : "未接入",
+                        stateColor: state.isModelConnected ? .lingHolo : .orange
+                    )
+                }
+
+                // 事件流：底层服务事件，本身即第二层状态信息。
+                Text("事件流 · \(state.eventLog.count) 条")
+                    .font(.system(size: 11.5, weight: .bold, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.5))
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(Array(state.eventLog.prefix(12).enumerated()), id: \.offset) { _, item in
+                        HStack(spacing: 8) {
+                            Circle().fill(Color.lingHolo.opacity(0.7)).frame(width: 4, height: 4)
+                            Text(item)
+                                .font(.system(size: 12, weight: .medium, design: .monospaced))
+                                .foregroundStyle(.white.opacity(0.66))
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        .padding(.vertical, 7)
+                        .padding(.horizontal, 10)
+                        .lingShuHUDPanel(cornerLength: 6, fillOpacity: 0.03)
+                    }
+                }
             }
             .padding(22)
         }
     }
-}
 
-struct LingShuOpsCard: View {
-    let title: String
-    let icon: String
-    let lines: [String]
+    private func policyCell(_ label: String, on: Bool, onText: String, offText: String) -> some View {
+        LingShuDualLayerCell(
+            label: label,
+            value: on ? onText : offText,
+            stateText: on ? "启用" : "关闭",
+            stateColor: on ? .lingHolo : .white.opacity(0.45)
+        )
+    }
 
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Label(title, systemImage: icon)
-                .font(.system(size: 16, weight: .semibold))
-                .foregroundStyle(.white)
-            ForEach(lines, id: \.self) { line in
-                Text(line)
-                    .font(.system(size: 12.5, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.62))
-            }
+    private func agentStateText(_ s: StepState) -> String {
+        switch s {
+        case .waiting: "待命"
+        case .running: "执行中"
+        case .done: "完成"
         }
-        .frame(maxWidth: .infinity, alignment: .topLeading)
-        .padding(16)
-        .background(Color.white.opacity(0.055), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .stroke(Color.white.opacity(0.08))
+    }
+
+    private func agentStateColor(_ s: StepState) -> Color {
+        switch s {
+        case .waiting: .white.opacity(0.45)
+        case .running: .lingHolo
+        case .done: .green
         }
     }
 }
@@ -67,7 +104,7 @@ struct LingShuModelGatewaySurface: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
-                SectionHeader(icon: "slider.horizontal.3", title: "模型访问配置", subtitle: "Codex Auth + 国内外主流大模型 API + 本地模型")
+                SectionHeader(icon: "slider.horizontal.3", title: "模型访问配置", subtitle: "默认数据网络网关 · Codex Auth · 主流大模型 API · 本地模型")
 
                 HStack(alignment: .top, spacing: 16) {
                     VStack(alignment: .leading, spacing: 12) {
@@ -99,10 +136,7 @@ struct LingShuModelGatewaySurface: View {
                             .font(.system(size: 12, weight: .semibold))
                             .foregroundStyle(.white.opacity(0.76))
 
-                        Text("Fast 模式只切换 Codex 的推理强度和服务档位；执行不按总时长中断，只有连续失去心跳才进入异常。")
-                            .font(.system(size: 11, weight: .medium))
-                            .foregroundStyle(.white.opacity(0.52))
-                            .fixedSize(horizontal: false, vertical: true)
+                        LingShuConfigLine(title: "档位", value: state.codexFastMode ? "Fast · 高推理档" : "标准 · 默认档")
 
                         HStack(spacing: 10) {
                             Button("使用 Codex Auth") {
@@ -147,10 +181,8 @@ struct LingShuModelGatewaySurface: View {
                         Toggle("本地模型流式多轮对话", isOn: $state.localStreamingDialogueEnabled)
                             .toggleStyle(.switch)
 
-                        Text(state.selectedModelPreset?.note ?? "自定义模型网关。")
-                            .font(.system(size: 12, weight: .medium))
-                            .foregroundStyle(.white.opacity(0.58))
-                            .fixedSize(horizontal: false, vertical: true)
+                        LingShuConfigLine(title: "鉴权", value: state.apiKey.isEmpty ? "未配置 \(state.selectedModelPreset?.authMode ?? "凭据")" : "已配置 · 钥匙串")
+                        LingShuConfigLine(title: "通道", value: state.isModelConnected ? "已接入 · \(state.modelName)" : "未接入")
                     }
                     .frame(maxWidth: .infinity, alignment: .topLeading)
                     .padding(16)
@@ -163,9 +195,19 @@ struct LingShuModelGatewaySurface: View {
                             state.applyModelProvider(preset.name)
                         } label: {
                             VStack(alignment: .leading, spacing: 7) {
-                                Text(preset.name)
-                                    .font(.system(size: 13, weight: .semibold))
-                                    .foregroundStyle(.white)
+                                HStack(spacing: 6) {
+                                    Circle()
+                                        .fill(presetStateColor(preset))
+                                        .frame(width: 6, height: 6)
+                                        .shadow(color: presetStateColor(preset).opacity(0.8), radius: 3)
+                                    Text(preset.name)
+                                        .font(.system(size: 13, weight: .semibold))
+                                        .foregroundStyle(.white)
+                                    Spacer(minLength: 2)
+                                    Text(presetStateText(preset))
+                                        .font(.system(size: 9, weight: .bold, design: .monospaced))
+                                        .foregroundStyle(presetStateColor(preset))
+                                }
                                 Text("\(preset.region) · \(preset.category)")
                                     .font(.system(size: 11.5, weight: .medium))
                                     .foregroundStyle(.white.opacity(0.54))
@@ -189,6 +231,22 @@ struct LingShuModelGatewaySurface: View {
             }
             .padding(22)
         }
+    }
+}
+
+private extension LingShuModelGatewaySurface {
+    func presetStateColor(_ preset: ModelProviderPreset) -> Color {
+        if state.modelProvider == preset.name {
+            return state.isModelConnected ? .lingHolo : .orange
+        }
+        return .white.opacity(0.32)
+    }
+
+    func presetStateText(_ preset: ModelProviderPreset) -> String {
+        if state.modelProvider == preset.name {
+            return state.isModelConnected ? "当前·在线" : "当前·未接入"
+        }
+        return "待启用"
     }
 }
 

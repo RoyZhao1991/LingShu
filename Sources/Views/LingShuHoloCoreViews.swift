@@ -227,6 +227,59 @@ struct LingShuVoiceWaveView: View {
     }
 }
 
+// MARK: - 双层信息单元
+
+/// 双层信息单元：第一层是字面文本（label/value），第二层是底层服务状态
+/// （状态点颜色 + 状态词 + 可选的量化负载条）。界面里禁止出现没有第二层的纯说明文本。
+struct LingShuDualLayerCell: View {
+    let label: String
+    let value: String
+    /// 底层服务状态词，例如「在线」「执行中」「失联」「未接入」。
+    let stateText: String
+    let stateColor: Color
+    /// 可选量化负载 0...1（链路负载、成熟度、占用等），nil 则不画条。
+    var load: Double? = nil
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Circle()
+                    .fill(stateColor)
+                    .frame(width: 6, height: 6)
+                    .shadow(color: stateColor.opacity(0.8), radius: 3)
+                Text(label)
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(.white.opacity(0.6))
+                Spacer(minLength: 4)
+                Text(stateText)
+                    .font(.system(size: 9.5, weight: .bold, design: .monospaced))
+                    .foregroundStyle(stateColor.opacity(0.95))
+            }
+
+            Text(value)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.92))
+                .lineLimit(2)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+            if let load {
+                GeometryReader { geo in
+                    ZStack(alignment: .leading) {
+                        Capsule().fill(Color.white.opacity(0.08))
+                        Capsule()
+                            .fill(stateColor.opacity(0.7))
+                            .frame(width: max(2, geo.size.width * min(max(load, 0), 1)))
+                    }
+                }
+                .frame(height: 3)
+            }
+        }
+        .padding(11)
+        .lingShuHUDPanel(accent: stateColor, cornerLength: 7, fillOpacity: 0.04)
+    }
+}
+
 // MARK: - HUD 读数
 
 /// 等宽大写小标签 + 数值的 HUD 读数样式。
