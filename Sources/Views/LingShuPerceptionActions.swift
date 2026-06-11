@@ -43,6 +43,45 @@ enum LingShuPerceptionActions {
         }
     }
 
+    /// 连续对话模式：进入即开启实时对话并开始监听（无需喊触发词）。
+    static func startContinuousConversation(
+        state: LingShuState,
+        voice: VoiceIOManager,
+        perceptionGateway: LingShuRealtimePerceptionGateway
+    ) {
+        state.voiceWakeListeningEnabled = true
+        state.isVoiceConversationActive = identityAllowsConversation(perceptionGateway)
+        state.isListening = true
+        voice.requestAuthorization { allowed in
+            guard allowed else {
+                state.voiceWakeListeningEnabled = false
+                state.isVoiceConversationActive = false
+                state.isListening = false
+                voice.markInputError("语音权限未授权")
+                return
+            }
+            startRecognitionLoop(state: state, voice: voice, perceptionGateway: perceptionGateway)
+        }
+    }
+
+    /// 一句话收口或灵枢说完后，重新武装监听（连续对话循环用）。
+    static func resumeListening(
+        state: LingShuState,
+        voice: VoiceIOManager,
+        perceptionGateway: LingShuRealtimePerceptionGateway
+    ) {
+        guard state.voiceWakeListeningEnabled, !voice.isRecording else { return }
+        startRecognitionLoop(state: state, voice: voice, perceptionGateway: perceptionGateway)
+    }
+
+    static func stopConversation(state: LingShuState, voice: VoiceIOManager) {
+        state.voiceWakeListeningEnabled = false
+        state.isVoiceConversationActive = false
+        state.isListening = false
+        voice.stopRecognition()
+        voice.stopSpeaking()
+    }
+
     private static func startRecognitionLoop(
         state: LingShuState,
         voice: VoiceIOManager,

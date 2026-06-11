@@ -409,6 +409,23 @@ final class VoiceIOManager: ObservableObject {
         return LingShuVoiceTranscriptNormalizer.normalize(cleaned)
     }
 
+    /// 结束当前这一句：触发识别给出最终结果（isFinal），但不拆掉麦克风管线。
+    /// 连续对话模式的 VAD 静音断句用它把一句话收口并自动提交。
+    func finishCurrentUtterance() {
+        guard isRecording else { return }
+        recognitionRequest?.endAudio()
+    }
+
+    /// 立即停止 TTS 播报（用户打断时调用）。
+    func stopSpeaking() {
+        activeSpeechTask?.cancel()
+        speechAudioPlayer?.stop()
+        if speechSynthesizer.isSpeaking {
+            speechSynthesizer.stopSpeaking(at: .immediate)
+        }
+        isSpeaking = false
+    }
+
     func stopRecognition() {
         embeddedASROutputHandle?.readabilityHandler = nil
         if let embeddedASRProcess, embeddedASRProcess.isRunning {

@@ -1,184 +1,205 @@
 import SwiftUI
 
-/// 极简 AI 模式：全屏，只有输入波形（你）+ 输出波形（灵枢），纯语音对话。
-/// 输入波形由真实麦克风电平驱动，输出波形由真实 TTS 音量计驱动。
+/// 极简 AI 模式 = 豆包视频通话式连续对话：进入即自动开始听，VAD 静音断句自动提交，
+/// 灵枢自动应答、应答完自动接着听，全程免手。上方是你的摄像头画面，中间两条波形
+/// （你的输入 + 灵枢的输出，均由真实电平驱动），底部静音/挂断。
 struct LingShuMinimalVoiceView: View {
     @ObservedObject var state: LingShuState
     @ObservedObject var voice: VoiceIOManager
     @ObservedObject var vision: VisionIOManager
     @ObservedObject var perceptionGateway: LingShuRealtimePerceptionGateway
+    @StateObject private var call = LingShuVoiceCallController()
 
     var body: some View {
         ZStack {
             Color.lingVoid.ignoresSafeArea()
             RadialGradient(
-                colors: [stateColor.opacity(0.12), .clear],
-                center: .center, startRadius: 20, endRadius: 520
+                colors: [stateColor.opacity(0.14), .clear],
+                center: .init(x: 0.5, y: 0.35), startRadius: 20, endRadius: 560
             )
             .ignoresSafeArea()
             .animation(.easeInOut(duration: 0.6), value: stateColor)
 
             VStack(spacing: 0) {
                 header
-
-                Spacer()
-
-                // 输入波形（你）
-                waveformBlock(
-                    label: "你",
-                    color: .lingHoloAlt,
-                    level: voice.inputLevel,
-                    active: voice.isRecording,
-                    caption: voice.isRecording ? "正在聆听" : "点击麦克风开始说话"
-                )
-
-                Spacer().frame(height: 28)
-
-                // 输出波形（灵枢）
-                waveformBlock(
-                    label: "灵枢",
-                    color: .lingHolo,
-                    level: voice.outputLevel,
-                    active: voice.isSpeaking,
-                    caption: captionForOutput
-                )
-
-                Spacer()
-
-                micButton
-                    .padding(.bottom, 40)
+                Spacer(minLength: 12)
+                selfCamera
+                Spacer(minLength: 18)
+                waveforms
+                Spacer(minLength: 18)
+                controls.padding(.bottom, 36)
             }
-            .padding(.horizontal, 48)
-            .padding(.top, 24)
+            .padding(.horizontal, 44)
+            .padding(.top, 22)
+        }
+        .onAppear {
+            call.start(state: state, voice: voice, perceptionGateway: perceptionGateway)
+            if !vision.isCameraRunning {
+                LingShuPerceptionActions.toggleVision(state: state, vision: vision)
+            }
+        }
+        .onDisappear {
+            call.stop()
+            if vision.isCameraRunning {
+                vision.stopCamera()
+            }
         }
     }
+
+    // MARK: - 顶部状态
 
     private var header: some View {
         HStack {
             HStack(spacing: 8) {
                 Circle().fill(stateColor).frame(width: 8, height: 8)
                     .shadow(color: stateColor.opacity(0.8), radius: 4)
-                TimelineView(.periodic(from: .now, by: 1)) { _ in
-                    Text(state.coreStateDisplay)
-                        .font(.system(size: 12, weight: .bold, design: .monospaced))
-                        .foregroundStyle(stateColor)
-                }
+                Text(call.phase.caption)
+                    .font(.system(size: 13, weight: .bold, design: .monospaced))
+                    .foregroundStyle(stateColor)
+                    .contentTransition(.opacity)
             }
             Spacer()
-            Button {
+            Text("实时通话")
+                .font(.system(size: 11, weight: .bold, design: .monospaced))
+                .tracking(2)
+                .foregroundStyle(.white.opacity(0.4))
+        }
+    }
+
+    // MARK: - 自拍摄像头
+
+    private var selfCamera: some View {
+        ZStack {
+            if vision.isCameraRunning {
+                CameraPreviewView(session: vision.captureSession)
+                    .clipShape(RoundedRectangle(cornerRadius: 14))
+            } else {
+                RoundedRectangle(cornerRadius: 14)
+                    .fill(Color.white.opacity(0.04))
+                    .overlay {
+                        VStack(spacing: 8) {
+                            Image(systemName: "video.slash")
+                                .font(.system(size: 26, weight: .medium))
+                                .foregroundStyle(.white.opacity(0.3))
+                            Text("摄像头关闭")
+                                .font(.system(size: 11, weight: .medium))
+                                .foregroundStyle(.white.opacity(0.35))
+                        }
+                    }
+            }
+        }
+        .frame(maxWidth: 420, maxHeight: 240)
+        .overlay { LingShuHUDCorners(accent: stateColor.opacity(0.5), cornerLength: 14) }
+    }
+
+    // MARK: - 双波形
+
+    private var waveforms: some View {
+        VStack(spacing: 16) {
+            waveformRow(label: "你", color: .lingHoloAlt, level: { voice.inputLevel }, active: { voice.isRecording })
+            waveformRow(label: "灵枢", color: .lingHolo, level: { voice.outputLevel }, active: { voice.isSpeaking })
+        }
+    }
+
+    private func waveformRow(label: String, color: Color, level: @escaping () -> Float, active: @escaping () -> Bool) -> some View {
+        HStack(spacing: 14) {
+            Text(label)
+                .font(.system(size: 12, weight: .bold, design: .monospaced))
+                .tracking(1)
+                .foregroundStyle(color.opacity(0.9))
+                .frame(width: 40, alignment: .leading)
+            LingShuLiveWaveform(color: color, level: level, active: active)
+                .frame(height: 64)
+        }
+    }
+
+    // MARK: - 控制
+
+    private var controls: some View {
+        HStack(spacing: 28) {
+            // 摄像头开关
+            circleButton(
+                icon: vision.isCameraRunning ? "video.fill" : "video.slash.fill",
+                bg: vision.isCameraRunning ? Color.white.opacity(0.12) : Color.white.opacity(0.06),
+                fg: vision.isCameraRunning ? .white : .white.opacity(0.6)
+            ) {
+                LingShuPerceptionActions.toggleVision(state: state, vision: vision)
+            }
+            // 挂断
+            circleButton(icon: "phone.down.fill", bg: Color.red.opacity(0.9), fg: .white, size: 72) {
                 state.isMinimalVoiceMode = false
-            } label: {
-                HStack(spacing: 6) {
-                    Image(systemName: "rectangle.on.rectangle")
-                    Text("退出极简")
+            }
+            // 静音麦克风（暂停/恢复连续监听）
+            circleButton(
+                icon: voice.isRecording ? "mic.fill" : "mic.slash.fill",
+                bg: voice.isRecording ? Color.lingHolo : Color.white.opacity(0.06),
+                fg: voice.isRecording ? Color.lingVoid : .white.opacity(0.6)
+            ) {
+                if call.isActive {
+                    call.stop()
+                } else {
+                    call.start(state: state, voice: voice, perceptionGateway: perceptionGateway)
                 }
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(.white.opacity(0.7))
-                .padding(.horizontal, 12).padding(.vertical, 7)
-                .overlay { LingShuHUDCorners(accent: .white.opacity(0.4), cornerLength: 7) }
-                .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
         }
     }
 
-    private func waveformBlock(label: String, color: Color, level: Float, active: Bool, caption: String) -> some View {
-        VStack(spacing: 12) {
-            HStack {
-                Text(label)
-                    .font(.system(size: 13, weight: .bold, design: .monospaced))
-                    .tracking(2)
-                    .foregroundStyle(color.opacity(0.9))
-                Spacer()
-                Text(caption)
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.5))
-            }
-            LingShuLiveWaveform(level: level, color: color, active: active)
-                .frame(height: 96)
-        }
-    }
-
-    private var micButton: some View {
-        Button {
-            LingShuPerceptionActions.toggleVoiceInput(
-                state: state, voice: voice, perceptionGateway: perceptionGateway
-            )
-        } label: {
-            Image(systemName: voice.isRecording ? "stop.fill" : "mic.fill")
-                .font(.system(size: 26, weight: .bold))
-                .foregroundStyle(voice.isRecording ? .white : Color.lingVoid)
-                .frame(width: 84, height: 84)
-                .background(
-                    voice.isRecording ? Color.red.opacity(0.9) : Color.lingHolo,
-                    in: Circle()
-                )
-                .shadow(color: (voice.isRecording ? Color.red : Color.lingHolo).opacity(0.6), radius: 16)
+    private func circleButton(icon: String, bg: Color, fg: Color, size: CGFloat = 58, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: icon)
+                .font(.system(size: size * 0.34, weight: .bold))
+                .foregroundStyle(fg)
+                .frame(width: size, height: size)
+                .background(bg, in: Circle())
+                .shadow(color: bg.opacity(0.5), radius: 10)
         }
         .buttonStyle(.plain)
-        .help(voice.isRecording ? "停止" : "开始说话")
     }
 
-    private var captionForOutput: String {
-        if voice.isSpeaking { return "正在回应" }
-        if state.hasActiveModelCall { return "正在思考" }
-        return "等待你的指令"
-    }
-
-    private var stateColor: Color {
-        state.coreState.color
-    }
+    private var stateColor: Color { state.coreState.color }
 }
 
-/// 实时音频波形：维护一个滚动的电平历史，画成对称柱状波形。level 0...1 实时驱动。
+/// 实时音频波形：滚动的电平历史画成对称柱状波形，level 0...1 实时驱动。
 struct LingShuLiveWaveform: View {
-    var level: Float
     var color: Color
-    var active: Bool
+    var level: () -> Float
+    var active: () -> Bool
 
-    @State private var history: [CGFloat] = Array(repeating: 0, count: 64)
+    @State private var history: [CGFloat] = Array(repeating: 0, count: 72)
+    @State private var isActiveNow = false
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: false)) { _ in
-            Canvas { context, size in
-                let count = history.count
-                let gap: CGFloat = 3
-                let barWidth = max(1.5, (size.width - gap * CGFloat(count - 1)) / CGFloat(count))
-                let midY = size.height / 2
-
-                for (index, value) in history.enumerated() {
-                    let x = CGFloat(index) * (barWidth + gap)
-                    let h = max(2, value * size.height)
-                    let rect = CGRect(x: x, y: midY - h / 2, width: barWidth, height: h)
-                    // 越靠右（越新）越亮
-                    let freshness = CGFloat(index) / CGFloat(count)
-                    let opacity = 0.25 + 0.75 * freshness
-                    context.fill(
-                        Path(roundedRect: rect, cornerRadius: barWidth / 2),
-                        with: .color(color.opacity(active ? opacity : opacity * 0.4))
-                    )
-                }
+        Canvas { context, size in
+            let count = history.count
+            let gap: CGFloat = 3
+            let barWidth = max(1.5, (size.width - gap * CGFloat(count - 1)) / CGFloat(count))
+            let midY = size.height / 2
+            for (index, value) in history.enumerated() {
+                let x = CGFloat(index) * (barWidth + gap)
+                let h = max(2, value * size.height)
+                let rect = CGRect(x: x, y: midY - h / 2, width: barWidth, height: h)
+                let freshness = CGFloat(index) / CGFloat(count)
+                let opacity = 0.2 + 0.8 * freshness
+                context.fill(
+                    Path(roundedRect: rect, cornerRadius: barWidth / 2),
+                    with: .color(color.opacity(isActiveNow ? opacity : opacity * 0.4))
+                )
             }
-            .onChange(of: tick) { _, _ in advance() }
         }
-        .background(
-            RoundedRectangle(cornerRadius: 10)
-                .fill(Color.white.opacity(0.03))
-        )
+        .background(RoundedRectangle(cornerRadius: 10).fill(Color.white.opacity(0.03)))
         .overlay { LingShuHUDCorners(accent: color.opacity(0.4), cornerLength: 10) }
-    }
-
-    // 用一个随时间变化的离散值触发 history 推进（约 30fps）。
-    private var tick: Int {
-        Int(Date().timeIntervalSinceReferenceDate * 30)
-    }
-
-    private func advance() {
-        var next = history
-        next.removeFirst()
-        // 加一点随机抖动，让等高电平也有自然起伏。
-        let jitter = active ? CGFloat.random(in: 0.85...1.15) : 1
-        next.append(min(1, CGFloat(level) * jitter))
-        history = next
+        .task {
+            // 在渲染之外、约 30fps 读取实时电平并推进历史，得到滚动波形。
+            while !Task.isCancelled {
+                let active = self.active()
+                isActiveNow = active
+                var next = history
+                next.removeFirst()
+                let jitter = active ? CGFloat.random(in: 0.8...1.2) : 1
+                next.append(min(1, CGFloat(self.level()) * jitter))
+                history = next
+                try? await Task.sleep(nanoseconds: 33_000_000)
+            }
+        }
     }
 }
