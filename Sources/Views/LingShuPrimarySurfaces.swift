@@ -18,11 +18,16 @@ struct LingShuRootView: View {
                     vision: vision,
                     perceptionGateway: perceptionGateway
                 )
+                .frame(minWidth: 320, minHeight: 480)
             } else {
                 standardLayout
+                    .frame(minWidth: 1240, minHeight: 820)
             }
         }
         .preferredColorScheme(.dark)
+        .onChange(of: state.isMinimalVoiceMode) { _, minimal in
+            LingShuWindowPlacement.applyMinimalVoiceWindow(minimal)
+        }
         .onAppear {
             state.refreshCodexAuthStatusIfNeeded()
             state.livePerceptionContextProvider = { [weak perceptionGateway] in

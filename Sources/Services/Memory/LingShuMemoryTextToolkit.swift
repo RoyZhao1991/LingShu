@@ -156,6 +156,63 @@ enum LingShuMemoryTextToolkit {
         return "\(trimmed.prefix(22))..."
     }
 
+    /// 给 FTS5 全文索引/查询用的切词：拉丁词原样小写，中文按字 bigram 展开
+    /// （"灵枢项目" → ["灵枢","枢项","项目"]），单字文本退化为 unigram。
+    /// unicode61 分词器会把连续汉字当成一个词，必须先切好再入索引。
+    static func searchTokens(_ text: String) -> [String] {
+        var tokens: [String] = []
+        var latinWord = ""
+        var cjkRun: [Character] = []
+
+        func flushLatin() {
+            if !latinWord.isEmpty {
+                tokens.append(latinWord.lowercased())
+                latinWord = ""
+            }
+        }
+        func flushCJK() {
+            guard !cjkRun.isEmpty else { return }
+            if cjkRun.count == 1 {
+                tokens.append(String(cjkRun[0]))
+            } else {
+                for index in 0..<(cjkRun.count - 1) {
+                    tokens.append(String(cjkRun[index]) + String(cjkRun[index + 1]))
+                }
+            }
+            cjkRun = []
+        }
+
+        for character in text {
+            if isCJK(character) {
+                flushLatin()
+                cjkRun.append(character)
+            } else if character.isLetter || character.isNumber {
+                flushCJK()
+                latinWord.append(character)
+            } else {
+                flushLatin()
+                flushCJK()
+            }
+        }
+        flushLatin()
+        flushCJK()
+        return tokens
+    }
+
+    static func searchableText(_ text: String) -> String {
+        searchTokens(text).joined(separator: " ")
+    }
+
+    private static func isCJK(_ character: Character) -> Bool {
+        guard let scalar = character.unicodeScalars.first else { return false }
+        switch scalar.value {
+        case 0x4E00...0x9FFF, 0x3400...0x4DBF, 0xF900...0xFAFF:
+            return true
+        default:
+            return false
+        }
+    }
+
     private static func tags(from prompt: String, candidates: [String]) -> [String] {
         let normalized = prompt
             .lowercased()

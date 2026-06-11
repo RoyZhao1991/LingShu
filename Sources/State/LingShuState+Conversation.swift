@@ -33,7 +33,9 @@ extension LingShuState {
         )
     }
 
-    /// 纯函数版上下文窗口构造，便于离线测试：从消息序列按预算取最近窗口，保持正序。
+    /// 纯函数版上下文窗口构造，便于离线测试。预算内全量保留原文；
+    /// 超预算时不再直接丢弃旧轮次，而是交给压缩引擎折叠成滚动摘要随上下文注入，
+    /// 折叠边界按块推进以保持前缀稳定（利好 vLLM prefix caching）。
     nonisolated static func conversationWindow(
         from messages: [ChatMessage],
         budget: Int,
@@ -41,26 +43,14 @@ extension LingShuState {
         normalize: (String) -> String,
         compact: (String) -> String
     ) -> [LingShuModelMessage] {
-        var visible = messages.filter { !$0.isLoading && !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
-        if let rawPrompt,
-           let last = visible.last,
-           last.isUser,
-           normalize(last.text) == normalize(rawPrompt) {
-            visible.removeLast()
-        }
-
-        // 从最近往回累积，直到用尽预算；再正序输出，保持 append-only 的稳定前缀。
-        var collected: [LingShuModelMessage] = []
-        var used = 0
-        for message in visible.reversed() {
-            let content = compact(message.text)
-            guard !content.isEmpty else { continue }
-            let cost = content.count + 8
-            if used + cost > budget, !collected.isEmpty { break }
-            collected.append(.init(role: message.isUser ? "user" : "assistant", content: content))
-            used += cost
-        }
-        return collected.reversed()
+        let composition = LingShuContextCompressionEngine.compose(
+            messages: messages,
+            budget: budget,
+            excludingTrailingPromptMatching: rawPrompt,
+            normalize: normalize,
+            compact: compact
+        )
+        return LingShuContextCompressionEngine.digestMessages(from: composition.digest) + composition.verbatim
     }
 
     private func recentConversationTurns(

@@ -66,12 +66,42 @@ struct CodexAgentTask: Codable {
     }
 }
 
+/// 结构化选项：模型需要用户在有限选择中做决定时返回，界面渲染成选择卡片。
+struct CodexRouteChoiceOption: Codable, Equatable, Sendable {
+    var label: String
+    var detail: String?
+
+    init(label: String, detail: String? = nil) {
+        self.label = label
+        self.detail = detail
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        label = (try? container.decode(String.self, forKey: .label)) ?? ""
+        detail = try? container.decode(String.self, forKey: .detail)
+    }
+}
+
+struct CodexRouteChoicePrompt: Codable, Equatable, Sendable {
+    var question: String
+    var options: [CodexRouteChoiceOption]
+
+    /// 过滤掉空标签，至少要有 2 个有效选项才算合法选择卡片。
+    var sanitized: CodexRouteChoicePrompt? {
+        let valid = options.filter { !$0.label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        guard valid.count >= 2 else { return nil }
+        return CodexRouteChoicePrompt(question: question, options: valid)
+    }
+}
+
 struct CodexRoutePayload: Codable {
     var needsAgents: Bool
     var agents: [CodexAgentTask]
     var directAnswer: String?
     var finalAnswer: String?
     var summary: String?
+    var choices: CodexRouteChoicePrompt?
 
     enum CodingKeys: String, CodingKey {
         case needsAgents
@@ -79,14 +109,16 @@ struct CodexRoutePayload: Codable {
         case directAnswer
         case finalAnswer
         case summary
+        case choices
     }
 
-    init(needsAgents: Bool, agents: [CodexAgentTask], directAnswer: String? = nil, finalAnswer: String? = nil, summary: String? = nil) {
+    init(needsAgents: Bool, agents: [CodexAgentTask], directAnswer: String? = nil, finalAnswer: String? = nil, summary: String? = nil, choices: CodexRouteChoicePrompt? = nil) {
         self.needsAgents = needsAgents
         self.agents = agents
         self.directAnswer = directAnswer
         self.finalAnswer = finalAnswer
         self.summary = summary
+        self.choices = choices
     }
 
     init(from decoder: Decoder) throws {
@@ -96,6 +128,7 @@ struct CodexRoutePayload: Codable {
         directAnswer = try? container.decode(String.self, forKey: .directAnswer)
         finalAnswer = try? container.decode(String.self, forKey: .finalAnswer)
         summary = try? container.decode(String.self, forKey: .summary)
+        choices = (try? container.decode(CodexRouteChoicePrompt.self, forKey: .choices))?.sanitized
     }
 
     var userFacingAnswer: String {

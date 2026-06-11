@@ -1,8 +1,8 @@
 import SwiftUI
 
-/// 极简 AI 模式 = 豆包视频通话式连续对话：进入即自动开始听，VAD 静音断句自动提交，
-/// 灵枢自动应答、应答完自动接着听，全程免手。上方是你的摄像头画面，中间两条波形
-/// （你的输入 + 灵枢的输出，均由真实电平驱动），底部静音/挂断。
+/// 极简 AI 模式 = 一个小小的常浮通话窗（豆包视频通话式连续对话）：进入即自动开始听，
+/// VAD 静音断句自动提交，灵枢自动应答、应答完自动接着听，全程免手。
+/// 窗口里只有三样东西：你的摄像头画面、两条对话音轨（你 + 灵枢，真实电平驱动）、挂断/静音。
 struct LingShuMinimalVoiceView: View {
     @ObservedObject var state: LingShuState
     @ObservedObject var voice: VoiceIOManager
@@ -15,22 +15,22 @@ struct LingShuMinimalVoiceView: View {
             Color.lingVoid.ignoresSafeArea()
             RadialGradient(
                 colors: [stateColor.opacity(0.14), .clear],
-                center: .init(x: 0.5, y: 0.35), startRadius: 20, endRadius: 560
+                center: .init(x: 0.5, y: 0.3), startRadius: 10, endRadius: 360
             )
             .ignoresSafeArea()
             .animation(.easeInOut(duration: 0.6), value: stateColor)
 
             VStack(spacing: 0) {
                 header
-                Spacer(minLength: 12)
                 selfCamera
-                Spacer(minLength: 18)
+                    .padding(.top, 10)
                 waveforms
-                Spacer(minLength: 18)
-                controls.padding(.bottom, 36)
+                    .padding(.top, 14)
+                Spacer(minLength: 10)
+                controls.padding(.bottom, 18)
             }
-            .padding(.horizontal, 44)
-            .padding(.top, 22)
+            .padding(.horizontal, 16)
+            .padding(.top, 14)
         }
         .onAppear {
             call.start(state: state, voice: voice, perceptionGateway: perceptionGateway)
@@ -72,68 +72,71 @@ struct LingShuMinimalVoiceView: View {
         ZStack {
             if vision.isCameraRunning {
                 CameraPreviewView(session: vision.captureSession)
-                    .clipShape(RoundedRectangle(cornerRadius: 14))
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
             } else {
-                RoundedRectangle(cornerRadius: 14)
+                RoundedRectangle(cornerRadius: 12)
                     .fill(Color.white.opacity(0.04))
                     .overlay {
-                        VStack(spacing: 8) {
+                        VStack(spacing: 7) {
                             Image(systemName: "video.slash")
-                                .font(.system(size: 26, weight: .medium))
+                                .font(.system(size: 22, weight: .medium))
                                 .foregroundStyle(.white.opacity(0.3))
                             Text("摄像头关闭")
-                                .font(.system(size: 11, weight: .medium))
+                                .font(.system(size: 10.5, weight: .medium))
                                 .foregroundStyle(.white.opacity(0.35))
                         }
                     }
             }
         }
-        .frame(maxWidth: 420, maxHeight: 240)
-        .overlay { LingShuHUDCorners(accent: stateColor.opacity(0.5), cornerLength: 14) }
+        .frame(maxWidth: .infinity)
+        .frame(height: 196)
+        .overlay { LingShuHUDCorners(accent: stateColor.opacity(0.5), cornerLength: 12) }
     }
 
     // MARK: - 双波形
 
     private var waveforms: some View {
-        VStack(spacing: 16) {
+        VStack(spacing: 10) {
             waveformRow(label: "你", color: .lingHoloAlt, level: { voice.inputLevel }, active: { voice.isRecording })
             waveformRow(label: "灵枢", color: .lingHolo, level: { voice.outputLevel }, active: { voice.isSpeaking })
         }
     }
 
     private func waveformRow(label: String, color: Color, level: @escaping () -> Float, active: @escaping () -> Bool) -> some View {
-        HStack(spacing: 14) {
+        HStack(spacing: 10) {
             Text(label)
-                .font(.system(size: 12, weight: .bold, design: .monospaced))
+                .font(.system(size: 11, weight: .bold, design: .monospaced))
                 .tracking(1)
                 .foregroundStyle(color.opacity(0.9))
-                .frame(width: 40, alignment: .leading)
+                .frame(width: 34, alignment: .leading)
             LingShuLiveWaveform(color: color, level: level, active: active)
-                .frame(height: 64)
+                .frame(height: 44)
         }
     }
 
     // MARK: - 控制
 
     private var controls: some View {
-        HStack(spacing: 28) {
+        HStack(spacing: 20) {
             // 摄像头开关
             circleButton(
                 icon: vision.isCameraRunning ? "video.fill" : "video.slash.fill",
                 bg: vision.isCameraRunning ? Color.white.opacity(0.12) : Color.white.opacity(0.06),
-                fg: vision.isCameraRunning ? .white : .white.opacity(0.6)
+                fg: vision.isCameraRunning ? .white : .white.opacity(0.6),
+                size: 44
             ) {
                 LingShuPerceptionActions.toggleVision(state: state, vision: vision)
             }
             // 挂断
-            circleButton(icon: "phone.down.fill", bg: Color.red.opacity(0.9), fg: .white, size: 72) {
+            circleButton(icon: "phone.down.fill", bg: Color.red.opacity(0.9), fg: .white, size: 56) {
                 state.isMinimalVoiceMode = false
             }
             // 静音麦克风（暂停/恢复连续监听）
             circleButton(
                 icon: voice.isRecording ? "mic.fill" : "mic.slash.fill",
                 bg: voice.isRecording ? Color.lingHolo : Color.white.opacity(0.06),
-                fg: voice.isRecording ? Color.lingVoid : .white.opacity(0.6)
+                fg: voice.isRecording ? Color.lingVoid : .white.opacity(0.6),
+                size: 44
             ) {
                 if call.isActive {
                     call.stop()

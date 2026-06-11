@@ -39,12 +39,53 @@ final class LingShuAppDelegate: NSObject, NSApplicationDelegate {
 }
 
 enum LingShuWindowPlacement {
+    /// 进入极简模式前的主窗布局，退出时原样恢复。
+    @MainActor private static var savedStandardFrame: NSRect?
+
+    /// 极简语音模式 = 一个小小的常浮窗口（视频画面 + 两条音轨），不再占满整个主窗。
+    /// 进入时收到屏幕右下角并置顶，退出时恢复原来的标准窗口。
+    @MainActor
+    static func applyMinimalVoiceWindow(_ minimal: Bool) {
+        guard let window = NSApp.windows.first(where: { shouldManage($0) }) else { return }
+
+        if minimal {
+            savedStandardFrame = window.frame
+            window.minSize = NSSize(width: 320, height: 480)
+            window.level = .floating
+            window.collectionBehavior.insert(.fullScreenAuxiliary)
+            window.titleVisibility = .hidden
+            window.titlebarAppearsTransparent = true
+            let size = NSSize(width: 340, height: 560)
+            let screen = window.screen ?? NSScreen.main
+            let origin: NSPoint
+            if let visible = screen?.visibleFrame {
+                origin = NSPoint(x: visible.maxX - size.width - 24, y: visible.minY + 24)
+            } else {
+                origin = window.frame.origin
+            }
+            window.setFrame(NSRect(origin: origin, size: size), display: true, animate: true)
+        } else {
+            window.level = .normal
+            window.collectionBehavior.remove(.fullScreenAuxiliary)
+            window.titleVisibility = .visible
+            window.titlebarAppearsTransparent = false
+            window.minSize = NSSize(width: 1240, height: 820)
+            if let savedStandardFrame {
+                window.setFrame(savedStandardFrame, display: true, animate: true)
+            } else {
+                centerWindowOnMainScreen(window)
+            }
+        }
+    }
+
     @MainActor
     static func bringWindowsToMainScreen() {
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
         NSApp.windows.forEach { window in
             guard shouldManage(window) else { return }
+            // 极简模式的小浮窗（level 已置顶）不参与标准窗口归位，避免被强行撑回大窗。
+            guard window.level != .floating else { return }
             configureWindowSurface(window)
             centerWindowOnMainScreen(window)
             window.makeKeyAndOrderFront(nil)
@@ -92,9 +133,11 @@ struct LingShuMacApp: App {
 
     var body: some Scene {
         WindowGroup("灵枢") {
+            // 尺寸约束在 LingShuRootView 内部按模式切换：
+            // 标准界面 ≥1240×820，极简语音模式收成 340×560 的小浮窗。
             LingShuRootView()
-                .frame(minWidth: 1240, minHeight: 820)
         }
+        .windowResizability(.contentMinSize)
         .defaultSize(width: 1360, height: 900)
         .commands {
             CommandMenu("灵枢") {

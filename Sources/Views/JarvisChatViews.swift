@@ -16,24 +16,47 @@ struct ChatBubbleView: View {
                     .foregroundStyle(message.isUser ? .white.opacity(0.72) : Color.lingHolo.opacity(0.84))
 
                 if message.isLoading && !message.isUser {
-                    HStack(alignment: .center, spacing: 9) {
-                        ProgressView()
-                            .progressViewStyle(.circular)
-                            .controlSize(.small)
-                            .tint(Color.lingHolo)
-                            .frame(width: 16, height: 16, alignment: .leading)
+                    VStack(alignment: .leading, spacing: 7) {
+                        HStack(alignment: .center, spacing: 9) {
+                            ProgressView()
+                                .progressViewStyle(.circular)
+                                .controlSize(.small)
+                                .tint(Color.lingHolo)
+                                .frame(width: 16, height: 16, alignment: .leading)
 
-                        // 流式片段一到就显示；还没有内容时只显示安静的“思考中…”。
-                        Text(message.text.isEmpty ? "思考中…" : message.text)
-                            .font(.system(size: 14.5, weight: .medium))
-                            .foregroundStyle(.white.opacity(message.text.isEmpty ? 0.5 : 0.88))
-                            .fixedSize(horizontal: false, vertical: true)
+                            // 流式片段一到就显示；还没有内容时只显示安静的“思考中…”。
+                            Text(message.text.isEmpty ? "思考中…" : message.text)
+                                .font(.system(size: 14.5, weight: .medium))
+                                .foregroundStyle(.white.opacity(message.text.isEmpty ? 0.5 : 0.88))
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+
+                        // 模型的实时推理预览：滚动展示思考流的尾部，定稿即消失。
+                        if let thinking = message.thinkingPreview, !thinking.isEmpty {
+                            Text(thinking)
+                                .font(.system(size: 11.5, weight: .regular))
+                                .foregroundStyle(.white.opacity(0.38))
+                                .lineLimit(4)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .padding(.leading, 25)
+                                .transition(.opacity)
+                                .animation(.easeInOut(duration: 0.2), value: thinking)
+                        }
                     }
                 } else {
                     Text(message.text)
                         .font(.system(size: 14.5, weight: .medium))
                         .foregroundStyle(.white.opacity(message.isUser ? 0.94 : 0.88))
                         .fixedSize(horizontal: false, vertical: true)
+                }
+
+                if !message.isUser, !message.isLoading, let choices = message.choices {
+                    LingShuChoiceCard(
+                        prompt: choices,
+                        resolvedChoice: message.resolvedChoice
+                    ) { option in
+                        state.selectRouteChoice(option, for: message.id)
+                    }
                 }
 
                 if !message.isUser,

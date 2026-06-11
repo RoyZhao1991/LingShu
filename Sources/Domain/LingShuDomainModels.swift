@@ -352,6 +352,12 @@ struct ChatMessage: Identifiable, Codable, Equatable, Sendable {
     var isLoading: Bool
     var taskRecordID: String?
     var createdAt: Date
+    /// 灵枢请用户在有限选项中做选择时的结构化选项；nil 表示普通消息。
+    var choices: CodexRouteChoicePrompt?
+    /// 用户已选中的选项标签（选过之后卡片置为已解决，不再可点）。
+    var resolvedChoice: String?
+    /// 思考中气泡上实时滚动的推理预览（流式 <think> 增量的尾部）；定稿时清空，不进历史。
+    var thinkingPreview: String?
 
     init(
         id: UUID = UUID(),
@@ -360,7 +366,10 @@ struct ChatMessage: Identifiable, Codable, Equatable, Sendable {
         isUser: Bool,
         isLoading: Bool = false,
         taskRecordID: String? = nil,
-        createdAt: Date = Date()
+        createdAt: Date = Date(),
+        choices: CodexRouteChoicePrompt? = nil,
+        resolvedChoice: String? = nil,
+        thinkingPreview: String? = nil
     ) {
         self.id = id
         self.speaker = speaker
@@ -369,6 +378,9 @@ struct ChatMessage: Identifiable, Codable, Equatable, Sendable {
         self.isLoading = isLoading
         self.taskRecordID = taskRecordID
         self.createdAt = createdAt
+        self.choices = choices
+        self.resolvedChoice = resolvedChoice
+        self.thinkingPreview = thinkingPreview
     }
 }
 

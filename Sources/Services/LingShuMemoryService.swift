@@ -35,9 +35,17 @@ struct LingShuExecutionMemoryHint {
 
 final class LingShuMemoryService {
     private let repository: LingShuMemoryRepository
+    /// 内嵌 RAG 语义库（SQLite + FTS5 + 本地句向量）：关键词标签匹配之外的
+    /// 语义检索层，"上周让你查的那件事"这类指代靠它召回。
+    private let semanticStore: LingShuSemanticMemoryStore
 
-    init(repository: LingShuMemoryRepository = LingShuMemoryRepository()) {
+    init(
+        repository: LingShuMemoryRepository = LingShuMemoryRepository(),
+        semanticStore: LingShuSemanticMemoryStore = LingShuSemanticMemoryStore()
+    ) {
         self.repository = repository
+        self.semanticStore = semanticStore
+        semanticStore.warmUp()
     }
 
     func prepareMainThreadMemory(for prompt: String) -> LingShuPreparedMainThreadMemory {
@@ -59,7 +67,11 @@ final class LingShuMemoryService {
 
         let coldRecords = searchColdMemory(for: prompt, tags: tags, shouldSearch: continuity || !tags.isEmpty || hotRecords.isEmpty)
         let hotMatches = Array(hotRecords)
-        let coldMatches = coldRecords
+        let coldMatches = mergeSemanticMatches(
+            into: coldRecords,
+            prompt: prompt,
+            existingTitles: Set(hotRecords.map(\.title) + coldRecords.map(\.title))
+        )
         let shouldLoadHistory = !hotMatches.isEmpty || !coldMatches.isEmpty || continuity
         let status = LingShuMemoryTextToolkit.memoryStatusText(hotMatches: hotMatches, coldMatches: coldMatches, continuity: continuity)
 
@@ -138,7 +150,42 @@ final class LingShuMemoryService {
 
         compactAndArchiveMainThreadRecords(&records)
         repository.saveMainThreadRecords(records)
+
+        // 同步写入语义库：反思摘要而非原文，向量化后供跨会话语义召回。
+        let summary = records.first(where: { $0.title == title })?.summary
+            ?? LingShuMemoryTextToolkit.compressedMemorySummary(previous: "", prompt: prompt, reply: reply, route: route)
+        semanticStore.remember(
+            kind: category,
+            title: title,
+            content: summary,
+            tags: tags,
+            importance: (route?.needsAgents == true || isCapabilityCollaboration) ? 0.7 : 0.5
+        )
         return title
+    }
+
+    /// 语义库召回并入冷备命中通道：来源标记「语义记忆」，标题去重，总量限 3。
+    private func mergeSemanticMatches(
+        into coldRecords: [ColdMemoryRecord],
+        prompt: String,
+        existingTitles: Set<String>
+    ) -> [ColdMemoryRecord] {
+        let semanticHits = semanticStore.recall(query: prompt, limit: 3)
+            .filter { !existingTitles.contains($0.entry.title) }
+            .map { hit in
+                ColdMemoryRecord(
+                    id: hit.entry.id,
+                    source: "语义记忆",
+                    title: hit.entry.title,
+                    summary: hit.entry.content,
+                    lastPrompt: "",
+                    category: hit.entry.kind,
+                    tags: hit.entry.tags,
+                    archivedAt: hit.entry.updatedAt,
+                    updatedAt: hit.entry.updatedAt
+                )
+            }
+        return Array((coldRecords + semanticHits).prefix(3))
     }
 
     func taskMemoryLookup(for prompt: String) -> LingShuTaskMemoryLookup {
@@ -250,6 +297,14 @@ final class LingShuMemoryService {
 
         compactAndArchiveTaskRecords(&records)
         repository.saveTaskRecords(records)
+
+        semanticStore.remember(
+            kind: "任务执行",
+            title: title,
+            content: "状态：\(status)。\(clippedSummary.isEmpty ? "本轮任务已完成。" : clippedSummary)",
+            tags: tags,
+            importance: 0.6
+        )
     }
 
     func normalizeMemoryText(_ text: String) -> String {

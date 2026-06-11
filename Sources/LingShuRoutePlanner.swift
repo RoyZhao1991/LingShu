@@ -22,7 +22,11 @@ struct LingShuRoutePlanner {
                  "cadence": "本轮|实时|立即|提交后|3m|5m|7m|10m",
                  "rationale": "为什么需要这个 agent"
                }
-             ]
+             ],
+             "choices": {
+               "question": "可选；仅当需要用户在 2~4 个有限选项里做决定时填写",
+               "options": [ { "label": "选项文字", "detail": "该选项的简短说明" } ]
+             }
            }
         3. 普通问答和解释类问题 needsAgents=false，并基于记忆直接回答。
         4. 用户要求写代码、脚本、页面、接口、爬虫、demo、程序、测试、修复、架构、部署、验收、Review、PPT、演示文稿、汇报材料或视觉设计时，needsAgents=true，必须包含“规划”“审议”“调度”，并按需加入设计、执行、监控、验证、安全、知识、记忆或路由。
@@ -33,6 +37,7 @@ struct LingShuRoutePlanner {
         9. finalAnswer 不要提到底层模型、API Key、JSON、网关、CLI 等内部实现，除非用户明确询问技术接入。
         10. 如果用户问“你是谁”“你是什么”“你叫什么”“灵枢是谁”，needsAgents=false，finalAnswer 只需：“我是灵枢，有什么可以帮你的？”
         11. 不要自称通义千问、Qwen、MiniMax、GPT、Claude 或任何底层模型名称，你的身份只有“灵枢”。
+        12. 当本轮确实需要用户在有限方案里做选择（如风格、方向、范围 2~4 选项）时，把选项写进 "choices"，finalAnswer 用一句话引出问题；不要把选项铺成一长段文字让用户手打。普通回答不要填 choices。
 
         当前权限边界：\(permission.boundary)
         可用专家 agent：
@@ -136,7 +141,8 @@ struct LingShuRoutePlanner {
             agents: needsAgents ? sanitizedTasks : [],
             directAnswer: payload.directAnswer,
             finalAnswer: payload.finalAnswer,
-            summary: payload.summary
+            summary: payload.summary,
+            choices: payload.choices
         )
     }
 }

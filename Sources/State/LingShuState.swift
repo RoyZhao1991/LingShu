@@ -152,8 +152,11 @@ final class LingShuState: ObservableObject {
     private var missionRunID = 0
     private var thinkingStartedAt: Date?
     private var executionStartedAt: Date?
-    private var lastModelHeartbeatAt: Date?
+    var lastModelHeartbeatAt: Date?
     private var activeThinkingMessageID: UUID?
+    /// 流式思考增量的逐消息累积缓冲（仅加载中气泡使用，定稿即清）；
+    /// 消费逻辑在 LingShuState+Streaming.swift。
+    var thinkingPreviewBuffers: [UUID: String] = [:]
     private var activeRouteHandle: CodexExecutionHandle?
     private var activeExecutionHandle: CodexExecutionHandle?
     private var activeAPITask: Task<Void, Never>?
@@ -530,37 +533,11 @@ final class LingShuState: ObservableObject {
         }
     }
 
-    private func appendModelStream(_ rawText: String, actor: String) {
-        let lines = rawText
-            .components(separatedBy: .newlines)
-            .map(cleanTraceText)
-            .filter { !$0.isEmpty }
-
-        for line in lines.prefix(12) {
-            recordModelHeartbeat(source: actor, detail: line, isSynthetic: false)
-            appendTrace(kind: .model, actor: actor, title: "流式输出", detail: line, isStream: true)
-        }
-    }
-
-    private func recordRemoteStreamRetryDiagnostic(_ line: String, actor: String) {
-        mainRemoteLastDiagnosticLog = line
-        if mainRemoteConsecutiveFailures == 0 {
-            mainRemoteConnectionStatus = LingShuRemoteConnectionPhase.degraded.rawValue
-            mainRemoteConnectionDetail = "检测到流式断开，底层正在自动重试。"
-        }
-    }
-
-    func recordModelHeartbeat(source: String, detail: String, isSynthetic: Bool = false) {
-        lastModelHeartbeatAt = Date()
-        modelHeartbeatIdleSeconds = 0
-        modelHeartbeatSource = source
-    }
-
     private func isGuardActor(_ actor: String) -> Bool {
         actor.contains("守护") || actor.contains("探活")
     }
 
-    private func cleanTraceText(_ rawText: String) -> String {
+    func cleanTraceText(_ rawText: String) -> String {
         let withoutControlCharacters = rawText
             .replacingOccurrences(of: "\u{001B}\\[[0-9;]*[A-Za-z]", with: "", options: .regularExpression)
             .replacingOccurrences(of: "\r", with: " ")
@@ -672,6 +649,7 @@ final class LingShuState: ObservableObject {
 
         if let messageID,
            let index = chatMessages.firstIndex(where: { $0.id == messageID }) {
+            clearThinkingPreview(for: messageID)
             chatMessages[index].text = response
             chatMessages[index].isLoading = false
         } else {
@@ -1859,10 +1837,17 @@ final class LingShuState: ObservableObject {
                 )
                 let reply: LingShuRemoteModelReply
                 if useStreamingDialogue {
+                    // 流式增量先过适配器解析（M3 的内联 <think> 拆成思考/正文两路），
+                    // 思考增量实时滚动在气泡上，正文增量进调用链。
+                    let streamParser = self.currentReplyAdapter.makeStreamParser()
                     reply = try await self.remoteModelClient.stream(request) { [weak self] delta in
                         Task { @MainActor in
                             guard let self, self.missionRunID == runID else { return }
-                            self.appendModelStream(delta, actor: "本地路由模型")
+                            self.consumeModelStreamEvent(
+                                streamParser.ingest(delta),
+                                actor: "本地路由模型",
+                                thinkingMessageID: messageID
+                            )
                         }
                     } onHeartbeat: { [weak self] in
                         Task { @MainActor in
@@ -1870,12 +1855,18 @@ final class LingShuState: ObservableObject {
                             self.recordModelHeartbeat(source: "本地路由模型", detail: "流式连接活跃。")
                         }
                     }
+                    self.consumeModelStreamEvent(
+                        streamParser.finish(),
+                        actor: "本地路由模型",
+                        thinkingMessageID: messageID
+                    )
                 } else {
                     reply = try await self.remoteModelClient.send(request)
                 }
                 guard !Task.isCancelled, self.missionRunID == runID else { return }
                 self.recordModelUsage(reply, stage: "路由判断")
-                let rawReply = reply.text
+                // 按当前模型适配器取干净正文（剥离 M3 的 <think> 等），再解析/兜底。
+                let rawReply = self.currentReplyAdapter.normalizedReplyText(reply.text)
                 let route = self.routePlanner.decodeRoutePayload(from: rawReply) ?? CodexRoutePayload(
                     needsAgents: false,
                     agents: [],
@@ -1916,6 +1907,7 @@ final class LingShuState: ObservableObject {
                 self.appendTaskRecordMessage(taskRecordID, actor: "模型网关", role: "路由判断", kind: .warning, text: message)
                 self.appendTaskRecordMessage(taskRecordID, actor: "灵枢", role: "中枢", kind: .result, text: finalText)
                 self.finishTaskRecord(taskRecordID, status: .blocked, summary: finalText)
+                self.clearThinkingPreview(for: messageID)
                 if let index = self.chatMessages.firstIndex(where: { $0.id == messageID }) {
                     self.chatMessages[index].text = finalText
                     self.chatMessages[index].isLoading = false
@@ -1961,6 +1953,15 @@ final class LingShuState: ObservableObject {
         recordModelHeartbeat(source: "执行模型", detail: "\(provider) 执行请求已启动。")
         markTaskRuntimeExecuting(route, for: userPrompt)
         appendTaskRecordMessage(taskRecordID, actor: "执行", role: "执行模型", kind: .model, text: "执行模型已接令；当前 API 通道会产出文本、代码或执行报告，不直接操作本机文件系统。")
+
+        // 流式模式下先放一个执行气泡，正文增量边到边上屏（豆包式逐字回复），
+        // 思考增量滚动在气泡的推理预览区；最终定稿替换为验收后的完整回复。
+        var streamingMessageID: UUID?
+        if useStreamingDialogue {
+            let pending = ChatMessage(speaker: "灵枢", text: "", isUser: false, isLoading: true, taskRecordID: taskRecordID)
+            chatMessages.append(pending)
+            streamingMessageID = pending.id
+        }
         appendTrace(
             kind: .model,
             actor: "执行模型",
@@ -1987,16 +1988,30 @@ final class LingShuState: ObservableObject {
                 )
                 let reply: LingShuRemoteModelReply
                 if useStreamingDialogue {
+                    let streamParser = self.currentReplyAdapter.makeStreamParser()
                     reply = try await self.remoteModelClient.stream(request) { [weak self] delta in
                         Task { @MainActor in
                             guard let self, self.missionRunID == runID else { return }
-                            self.appendModelStream(delta, actor: "本地执行模型")
+                            self.consumeModelStreamEvent(
+                                streamParser.ingest(delta),
+                                actor: "本地执行模型",
+                                thinkingMessageID: streamingMessageID
+                            ) { content in
+                                self.appendStreamingBubbleText(content, to: streamingMessageID)
+                            }
                         }
                     } onHeartbeat: { [weak self] in
                         Task { @MainActor in
                             guard let self, self.missionRunID == runID else { return }
                             self.recordModelHeartbeat(source: "本地执行模型", detail: "流式连接活跃。")
                         }
+                    }
+                    self.consumeModelStreamEvent(
+                        streamParser.finish(),
+                        actor: "本地执行模型",
+                        thinkingMessageID: streamingMessageID
+                    ) { content in
+                        self.appendStreamingBubbleText(content, to: streamingMessageID)
                     }
                 } else {
                     reply = try await self.remoteModelClient.send(request)
@@ -2022,9 +2037,7 @@ final class LingShuState: ObservableObject {
                 self.materializeTaskArtifacts(for: userPrompt, route: route, reply: finalReply, taskRecordID: taskRecordID)
                 self.appendTaskRecordMessage(taskRecordID, actor: "灵枢", role: "最终验收", kind: .review, text: "我已收到执行回传，并完成本轮验收与统一交付。")
                 self.finishTaskRecord(taskRecordID, status: .completed, summary: finalReply.isEmpty ? "执行模型已完成。" : finalReply)
-                if !finalReply.isEmpty {
-                    self.chatMessages.append(.init(speaker: "灵枢", text: finalReply, isUser: false, taskRecordID: taskRecordID))
-                }
+                self.finalizeStreamingBubble(streamingMessageID, text: finalReply, taskRecordID: taskRecordID)
                 self.logEvent("现在  API 执行流程已返回。")
             } catch {
                 guard !Task.isCancelled, self.missionRunID == runID else { return }
@@ -2046,7 +2059,7 @@ final class LingShuState: ObservableObject {
                     self.rememberMainThreadTurn(prompt: userPrompt, reply: reply, route: route)
                     self.appendTaskRecordMessage(taskRecordID, actor: "灵枢", role: "最终验收", kind: .review, text: "已用本地能力完成本轮交付。")
                     self.finishTaskRecord(taskRecordID, status: .completed, summary: reply)
-                    self.chatMessages.append(.init(speaker: "灵枢", text: reply, isUser: false, taskRecordID: taskRecordID))
+                    self.finalizeStreamingBubble(streamingMessageID, text: reply, taskRecordID: taskRecordID)
                     self.logEvent("现在  网关执行受限，已本地兜底交付。")
                     return
                 }
@@ -2060,7 +2073,7 @@ final class LingShuState: ObservableObject {
                 let failureReply = "执行阶段遇到阻断。我已经停止继续推进，避免给你一个不可靠的结果。你可以检查模型配置，或者调整任务后再交给我。"
                 self.appendTaskRecordMessage(taskRecordID, actor: "灵枢", role: "中枢", kind: .result, text: failureReply)
                 self.finishTaskRecord(taskRecordID, status: .blocked, summary: failureReply)
-                self.chatMessages.append(.init(speaker: "灵枢", text: failureReply, isUser: false, taskRecordID: taskRecordID))
+                self.finalizeStreamingBubble(streamingMessageID, text: failureReply, taskRecordID: taskRecordID)
                 self.logEvent("现在  API 执行流程失败：\(message)")
             }
         }
@@ -2158,12 +2171,17 @@ final class LingShuState: ObservableObject {
             finishTaskRecord(taskRecordID, status: .answered, summary: "灵枢直接回答，未创建专家 agent 任务。")
         }
 
+        // 仅在直接回答（无后台执行线程）时把选择卡片挂到这条回复上，
+        // 让用户在有限选项中一键选择，而不是手打。
+        let attachedChoices = willStartExecutionThread ? nil : effectiveRoute.choices
+        clearThinkingPreview(for: messageID)
         if let index = chatMessages.firstIndex(where: { $0.id == messageID }) {
             chatMessages[index].text = finalText
             chatMessages[index].isLoading = false
             chatMessages[index].taskRecordID = taskRecordID
+            chatMessages[index].choices = attachedChoices
         } else {
-            chatMessages.append(.init(speaker: "灵枢", text: finalText, isUser: false, taskRecordID: taskRecordID))
+            chatMessages.append(.init(speaker: "灵枢", text: finalText, isUser: false, taskRecordID: taskRecordID, choices: attachedChoices))
         }
     }
 
