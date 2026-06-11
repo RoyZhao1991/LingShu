@@ -236,6 +236,68 @@ extension LingShuState {
         }
     }
 
+    func finishBackgroundExecution(
+        userPrompt: String,
+        route: CodexRoutePayload,
+        taskRecordID: String?,
+        threadID: String,
+        rawReply: String
+    ) {
+        refreshRemoteSessionStatus()
+        let finalReply = postProcessExecutionReply(rawReply, for: userPrompt, route: route)
+        mainThreadKernel.observeExecution(prompt: userPrompt, summary: finalReply, completed: true)
+        memoryService.rememberTask(prompt: userPrompt, status: "delivered", summary: finalReply, taskID: threadID, taskRecordID: taskRecordID)
+        rememberMainThreadTurn(prompt: userPrompt, reply: finalReply, route: route)
+        appendTaskRecordMessage(taskRecordID, actor: "执行", role: "隔离执行", kind: .result, text: finalReply.isEmpty ? "隔离执行已返回，但没有可展示文本。" : finalReply)
+        materializeTaskArtifacts(for: userPrompt, route: route, reply: finalReply, taskRecordID: taskRecordID)
+        appendTaskRecordMessage(taskRecordID, actor: "灵枢", role: "最终验收", kind: .review, text: "隔离线程已回传结果，我已完成本轮验收。")
+        finishTaskRecord(taskRecordID, status: .completed, summary: finalReply.isEmpty ? "隔离执行已完成。" : finalReply)
+        if !finalReply.isEmpty {
+            chatMessages.append(.init(speaker: "灵枢", text: finalReply, isUser: false, taskRecordID: taskRecordID))
+        }
+        markTaskSegmentFinished(recordID: taskRecordID)
+        startNextQueuedTaskIfAvailable(preferredThreadID: threadID)
+    }
+
+    /// 网关执行通道受限（如禁止系统工具、500）时的本地兜底：用灵枢本机能力把交付物落地，
+    /// 而不是把失败甩给用户。能本地产出交付物（PPT/代码等）就按完成交付；实在没有可交付内容才阻断。
+    func degradeBackgroundToLocalDelivery(
+        userPrompt: String,
+        route: CodexRoutePayload,
+        taskRecordID: String?,
+        threadID: String,
+        failureMessage: String
+    ) {
+        let baseText = route.userFacingAnswer.trimmingCharacters(in: .whitespacesAndNewlines)
+        let artifacts = materializeTaskArtifacts(for: userPrompt, route: route, reply: baseText, taskRecordID: taskRecordID)
+
+        guard !artifacts.isEmpty else {
+            blockBackgroundTask(userPrompt: userPrompt, taskRecordID: taskRecordID, threadID: threadID, message: failureMessage)
+            return
+        }
+
+        let reply = "网关的执行通道这次受限，我已用本地能力把交付物生成好，挂在本轮任务记录里，可以直接预览。"
+        appendTaskRecordMessage(taskRecordID, actor: "执行", role: "本地兜底", kind: .warning, text: "网关执行受限：\(failureMessage)。已回退灵枢本地生成。")
+        appendTaskRecordMessage(taskRecordID, actor: "灵枢", role: "最终验收", kind: .review, text: "已用本地能力完成本轮交付。")
+        finishTaskRecord(taskRecordID, status: .completed, summary: reply)
+        mainThreadKernel.observeExecution(prompt: userPrompt, summary: reply, completed: true)
+        rememberMainThreadTurn(prompt: userPrompt, reply: reply, route: route)
+        chatMessages.append(.init(speaker: "灵枢", text: reply, isUser: false, taskRecordID: taskRecordID))
+        markTaskSegmentFinished(recordID: taskRecordID)
+        startNextQueuedTaskIfAvailable(preferredThreadID: threadID)
+    }
+
+    func blockBackgroundTask(userPrompt: String, taskRecordID: String?, threadID: String, message: String) {
+        let failureReply = "这个隔离线程遇到阻断，我已停止它，避免影响其他任务。原因：\(message)"
+        mainThreadKernel.observeExecution(prompt: userPrompt, summary: message, completed: false)
+        appendTaskRecordMessage(taskRecordID, actor: "任务线程", role: "隔离执行", kind: .warning, text: message)
+        appendTaskRecordMessage(taskRecordID, actor: "灵枢", role: "中枢", kind: .result, text: failureReply)
+        finishTaskRecord(taskRecordID, status: .blocked, summary: failureReply)
+        chatMessages.append(.init(speaker: "灵枢", text: failureReply, isUser: false, taskRecordID: taskRecordID))
+        markTaskSegmentFinished(recordID: taskRecordID, blocked: true)
+        startNextQueuedTaskIfAvailable(preferredThreadID: threadID)
+    }
+
     func persistTaskExecutionRecords() {
         let saved = taskExecutionJournal.saveRecords(taskExecutionRecords)
         if taskExecutionRecords != saved.active {

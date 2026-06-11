@@ -130,7 +130,7 @@ final class LingShuState: ObservableObject {
     @Published var isMinimalVoiceMode = false
 
     let mainThreadKernel = LingShuMainThreadKernel()
-    private let memoryService = LingShuMemoryService()
+    let memoryService = LingShuMemoryService()
     private let agentScheduler = LingShuAgentScheduler()
     private let taskThreadScheduler = LingShuTaskThreadScheduler(maxParallelThreads: 3)
     private let routePlanner = LingShuRoutePlanner()
@@ -2026,15 +2026,31 @@ final class LingShuState: ObservableObject {
                 self.refreshRemoteSessionStatus()
                 self.activeAPITask = nil
                 self.isModelExecuting = false
+                self.appendTrace(kind: .warning, actor: "执行模型", title: "执行失败", detail: message)
+                self.appendTaskRecordMessage(taskRecordID, actor: "执行", role: "执行模型", kind: .warning, text: message)
+
+                // 网关执行通道受限时，先尝试本地兜底交付，再决定是否阻断。
+                let artifacts = self.materializeTaskArtifacts(for: userPrompt, route: route, reply: route.userFacingAnswer, taskRecordID: taskRecordID)
+                if !artifacts.isEmpty {
+                    let reply = "网关的执行通道这次受限，我已用本地能力把交付物生成好，挂在本轮任务记录里，可以直接预览。"
+                    self.completeRouteExecution(route)
+                    self.completeTaskRuntime(for: userPrompt, reply: reply, taskRecordID: taskRecordID)
+                    self.mainThreadKernel.observeExecution(prompt: userPrompt, summary: reply, completed: true)
+                    self.rememberMainThreadTurn(prompt: userPrompt, reply: reply, route: route)
+                    self.appendTaskRecordMessage(taskRecordID, actor: "灵枢", role: "最终验收", kind: .review, text: "已用本地能力完成本轮交付。")
+                    self.finishTaskRecord(taskRecordID, status: .completed, summary: reply)
+                    self.chatMessages.append(.init(speaker: "灵枢", text: reply, isUser: false, taskRecordID: taskRecordID))
+                    self.logEvent("现在  网关执行受限，已本地兜底交付。")
+                    return
+                }
+
                 self.mainThreadKernel.observeExecution(prompt: userPrompt, summary: message, completed: false)
                 self.enterCoreState(.abnormal)
                 self.runtimePhase = .correcting
                 self.missionTitle = "异常"
                 self.missionStatus = "执行阶段受阻，我已经停止继续推进，避免产生不可靠结果。"
                 self.blockTaskRuntime(message)
-                self.appendTrace(kind: .warning, actor: "执行模型", title: "执行失败", detail: message)
                 let failureReply = "执行阶段遇到阻断。我已经停止继续推进，避免给你一个不可靠的结果。你可以检查模型配置，或者调整任务后再交给我。"
-                self.appendTaskRecordMessage(taskRecordID, actor: "执行", role: "执行模型", kind: .warning, text: message)
                 self.appendTaskRecordMessage(taskRecordID, actor: "灵枢", role: "中枢", kind: .result, text: failureReply)
                 self.finishTaskRecord(taskRecordID, status: .blocked, summary: failureReply)
                 self.chatMessages.append(.init(speaker: "灵枢", text: failureReply, isUser: false, taskRecordID: taskRecordID))
@@ -2525,43 +2541,15 @@ final class LingShuState: ObservableObject {
                 self.remoteSessionPool.markFailed(lease: executionLease)
                 self.backgroundAPITasks.removeValue(forKey: recordKey)
                 self.refreshRemoteSessionStatus()
-                self.blockBackgroundTask(userPrompt: userPrompt, taskRecordID: taskRecordID, threadID: threadID, message: message)
+                self.degradeBackgroundToLocalDelivery(
+                    userPrompt: userPrompt,
+                    route: route,
+                    taskRecordID: taskRecordID,
+                    threadID: threadID,
+                    failureMessage: message
+                )
             }
         }
-    }
-
-    private func finishBackgroundExecution(
-        userPrompt: String,
-        route: CodexRoutePayload,
-        taskRecordID: String?,
-        threadID: String,
-        rawReply: String
-    ) {
-        refreshRemoteSessionStatus()
-        let finalReply = postProcessExecutionReply(rawReply, for: userPrompt, route: route)
-        mainThreadKernel.observeExecution(prompt: userPrompt, summary: finalReply, completed: true)
-        memoryService.rememberTask(prompt: userPrompt, status: "delivered", summary: finalReply, taskID: threadID, taskRecordID: taskRecordID)
-        rememberMainThreadTurn(prompt: userPrompt, reply: finalReply, route: route)
-        appendTaskRecordMessage(taskRecordID, actor: "执行", role: "隔离执行", kind: .result, text: finalReply.isEmpty ? "隔离执行已返回，但没有可展示文本。" : finalReply)
-        materializeTaskArtifacts(for: userPrompt, route: route, reply: finalReply, taskRecordID: taskRecordID)
-        appendTaskRecordMessage(taskRecordID, actor: "灵枢", role: "最终验收", kind: .review, text: "隔离线程已回传结果，我已完成本轮验收。")
-        finishTaskRecord(taskRecordID, status: .completed, summary: finalReply.isEmpty ? "隔离执行已完成。" : finalReply)
-        if !finalReply.isEmpty {
-            chatMessages.append(.init(speaker: "灵枢", text: finalReply, isUser: false, taskRecordID: taskRecordID))
-        }
-        markTaskSegmentFinished(recordID: taskRecordID)
-        startNextQueuedTaskIfAvailable(preferredThreadID: threadID)
-    }
-
-    private func blockBackgroundTask(userPrompt: String, taskRecordID: String?, threadID: String, message: String) {
-        let failureReply = "这个隔离线程遇到阻断，我已停止它，避免影响其他任务。原因：\(message)"
-        mainThreadKernel.observeExecution(prompt: userPrompt, summary: message, completed: false)
-        appendTaskRecordMessage(taskRecordID, actor: "任务线程", role: "隔离执行", kind: .warning, text: message)
-        appendTaskRecordMessage(taskRecordID, actor: "灵枢", role: "中枢", kind: .result, text: failureReply)
-        finishTaskRecord(taskRecordID, status: .blocked, summary: failureReply)
-        chatMessages.append(.init(speaker: "灵枢", text: failureReply, isUser: false, taskRecordID: taskRecordID))
-        markTaskSegmentFinished(recordID: taskRecordID, blocked: true)
-        startNextQueuedTaskIfAvailable(preferredThreadID: threadID)
     }
 
     private func dispatchExternalAgentsIfAvailable(
@@ -2934,7 +2922,7 @@ final class LingShuState: ObservableObject {
         return prepared.context
     }
 
-    private func rememberMainThreadTurn(prompt: String, reply: String, route: CodexRoutePayload? = nil) {
+    func rememberMainThreadTurn(prompt: String, reply: String, route: CodexRoutePayload? = nil) {
         if let title = memoryService.rememberMainThreadTurn(
             prompt: prompt,
             reply: reply,
@@ -3104,7 +3092,7 @@ final class LingShuState: ObservableObject {
         }
     }
 
-    private func postProcessExecutionReply(_ reply: String, for userPrompt: String, route: CodexRoutePayload) -> String {
+    func postProcessExecutionReply(_ reply: String, for userPrompt: String, route: CodexRoutePayload) -> String {
         executionCoordinator.postProcessExecutionReply(
             reply,
             userPrompt: userPrompt,
