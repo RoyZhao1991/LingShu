@@ -43,6 +43,16 @@ final class LingShuSpeakerProfiler {
         }
     }
 
+    /// 最近窗口内疑似多位说话人：基频分布出现两个相距 ≥60Hz 的簇
+    /// （同一个人正常说话的基频波动远小于此）。
+    var multipleSpeakersSuspected: Bool {
+        guard recentPitches.count >= 10 else { return false }
+        let sorted = recentPitches.sorted()
+        let lower = sorted[sorted.count / 10]
+        let upper = sorted[(sorted.count * 9) / 10]
+        return upper - lower >= 60
+    }
+
     func snapshot(now: Date = Date()) -> LingShuSpeakerProfileSnapshot? {
         guard !recentPitches.isEmpty,
               now.timeIntervalSince(lastVoicedAt) <= staleInterval else { return nil }

@@ -223,6 +223,11 @@ final class LingShuRealtimePerceptionGateway: ObservableObject {
         speakerProfiler.snapshot()?.promptLine
     }
 
+    /// 最近窗口疑似多位说话人（基频双簇），声线寻址闸门据此提高响应门槛。
+    var multipleSpeakersSuspected: Bool {
+        speakerProfiler.multipleSpeakersSuspected
+    }
+
     /// 最近的视觉环境一句话摘要，供情境上下文引用。
     var latestVisionSummary: String? {
         latestVisionObservation?.summary

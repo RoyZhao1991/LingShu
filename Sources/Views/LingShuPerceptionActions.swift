@@ -199,7 +199,30 @@ enum LingShuPerceptionActions {
         state.prompt = command
 
         if result.isFinal {
-            _ = state.submitVoiceTranscript(command)
+            // 声线寻址闸门：以主人声线为最高优先，多人环境未点名不插话，
+            // 屏蔽嘈杂环境对主人指令的污染。
+            let verdict = LingShuVoiceAddressingGate.decide(.init(
+                transcript: command,
+                containsWakeWord: containsWakeWord(cleanedText, wakeWord: effectiveWakeWord(for: state)),
+                lockEnabled: perceptionGateway.ownerIdentityLockEnabled,
+                ownerVoiceConfidence: perceptionGateway.ownerIdentitySnapshot.voiceConfidence,
+                multipleSpeakersDetected: perceptionGateway.multipleSpeakersSuspected,
+                secondsSinceLastExchange: state.chatMessages.last.map { Date().timeIntervalSince($0.createdAt) },
+                isExplicitCallMode: state.isMinimalVoiceMode
+            ))
+
+            switch verdict {
+            case .respond:
+                _ = state.submitVoiceTranscript(command)
+            case .ignore(let reason):
+                state.prompt = ""
+                state.appendTrace(
+                    kind: .system,
+                    actor: "声线闸门",
+                    title: "环境音忽略",
+                    detail: "\(reason)。被忽略内容：「\(String(command.prefix(42)))」"
+                )
+            }
         }
     }
 

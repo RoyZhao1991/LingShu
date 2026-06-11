@@ -29,12 +29,10 @@ final class LingShuVoiceCallController: ObservableObject {
     private weak var perceptionGateway: LingShuRealtimePerceptionGateway?
     private var loopTask: Task<Void, Never>?
 
-    // VAD 阈值：电平高于 speakThreshold 视为说话；说话后低于 silenceThreshold 持续
-    // silenceHold 秒视为一句结束。bargeInThreshold 用于灵枢说话时的打断。
-    private let speakThreshold: Float = 0.12
-    private let silenceThreshold: Float = 0.06
+    // VAD 阈值自适应：跟踪环境噪声底，嘈杂环境自动抬高说话/收口/打断门槛，
+    // 屏蔽底噪对主人指令断句的干扰。
+    private var adaptiveVAD = LingShuAdaptiveVAD()
     private let silenceHold: TimeInterval = 1.0
-    private let bargeInThreshold: Float = 0.2
     private let tickInterval: UInt64 = 80_000_000 // 80ms ≈ 12.5Hz
 
     private var hasCapturedSpeech = false
@@ -89,11 +87,13 @@ final class LingShuVoiceCallController: ObservableObject {
         let level = voice.inputLevel
         let now = Date()
 
+        adaptiveVAD.observe(level: level, isCapturingSpeech: hasCapturedSpeech || voice.isSpeakingOrQueued)
+
         // 灵枢正在回应（含分句早读的排队间隙）：暂停麦克风避免回声；监听用户是否要打断。
         if voice.isSpeakingOrQueued {
             phase = .responding
             if voice.isRecording { voice.stopRecognition() }
-            if level > bargeInThreshold {
+            if level > adaptiveVAD.bargeInThreshold {
                 if let started = bargeInStartedAt {
                     if now.timeIntervalSince(started) > 0.25 {
                         // 用户开口打断：停掉 TTS，立即重新听。
@@ -125,11 +125,11 @@ final class LingShuVoiceCallController: ObservableObject {
             LingShuPerceptionActions.resumeListening(state: state, voice: voice, perceptionGateway: perceptionGateway)
         }
 
-        if level >= speakThreshold {
+        if level >= adaptiveVAD.speakThreshold {
             hasCapturedSpeech = true
             silenceStartedAt = nil
             phase = .capturing
-        } else if hasCapturedSpeech, level < silenceThreshold {
+        } else if hasCapturedSpeech, level < adaptiveVAD.silenceThreshold {
             if let started = silenceStartedAt {
                 if now.timeIntervalSince(started) >= silenceHold {
                     // 一句话说完：收口，触发最终识别并自动提交。

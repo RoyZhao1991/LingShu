@@ -68,6 +68,8 @@
 
 默认身份档案位置：`~/Library/Application Support/LingShu/Identity/owner-profile.json`。档案只保存面容/声线特征向量和阈值，不保存原始音频或视频帧。
 
+语音提交必须经过声线寻址闸门（`LingShuVoiceAddressingGate`，纯函数可插拔）：以绑定的主人声线为最高优先——身份锁开启时逐句核验声线，不匹配一律按环境音忽略（点名也不放行）；多人对话环境（声线画像基频双簇判定）未点名灵枢时，只有对话延续窗口内才响应，否则判定为人际交谈不插话。被忽略的语句进调用链可审计。VAD 阈值由 `LingShuAdaptiveVAD` 自适应：跟踪环境噪声底，嘈杂环境自动抬高说话/收口/打断门槛。
+
 ### Infrastructure
 
 路径：`Sources/Infrastructure/`
