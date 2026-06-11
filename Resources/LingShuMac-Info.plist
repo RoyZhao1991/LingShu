@@ -7,9 +7,9 @@
     <key>CFBundleDisplayName</key>
     <string>灵枢</string>
     <key>CFBundleExecutable</key>
-    <string>LingShuMac</string>
+    <string>灵枢</string>
     <key>CFBundleIdentifier</key>
-    <string>com.zhaoroy.LingShuMac</string>
+    <string>com.zhaoroy.lingshu</string>
     <key>CFBundleInfoDictionaryVersion</key>
     <string>6.0</string>
     <key>CFBundleName</key>

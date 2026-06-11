@@ -8,7 +8,9 @@ let package = Package(
         .macOS(.v14)
     ],
     products: [
-        .executable(name: "LingShuMac", targets: ["LingShuMac"])
+        // 可执行产物（进程名/菜单栏应用名）用中文「灵枢」；内部模块名仍是 LingShuMac，
+        // 以保持 @testable import 与测试目标不变。
+        .executable(name: "灵枢", targets: ["LingShuMac"])
     ],
     targets: [
         .executableTarget(
