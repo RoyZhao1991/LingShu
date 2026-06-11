@@ -27,6 +27,8 @@ struct LingShuRootView: View {
                         vision: vision,
                         perceptionGateway: perceptionGateway
                     )
+                case .runtime:
+                    LingShuRuntimeSurface(state: state, voice: voice)
                 case .operations:
                     LingShuOperationsSurface(state: state)
                 case .settings:
@@ -35,7 +37,7 @@ struct LingShuRootView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .background(LingShuStableBackground())
+        .background(LingShuStableBackground(accent: state.coreState.color))
         .preferredColorScheme(.dark)
         .onAppear {
             state.refreshCodexAuthStatusIfNeeded()
@@ -93,8 +95,10 @@ struct LingShuRootView: View {
 }
 
 struct LingShuStableBackground: View {
+    var accent: Color = .lingHolo
+
     var body: some View {
-        LingShuHUDBackground()
+        LingShuHUDBackground(accent: accent)
     }
 }
 

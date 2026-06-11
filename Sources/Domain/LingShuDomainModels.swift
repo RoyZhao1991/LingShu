@@ -26,6 +26,7 @@ enum NavItem: String, CaseIterable, Identifiable {
 
 enum AppSurface: String, CaseIterable, Identifiable {
     case chat = "对话"
+    case runtime = "运行态"
     case operations = "运维"
     case settings = "配置"
 
@@ -34,6 +35,7 @@ enum AppSurface: String, CaseIterable, Identifiable {
     var icon: String {
         switch self {
         case .chat: "message"
+        case .runtime: "waveform.path.ecg"
         case .operations: "building.columns"
         case .settings: "slider.horizontal.3"
         }

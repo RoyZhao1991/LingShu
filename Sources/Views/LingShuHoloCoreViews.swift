@@ -175,42 +175,22 @@ extension View {
 
 // MARK: - HUD 背景
 
-/// 深空背景：径向辉光 + 透视网格 + 暗角。静态绘制，无逐帧动画成本。
+/// 深空背景。顶部环境辉光的颜色跟随中枢状态（待机青 / 思考与执行各异 / 异常红），
+/// 是状态的环境光指示，不是装饰；底部压暗渐变保证文字可读性。
 struct LingShuHUDBackground: View {
+    var accent: Color = .lingHolo
+
     var body: some View {
         ZStack {
             Color.lingVoid
 
             RadialGradient(
-                colors: [Color.lingHolo.opacity(0.10), .clear],
-                center: .init(x: 0.5, y: 0.16),
-                startRadius: 10,
-                endRadius: 560
-            )
-            RadialGradient(
-                colors: [Color.lingHoloAlt.opacity(0.07), .clear],
-                center: .init(x: 0.85, y: 0.9),
+                colors: [accent.opacity(0.10), .clear],
+                center: .init(x: 0.5, y: 0.12),
                 startRadius: 10,
                 endRadius: 620
             )
-
-            Canvas { context, size in
-                let step: CGFloat = 56
-                var path = Path()
-                var x: CGFloat = 0
-                while x <= size.width {
-                    path.move(to: CGPoint(x: x, y: 0))
-                    path.addLine(to: CGPoint(x: x, y: size.height))
-                    x += step
-                }
-                var y: CGFloat = 0
-                while y <= size.height {
-                    path.move(to: CGPoint(x: 0, y: y))
-                    path.addLine(to: CGPoint(x: size.width, y: y))
-                    y += step
-                }
-                context.stroke(path, with: .color(Color.lingHolo.opacity(0.035)), lineWidth: 0.5)
-            }
+            .animation(.easeInOut(duration: 0.8), value: accent)
 
             LinearGradient(
                 colors: [.clear, Color.black.opacity(0.42)],
