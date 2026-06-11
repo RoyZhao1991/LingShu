@@ -47,7 +47,11 @@ final class VoiceIOManager: ObservableObject {
     private var embeddedASROutputHandle: FileHandle?
     private var embeddedASRLineBuffer = ""
     var speechAudioPlayer: AVAudioPlayer?
-    private var activeSpeechTask: Task<Void, Never>?
+    var activeSpeechTask: Task<Void, Never>?
+    /// 分句早读队列：流式回复的整句按到达顺序排队播报；
+    /// 排队/排空逻辑在 VoiceIOManager+SpeechQueue.swift。
+    var speechQueue: [String] = []
+    var speechQueueDrainTask: Task<Void, Never>?
 
     var availableTranscriptionProviders: [LingShuVoiceTranscriptionProviderDescriptor] {
         LingShuVoiceTranscriptionProviderDescriptor.recommendedChineseProviders.map { provider in
@@ -416,8 +420,11 @@ final class VoiceIOManager: ObservableObject {
         recognitionRequest?.endAudio()
     }
 
-    /// 立即停止 TTS 播报（用户打断时调用）。
+    /// 立即停止 TTS 播报（用户打断时调用）；同时清空分句早读队列。
     func stopSpeaking() {
+        speechQueue.removeAll()
+        speechQueueDrainTask?.cancel()
+        speechQueueDrainTask = nil
         activeSpeechTask?.cancel()
         speechAudioPlayer?.stop()
         if speechSynthesizer.isSpeaking {

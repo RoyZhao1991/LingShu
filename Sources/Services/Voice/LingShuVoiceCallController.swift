@@ -89,8 +89,8 @@ final class LingShuVoiceCallController: ObservableObject {
         let level = voice.inputLevel
         let now = Date()
 
-        // 灵枢正在回应：暂停麦克风避免回声；监听用户是否要打断。
-        if voice.isSpeaking {
+        // 灵枢正在回应（含分句早读的排队间隙）：暂停麦克风避免回声；监听用户是否要打断。
+        if voice.isSpeakingOrQueued {
             phase = .responding
             if voice.isRecording { voice.stopRecognition() }
             if level > bargeInThreshold {

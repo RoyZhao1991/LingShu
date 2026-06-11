@@ -85,12 +85,49 @@ extension LingShuState {
         }
     }
 
-    /// 执行阶段的流式气泡：正文增量边到边追加上屏。
+    /// 执行阶段的流式气泡：正文增量边到边追加上屏；语音输出开启时整句即到即读。
     func appendStreamingBubbleText(_ delta: String, to messageID: UUID?) {
         guard let messageID,
               let index = chatMessages.firstIndex(where: { $0.id == messageID }),
               chatMessages[index].isLoading else { return }
         chatMessages[index].text += delta
+        emitCompletedStreamSentences(for: messageID, text: chatMessages[index].text)
+    }
+
+    /// 分句早读：流式正文每攒满一句（。！？；换行）立即交给注册的播报器，
+    /// 语音对话不必等整段回复生成完——首句即开口。
+    private func emitCompletedStreamSentences(for messageID: UUID, text: String) {
+        guard let speaker = streamingSentenceSpeaker else { return }
+        let terminators: Set<Character> = ["。", "！", "？", "!", "?", "；", ";", "\n"]
+        let characters = Array(text)
+        let offset = spokenStreamOffsets[messageID] ?? 0
+        guard offset < characters.count else { return }
+
+        var lastBoundary: Int?
+        for index in offset..<characters.count where terminators.contains(characters[index]) {
+            lastBoundary = index
+        }
+        guard let boundary = lastBoundary else { return }
+
+        let sentence = String(characters[offset...boundary])
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        spokenStreamOffsets[messageID] = boundary + 1
+        if sentence.count >= 2 {
+            speaker(sentence)
+        }
+    }
+
+    /// 流式消息定稿时的语音收尾：早读过的消息补读尾句并打去重标记，
+    /// 避免根视图把整段回复再念一遍；没早读过则不干预（保持原有整段播报）。
+    func concludeStreamedSpeech(for messageID: UUID, streamedText: String) {
+        guard let offset = spokenStreamOffsets.removeValue(forKey: messageID) else { return }
+        lastSpokenMessageID = messageID
+        let characters = Array(streamedText)
+        guard offset < characters.count, let speaker = streamingSentenceSpeaker else { return }
+        let tail = String(characters[offset...]).trimmingCharacters(in: .whitespacesAndNewlines)
+        if tail.count >= 2 {
+            speaker(tail)
+        }
     }
 
     /// 定稿流式气泡：流式中的临时文本替换为验收后的最终回复。没有流式气泡
@@ -99,6 +136,7 @@ extension LingShuState {
         if let messageID {
             clearThinkingPreview(for: messageID)
             if let index = chatMessages.firstIndex(where: { $0.id == messageID }) {
+                concludeStreamedSpeech(for: messageID, streamedText: chatMessages[index].text)
                 if text.isEmpty {
                     chatMessages.remove(at: index)
                 } else {
@@ -111,5 +149,28 @@ extension LingShuState {
         }
         guard !text.isEmpty else { return }
         chatMessages.append(.init(speaker: "灵枢", text: text, isUser: false, taskRecordID: taskRecordID))
+    }
+
+    func handleModelTimeout(stage: String, messageID: UUID?) {
+        cancelActiveCodexCalls()
+        isModelReplying = false
+        isModelExecuting = false
+        let response = "主通道连续 \(Int(codexTimeoutSeconds)) 秒没有心跳，我已停止本轮\(stage)。"
+        appendTrace(kind: .warning, actor: "灵枢", title: "\(stage)失联", detail: response)
+        blockTaskRuntime(response)
+        resetAgentRuntime(title: "异常", status: response)
+        enterCoreState(.abnormal, resetTimer: false)
+        activeLayer = "异常"
+
+        if let messageID,
+           let index = chatMessages.firstIndex(where: { $0.id == messageID }) {
+            clearThinkingPreview(for: messageID)
+            chatMessages[index].text = response
+            chatMessages[index].isLoading = false
+        } else {
+            chatMessages.append(.init(speaker: "灵枢", text: response, isUser: false))
+        }
+
+        logEvent("现在  \(stage)连续 \(Int(codexTimeoutSeconds)) 秒没有心跳，已停止本轮。")
     }
 }

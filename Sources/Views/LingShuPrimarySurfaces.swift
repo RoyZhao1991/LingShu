@@ -34,6 +34,14 @@ struct LingShuRootView: View {
                 guard let perceptionGateway, perceptionGateway.hasLiveSignals else { return "" }
                 return perceptionGateway.promptContext
             }
+            // 分句早读：语音输出开启时，流式回复每攒满一句立即排队播报，
+            // 不必等整段回复生成完才开口。
+            state.streamingSentenceSpeaker = { [weak state, weak voice, weak perceptionGateway] sentence in
+                guard let state, let voice,
+                      state.voiceOutputEnabled || state.isMinimalVoiceMode else { return }
+                voice.speakQueued(sentence)
+                perceptionGateway?.ingestSpeechOutput(sentence)
+            }
             perceptionGateway.registerCloudPerceptionRoute(client: state.cloudPerceptionClient)
             if !didRunLaunchValidation,
                ProcessInfo.processInfo.arguments.contains("--lingshu-engineering-validation") {

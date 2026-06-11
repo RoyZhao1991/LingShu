@@ -133,13 +133,13 @@ final class LingShuState: ObservableObject {
     let memoryService = LingShuMemoryService()
     private let agentScheduler = LingShuAgentScheduler()
     private let taskThreadScheduler = LingShuTaskThreadScheduler(maxParallelThreads: 3)
-    private let routePlanner = LingShuRoutePlanner()
+    let routePlanner = LingShuRoutePlanner()
     private let executionCoordinator = LingShuExecutionCoordinator()
     private let dialogueAcknowledgement = LingShuDialogueAcknowledgement()
     private let intentClarificationPolicy = LingShuIntentClarificationPolicy()
     private let taskRuntimeCoordinator = LingShuTaskRuntimeCoordinator()
     private let modelGateway = LingShuModelGateway()
-    private let remoteModelClient = LingShuRemoteModelClient()
+    let remoteModelClient = LingShuRemoteModelClient()
     private let permissionPolicy = LingShuPermissionPolicy()
     private let externalAgentRegistry = LingShuExternalAgentRegistry()
     private let externalAgentGateway = LingShuExternalAgentGateway()
@@ -149,7 +149,7 @@ final class LingShuState: ObservableObject {
     let remoteConnectionPolicy = LingShuRemoteConnectionPolicy()
     let taskExecutionJournal = LingShuTaskExecutionJournal()
     let engineeringArtifactService = LingShuEngineeringArtifactService()
-    private var missionRunID = 0
+    var missionRunID = 0
     private var thinkingStartedAt: Date?
     private var executionStartedAt: Date?
     var lastModelHeartbeatAt: Date?
@@ -157,9 +157,13 @@ final class LingShuState: ObservableObject {
     /// 流式思考增量的逐消息累积缓冲（仅加载中气泡使用，定稿即清）；
     /// 消费逻辑在 LingShuState+Streaming.swift。
     var thinkingPreviewBuffers: [UUID: String] = [:]
+    /// 流式分句早读：根视图在语音输出开启时注册；流式正文每攒满一句立即播报。
+    var streamingSentenceSpeaker: ((String) -> Void)?
+    /// 每条流式消息已播报到的字符偏移（分句早读去重，定稿即清）。
+    var spokenStreamOffsets: [UUID: Int] = [:]
     private var activeRouteHandle: CodexExecutionHandle?
     private var activeExecutionHandle: CodexExecutionHandle?
-    private var activeAPITask: Task<Void, Never>?
+    var activeAPITask: Task<Void, Never>?
     private var backgroundCodexHandles: [String: CodexExecutionHandle] = [:]
     private var backgroundAPITasks: [String: Task<Void, Never>] = [:]
     var isMainRemoteProbeInFlight = false
@@ -474,7 +478,7 @@ final class LingShuState: ObservableObject {
         rememberTask(prompt: userPrompt, status: "delivered", summary: reply, taskRecordID: taskRecordID)
     }
 
-    private func blockTaskRuntime(_ error: String) {
+    func blockTaskRuntime(_ error: String) {
         guard taskRuntime.stage != .dormant else { return }
 
         taskRuntime = taskRuntimeCoordinator.blocked(taskRuntime, error: error)
@@ -636,30 +640,7 @@ final class LingShuState: ObservableObject {
         }
     }
 
-    private func handleModelTimeout(stage: String, messageID: UUID?) {
-        cancelActiveCodexCalls()
-        isModelReplying = false
-        isModelExecuting = false
-        let response = "主通道连续 \(Int(codexTimeoutSeconds)) 秒没有心跳，我已停止本轮\(stage)。"
-        appendTrace(kind: .warning, actor: "灵枢", title: "\(stage)失联", detail: response)
-        blockTaskRuntime(response)
-        resetAgentRuntime(title: "异常", status: response)
-        enterCoreState(.abnormal, resetTimer: false)
-        activeLayer = "异常"
-
-        if let messageID,
-           let index = chatMessages.firstIndex(where: { $0.id == messageID }) {
-            clearThinkingPreview(for: messageID)
-            chatMessages[index].text = response
-            chatMessages[index].isLoading = false
-        } else {
-            chatMessages.append(.init(speaker: "灵枢", text: response, isUser: false))
-        }
-
-        logEvent("现在  \(stage)连续 \(Int(codexTimeoutSeconds)) 秒没有心跳，已停止本轮。")
-    }
-
-    private func cancelActiveCodexCalls() {
+    func cancelActiveCodexCalls() {
         activeRouteHandle?.cancel()
         activeExecutionHandle?.cancel()
         activeHealthProbeHandle?.cancel()
@@ -1047,7 +1028,13 @@ final class LingShuState: ObservableObject {
         )
         chatMessages.append(pending)
         activeThinkingMessageID = pending.id
-        requestAPIGatewayRouteReply(for: trimmedPrompt, memoryContext: mainMemoryContext, replacing: pending.id, taskRecordID: taskRecordID)
+        // 普通对话走直答快路（无 JSON 包装、真流式，实测首字 ~1.6s）；
+        // 交付型诉求保留完整路由编排。误判由直答模型的升级标记兜底。
+        if isCapabilityCollaborationRequest(trimmedPrompt) {
+            requestAPIGatewayRouteReply(for: trimmedPrompt, memoryContext: mainMemoryContext, replacing: pending.id, taskRecordID: taskRecordID)
+        } else {
+            requestDirectChatReply(for: trimmedPrompt, memoryContext: mainMemoryContext, replacing: pending.id, taskRecordID: taskRecordID)
+        }
         return pending.text
     }
 
@@ -1775,7 +1762,7 @@ final class LingShuState: ObservableObject {
         }
     }
 
-    private func requestAPIGatewayRouteReply(
+    func requestAPIGatewayRouteReply(
         for userPrompt: String,
         memoryContext: MainThreadMemoryContext,
         replacing messageID: UUID,
@@ -1820,6 +1807,7 @@ final class LingShuState: ObservableObject {
 
         activeAPITask = Task { [weak self] in
             guard let self else { return }
+            var probe = LingShuStreamLatencyProbe()
             do {
                 let request = LingShuRemoteModelRequest(
                     provider: provider,
@@ -1843,8 +1831,10 @@ final class LingShuState: ObservableObject {
                     reply = try await self.remoteModelClient.stream(request) { [weak self] delta in
                         Task { @MainActor in
                             guard let self, self.missionRunID == runID else { return }
+                            let event = streamParser.ingest(delta)
+                            probe.observeDelta(hasContent: !event.contentDelta.isEmpty)
                             self.consumeModelStreamEvent(
-                                streamParser.ingest(delta),
+                                event,
                                 actor: "本地路由模型",
                                 thinkingMessageID: messageID
                             )
@@ -1865,6 +1855,7 @@ final class LingShuState: ObservableObject {
                 }
                 guard !Task.isCancelled, self.missionRunID == runID else { return }
                 self.recordModelUsage(reply, stage: "路由判断")
+                self.appendTrace(kind: .system, actor: "模型网关", title: "路由延迟", detail: probe.summary())
                 // 按当前模型适配器取干净正文（剥离 M3 的 <think> 等），再解析/兜底。
                 let rawReply = self.currentReplyAdapter.normalizedReplyText(reply.text)
                 let route = self.routePlanner.decodeRoutePayload(from: rawReply) ?? CodexRoutePayload(
@@ -1971,6 +1962,7 @@ final class LingShuState: ObservableObject {
 
         activeAPITask = Task { [weak self] in
             guard let self else { return }
+            var probe = LingShuStreamLatencyProbe()
             do {
                 let request = LingShuRemoteModelRequest(
                     provider: provider,
@@ -1992,8 +1984,10 @@ final class LingShuState: ObservableObject {
                     reply = try await self.remoteModelClient.stream(request) { [weak self] delta in
                         Task { @MainActor in
                             guard let self, self.missionRunID == runID else { return }
+                            let event = streamParser.ingest(delta)
+                            probe.observeDelta(hasContent: !event.contentDelta.isEmpty)
                             self.consumeModelStreamEvent(
-                                streamParser.ingest(delta),
+                                event,
                                 actor: "本地执行模型",
                                 thinkingMessageID: streamingMessageID
                             ) { content in
@@ -2018,6 +2012,7 @@ final class LingShuState: ObservableObject {
                 }
                 guard !Task.isCancelled, self.missionRunID == runID else { return }
                 self.recordModelUsage(reply, stage: "执行阶段")
+                self.appendTrace(kind: .system, actor: "执行模型", title: "执行延迟", detail: probe.summary())
                 self.remoteSessionPool.resolveNativeSession(
                     lease: executionLease,
                     nativeSessionID: nil,
@@ -2079,7 +2074,7 @@ final class LingShuState: ObservableObject {
         }
     }
 
-    private func handleRouteResult(
+    func handleRouteResult(
         _ route: CodexRoutePayload,
         userPrompt: String,
         messageID: UUID,
@@ -2176,6 +2171,7 @@ final class LingShuState: ObservableObject {
         let attachedChoices = willStartExecutionThread ? nil : effectiveRoute.choices
         clearThinkingPreview(for: messageID)
         if let index = chatMessages.firstIndex(where: { $0.id == messageID }) {
+            concludeStreamedSpeech(for: messageID, streamedText: chatMessages[index].text)
             chatMessages[index].text = finalText
             chatMessages[index].isLoading = false
             chatMessages[index].taskRecordID = taskRecordID
@@ -2866,7 +2862,7 @@ final class LingShuState: ObservableObject {
             && !isProjectExecutionRequest(prompt)
     }
 
-    private func isCapabilityCollaborationRequest(_ prompt: String) -> Bool {
+    func isCapabilityCollaborationRequest(_ prompt: String) -> Bool {
         let normalized = prompt
             .lowercased()
             .replacingOccurrences(of: " ", with: "")
@@ -2925,7 +2921,7 @@ final class LingShuState: ObservableObject {
         return .direct
     }
 
-    private func permissionDecision(for prompt: String) -> LingShuPermissionDecision {
+    func permissionDecision(for prompt: String) -> LingShuPermissionDecision {
         permissionPolicy.decide(
             intent: taskIntent(for: prompt),
             codexMode: codexPermissionMode,
