@@ -20,7 +20,10 @@ extension LingShuState {
     }
 
     func refreshRemoteSessionStatus() {
-        remoteSessionStatus = remoteSessionPool.stats().statusText
+        let statusText = remoteSessionPool.stats().statusText
+        if statusText != remoteSessionStatus {
+            remoteSessionStatus = statusText
+        }
     }
 
     func refreshMainRemoteConnectionStatus() {
@@ -38,8 +41,12 @@ extension LingShuState {
             lastDiagnosticLog: mainRemoteLastDiagnosticLog
         )
 
-        mainRemoteConnectionStatus = snapshot.statusText
-        mainRemoteConnectionDetail = snapshot.detailText
+        if mainRemoteConnectionStatus != snapshot.statusText {
+            mainRemoteConnectionStatus = snapshot.statusText
+        }
+        if mainRemoteConnectionDetail != snapshot.detailText {
+            mainRemoteConnectionDetail = snapshot.detailText
+        }
     }
 
     func tickMainRemoteConnectionGuard(now: Date) {
@@ -152,7 +159,7 @@ extension LingShuState {
                     )
                     self.recordModelHeartbeat(source: "主线程守护", detail: "主线程远端探活成功。", isSynthetic: false)
                     if hadFailures || force {
-                        self.eventLog.insert("现在  主线程远端会话已恢复。", at: 0)
+                        self.logEvent("现在  主线程远端会话已恢复。")
                     }
 
                 case .failure(let failure):
@@ -162,7 +169,7 @@ extension LingShuState {
                     self.remoteSessionPool.markFailed(lease: lease)
 
                     if self.remoteConnectionPolicy.isDisconnected(consecutiveFailures: self.mainRemoteConsecutiveFailures) {
-                        self.eventLog.insert("现在  主线程远端会话断开：\(failure.message)", at: 0)
+                        self.logEvent("现在  主线程远端会话断开：\(failure.message)")
                         if !self.hasActiveModelCall {
                             self.missionTitle = "主通道断开"
                             self.missionStatus = "主线程远端会话连续探活失败。我会继续自动重连，恢复前不会伪造模型判断。"

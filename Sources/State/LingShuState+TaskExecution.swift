@@ -237,9 +237,13 @@ extension LingShuState {
     }
 
     func persistTaskExecutionRecords() {
-        taskExecutionJournal.saveRecords(taskExecutionRecords)
-        taskExecutionRecords = taskExecutionJournal.loadRecords()
-        archivedTaskExecutionRecords = taskExecutionJournal.loadArchivedRecords()
+        let saved = taskExecutionJournal.saveRecords(taskExecutionRecords)
+        if taskExecutionRecords != saved.active {
+            taskExecutionRecords = saved.active
+        }
+        if archivedTaskExecutionRecords != saved.archived {
+            archivedTaskExecutionRecords = saved.archived
+        }
     }
 
     func formatElapsed(_ seconds: Int) -> String {

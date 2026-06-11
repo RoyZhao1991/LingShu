@@ -46,7 +46,7 @@ struct JarvisChatView: View {
 
                     ScrollViewReader { proxy in
                         ScrollView {
-                            VStack(spacing: 12) {
+                            LazyVStack(spacing: 12) {
                                 if state.hasMoreColdChatHistory {
                                     Color.clear
                                         .frame(height: 1)
@@ -226,7 +226,7 @@ struct JarvisChatView: View {
                 state.isListening = true
                 state.missionTitle = "正在监听"
                 state.missionStatus = "语音会先被系统转写成文字，再交给灵枢和模型网关理解。"
-                state.eventLog.insert("现在  语音入口开始监听。", at: 0)
+                state.logEvent("现在  语音入口开始监听。")
             } catch {
                 state.isListening = false
                 voice.markInputError("语音启动失败")

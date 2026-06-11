@@ -1,6 +1,6 @@
 import Foundation
 
-enum LingShuTaskExecutionStatus: String, Codable, Equatable {
+enum LingShuTaskExecutionStatus: String, Codable, Equatable, Sendable {
     case queued = "排队中"
     case running = "执行中"
     case answered = "已直接回答"
@@ -9,7 +9,7 @@ enum LingShuTaskExecutionStatus: String, Codable, Equatable {
     case blocked = "异常"
 }
 
-enum LingShuTaskExecutionMessageKind: String, Codable, Equatable {
+enum LingShuTaskExecutionMessageKind: String, Codable, Equatable, Sendable {
     case user
     case core
     case memory
@@ -21,7 +21,7 @@ enum LingShuTaskExecutionMessageKind: String, Codable, Equatable {
     case warning
 }
 
-struct LingShuTaskExecutionMessage: Identifiable, Codable, Equatable {
+struct LingShuTaskExecutionMessage: Identifiable, Codable, Equatable, Sendable {
     var id: String
     var timestamp: Date
     var actor: String
@@ -46,7 +46,7 @@ struct LingShuTaskExecutionMessage: Identifiable, Codable, Equatable {
     }
 }
 
-struct LingShuTaskExecutionArtifact: Identifiable, Codable, Equatable {
+struct LingShuTaskExecutionArtifact: Identifiable, Codable, Equatable, Sendable {
     var id: String
     var title: String
     var location: String
@@ -68,7 +68,7 @@ struct LingShuTaskExecutionArtifact: Identifiable, Codable, Equatable {
     }
 }
 
-struct LingShuTaskExecutionRecord: Identifiable, Codable, Equatable {
+struct LingShuTaskExecutionRecord: Identifiable, Codable, Equatable, Sendable {
     var id: String
     var title: String
     var prompt: String
@@ -237,12 +237,17 @@ struct LingShuTaskExecutionRecord: Identifiable, Codable, Equatable {
     }
 }
 
-final class LingShuTaskExecutionJournal {
+/// 任务执行日志。写入串行化在 `ioQueue` 上异步完成，调用方不等待编码与落盘；
+/// 读取同步穿过同一队列，保证读后写一致。归档记录在内存中缓存，
+/// 避免每次保存都重新解码全部归档。
+final class LingShuTaskExecutionJournal: @unchecked Sendable {
     private let defaults: UserDefaults
     private let storageKey: String
     private let archiveStorageKey: String
     private let maxRecords: Int
     private let maxArchivedRecords: Int
+    private let ioQueue = DispatchQueue(label: "lingshu.task-journal.io", qos: .utility)
+    private var cachedArchivedRecords: [LingShuTaskExecutionRecord]?
 
     init(
         defaults: UserDefaults = .standard,
@@ -259,38 +264,68 @@ final class LingShuTaskExecutionJournal {
     }
 
     func loadRecords() -> [LingShuTaskExecutionRecord] {
-        guard let data = defaults.data(forKey: storageKey),
-              let records = try? JSONDecoder().decode([LingShuTaskExecutionRecord].self, from: data) else {
-            return []
+        ioQueue.sync {
+            guard let data = defaults.data(forKey: storageKey),
+                  let records = try? JSONDecoder().decode([LingShuTaskExecutionRecord].self, from: data) else {
+                return []
+            }
+            return records.sorted { $0.updatedAt > $1.updatedAt }.prefix(maxRecords).map { $0 }
         }
-        return records.sorted { $0.updatedAt > $1.updatedAt }.prefix(maxRecords).map { $0 }
     }
 
     func loadArchivedRecords() -> [LingShuTaskExecutionRecord] {
-        guard let data = defaults.data(forKey: archiveStorageKey),
-              let records = try? JSONDecoder().decode([LingShuTaskExecutionRecord].self, from: data) else {
-            return []
+        ioQueue.sync {
+            loadArchivedRecordsCached()
         }
-        return records.sorted { $0.updatedAt > $1.updatedAt }.prefix(maxArchivedRecords).map { $0 }
     }
 
-    func saveRecords(_ records: [LingShuTaskExecutionRecord]) {
-        let sorted = unique(records).sorted { $0.updatedAt > $1.updatedAt }
-        let retained = Array(sorted.prefix(maxRecords))
-        let retainedIDs = Set(retained.map(\.id))
-        let overflow = sorted.dropFirst(maxRecords)
-        let archived = unique(Array(overflow) + loadArchivedRecords())
-            .filter { !retainedIDs.contains($0.id) }
-            .sorted { $0.updatedAt > $1.updatedAt }
-            .prefix(maxArchivedRecords)
-            .map { $0 }
+    /// 归一化并保存记录。返回值即保存后的（活跃, 归档）两组数据，
+    /// 调用方应直接采用返回值，而不是保存后再从磁盘读回。
+    @discardableResult
+    func saveRecords(_ records: [LingShuTaskExecutionRecord]) -> (active: [LingShuTaskExecutionRecord], archived: [LingShuTaskExecutionRecord]) {
+        ioQueue.sync {
+            let sorted = unique(records).sorted { $0.updatedAt > $1.updatedAt }
+            let retained = Array(sorted.prefix(maxRecords))
+            let retainedIDs = Set(retained.map(\.id))
+            let overflow = sorted.dropFirst(maxRecords)
+            let archived = unique(Array(overflow) + loadArchivedRecordsCached())
+                .filter { !retainedIDs.contains($0.id) }
+                .sorted { $0.updatedAt > $1.updatedAt }
+                .prefix(maxArchivedRecords)
+                .map { $0 }
+            cachedArchivedRecords = archived
 
-        guard let data = try? JSONEncoder().encode(retained) else { return }
-        defaults.set(data, forKey: storageKey)
+            ioQueue.async {
+                if let data = try? JSONEncoder().encode(retained) {
+                    self.defaults.set(data, forKey: self.storageKey)
+                }
+                if let archiveData = try? JSONEncoder().encode(archived) {
+                    self.defaults.set(archiveData, forKey: self.archiveStorageKey)
+                }
+            }
 
-        if let archiveData = try? JSONEncoder().encode(archived) {
-            defaults.set(archiveData, forKey: archiveStorageKey)
+            return (retained, archived)
         }
+    }
+
+    /// 同步落盘队列中所有待写任务。退出前调用。
+    func flush() {
+        ioQueue.sync {}
+    }
+
+    /// 仅允许在 ioQueue 上调用。
+    private func loadArchivedRecordsCached() -> [LingShuTaskExecutionRecord] {
+        if let cachedArchivedRecords {
+            return cachedArchivedRecords
+        }
+        guard let data = defaults.data(forKey: archiveStorageKey),
+              let records = try? JSONDecoder().decode([LingShuTaskExecutionRecord].self, from: data) else {
+            cachedArchivedRecords = []
+            return []
+        }
+        let archived = records.sorted { $0.updatedAt > $1.updatedAt }.prefix(maxArchivedRecords).map { $0 }
+        cachedArchivedRecords = archived
+        return archived
     }
 
     func upsert(_ record: LingShuTaskExecutionRecord, into records: inout [LingShuTaskExecutionRecord]) {

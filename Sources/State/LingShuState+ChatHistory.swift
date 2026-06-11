@@ -29,8 +29,23 @@ extension LingShuState {
         }
     }
 
+    /// 防抖持久化：流式输出会高频改写 chatMessages，这里合并 0.8 秒内的所有变更，
+    /// 只触发一次后台保存。
     func persistChatHistoryIfNeeded() {
         guard !isRestoringChatHistory else { return }
+        chatHistoryPersistTask?.cancel()
+        chatHistoryPersistTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 800_000_000)
+            guard let self, !Task.isCancelled else { return }
+            self.chatHistoryStore.save(self.chatMessages)
+        }
+    }
+
+    /// 立即落盘当前对话，跳过防抖窗口。退出前调用。
+    func flushChatHistory() {
+        chatHistoryPersistTask?.cancel()
+        chatHistoryPersistTask = nil
         chatHistoryStore.save(chatMessages)
+        chatHistoryStore.flush()
     }
 }

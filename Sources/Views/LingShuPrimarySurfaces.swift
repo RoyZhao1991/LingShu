@@ -52,6 +52,10 @@ struct LingShuRootView: View {
                 }
             }
         }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
+            state.flushChatHistory()
+            state.taskExecutionJournal.flush()
+        }
         .onReceive(NotificationCenter.default.publisher(for: .startDemoMission)) { _ in
             state.startDemoMissionIfConnected()
         }

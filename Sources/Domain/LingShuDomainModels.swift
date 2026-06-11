@@ -316,7 +316,7 @@ struct ModelProviderPreset: Identifiable {
     static let catalog: [ModelProviderPreset] = [codexAuth] + apiCatalog
 }
 
-struct ChatMessage: Identifiable, Codable, Equatable {
+struct ChatMessage: Identifiable, Codable, Equatable, Sendable {
     let id: UUID
     let speaker: String
     var text: String

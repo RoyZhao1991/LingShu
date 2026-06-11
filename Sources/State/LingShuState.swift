@@ -158,6 +158,7 @@ final class LingShuState: ObservableObject {
     var mainRemoteLastDiagnosticLog = ""
     private var pendingIntentClarification: LingShuPendingIntentClarification?
     var isRestoringChatHistory = false
+    var chatHistoryPersistTask: Task<Void, Never>?
 
     init() {
         restoreChatHistory()
@@ -168,7 +169,7 @@ final class LingShuState: ObservableObject {
         taskExecutionRecords = taskExecutionJournal.loadRecords()
         archivedTaskExecutionRecords = taskExecutionJournal.loadArchivedRecords()
         refreshRemoteSessionStatus()
-        eventLog.insert("现在  \(report.statusText)", at: 0)
+        logEvent("现在  \(report.statusText)")
         appendTrace(
             kind: .system,
             actor: "主线程",
@@ -459,6 +460,14 @@ final class LingShuState: ObservableObject {
         appendTrace(kind: .runtime, actor: "能力运行时", title: "阻断", detail: error)
     }
 
+    /// 事件日志统一入口：头部插入并裁剪上限，防止长会话期间无界增长。
+    func logEvent(_ text: String) {
+        eventLog.insert(text, at: 0)
+        if eventLog.count > 200 {
+            eventLog.removeLast(eventLog.count - 200)
+        }
+    }
+
     func appendTrace(kind: LingShuTraceKind, actor: String, title: String, detail: String, isStream: Bool = false) {
         let cleanedDetail = cleanTraceText(detail)
         guard !cleanedDetail.isEmpty else { return }
@@ -630,7 +639,9 @@ final class LingShuState: ObservableObject {
         let now = Date()
         if let heartbeat = mainThreadKernel.heartbeat(now: now) {
             mainThreadHeartbeatText = heartbeat.displayText
-            mainThreadSessionStatus = "主线程常驻运行中"
+            if mainThreadSessionStatus != "主线程常驻运行中" {
+                mainThreadSessionStatus = "主线程常驻运行中"
+            }
         }
         refreshRemoteSessionStatus()
         tickMainRemoteConnectionGuard(now: now)
@@ -680,7 +691,7 @@ final class LingShuState: ObservableObject {
             chatMessages.append(.init(speaker: "灵枢", text: response, isUser: false))
         }
 
-        eventLog.insert("现在  \(stage)连续 \(Int(codexTimeoutSeconds)) 秒没有心跳，已停止本轮。", at: 0)
+        logEvent("现在  \(stage)连续 \(Int(codexTimeoutSeconds)) 秒没有心跳，已停止本轮。")
     }
 
     private func cancelActiveCodexCalls() {
@@ -735,12 +746,13 @@ final class LingShuState: ObservableObject {
             chatMessages.append(.init(speaker: "灵枢", text: response, isUser: false))
         }
 
-        eventLog.insert("现在  用户停止了本轮模型调用。", at: 0)
+        logEvent("现在  用户停止了本轮模型调用。")
     }
 
     private func updateThinkingBubble() {
         guard let messageID = activeThinkingMessageID,
-              let index = chatMessages.firstIndex(where: { $0.id == messageID }) else {
+              let index = chatMessages.firstIndex(where: { $0.id == messageID }),
+              !chatMessages[index].isLoading else {
             return
         }
 
@@ -767,7 +779,7 @@ final class LingShuState: ObservableObject {
             codexCLIPath = CodexBridge.bundledCLIPath
         }
 
-        eventLog.insert("现在  模型供应商切换为 \(preset.name)，协议：\(preset.protocolName)。", at: 0)
+        logEvent("现在  模型供应商切换为 \(preset.name)，协议：\(preset.protocolName)。")
         appendTrace(kind: .system, actor: "配置", title: "模型供应商", detail: "已切换为 \(preset.name)，协议：\(preset.protocolName)。")
     }
 
@@ -838,11 +850,11 @@ final class LingShuState: ObservableObject {
         if isListening {
             missionTitle = "正在监听"
             missionStatus = "语音入口已激活。当前原型先模拟唤醒，后续接入 Speech framework 与快捷指令。"
-            eventLog.insert("现在  语音入口进入监听状态。", at: 0)
+            logEvent("现在  语音入口进入监听状态。")
         } else {
             missionTitle = "语音已暂停"
             missionStatus = "可以通过按钮或 Command-R 触发一次演示任务。"
-            eventLog.insert("现在  语音入口已暂停。", at: 0)
+            logEvent("现在  语音入口已暂停。")
         }
     }
 
@@ -1171,7 +1183,7 @@ final class LingShuState: ObservableObject {
             kind: .router,
             text: decision.reason
         )
-        eventLog.insert("现在  任务调度：\(decision.reason)", at: 0)
+        logEvent("现在  任务调度：\(decision.reason)")
 
         switch decision.action {
         case .enqueueSameThread:
@@ -1347,7 +1359,7 @@ final class LingShuState: ObservableObject {
             self.finishTaskRecord(taskRecordID, status: .answered, summary: "灵枢直接回答，未创建专家 agent 任务。")
             self.mainThreadKernel.observeDirectAnswer(prompt: userPrompt, answer: answer)
             self.rememberMainThreadTurn(prompt: userPrompt, reply: answer)
-            self.eventLog.insert("现在  主线程完成轻量思考，未创建任务线程。", at: 0)
+            self.logEvent("现在  主线程完成轻量思考，未创建任务线程。")
         }
 
         return answer
@@ -1393,7 +1405,7 @@ final class LingShuState: ObservableObject {
         missionTitle = "工程验证"
         missionStatus = "正在验证软件工程与 PPT 工程两条交付链路。"
         activeLayer = "验证"
-        eventLog.insert("现在  启动工程验证：软件工程 + PPT 工程。", at: 0)
+        logEvent("现在  启动工程验证：软件工程 + PPT 工程。")
         appendTrace(kind: .system, actor: "灵枢", title: "工程验证", detail: "开始走通软件工程和 PPT 工程两类产出物链路。")
 
         let softwarePrompt = "工程验证：写一个简单的 web 爬虫，要求给出可运行代码和验证说明。"
@@ -1498,7 +1510,7 @@ final class LingShuState: ObservableObject {
                 self.codexAuthDetail = status.detail
                 self.enterCoreState(status.status == "已登录" ? .standby : .abnormal)
                 self.isCheckingCodexAuth = false
-                self.eventLog.insert("现在  Codex Auth 状态：\(status.status) \(status.detail)。", at: 0)
+                self.logEvent("现在  Codex Auth 状态：\(status.status) \(status.detail)。")
                 self.appendTrace(kind: status.status == "已登录" ? .result : .warning, actor: "Codex Auth", title: "登录状态", detail: "\(status.status)：\(status.detail)。")
                 if status.status == "已登录" {
                     self.performMainRemoteHealthProbe(reason: "登录后探活", force: true)
@@ -1529,10 +1541,10 @@ final class LingShuState: ObservableObject {
 
         do {
             try process.run()
-            eventLog.insert("现在  已打开 Codex 登录终端，请按提示完成 ChatGPT 授权。", at: 0)
+            logEvent("现在  已打开 Codex 登录终端，请按提示完成 ChatGPT 授权。")
             appendTrace(kind: .tool, actor: "Codex Auth", title: "打开登录", detail: "已启动 Codex device auth 登录终端。")
         } catch {
-            eventLog.insert("现在  打开 Codex 登录失败：\(error.localizedDescription)。", at: 0)
+            logEvent("现在  打开 Codex 登录失败：\(error.localizedDescription)。")
             appendTrace(kind: .warning, actor: "Codex Auth", title: "登录失败", detail: error.localizedDescription)
         }
     }
@@ -1694,7 +1706,7 @@ final class LingShuState: ObservableObject {
                         willExecute: willStartExecutionThread
                     )
                     self.rememberMainThreadTurn(prompt: userPrompt, reply: finalText, route: effectiveRoute)
-                    self.eventLog.insert("现在  Codex Auth 路由结果已返回。", at: 0)
+                    self.logEvent("现在  Codex Auth 路由结果已返回。")
                     if effectiveRoute.needsAgents {
                         if willStartExecutionThread {
                             self.appendTaskRecordMessage(taskRecordID, actor: "灵枢", role: "中枢", kind: .result, text: finalText)
@@ -1733,7 +1745,7 @@ final class LingShuState: ObservableObject {
                     self.appendTaskRecordMessage(taskRecordID, actor: "主线程", role: "路由判断", kind: .warning, text: error)
                     self.appendTaskRecordMessage(taskRecordID, actor: "灵枢", role: "中枢", kind: .result, text: finalText)
                     self.finishTaskRecord(taskRecordID, status: .blocked, summary: finalText)
-                    self.eventLog.insert("现在  Codex Auth 调用失败：\(error)", at: 0)
+                    self.logEvent("现在  Codex Auth 调用失败：\(error)")
                 }
 
                 if let index = self.chatMessages.firstIndex(where: { $0.id == messageID }) {
@@ -1974,7 +1986,7 @@ final class LingShuState: ObservableObject {
                 if !finalReply.isEmpty {
                     self.chatMessages.append(.init(speaker: "灵枢", text: finalReply, isUser: false, taskRecordID: taskRecordID))
                 }
-                self.eventLog.insert("现在  API 执行流程已返回。", at: 0)
+                self.logEvent("现在  API 执行流程已返回。")
             } catch {
                 guard !Task.isCancelled, self.missionRunID == runID else { return }
                 let message = self.routePlanner.modelGatewayErrorMessage(error)
@@ -1994,7 +2006,7 @@ final class LingShuState: ObservableObject {
                 self.appendTaskRecordMessage(taskRecordID, actor: "灵枢", role: "中枢", kind: .result, text: failureReply)
                 self.finishTaskRecord(taskRecordID, status: .blocked, summary: failureReply)
                 self.chatMessages.append(.init(speaker: "灵枢", text: failureReply, isUser: false, taskRecordID: taskRecordID))
-                self.eventLog.insert("现在  API 执行流程失败：\(message)", at: 0)
+                self.logEvent("现在  API 执行流程失败：\(message)")
             }
         }
     }
@@ -2062,7 +2074,7 @@ final class LingShuState: ObservableObject {
             willExecute: willStartExecutionThread
         )
         rememberMainThreadTurn(prompt: userPrompt, reply: finalText, route: effectiveRoute)
-        eventLog.insert("现在  \(sourceLabel) 路由结果已返回。", at: 0)
+        logEvent("现在  \(sourceLabel) 路由结果已返回。")
 
         if effectiveRoute.needsAgents {
             if willStartExecutionThread {
@@ -3034,7 +3046,7 @@ final class LingShuState: ObservableObject {
                     if !finalReply.isEmpty {
                         self.chatMessages.append(.init(speaker: "灵枢", text: finalReply, isUser: false, taskRecordID: taskRecordID))
                     }
-                    self.eventLog.insert("现在  后台执行流程已返回。", at: 0)
+                    self.logEvent("现在  后台执行流程已返回。")
                 case .failure(let error):
                     self.remoteSessionPool.markFailed(lease: executionLease)
                     self.refreshRemoteSessionStatus()
@@ -3050,7 +3062,7 @@ final class LingShuState: ObservableObject {
                     self.appendTaskRecordMessage(taskRecordID, actor: "灵枢", role: "中枢", kind: .result, text: failureReply)
                     self.finishTaskRecord(taskRecordID, status: .blocked, summary: failureReply)
                     self.chatMessages.append(.init(speaker: "灵枢", text: failureReply, isUser: false, taskRecordID: taskRecordID))
-                    self.eventLog.insert("现在  后台执行流程失败：\(error)", at: 0)
+                    self.logEvent("现在  后台执行流程失败：\(error)")
                 }
             }
         }
@@ -3088,7 +3100,7 @@ final class LingShuState: ObservableObject {
             enterCoreState(.standby, resetTimer: false)
             activeLayer = "待机中"
             trustScore = max(trustScore, 92)
-            eventLog.insert("现在  路由判断：无需专家 agent，灵枢直接回复。", at: 0)
+            logEvent("现在  路由判断：无需专家 agent，灵枢直接回复。")
             appendTrace(kind: .result, actor: "灵枢", title: "直接回复", detail: answer)
             return answer
         }
@@ -3130,7 +3142,7 @@ final class LingShuState: ObservableObject {
         }
 
         let agentNames = schedule.agentSummary
-        eventLog.insert("现在  路由判断：调用 \(agentNames)。", at: 0)
+        logEvent("现在  路由判断：调用 \(agentNames)。")
         appendTrace(kind: .route, actor: "灵枢", title: "分派完成", detail: "本轮唤起：\(agentNames)。")
         if shouldStartExecutionThread(for: userPrompt, route: route) {
             scheduleRouteExecutionAnimation(route, taskRecordID: taskRecordID)
@@ -3180,7 +3192,7 @@ final class LingShuState: ObservableObject {
                 .init(agent: supervisor, severity: "info", title: "执行巡检", detail: "本轮任务已进入后台执行，灵枢保持统一出声，能力节点状态仅在调用链显示。", tick: self.supervisionTick),
                 at: 0
             )
-            self.eventLog.insert("巡检\(self.supervisionTick)  \(supervisor)：执行巡检。", at: 0)
+            self.logEvent("巡检\(self.supervisionTick)  \(supervisor)：执行巡检。")
             self.appendTrace(kind: .agent, actor: supervisor, title: "执行巡检", detail: "本轮后台执行仍在等待模型或工具返回，暂未形成最终交付。")
             self.appendTaskRecordMessage(taskRecordID, actor: supervisor, role: "监控", kind: .agent, text: "巡检\(self.supervisionTick)：后台执行仍在等待模型或工具返回，暂未形成最终交付。")
         }
@@ -3274,7 +3286,7 @@ final class LingShuState: ObservableObject {
         missionStatus = "规划节点先拟定任务草案，调度节点编排能力；执行期启动监控线程，持续校验目标、进度、边界和体验。"
         trustScore = 88
         activeLayer = "灵枢调度"
-        eventLog.insert("现在  用户向灵枢提交复杂目标。", at: 0)
+        logEvent("现在  用户向灵枢提交复杂目标。")
         appendTrace(kind: .system, actor: "演示", title: "启动演示", detail: "启动一次通用能力流转演示。")
 
         for index in missionSteps.indices {
@@ -3335,7 +3347,7 @@ final class LingShuState: ObservableObject {
         trustScore = trust
         runtimePhase = stepIndex < 2 ? .planning : stepIndex < 4 ? .planning : stepIndex < 7 ? .executing : .verifying
         activeLayer = stepIndex < 2 ? "目标受理" : stepIndex < 4 ? "治理编排" : stepIndex < 7 ? "并行执行" : "验收交付"
-        eventLog.insert("现在  \(log)", at: 0)
+        logEvent("现在  \(log)")
         appendTrace(kind: .agent, actor: activeAgents.joined(separator: "、"), title: "演示流转", detail: log)
 
         if stepIndex == 4 {
@@ -3356,7 +3368,7 @@ final class LingShuState: ObservableObject {
                 }
                 self.missionTitle = "等待灵枢最终验收"
                 self.missionStatus = "任务草案、推进方案、执行产物、巡检纠偏记录和验证报告已汇总，高风险操作仍需人工确认。"
-                self.eventLog.insert("现在  任务进入灵枢最终验收节点。", at: 0)
+                self.logEvent("现在  任务进入灵枢最终验收节点。")
             }
         }
     }
@@ -3367,7 +3379,7 @@ final class LingShuState: ObservableObject {
         activeLayer = "并行监控"
         missionTitle = "执行期：监控线程运行中"
         missionStatus = "执行节点推进产出，监控节点观察心跳和偏差，验证节点准备验收；发现偏差先上报灵枢裁决。"
-        eventLog.insert("现在  监控调度器启动：执行、监控、验证进入周期巡检。", at: 0)
+        logEvent("现在  监控调度器启动：执行、监控、验证进入周期巡检。")
         appendTrace(kind: .agent, actor: "监控调度器", title: "周期巡检启动", detail: "执行、监控、验证进入周期巡检；审议节点等待风险信号。")
 
         configureAgent("执行", mode: .working, state: .running, load: 0.88, cadence: "实时", focus: "处理任务分片", finding: "等待监控反馈")
@@ -3399,7 +3411,7 @@ final class LingShuState: ObservableObject {
         activeLayer = severity == "high" || severity == "medium" ? "灵枢纠偏" : "并行监工"
 
         supervisorEvents.insert(.init(agent: agent, severity: severity, title: title, detail: detail, tick: supervisionTick), at: 0)
-        eventLog.insert("巡检\(supervisionTick)  \(agent)：\(title)。", at: 0)
+        logEvent("巡检\(supervisionTick)  \(agent)：\(title)。")
         appendTrace(kind: severity == "high" || severity == "medium" ? .warning : .agent, actor: agent, title: title, detail: detail)
 
         if severity == "high" {

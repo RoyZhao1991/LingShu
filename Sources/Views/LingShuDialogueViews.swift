@@ -27,7 +27,7 @@ struct LingShuDialogueSurface: View {
 
                 ScrollViewReader { proxy in
                     ScrollView {
-                        VStack(spacing: 12) {
+                        LazyVStack(spacing: 12) {
                             if state.hasMoreColdChatHistory {
                                 Color.clear
                                     .frame(height: 1)
