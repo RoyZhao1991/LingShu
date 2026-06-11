@@ -568,38 +568,6 @@ final class LingShuState: ObservableObject {
         return String(withoutControlCharacters.prefix(420)) + "..."
     }
 
-    private func modelConversationMessages(
-        finalUserPrompt: String,
-        excludingCurrentRawPrompt rawPrompt: String,
-        maxMessages: Int = 10
-    ) -> [LingShuModelMessage] {
-        var visibleMessages = chatMessages.filter { !$0.isLoading }
-        if let last = visibleMessages.last,
-           last.isUser,
-           normalizeMemoryText(last.text) == normalizeMemoryText(rawPrompt) {
-            visibleMessages.removeLast()
-        }
-
-        let history = visibleMessages.suffix(maxMessages).map { message in
-            LingShuModelMessage(
-                role: message.isUser ? "user" : "assistant",
-                content: compactForModelContext(message.text)
-            )
-        }
-
-        return history + [
-            .init(role: "user", content: finalUserPrompt)
-        ]
-    }
-
-    private func compactForModelContext(_ text: String) -> String {
-        let cleaned = text
-            .replacingOccurrences(of: "\r", with: " ")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        guard cleaned.count > 1200 else { return cleaned }
-        return String(cleaned.prefix(1200)) + "..."
-    }
-
     func enterCoreState(_ newState: LingShuCoreState, resetTimer: Bool = true) {
         let now = Date()
 
@@ -1949,8 +1917,7 @@ final class LingShuState: ObservableObject {
         let executionPrompt = executionPrompt(for: userPrompt, route: route)
         let conversationMessages = modelConversationMessages(
             finalUserPrompt: executionPrompt,
-            excludingCurrentRawPrompt: userPrompt,
-            maxMessages: 8
+            excludingCurrentRawPrompt: userPrompt
         )
         let useStreamingDialogue = shouldUseLocalStreamingDialogue
         let executionContextKey = activeTaskThread?.id ?? taskRuntime.taskID
@@ -2281,6 +2248,7 @@ final class LingShuState: ObservableObject {
         let permission = permissionDecision(for: userPrompt)
         let routeSystemPrompt = routePlanner.routeSystemPrompt(permission: permission)
         let routeUserPrompt = routePlanner.routeUserPrompt(userPrompt: userPrompt, memoryContext: memoryPromptHint)
+        let routeConversation = backgroundConversationMessages(excludingTrailingPromptMatching: userPrompt)
         let routeLease = remoteSessionPool.lease(
             provider: provider,
             model: model,
@@ -2308,7 +2276,7 @@ final class LingShuState: ObservableObject {
                     stream: false,
                     timeout: timeout,
                     continuationToken: routeLease.continuationToken,
-                    conversationMessages: []
+                    conversationMessages: routeConversation
                 ))
                 guard !Task.isCancelled else { return }
                 let route = self.routePlanner.decodeRoutePayload(from: reply.text) ?? CodexRoutePayload(
@@ -2487,6 +2455,7 @@ final class LingShuState: ObservableObject {
             memoryHint: memoryHint,
             isProjectExecutionRequest: isProjectExecutionRequest(userPrompt)
         )
+        let executionConversation = backgroundConversationMessages(excludingTrailingPromptMatching: userPrompt)
         let provider = modelProvider
         let model = modelName
         let endpoint = endpoint
@@ -2521,7 +2490,7 @@ final class LingShuState: ObservableObject {
                     stream: false,
                     timeout: timeout,
                     continuationToken: executionLease.continuationToken,
-                    conversationMessages: []
+                    conversationMessages: executionConversation
                 ))
                 guard !Task.isCancelled else { return }
                 self.remoteSessionPool.resolveNativeSession(
@@ -2978,7 +2947,7 @@ final class LingShuState: ObservableObject {
         )
     }
 
-    private func normalizeMemoryText(_ text: String) -> String {
+    func normalizeMemoryText(_ text: String) -> String {
         memoryService.normalizeMemoryText(text)
     }
 
