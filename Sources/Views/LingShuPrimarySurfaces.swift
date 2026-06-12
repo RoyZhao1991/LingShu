@@ -132,7 +132,7 @@ struct LingShuRootView: View {
                 case .operations:
                     LingShuOperationsSurface(state: state)
                 case .settings:
-                    LingShuModelGatewaySurface(state: state)
+                    LingShuSettingsHub(state: state)
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)

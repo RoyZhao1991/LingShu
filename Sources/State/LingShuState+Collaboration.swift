@@ -74,11 +74,18 @@ extension LingShuState {
         let reviewer = expertProfileRegistry.reviewerProfile()
         let threadID = activeTaskThread?.id
         let inherited = taskIterationContext(threadID: threadID, currentRecordID: taskRecordID)
+        // 任务级文件隔离：每个管线在独立子目录落盘，并行任务互不污染。
+        let taskWorkDir = makeTaskWorkingDirectory(for: threadID ?? taskRecordID ?? UUID().uuidString)
+        // 借鉴文章：召回同领域经验规则注入规划，避免重复踩坑（记忆复利）。
+        let experienceRules = memoryService.recallExperienceRules(for: userPrompt)
         let pipelineToken = UUID()
         activePipelineToken = pipelineToken
 
         if !inherited.isEmpty {
             appendTaskRecordMessage(taskRecordID, actor: "记忆", role: "执行记忆", kind: .memory, text: "本段继承同任务前序迭代的结论，专家产出会在其基础上延续。")
+        }
+        if !experienceRules.isEmpty {
+            appendTaskRecordMessage(taskRecordID, actor: "记忆", role: "经验规则", kind: .memory, text: "召回 \(experienceRules.count) 条同领域经验规则，已注入规划参考。")
         }
         appendTaskRecordMessage(
             taskRecordID,
@@ -102,7 +109,8 @@ extension LingShuState {
                 self.missionTitle = "规划中"
                 self.missionStatus = "项目经理专家正在拆解任务并定验收标准。"
                 let planPrompt = """
-                为下面的任务制定执行计划：列出执行步骤（不超过 5 步）和验收标准（不超过 5 条，必须可检查）。直接给计划，不要寒暄。
+                为下面的任务制定执行计划：列出执行步骤（不超过 5 步）和验收标准（不超过 5 条，每条必须是可逐条核对的具体断言）。直接给计划，不要寒暄。
+                \(experienceRules.isEmpty ? "" : "过往同类任务沉淀的经验规则（务必纳入，避免重复踩坑）：\n\(experienceRules.map { "- \($0)" }.joined(separator: "\n"))\n")
                 \(inherited.isEmpty ? "" : "前序迭代上下文（本段必须延续，不要推翻已确认的结论）：\n\(inherited)\n")
                 任务：\(userPrompt)
                 """
@@ -133,31 +141,34 @@ extension LingShuState {
                     token: pipelineToken,
                     stageActor: "执行",
                     taskRecordID: taskRecordID,
+                    workingDirectory: taskWorkDir,
                     streamInto: bubbleID,
                     probe: &probe
                 )
                 self.appendTaskRecordMessage(taskRecordID, actor: "执行", role: expert.title, kind: .agent, text: draft)
 
-                // ③+④ 评审-纠正循环：评审官逐条核对，结论"需修正"就打回专家修订，
-                // 再评审——最多三轮修订，直到通过或轮次用尽（如实标注）。
+                // ③+④ 评审-纠正循环：评审官按验收标准逐条 ✅/❌ 核对（checklist 驱动，
+                // 不是给一句总评），全部通过才算过；任一不达标就打回——最多三轮（保险丝）。
                 var finalDraft = draft
                 var correctionRounds = 0
                 var lastCritique = ""
                 var reviewPassed = false
+                let criteriaBlock = "验收标准：\n\(plan)\n专家检查清单：\n\(expert.reviewChecklist.map { "- \($0)" }.joined(separator: "\n"))"
                 while correctionRounds <= 3 {
                     self.missionTitle = "评审中"
                     self.missionStatus = correctionRounds == 0
-                        ? "评审官正在对照验收标准核对草稿。"
+                        ? "评审官正在逐条核对验收标准。"
                         : "评审官正在复核第 \(correctionRounds) 轮修订稿。"
                     let critiquePrompt = """
-                    对照验收标准和检查清单评审下面的\(correctionRounds == 0 ? "草稿" : "第 \(correctionRounds) 轮修订稿")。
-                    验收标准：
-                    \(plan)
-                    检查清单：
-                    \(expert.reviewChecklist.map { "- \($0)" }.joined(separator: "\n"))
+                    逐条核对下面的\(correctionRounds == 0 ? "草稿" : "第 \(correctionRounds) 轮修订稿")是否满足每一条验收标准与检查清单。
+                    \(criteriaBlock)
                     \(correctionRounds == 0 ? "" : "上一轮评审意见（核对是否已落实）：\n\(lastCritique)\n")
                     待评审稿：
                     \(finalDraft)
+
+                    输出格式（严格遵守）：
+                    先逐条列出每一条标准的核对结果，每行以 ✅ 或 ❌ 开头，❌ 必须写明缺什么、怎么改。
+                    最后单独一行给结论：所有条目都 ✅ 写「结论：通过」，只要有一条 ❌ 写「结论：需修正」。
                     """
                     let critique = try await self.pipelineModelCall(
                         channel: channel,
@@ -167,10 +178,11 @@ extension LingShuState {
                         stageActor: "审议",
                         probe: &probe
                     )
-                    self.appendTaskRecordMessage(taskRecordID, actor: "审议", role: reviewer.title, kind: .review, text: critique)
+                    let checklist = LingShuChecklistVerdict.parse(critique)
+                    self.appendTaskRecordMessage(taskRecordID, actor: "审议", role: reviewer.title, kind: .review, text: "\(checklist.summaryLine)\n\(critique)")
                     lastCritique = critique
 
-                    guard critique.contains("需修正") else {
+                    if checklist.allPassed {
                         reviewPassed = true
                         break
                     }
@@ -178,11 +190,11 @@ extension LingShuState {
 
                     correctionRounds += 1
                     self.missionTitle = "纠正中（第 \(correctionRounds)/3 轮）"
-                    self.missionStatus = "\(expert.title)正在按评审意见进行第 \(correctionRounds) 轮修订。"
-                    self.appendTaskRecordMessage(taskRecordID, actor: "调度", role: "过程纠偏", kind: .router, text: "评审未通过，打回\(expert.title)进行第 \(correctionRounds)/3 轮修订。")
+                    self.missionStatus = "\(expert.title)正在按未达标项进行第 \(correctionRounds) 轮修订。"
+                    self.appendTaskRecordMessage(taskRecordID, actor: "调度", role: "过程纠偏", kind: .router, text: "评审未通过（\(checklist.failedCount) 项未达标），打回\(expert.title)进行第 \(correctionRounds)/3 轮修订。")
                     let revisePrompt = """
-                    你的稿件被评审打回（第 \(correctionRounds)/3 轮修订）。逐条吸收下面的评审意见，输出修订后的完整交付物（全文，不要只列改动）。
-                    评审意见：
+                    你的稿件被评审打回（第 \(correctionRounds)/3 轮修订）。下面是逐条核对结果，把每个 ❌ 项改到位，输出修订后的完整交付物（全文，不要只列改动）。
+                    评审逐条结果：
                     \(critique)
                     当前稿件：
                     \(finalDraft)
@@ -194,13 +206,19 @@ extension LingShuState {
                         token: pipelineToken,
                         stageActor: "纠正",
                         taskRecordID: taskRecordID,
+                        workingDirectory: taskWorkDir,
                         probe: &probe
                     )
                     self.appendTaskRecordMessage(taskRecordID, actor: "纠正", role: expert.title, kind: .agent, text: finalDraft)
                 }
                 let corrected = correctionRounds > 0
                 if !reviewPassed && corrected {
-                    self.appendTaskRecordMessage(taskRecordID, actor: "调度", role: "过程纠偏", kind: .warning, text: "三轮修订后评审仍有保留意见，按现稿进入验收（意见已留档）。")
+                    self.appendTaskRecordMessage(taskRecordID, actor: "调度", role: "过程纠偏", kind: .warning, text: "三轮修订后仍有未达标项，按现稿进入验收（逐条意见已留档）。")
+                }
+
+                // 借鉴文章：被打回又修正过的任务，把"问题→修正"提炼成经验规则沉淀（记忆复利）。
+                if corrected {
+                    await self.distillExperienceRule(channel: channel, token: pipelineToken, userPrompt: userPrompt, expert: expert, critique: lastCritique, taskRecordID: taskRecordID)
                 }
 
                 // ⑤ 验收：最终结论 + 下一步建议。
@@ -208,7 +226,7 @@ extension LingShuState {
                 self.missionStatus = "验收官正在给出最终结论。"
                 let verdictText = try await self.pipelineModelCall(
                     channel: channel,
-                    systemPrompt: "你是验收官。对照验收标准给出最终验收结论（120 字以内），并给一条具体的下一步建议。不要复述交付物。",
+                    systemPrompt: "你是验收官。对照验收标准逐条复核交付物，先用一两句给出每条是否达标，再给最终结论（达标/部分达标）和一条具体的下一步建议。总共不超过 160 字，不要复述交付物全文。",
                     userPrompt: "验收标准：\n\(plan)\n\n最终交付物：\n\(finalDraft)",
                     token: pipelineToken,
                     stageActor: "验证",
@@ -351,134 +369,5 @@ extension LingShuState {
             .suffix(3)
             .map { "- 「\($0.title)」（\($0.status.rawValue)）：\(String($0.summary.prefix(220)))" }
             .joined(separator: "\n")
-    }
-
-    // MARK: - 管线模型调用
-
-    struct PipelineChannel {
-        var provider: String
-        var model: String
-        var endpoint: String
-        var protocolName: String
-        var apiKey: String
-        var temperature: Double
-        var timeout: TimeInterval
-        var useStreaming: Bool
-    }
-
-    /// 单阶段模型调用：上下文严格任务内（不带聊天历史），按需把正文流式写入气泡。
-    /// 带工具的执行调用：专家产出过程中可请求宿主执行真实动作（读写文件、列目录、
-    /// 抓网页、跑命令），结果回传后继续——最多 4 个回合防失控。
-    /// 工具调用与结果全部进任务执行记录可审计；run_command 受权限策略约束。
-    func pipelineAgenticCall(
-        channel: PipelineChannel,
-        systemPrompt: String,
-        userPrompt: String,
-        token: UUID,
-        stageActor: String,
-        taskRecordID: String?,
-        streamInto bubbleID: UUID? = nil,
-        probe: inout LingShuStreamLatencyProbe
-    ) async throws -> String {
-        let toolSystemPrompt = systemPrompt + "\n\n" + toolExecutor.catalogPrompt
-        var conversation: [LingShuModelMessage] = []
-        var currentPrompt = userPrompt
-        let allowShell = !requireHumanApproval
-        let workingDirectory = codexWorkingDirectory
-
-        for turn in 0..<4 {
-            let reply = try await pipelineModelCall(
-                channel: channel,
-                systemPrompt: toolSystemPrompt,
-                userPrompt: currentPrompt,
-                conversationMessages: conversation,
-                token: token,
-                stageActor: stageActor,
-                streamInto: bubbleID,
-                probe: &probe
-            )
-            let requests = LingShuToolCallParser.parse(reply)
-            guard !requests.isEmpty, turn < 3 else {
-                return LingShuToolCallParser.strippingToolLines(reply)
-            }
-
-            conversation.append(.init(role: "user", content: currentPrompt))
-            conversation.append(.init(role: "assistant", content: reply))
-
-            var resultLines: [String] = []
-            for request in requests.prefix(3) {
-                appendTaskRecordMessage(taskRecordID, actor: "工具", role: stageActor, kind: .agent, text: "请求执行 \(request.tool)：\(String(describing: request.arguments).prefix(200))")
-                let result = await toolExecutor.execute(request, workingDirectory: workingDirectory, allowShell: allowShell)
-                appendTaskRecordMessage(taskRecordID, actor: "工具", role: "执行结果", kind: .agent, text: result.journalText)
-                appendTrace(kind: .tool, actor: "工具", title: result.success ? "\(result.tool) 完成" : "\(result.tool) 失败", detail: String(result.output.prefix(180)))
-                if result.tool == "write_file", result.success,
-                   let path = request.arguments["path"] {
-                    appendTaskRecordArtifact(taskRecordID, title: (path as NSString).lastPathComponent, location: path, producer: "工具执行")
-                }
-                resultLines.append("【工具结果】\(result.journalText)")
-            }
-            currentPrompt = resultLines.joined(separator: "\n") + "\n请基于工具结果继续完成交付物。"
-        }
-        return ""
-    }
-
-    private func pipelineModelCall(
-        channel: PipelineChannel,
-        systemPrompt: String,
-        userPrompt: String,
-        conversationMessages: [LingShuModelMessage] = [],
-        token: UUID,
-        stageActor: String,
-        streamInto bubbleID: UUID? = nil,
-        probe: inout LingShuStreamLatencyProbe
-    ) async throws -> String {
-        let request = LingShuRemoteModelRequest(
-            provider: channel.provider,
-            model: channel.model,
-            endpoint: channel.endpoint,
-            protocolName: channel.protocolName,
-            apiKey: channel.apiKey,
-            systemPrompt: systemPrompt,
-            userPrompt: userPrompt,
-            temperature: channel.temperature,
-            stream: channel.useStreaming,
-            timeout: channel.timeout,
-            continuationToken: nil,
-            conversationMessages: conversationMessages
-        )
-
-        let reply: LingShuRemoteModelReply
-        if channel.useStreaming {
-            let parser = currentReplyAdapter.makeStreamParser()
-            var localProbe = probe
-            reply = try await remoteModelClient.stream(request) { [weak self] delta in
-                Task { @MainActor in
-                    guard let self, self.activePipelineToken == token else { return }
-                    let event = parser.ingest(delta)
-                    localProbe.observeDelta(hasContent: !event.contentDelta.isEmpty)
-                    self.consumeModelStreamEvent(event, actor: stageActor, thinkingMessageID: bubbleID) { content in
-                        if bubbleID != nil {
-                            self.appendStreamingBubbleText(content, to: bubbleID)
-                        }
-                    }
-                }
-            } onHeartbeat: { [weak self] in
-                Task { @MainActor in
-                    guard let self, self.activePipelineToken == token else { return }
-                    self.recordModelHeartbeat(source: stageActor, detail: "流式连接活跃。")
-                }
-            }
-            probe = localProbe
-            _ = parser.finish()
-        } else {
-            reply = try await remoteModelClient.send(request)
-            probe.observeDelta(hasContent: true)
-        }
-
-        guard activePipelineToken == token, !Task.isCancelled else {
-            throw CancellationError()
-        }
-        recordModelUsage(reply, stage: stageActor)
-        return currentReplyAdapter.normalizedReplyText(reply.text)
     }
 }

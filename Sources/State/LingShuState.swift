@@ -131,10 +131,13 @@ final class LingShuState: ObservableObject {
 
     let mainThreadKernel = LingShuMainThreadKernel()
     let memoryService = LingShuMemoryService()
-    /// 专家档案库（模板+知识要点+评审清单）；协议化，可整体替换（可插拔）。
-    let expertProfileRegistry: any LingShuExpertProfileProviding = LingShuExpertProfileRegistry()
+    /// 专家档案库（内置 + 用户 ~/Library/Application Support/LingShu/Skills/*.md 技能）；
+    /// 协议化可插拔，用户技能触发词命中时优先。
+    let expertProfileRegistry: any LingShuExpertProfileProviding = LingShuCompositeExpertRegistry()
     /// 定时触发服务（提醒/例行任务），分钟级检查，本机 JSON 持久化。
     let scheduledTriggers = LingShuScheduledTriggerService()
+    /// MCP 连接器注册表：接外部 MCP server 暴露的工具进协同管线（可插拔）。
+    let connectorRegistry = LingShuConnectorRegistry()
     /// 本机工具执行器（读写文件/列目录/抓网页/跑命令）；协议化可替换沙箱实现。
     let toolExecutor: any LingShuToolExecuting = LingShuLocalToolExecutor()
     /// 协同管线开关：关闭则任务回退单次执行调用（应急逃生口）。

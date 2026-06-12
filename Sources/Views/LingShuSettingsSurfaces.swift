@@ -106,8 +106,6 @@ struct LingShuModelGatewaySurface: View {
             VStack(alignment: .leading, spacing: 18) {
                 SectionHeader(icon: "slider.horizontal.3", title: "模型访问配置", subtitle: "默认数据网络网关 · Codex Auth · 主流大模型 API · 本地模型")
 
-                LingShuTriggerSettingsView(triggerService: state.scheduledTriggers)
-
                 HStack(alignment: .top, spacing: 16) {
                     VStack(alignment: .leading, spacing: 12) {
                         SectionHeader(icon: "person.badge.key", title: "Codex Auth", subtitle: "复用本机 Codex / ChatGPT 登录")
