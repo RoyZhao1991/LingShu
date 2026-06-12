@@ -67,19 +67,24 @@ struct CodexAgentTask: Codable {
 }
 
 /// 结构化选项：模型需要用户在有限选择中做决定时返回，界面渲染成选择卡片。
+/// action 为宿主侧结构化动作（如 "resume:task-123" / "new-task"）：有 action 的选项
+/// 点选后执行动作而不是把 label 当新输入提交；模型生成的选项不填 action。
 struct CodexRouteChoiceOption: Codable, Equatable, Sendable {
     var label: String
     var detail: String?
+    var action: String?
 
-    init(label: String, detail: String? = nil) {
+    init(label: String, detail: String? = nil, action: String? = nil) {
         self.label = label
         self.detail = detail
+        self.action = action
     }
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         label = (try? container.decode(String.self, forKey: .label)) ?? ""
         detail = try? container.decode(String.self, forKey: .detail)
+        action = try? container.decode(String.self, forKey: .action)
     }
 }
 

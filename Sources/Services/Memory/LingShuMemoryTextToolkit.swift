@@ -60,6 +60,18 @@ enum LingShuMemoryTextToolkit {
         return signals.contains { normalized.contains($0) }
     }
 
+    /// 明确的任务回溯请求：用户点名要续接某个历史任务（"继续做上次那个PPT"），
+    /// 区别于一般的延续语气。强回溯动词 + 历史指代同时出现才算，避免把
+    /// "继续说"这类口头语误判成回溯。
+    static func isExplicitResumeRequest(_ prompt: String) -> Bool {
+        let normalized = normalize(prompt)
+        let resumeVerbs = ["继续", "接着做", "接着弄", "回到", "恢复", "续上", "续做", "捡起", "接着推进", "继续执行", "继续推进"]
+        let historyReferences = ["上次", "之前", "那个任务", "上回", "昨天", "前几天", "历史任务", "原来", "先前", "之前的", "没做完", "未完成", "做到一半"]
+        let hasVerb = resumeVerbs.contains { normalized.contains($0) }
+        let hasReference = historyReferences.contains { normalized.contains($0) }
+        return hasVerb && hasReference
+    }
+
     static func isEphemeralLocalPrompt(_ prompt: String) -> Bool {
         let normalized = normalize(prompt)
         let ephemeralPrompts = ["你是谁", "你是什么", "你叫什么", "灵枢是谁", "我是谁", "你好", "您好", "在吗", "hello", "hi"]

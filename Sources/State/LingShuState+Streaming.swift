@@ -9,12 +9,18 @@ extension LingShuState {
         LingShuModelReplyAdapters.adapter(provider: modelProvider, model: modelName)
     }
 
-    /// 用户在选择卡片上点了某个选项：标记该卡片已解决，并把选项作为一条输入提交，推进对话。
-    func selectRouteChoice(_ option: String, for messageID: UUID) {
+    /// 用户在选择卡片上点了某个选项：标记卡片已解决。带 action 的选项执行结构化
+    /// 动作（任务续接/新任务）；普通选项把 label 作为一条输入提交，推进对话。
+    func selectRouteChoice(_ option: CodexRouteChoiceOption, for messageID: UUID) {
         guard let index = chatMessages.firstIndex(where: { $0.id == messageID }),
               chatMessages[index].resolvedChoice == nil else { return }
-        chatMessages[index].resolvedChoice = option
-        _ = submitTextInput(option, source: .typed)
+        chatMessages[index].resolvedChoice = option.label
+
+        if let action = option.action {
+            performChoiceAction(action)
+            return
+        }
+        _ = submitTextInput(option.label, source: .typed)
     }
 
     func recordRemoteStreamRetryDiagnostic(_ line: String, actor: String) {

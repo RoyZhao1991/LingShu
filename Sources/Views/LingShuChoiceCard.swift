@@ -4,7 +4,7 @@ import SwiftUI
 struct LingShuChoiceCard: View {
     let prompt: CodexRouteChoicePrompt
     let resolvedChoice: String?
-    let onSelect: (String) -> Void
+    let onSelect: (CodexRouteChoiceOption) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -19,7 +19,7 @@ struct LingShuChoiceCard: View {
                 let isResolved = resolvedChoice != nil
                 let isPicked = resolvedChoice == option.label
                 Button {
-                    onSelect(option.label)
+                    onSelect(option)
                 } label: {
                     HStack(alignment: .top, spacing: 10) {
                         Text("\(index + 1)")

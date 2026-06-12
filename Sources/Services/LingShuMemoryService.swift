@@ -8,12 +8,31 @@ struct LingShuPreparedMainThreadMemory {
     let traceDetail: String
 }
 
+/// 任务匹配置信度：高=直接续接；中=必须二次确认；无=按新任务。
+enum LingShuTaskMatchConfidence: Equatable, Sendable {
+    case high
+    case medium
+    case none
+}
+
+/// 可供用户挑选的续接候选（语义近似命中）。
+struct LingShuTaskResumeCandidate: Equatable, Sendable {
+    let taskID: String?
+    let title: String
+    let summary: String
+    let updatedAt: Date
+    let matchedBy: String
+}
+
 struct LingShuTaskMemoryLookup {
     let taskID: String
     let memoryStatus: String
     let restored: Bool
     let hotMatch: TaskMemoryRecord?
     let coldMatch: ColdMemoryRecord?
+    var confidence: LingShuTaskMatchConfidence = .none
+    var candidates: [LingShuTaskResumeCandidate] = []
+    var explicitResume: Bool = false
 
     var traceTitle: String {
         hotMatch == nil && coldMatch == nil ? "创建线程" : "恢复记忆"
@@ -34,10 +53,10 @@ struct LingShuExecutionMemoryHint {
 }
 
 final class LingShuMemoryService {
-    private let repository: LingShuMemoryRepository
+    let repository: LingShuMemoryRepository
     /// 内嵌 RAG 语义库（SQLite + FTS5 + 本地句向量）：关键词标签匹配之外的
     /// 语义检索层，"上周让你查的那件事"这类指代靠它召回。
-    private let semanticStore: LingShuSemanticMemoryStore
+    let semanticStore: LingShuSemanticMemoryStore
 
     init(
         repository: LingShuMemoryRepository = LingShuMemoryRepository(),
@@ -188,27 +207,11 @@ final class LingShuMemoryService {
         return Array((coldRecords + semanticHits).prefix(3))
     }
 
-    func taskMemoryLookup(for prompt: String) -> LingShuTaskMemoryLookup {
-        let tags = Set(LingShuMemoryTextToolkit.taskTags(from: prompt))
-        let hotMatch = findTaskMemory(for: prompt)
-        let coldMatch = hotMatch == nil
-            ? searchColdMemory(for: prompt, tags: tags, shouldSearch: !tags.isEmpty || LingShuMemoryTextToolkit.shouldRecallHistory(for: prompt))
-                .first { $0.source == "执行线程" || $0.category.contains("任务执行") || $0.category.contains("能力协作") || $0.category.contains("软件工程") }
-            : nil
+    /// 任务回溯三层匹配：①关键字标签精确层 ②语义库检索层（全文+向量 RRF）③融合定置信度。
+    /// 高置信直接续接；中置信由上层发选择卡二次确认；明确回溯但未精确命中时，
 
-        let taskID = hotMatch?.id ?? coldMatch.map { "task-\($0.id)" } ?? "task-\(Int(Date().timeIntervalSince1970))"
-        let memoryStatus = hotMatch.map { "续接：\($0.title)" }
-            ?? coldMatch.map { "冷备续接：\($0.title)" }
-            ?? "未命中历史任务，创建新任务线程。"
-
-        return .init(
-            taskID: taskID,
-            memoryStatus: memoryStatus,
-            restored: hotMatch != nil || coldMatch != nil,
-            hotMatch: hotMatch,
-            coldMatch: coldMatch
-        )
-    }
+    /// 语义库里的任务召回：按 kind=任务执行过滤，从 task: 标签解析 taskID，按任务去重。
+    /// 要求词面锚点（全文命中）——纯向量单路命中对本地向量模型不可靠（无关中文短句也会
 
     func executionMemoryHint(for prompt: String) -> LingShuExecutionMemoryHint {
         var records = repository.loadTaskRecords()
@@ -298,11 +301,12 @@ final class LingShuMemoryService {
         compactAndArchiveTaskRecords(&records)
         repository.saveTaskRecords(records)
 
+        // task: 标签携带任务线程 ID——语义召回后才能找回对应任务续接。
         semanticStore.remember(
             kind: "任务执行",
             title: title,
             content: "状态：\(status)。\(clippedSummary.isEmpty ? "本轮任务已完成。" : clippedSummary)",
-            tags: tags,
+            tags: tags + ["task:\(resolvedID)"],
             importance: 0.6
         )
     }
@@ -413,7 +417,7 @@ final class LingShuMemoryService {
         repository.saveColdRecords(records)
     }
 
-    private func searchColdMemory(for prompt: String, tags: Set<String>, shouldSearch: Bool) -> [ColdMemoryRecord] {
+    func searchColdMemory(for prompt: String, tags: Set<String>, shouldSearch: Bool) -> [ColdMemoryRecord] {
         guard shouldSearch else { return [] }
 
         return repository.loadColdRecords()
@@ -462,15 +466,4 @@ final class LingShuMemoryService {
             .index
     }
 
-    private func findTaskMemory(for prompt: String) -> TaskMemoryRecord? {
-        let tags = Set(LingShuMemoryTextToolkit.taskTags(from: prompt))
-        guard !tags.isEmpty else { return nil }
-
-        return repository.loadTaskRecords()
-            .sorted { $0.updatedAt > $1.updatedAt }
-            .first { record in
-                let recordTags = Set(record.tags)
-                return !recordTags.isDisjoint(with: tags)
-            }
-    }
 }

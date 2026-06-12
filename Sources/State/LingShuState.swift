@@ -188,6 +188,8 @@ final class LingShuState: ObservableObject {
     var mainRemoteLastFailureReason = ""
     var mainRemoteLastDiagnosticLog = ""
     private var pendingIntentClarification: LingShuPendingIntentClarification?
+    /// 任务续接二次确认的挂起上下文：用户在选择卡上点选后据此重提原指令。
+    var pendingTaskResume: LingShuPendingTaskResume?
     var isRestoringChatHistory = false
     var chatHistoryPersistTask: Task<Void, Never>?
     /// 由根视图注入：返回当前实时态势感知上下文（无有效信号时返回空串）。
@@ -967,6 +969,16 @@ final class LingShuState: ObservableObject {
 
         if isPotentialTask {
             let memoryLookup = memoryService.taskMemoryLookup(for: trimmedPrompt)
+            // 置信不足时不赌——发选择卡二次确认（用户已通过 forcedThreadID 指定线程则跳过）。
+            if forcedThreadID == nil,
+               let confirmation = presentTaskResumeConfirmationIfNeeded(
+                   lookup: memoryLookup,
+                   prompt: trimmedPrompt,
+                   source: source,
+                   taskRecordID: taskRecordID
+               ) {
+                return confirmation
+            }
             let threadID = forcedThreadID ?? memoryLookup.taskID
             upsertTaskThread(
                 id: threadID,
