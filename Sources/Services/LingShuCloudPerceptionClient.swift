@@ -65,19 +65,27 @@ struct LingShuCloudPerceptionClient {
         }
     }
 
-    /// 图片快速理解（swds-vision-fast）。
+    /// 实时态势常用检测对象。后端 grounding-dino 只有传了 detection_queries 才执行检测，
+    /// 否则 detections 永远为空。
+    static let defaultDetectionQueries = ["person", "face", "screen", "document", "phone", "hand"]
+
+    /// 图片快速理解（swds-vision-fast）。include_qwen_semantics 默认开——服务端已部署
+    /// Qwen2.5-VL，可给出场景语义理解。
     func analyzeImage(
         imageURL: String? = nil,
         imageBase64: String? = nil,
         prompt: String = "请解析图片中的文字、人物、物体、场景和风险点。",
         includeOCR: Bool = true,
-        includeGrounding: Bool = true
+        includeGrounding: Bool = true,
+        detectionQueries: [String] = LingShuCloudPerceptionClient.defaultDetectionQueries,
+        includeQwenSemantics: Bool = true
     ) async throws -> LingShuCloudPerceptionResult {
         var body: [String: Any] = [
             "prompt": prompt,
             "include_ocr": includeOCR,
             "include_grounding": includeGrounding,
-            "include_qwen_semantics": false
+            "detection_queries": detectionQueries,
+            "include_qwen_semantics": includeQwenSemantics
         ]
         try attachMedia(&body, urlKey: "image_url", base64Key: "image_base64", url: imageURL, base64: imageBase64)
         return try await invokePerception(route: "swds-vision-fast", body: body)
@@ -105,7 +113,9 @@ struct LingShuCloudPerceptionClient {
         sampleIntervalSec: Int = 1,
         maxKeyframes: Int = 8,
         includeOCR: Bool = true,
-        includeGrounding: Bool = true
+        includeGrounding: Bool = true,
+        detectionQueries: [String] = LingShuCloudPerceptionClient.defaultDetectionQueries,
+        includeQwenSemantics: Bool = true
     ) async throws -> LingShuCloudPerceptionResult {
         var body: [String: Any] = [
             "prompt": prompt,
@@ -113,7 +123,8 @@ struct LingShuCloudPerceptionClient {
             "max_keyframes": maxKeyframes,
             "include_ocr": includeOCR,
             "include_grounding": includeGrounding,
-            "include_qwen_semantics": false
+            "detection_queries": detectionQueries,
+            "include_qwen_semantics": includeQwenSemantics
         ]
         try attachMedia(&body, urlKey: "video_url", base64Key: "video_base64", url: videoURL, base64: videoBase64)
         return try await invokePerception(route: "swds-vision-deep", body: body)

@@ -125,6 +125,10 @@ final class LingShuDataNetPerceptionProvider: LingShuRealtimePerceptionProviding
     static func makeReply(from result: LingShuCloudPerceptionResult) -> LingShuRealtimePerceptionModelReply {
         var parts: [String] = []
         let transcript = result.transcript.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Qwen2.5-VL 的场景语义 summary 是最有价值的画面理解，放在最前。
+        if let summary = extractSemanticSummary(result.semanticSuggestions), !summary.isEmpty {
+            parts.append("场景：\(summary)")
+        }
         if !transcript.isEmpty {
             parts.append("听觉转写：\(transcript)")
         }
@@ -153,6 +157,16 @@ final class LingShuDataNetPerceptionProvider: LingShuRealtimePerceptionProviding
             intentHint: nil,
             metadata: metadata
         )
+    }
+
+    /// 从 semantic_suggestions 的 JSON 串里取 VL 的 summary（场景理解）。
+    static func extractSemanticSummary(_ semanticSuggestions: String) -> String? {
+        guard let data = semanticSuggestions.data(using: .utf8),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let summary = obj["summary"] as? String else {
+            return nil
+        }
+        return summary.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     /// 音频拼批：凑满 `audioBatchSeconds` 且距上次上传超过 `audioMinInterval` 才出批。
