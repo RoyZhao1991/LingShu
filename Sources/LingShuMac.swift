@@ -29,6 +29,11 @@ final class LingShuAppDelegate: NSObject, NSApplicationDelegate {
         false
     }
 
+    /// 常驻：关掉主窗口不退出，灵枢继续在菜单栏值守（定时触发/后台任务不中断）。
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        false
+    }
+
     private static func removeSavedApplicationState() {
         guard let bundleID = Bundle.main.bundleIdentifier else { return }
         let savedStateURL = FileManager.default
@@ -130,12 +135,22 @@ enum LingShuWindowPlacement {
 @main
 struct LingShuMacApp: App {
     @NSApplicationDelegateAdaptor(LingShuAppDelegate.self) private var appDelegate
+    // 状态归 App 持有：主窗口关闭后灵枢仍在菜单栏常驻，定时触发与后台任务不中断。
+    @StateObject private var state = LingShuState()
+    @StateObject private var voice = VoiceIOManager()
+    @StateObject private var vision = VisionIOManager()
+    @StateObject private var perceptionGateway = LingShuRealtimePerceptionGateway()
 
     var body: some Scene {
         WindowGroup("灵枢") {
             // 尺寸约束在 LingShuRootView 内部按模式切换：
             // 标准界面 ≥1240×820，极简语音模式收成 340×560 的小浮窗。
-            LingShuRootView()
+            LingShuRootView(
+                state: state,
+                voice: voice,
+                vision: vision,
+                perceptionGateway: perceptionGateway
+            )
         }
         .windowResizability(.contentMinSize)
         .defaultSize(width: 1360, height: 900)
@@ -150,6 +165,26 @@ struct LingShuMacApp: App {
                     NotificationCenter.default.post(name: .runEngineeringValidation, object: nil)
                 }
                 .keyboardShortcut("e", modifiers: [.command, .shift])
+            }
+        }
+
+        // 菜单栏常驻：主窗关闭后这里是灵枢的值守入口。
+        MenuBarExtra("灵枢", systemImage: "brain") {
+            Text("状态：\(state.coreStateDisplay)")
+            if state.hasRunningCollaborationPipeline {
+                Text("后台任务：\(state.missionTitle)")
+            }
+            let enabledTriggers = state.scheduledTriggers.triggers.filter(\.enabled).count
+            if enabledTriggers > 0 {
+                Text("定时任务：\(enabledTriggers) 个待触发")
+            }
+            Divider()
+            Button("打开主窗口") {
+                NSApp.setActivationPolicy(.regular)
+                LingShuWindowPlacement.bringWindowsToMainScreen()
+            }
+            Button("退出灵枢") {
+                NSApp.terminate(nil)
             }
         }
     }

@@ -133,6 +133,10 @@ final class LingShuState: ObservableObject {
     let memoryService = LingShuMemoryService()
     /// 专家档案库（模板+知识要点+评审清单）；协议化，可整体替换（可插拔）。
     let expertProfileRegistry: any LingShuExpertProfileProviding = LingShuExpertProfileRegistry()
+    /// 定时触发服务（提醒/例行任务），分钟级检查，本机 JSON 持久化。
+    let scheduledTriggers = LingShuScheduledTriggerService()
+    /// 本机工具执行器（读写文件/列目录/抓网页/跑命令）；协议化可替换沙箱实现。
+    let toolExecutor: any LingShuToolExecuting = LingShuLocalToolExecutor()
     /// 协同管线开关：关闭则任务回退单次执行调用（应急逃生口）。
     @Published var collaborationPipelineEnabled = true
     private let agentScheduler = LingShuAgentScheduler()
@@ -616,6 +620,7 @@ final class LingShuState: ObservableObject {
 
     func tickCoreTimers() {
         let now = Date()
+        fireScheduledTriggersIfDue(now: now)
         if let heartbeat = mainThreadKernel.heartbeat(now: now) {
             mainThreadHeartbeatText = heartbeat.displayText
             if mainThreadSessionStatus != "主线程常驻运行中" {
@@ -731,7 +736,7 @@ final class LingShuState: ObservableObject {
         hint += "\n" + LingShuSituationContext.compose(.init(
             sessionStartedAt: sessionStartedAt,
             activeTaskTitle: isModelExecuting ? activeTaskThread.map { String($0.prompt.prefix(40)) } : nil,
-            activeTaskStage: isModelExecuting ? missionTitle : nil
+            activeTaskStage: isModelExecuting ? "\(missionTitle)，已进行 \(formatElapsed(executionElapsedSeconds))" : nil
         ))
         return hint
     }

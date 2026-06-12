@@ -1,10 +1,10 @@
 import SwiftUI
 
 struct LingShuRootView: View {
-    @StateObject private var state = LingShuState()
-    @StateObject private var voice = VoiceIOManager()
-    @StateObject private var vision = VisionIOManager()
-    @StateObject private var perceptionGateway = LingShuRealtimePerceptionGateway()
+    @ObservedObject var state: LingShuState
+    @ObservedObject var voice: VoiceIOManager
+    @ObservedObject var vision: VisionIOManager
+    @ObservedObject var perceptionGateway: LingShuRealtimePerceptionGateway
     @State private var lastVisionTraceAt = Date.distantPast
     @State private var didRunLaunchValidation = false
     private let coreTimer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
