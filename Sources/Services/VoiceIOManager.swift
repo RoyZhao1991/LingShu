@@ -27,8 +27,8 @@ final class VoiceIOManager: ObservableObject {
     @Published var transcriptionProvider = LingShuVoiceTranscriptionProviderDescriptor.appleSpeech
     @Published private(set) var embeddedASRStatus = LingShuEmbeddedASRRuntimeLocator.senseVoiceSherpaONNXStatus()
     @Published private(set) var embeddedTTSStatus = LingShuEmbeddedTTSRuntimeLocator.sherpaONNXTTSStatus()
-    @Published var speechOutputProvider = LingShuSpeechOutputProviderDescriptor.customHTTPService
-    @Published var speechOutputEndpoint = LingShuSpeechOutputProviderDescriptor.customHTTPService.defaultEndpoint
+    @Published var speechOutputProvider = LingShuSpeechOutputProviderDescriptor.dataNetSpeakerTTS
+    @Published var speechOutputEndpoint = LingShuSpeechOutputProviderDescriptor.dataNetSpeakerTTS.defaultEndpoint
     @Published var speechOutputAPIKey = ""
     @Published var speechPersona = LingShuSpeechPersona.softDominantMale
     /// 实时输入电平 0...1（麦克风 RMS），供极简模式的输入波形使用。
@@ -40,7 +40,7 @@ final class VoiceIOManager: ObservableObject {
 
     private let audioEngine = AVAudioEngine()
     private let speechRecognizer = SFSpeechRecognizer(locale: Locale(identifier: "zh_CN"))
-    private let speechSynthesizer = AVSpeechSynthesizer()
+    let speechSynthesizer = AVSpeechSynthesizer()
     private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
     private var recognitionTask: SFSpeechRecognitionTask?
     private var embeddedASRProcess: Process?
@@ -52,6 +52,7 @@ final class VoiceIOManager: ObservableObject {
     /// 排队/排空逻辑在 VoiceIOManager+SpeechQueue.swift。
     var speechQueue: [String] = []
     var speechQueueDrainTask: Task<Void, Never>?
+    let bundledRuntimeConfig = LingShuBundledRuntimeConfig()
 
     var availableTranscriptionProviders: [LingShuVoiceTranscriptionProviderDescriptor] {
         LingShuVoiceTranscriptionProviderDescriptor.recommendedChineseProviders.map { provider in
@@ -455,201 +456,6 @@ final class VoiceIOManager: ObservableObject {
         setInputStatus(transcript.isEmpty ? "收音待机" : "语音已转写")
     }
 
-    func applySpeechOutputProvider(_ providerID: String) {
-        guard let provider = availableSpeechOutputProviders.first(where: { $0.id == providerID }) else { return }
-        let previousDefaultEndpoints = Set(availableSpeechOutputProviders.map(\.defaultEndpoint))
-        let shouldReplaceEndpoint = speechOutputEndpoint.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            || previousDefaultEndpoints.contains(speechOutputEndpoint)
-
-        speechOutputProvider = provider
-        if shouldReplaceEndpoint {
-            speechOutputEndpoint = provider.defaultEndpoint
-        }
-        setOutputStatus(outputStandbyStatus(for: provider))
-    }
-
-    func applySpeechPersona(_ personaID: String) {
-        guard let persona = availableSpeechPersonas.first(where: { $0.id == personaID }) else { return }
-        speechPersona = persona
-        setOutputStatus("\(persona.displayName) 已选定")
-    }
-
-    func speak(_ text: String) {
-        let cleanedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !cleanedText.isEmpty else { return }
-
-        activeSpeechTask?.cancel()
-        speechAudioPlayer?.stop()
-        if speechSynthesizer.isSpeaking {
-            speechSynthesizer.stopSpeaking(at: .immediate)
-        }
-
-        if speechOutputProvider.kind == .appleSpeech {
-            speakWithAppleSpeech(cleanedText)
-            return
-        }
-
-        if speechOutputEndpoint.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            isSpeaking = false
-            setOutputStatus("云端 TTS 未配置")
-            return
-        }
-
-        isSpeaking = true
-        setOutputStatus("正在发声（\(speechOutputProvider.displayName)）")
-        let provider = speechOutputProvider
-        let endpoint = speechOutputEndpoint
-        let apiKey = speechOutputAPIKey
-        let persona = speechPersona
-
-        activeSpeechTask = Task { @MainActor [weak self] in
-            guard let self else { return }
-            do {
-                if provider.kind == .embeddedSherpaONNXTTS {
-                    try await self.speakWithEmbeddedSherpaONNXTTS(cleanedText, provider: provider, persona: persona)
-                } else {
-                    try await self.speakWithSpeechService(
-                        cleanedText,
-                        provider: provider,
-                        endpoint: endpoint,
-                        apiKey: apiKey,
-                        persona: persona
-                    )
-                }
-            } catch {
-                self.isSpeaking = false
-                self.setOutputStatus("\(provider.displayName) 未响应，已停止发声")
-            }
-        }
-    }
-
-    private func speakWithEmbeddedSherpaONNXTTS(
-        _ cleanedText: String,
-        provider: LingShuSpeechOutputProviderDescriptor,
-        persona: LingShuSpeechPersona
-    ) async throws {
-        refreshEmbeddedTTSRuntimeStatus()
-        let status = embeddedTTSStatus
-        guard status.isAvailable,
-              let runtimePath = status.runtimePath else {
-            throw LingShuVoiceError.embeddedRuntimeUnavailable(status.diagnosticSummary)
-        }
-
-        let outputURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("lingshu-tts-\(UUID().uuidString)", isDirectory: false)
-            .appendingPathExtension("wav")
-        let arguments = try LingShuEmbeddedTTSRuntimeLocator.processArguments(
-            status: status,
-            text: cleanedText,
-            persona: persona,
-            outputURL: outputURL
-        )
-        try await Self.runEmbeddedTTSProcess(
-            runtimePath: runtimePath,
-            arguments: arguments,
-            outputURL: outputURL
-        )
-
-        let audioData = try Self.readGeneratedAudioAndRemoveFile(at: outputURL)
-        let player = try AVAudioPlayer(data: audioData)
-        speechAudioPlayer = player
-        player.prepareToPlay()
-        player.isMeteringEnabled = true
-        isSpeaking = true
-        setOutputStatus("正在发声（\(provider.displayName)）")
-        player.play()
-
-        let duration = max(player.duration, 1.0)
-        Task { @MainActor [weak self, weak player] in
-            try? await Task.sleep(nanoseconds: UInt64((duration + 0.25) * 1_000_000_000))
-            guard let self else { return }
-            if player === self.speechAudioPlayer, self.speechAudioPlayer?.isPlaying != true {
-                self.isSpeaking = false
-                self.setOutputStatus(self.outputStandbyStatus(for: provider))
-            }
-        }
-    }
-
-    private func speakWithSpeechService(
-        _ cleanedText: String,
-        provider: LingShuSpeechOutputProviderDescriptor,
-        endpoint: String,
-        apiKey: String,
-        persona: LingShuSpeechPersona
-    ) async throws {
-        let request = try LingShuSpeechOutputServiceContract.makeURLRequest(
-            endpoint: endpoint,
-            provider: provider,
-            persona: persona,
-            text: cleanedText,
-            apiKey: apiKey
-        )
-        let (data, response) = try await URLSession.shared.data(for: request)
-        guard let httpResponse = response as? HTTPURLResponse,
-              (200..<300).contains(httpResponse.statusCode) else {
-            throw LingShuVoiceError.embeddedRuntimeLaunchFailed("TTS 服务 HTTP 状态异常")
-        }
-
-        let contentType = (httpResponse.value(forHTTPHeaderField: "Content-Type") ?? "").lowercased()
-        let audioData: Data
-        if contentType.contains("application/json") {
-            let decoded = try JSONDecoder().decode(LingShuSpeechSynthesisServiceResponse.self, from: data)
-            if let audioBase64 = decoded.audioBase64,
-               let decodedAudio = Data(base64Encoded: audioBase64) {
-                audioData = decodedAudio
-            } else if let audioURLString = decoded.audioURL,
-                      let audioURL = URL(string: audioURLString) {
-                let (remoteAudio, _) = try await URLSession.shared.data(from: audioURL)
-                audioData = remoteAudio
-            } else {
-                throw LingShuVoiceError.embeddedRuntimeLaunchFailed("TTS 服务未返回音频")
-            }
-        } else {
-            audioData = data
-        }
-
-        let player = try AVAudioPlayer(data: audioData)
-        speechAudioPlayer = player
-        player.prepareToPlay()
-        player.isMeteringEnabled = true
-        isSpeaking = true
-        setOutputStatus("正在发声（\(provider.displayName)）")
-        player.play()
-
-        let duration = max(player.duration, 1.0)
-        Task { @MainActor [weak self, weak player] in
-            try? await Task.sleep(nanoseconds: UInt64((duration + 0.25) * 1_000_000_000))
-            guard let self else { return }
-            if player === self.speechAudioPlayer, self.speechAudioPlayer?.isPlaying != true {
-                self.isSpeaking = false
-                self.setOutputStatus("\(provider.displayName) 待机")
-            }
-        }
-    }
-
-    private func speakWithAppleSpeech(_ cleanedText: String, statusAlreadySet: Bool = false) {
-        let utterance = AVSpeechUtterance(string: cleanedText)
-        utterance.voice = preferredChineseVoice()
-        utterance.rate = 0.46
-        utterance.pitchMultiplier = 0.94
-        utterance.volume = 1.0
-
-        isSpeaking = true
-        if !statusAlreadySet {
-            setOutputStatus("正在发声（macOS 中文男声）")
-        }
-        speechSynthesizer.speak(utterance)
-
-        let estimatedSeconds = min(max(Double(cleanedText.count) * 0.16, 1.2), 28.0)
-        Task { @MainActor in
-            try? await Task.sleep(nanoseconds: UInt64(estimatedSeconds * 1_000_000_000))
-            if !speechSynthesizer.isSpeaking {
-                isSpeaking = false
-                setOutputStatus(self.outputStandbyStatus(for: self.speechOutputProvider))
-            }
-        }
-    }
-
     func markInputError(_ message: String) {
         setInputStatus(message)
     }
@@ -659,7 +465,7 @@ final class VoiceIOManager: ObservableObject {
         refreshOverallStatus()
     }
 
-    private func setOutputStatus(_ message: String) {
+    func setOutputStatus(_ message: String) {
         outputStatusMessage = message
         refreshOverallStatus()
     }
@@ -672,112 +478,6 @@ final class VoiceIOManager: ObservableObject {
         } else {
             statusMessage = "语音待机"
         }
-    }
-
-    private func preferredChineseVoice() -> AVSpeechSynthesisVoice? {
-        let voices = AVSpeechSynthesisVoice.speechVoices()
-
-        let preferredIdentifiers = [
-            "com.apple.eloquence.zh-CN.Reed",
-            "com.apple.eloquence.zh-CN.Eddy",
-            "com.apple.eloquence.zh-CN.Rocko",
-            "com.apple.eloquence.zh-CN.Grandpa"
-        ]
-
-        for identifier in preferredIdentifiers {
-            if let voice = voices.first(where: { $0.identifier == identifier }) {
-                return voice
-            }
-        }
-
-        let preferredNames = ["Reed", "Eddy", "Rocko", "Grandpa"]
-        for name in preferredNames {
-            if let voice = voices.first(where: { $0.language == "zh-CN" && $0.name == name }) {
-                return voice
-            }
-        }
-
-        return AVSpeechSynthesisVoice(language: "zh-CN")
-            ?? voices.first(where: { $0.language.hasPrefix("zh") })
-    }
-
-    private func outputStandbyStatus(for provider: LingShuSpeechOutputProviderDescriptor) -> String {
-        switch provider.kind {
-        case .appleSpeech:
-            return "中文男声待机"
-        case .embeddedSherpaONNXTTS:
-            return embeddedTTSStatus.isAvailable ? "本地 VITS 待机" : "本地 VITS 未就绪"
-        case .customHTTPService where speechOutputEndpoint.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty:
-            return "云端 TTS 待配置"
-        default:
-            return "\(provider.displayName) 待机"
-        }
-    }
-
-    private nonisolated static func runEmbeddedTTSProcess(
-        runtimePath: String,
-        arguments: [String],
-        outputURL: URL
-    ) async throws {
-        try await withCheckedThrowingContinuation { continuation in
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: runtimePath)
-            process.currentDirectoryURL = URL(fileURLWithPath: runtimePath).deletingLastPathComponent()
-            process.arguments = arguments
-
-            var environment = ProcessInfo.processInfo.environment
-            let libraryPath = LingShuEmbeddedTTSRuntimeLocator.dynamicLibraryPath(for: runtimePath)
-            let existingLibraryPath = environment["DYLD_LIBRARY_PATH"] ?? ""
-            environment["DYLD_LIBRARY_PATH"] = existingLibraryPath.isEmpty
-                ? libraryPath
-                : "\(libraryPath):\(existingLibraryPath)"
-            process.environment = environment
-
-            let outputPipe = Pipe()
-            let errorPipe = Pipe()
-            process.standardOutput = outputPipe
-            process.standardError = errorPipe
-
-            final class ProcessBox: @unchecked Sendable {
-                var didResume = false
-            }
-            let box = ProcessBox()
-
-            process.terminationHandler = { completedProcess in
-                guard !box.didResume else { return }
-                box.didResume = true
-
-                let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
-                let outputData = outputPipe.fileHandleForReading.readDataToEndOfFile()
-                let diagnostic = String(data: errorData + outputData, encoding: .utf8)?
-                    .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-
-                if completedProcess.terminationStatus == 0,
-                   FileManager.default.fileExists(atPath: outputURL.path) {
-                    continuation.resume()
-                } else {
-                    continuation.resume(throwing: LingShuVoiceError.embeddedRuntimeLaunchFailed(
-                        diagnostic.isEmpty ? "sherpa-onnx-offline-tts 退出码 \(completedProcess.terminationStatus)" : diagnostic
-                    ))
-                }
-            }
-
-            do {
-                try process.run()
-            } catch {
-                guard !box.didResume else { return }
-                box.didResume = true
-                continuation.resume(throwing: LingShuVoiceError.embeddedRuntimeLaunchFailed(error.localizedDescription))
-            }
-        }
-    }
-
-    nonisolated static func readGeneratedAudioAndRemoveFile(at outputURL: URL) throws -> Data {
-        defer {
-            try? FileManager.default.removeItem(at: outputURL)
-        }
-
-        return try Data(contentsOf: outputURL)
     }
 
 }

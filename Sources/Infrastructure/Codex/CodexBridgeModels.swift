@@ -103,6 +103,8 @@ struct CodexRouteChoicePrompt: Codable, Equatable, Sendable {
 struct CodexRoutePayload: Codable {
     var needsAgents: Bool
     var agents: [CodexAgentTask]
+    var currentReply: String?
+    var executionRequest: String?
     var directAnswer: String?
     var finalAnswer: String?
     var summary: String?
@@ -111,15 +113,28 @@ struct CodexRoutePayload: Codable {
     enum CodingKeys: String, CodingKey {
         case needsAgents
         case agents
+        case currentReply
+        case executionRequest
         case directAnswer
         case finalAnswer
         case summary
         case choices
     }
 
-    init(needsAgents: Bool, agents: [CodexAgentTask], directAnswer: String? = nil, finalAnswer: String? = nil, summary: String? = nil, choices: CodexRouteChoicePrompt? = nil) {
+    init(
+        needsAgents: Bool,
+        agents: [CodexAgentTask],
+        currentReply: String? = nil,
+        executionRequest: String? = nil,
+        directAnswer: String? = nil,
+        finalAnswer: String? = nil,
+        summary: String? = nil,
+        choices: CodexRouteChoicePrompt? = nil
+    ) {
         self.needsAgents = needsAgents
         self.agents = agents
+        self.currentReply = currentReply
+        self.executionRequest = executionRequest
         self.directAnswer = directAnswer
         self.finalAnswer = finalAnswer
         self.summary = summary
@@ -130,10 +145,21 @@ struct CodexRoutePayload: Codable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         needsAgents = (try? container.decode(Bool.self, forKey: .needsAgents)) ?? false
         agents = (try? container.decode([CodexAgentTask].self, forKey: .agents)) ?? []
+        currentReply = try? container.decode(String.self, forKey: .currentReply)
+        executionRequest = try? container.decode(String.self, forKey: .executionRequest)
         directAnswer = try? container.decode(String.self, forKey: .directAnswer)
         finalAnswer = try? container.decode(String.self, forKey: .finalAnswer)
         summary = try? container.decode(String.self, forKey: .summary)
         choices = (try? container.decode(CodexRouteChoicePrompt.self, forKey: .choices))?.sanitized
+    }
+
+    var currentUserReply: String {
+        for candidate in [currentReply, finalAnswer, directAnswer, summary] {
+            if let text = candidate?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty {
+                return text
+            }
+        }
+        return userFacingAnswer
     }
 
     var userFacingAnswer: String {

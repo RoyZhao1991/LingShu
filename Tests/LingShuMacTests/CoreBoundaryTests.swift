@@ -968,6 +968,29 @@ final class CoreBoundaryTests: XCTestCase {
         XCTAssertEqual(route.agents.first?.mode, "设计")
     }
 
+    func testRoutePlannerKeepsImmediateReplySeparateFromExecutionRequest() throws {
+        let planner = LingShuRoutePlanner()
+        let raw = """
+        {
+          "needsAgents": true,
+          "summary": "需要设计交付",
+          "currentReply": "我先按课题汇报的场景处理，设计节点会介入。",
+          "executionRequest": "产出一份三页 PPT，包含背景、构建思路和预期目标，风格偏科技但不夸张。",
+          "finalAnswer": "我会把这件事交给设计和执行节点。",
+          "agents": [
+            { "agent": "设计", "task": "设计 PPT 结构与视觉口径", "mode": "设计" },
+            { "agent": "执行", "task": "生成可落地 PPT 文件", "mode": "执行" }
+          ]
+        }
+        """
+
+        let route = try XCTUnwrap(planner.decodeRoutePayload(from: raw))
+
+        XCTAssertEqual(route.currentUserReply, "我先按课题汇报的场景处理，设计节点会介入。")
+        XCTAssertEqual(route.executionRequest, "产出一份三页 PPT，包含背景、构建思路和预期目标，风格偏科技但不夸张。")
+        XCTAssertEqual(route.userFacingAnswer, "我会把这件事交给设计和执行节点。")
+    }
+
     func testRoutePlannerDisablesAgentRouteWhenModelReturnsNoValidAgents() throws {
         let planner = LingShuRoutePlanner()
         let raw = """
@@ -986,6 +1009,21 @@ final class CoreBoundaryTests: XCTestCase {
 
         XCTAssertFalse(route.needsAgents)
         XCTAssertTrue(route.agents.isEmpty)
+    }
+
+    func testExecutionCoordinatorUsesCurrentReplyBeforeExecutionResult() {
+        let acknowledgement = LingShuDialogueAcknowledgement()
+        let route = CodexRoutePayload(
+            needsAgents: true,
+            agents: [.init(agent: "设计", task: "产出 PPT", mode: "设计")],
+            currentReply: "我先按汇报场景处理，设计节点已经进入队列。",
+            executionRequest: "生成三页 PPT 文件并给出预览说明。",
+            finalAnswer: "我会安排设计节点处理。"
+        )
+
+        let text = acknowledgement.routeReply(for: route, fallback: "收到。", willExecute: true)
+
+        XCTAssertEqual(text, "我先按汇报场景处理，设计节点已经进入队列。")
     }
 
     func testExecutionCoordinatorStartsExecutionForDevelopmentQueue() {
@@ -1007,6 +1045,25 @@ final class CoreBoundaryTests: XCTestCase {
         )
 
         XCTAssertTrue(shouldStart)
+    }
+
+    func testExecutionPromptCarriesModelExecutionRequest() {
+        let coordinator = LingShuExecutionCoordinator()
+        let route = CodexRoutePayload(
+            needsAgents: true,
+            agents: [.init(agent: "执行", task: "写一个 web 爬虫", mode: "执行")],
+            executionRequest: "生成一个可运行的 Python 爬虫脚本，包含错误处理、运行说明和验收方式。"
+        )
+
+        let prompt = coordinator.executionPrompt(
+            userPrompt: "写一个简单的 web 爬虫",
+            route: route,
+            memoryHint: "无历史执行记忆。",
+            isProjectExecutionRequest: false
+        )
+
+        XCTAssertTrue(prompt.contains("灵枢主线程提炼的执行诉求"))
+        XCTAssertTrue(prompt.contains("生成一个可运行的 Python 爬虫脚本"))
     }
 
     func testExecutionCoordinatorStartsExecutionForDesignDelivery() {
@@ -1381,7 +1438,7 @@ final class CoreBoundaryTests: XCTestCase {
     func testSpeechOutputRecommendedProvidersPreferCloudGatewayAndHideLocalVoices() {
         let providers = LingShuSpeechOutputProviderDescriptor.recommendedProviders
 
-        XCTAssertEqual(providers.first?.kind, .customHTTPService)
+        XCTAssertEqual(providers.first?.kind, .dataNetSpeakerTTS)
         XCTAssertFalse(providers.contains(where: { $0.kind == .appleSpeech }))
         XCTAssertFalse(providers.contains(where: { $0.kind == .embeddedSherpaONNXTTS }))
         XCTAssertFalse(providers.contains(where: { $0.kind == .indexTTS2Service }))
@@ -1516,6 +1573,57 @@ final class CoreBoundaryTests: XCTestCase {
         XCTAssertEqual(urlRequest.httpMethod, "POST")
         XCTAssertEqual(urlRequest.value(forHTTPHeaderField: "Authorization"), "Bearer secret")
         XCTAssertNotNil(urlRequest.httpBody)
+    }
+
+    func testDataNetSpeakerTTSUsesModelTokenHeader() throws {
+        let urlRequest = try LingShuSpeechOutputServiceContract.makeURLRequest(
+            endpoint: LingShuSpeechOutputProviderDescriptor.dataNetSpeakerTTS.defaultEndpoint,
+            provider: .dataNetSpeakerTTS,
+            persona: .softDominantMale,
+            text: "我是灵枢。",
+            apiKey: "model-token"
+        )
+
+        XCTAssertEqual(urlRequest.httpMethod, "POST")
+        XCTAssertEqual(urlRequest.value(forHTTPHeaderField: "X-Model-Token"), "model-token")
+        XCTAssertNil(urlRequest.value(forHTTPHeaderField: "Authorization"))
+        XCTAssertEqual(urlRequest.url?.absoluteString, "https://model-gateway.datanet.bj.cn/v1/perception/swds-speaker-tts")
+    }
+
+    func testSpeechSegmenterSplitsLongChineseReplyForLowLatencyPlayback() {
+        let segments = LingShuSpeechSegmenter.segments(
+            from: "收到。我会先判断你的意图，然后把任务拆给合适的能力节点，同时保持过程可追踪。执行完成后，我会给你一个明确的交付结果。"
+        )
+
+        XCTAssertGreaterThan(segments.count, 1)
+        XCTAssertTrue(segments.first?.contains("收到") == true)
+        XCTAssertTrue(segments.allSatisfy { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty })
+    }
+
+    func testSpeechAudioDecoderAcceptsDirectWAVBytes() throws {
+        let response = try XCTUnwrap(HTTPURLResponse(
+            url: URL(string: "https://example.com/tts")!,
+            statusCode: 200,
+            httpVersion: nil,
+            headerFields: ["Content-Type": "audio/wav"]
+        ))
+        let wavBytes = Data("RIFFdemoWAVE".utf8)
+
+        let decoded = try VoiceIOManager.decodeSpeechAudioData(data: wavBytes, response: response)
+
+        XCTAssertEqual(decoded, wavBytes)
+    }
+
+    func testBundledRuntimeConfigReadsProviderTokenFromResourceRoot() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lingshu-runtime-config-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try Data(" bundled-token \n".utf8).write(to: root.appendingPathComponent("datanet-gateway.token"))
+
+        let config = LingShuBundledRuntimeConfig(extraRoots: [root])
+
+        XCTAssertEqual(config.token(forProvider: "datanet-gateway"), "bundled-token")
     }
 
     func testEngineeringArtifactServiceCreatesRunnableCrawlerArtifacts() throws {

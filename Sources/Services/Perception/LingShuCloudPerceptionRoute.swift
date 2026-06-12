@@ -127,10 +127,14 @@ final class LingShuDataNetPerceptionProvider: LingShuRealtimePerceptionProviding
     static func makeReply(from result: LingShuCloudPerceptionResult) -> LingShuRealtimePerceptionModelReply {
         var parts: [String] = []
         let semantics = result.semanticSuggestions.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !semantics.isEmpty {
+        let transcript = result.transcript.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Qwen2.5-VL 的场景语义是情境化回应的主输入，放在态势摘要最前。
+        // 优先取结构化 summary 字段；没有就退回摊平后的语义文本。
+        if let summary = extractSemanticSummary(result.semanticSuggestions), !summary.isEmpty {
+            parts.append("场景：\(summary)")
+        } else if !semantics.isEmpty {
             parts.append("场景理解：\(String(semantics.prefix(280)))")
         }
-        let transcript = result.transcript.trimmingCharacters(in: .whitespacesAndNewlines)
         if !transcript.isEmpty {
             parts.append("听觉转写：\(transcript)")
         }
@@ -164,6 +168,16 @@ final class LingShuDataNetPerceptionProvider: LingShuRealtimePerceptionProviding
             intentHint: nil,
             metadata: metadata
         )
+    }
+
+    /// 从 semantic_suggestions 的 JSON 串里取 VL 的 summary（场景理解）。
+    static func extractSemanticSummary(_ semanticSuggestions: String) -> String? {
+        guard let data = semanticSuggestions.data(using: .utf8),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let summary = obj["summary"] as? String else {
+            return nil
+        }
+        return summary.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     /// 音频拼批：凑满 `audioBatchSeconds` 且距上次上传超过 `audioMinInterval` 才出批。

@@ -15,7 +15,10 @@ struct LingShuEngineeringArtifactService {
 
     func inferCapabilities(prompt: String, route: CodexRoutePayload? = nil) -> [Capability] {
         let routeText = route.map { route in
-            ([route.summary, route.directAnswer, route.finalAnswer].compactMap { $0 } + route.agents.flatMap { [$0.agent, $0.task, $0.mode] }.compactMap { $0 })
+            (
+                [route.summary, route.currentReply, route.executionRequest, route.directAnswer, route.finalAnswer].compactMap { $0 }
+                + route.agents.flatMap { [$0.agent, $0.task, $0.mode] }.compactMap { $0 }
+            )
                 .joined(separator: " ")
         } ?? ""
         let text = "\(prompt) \(routeText)".lowercased()

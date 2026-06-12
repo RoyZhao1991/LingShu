@@ -308,8 +308,10 @@ enum CodexBridge {
            {
              "needsAgents": true 或 false,
              "summary": "一句话说明你的路由判断",
+             "currentReply": "灵枢当前回复给用户的话：短、自然、动态，结合本轮消息、记忆和态势感知；不是固定话术",
+             "executionRequest": "如果 needsAgents=true，这里写给任务线程的执行诉求：目标、交付物、约束、默认假设、验收标准；否则可为空",
              "directAnswer": "如果 needsAgents=false，这里给用户的直接回答；否则可为空",
-             "finalAnswer": "灵枢最终回复给用户的话，只能用灵枢统一口吻",
+             "finalAnswer": "本轮路由阶段可展示给用户的收束回复；执行型任务可与 currentReply 一致，真正执行结果由执行阶段回传",
              "agents": [
                {
                  "agent": "\(LingShuCapabilityRole.promptChoiceList)",
@@ -327,13 +329,14 @@ enum CodexBridge {
         7. 只有当用户明确要求操作当前项目、修改文件、修复报错、运行测试、生成项目产物、推进一个能力协作任务，或任务确实需要跨多个专家协作时，才让执行器操作工作区。
         8. 不要把所有 agent 都列出来；后续可能有成百上千个 agent，本轮只返回必要 agent。
         9. 不要在回答里假装已经修改文件、运行测试、部署系统或完成外部动作，除非用户消息明确要求并且执行阶段已经完成。当前这一步只做路由判断、任务分派和灵枢口吻回复。
-        10. finalAnswer 不要出现“规划 agent：”“执行 agent：”等多角色对话格式。
-        11. finalAnswer 不要提到 Codex、Auth、CLI、JSON、模型通道、底层调用、路由 JSON 等内部实现，除非用户明确问这些技术细节。
-        12. finalAnswer 可以简短地说“收到”“我会交给任务运行时处理”“相关执行器会介入”，但不要每轮都解释连接状态或工作原理。
-        13. 如果用户问“你是谁”“你是什么”“你叫什么”“灵枢是谁”这类身份问题，needsAgents=false，agents=[]，finalAnswer 必须简洁自信，例如：“我是灵枢，有什么可以帮你的？”
-        14. 如果用户的目标、对象、范围、交付物、权限边界或继续对象不明确，且无法从记忆中可靠判断，needsAgents=false，agents=[]，finalAnswer 只问必要的澄清问题；不要创建任务线程，不要盲目分派 agent。
-        15. 生成 finalAnswer 前做一次需求满足度判断：显性需求是否已满足、潜在下一步是否明显。如果满足度高，就干净回答；如果只完成了第一层交付，或后续很可能需要落地、验证、细化、保存、运行、审查、生成产物，只提出一个自然的继续推进问题。不要针对某个关键词使用固定追问模板。
-        16. 如果 needsAgents=true 且本轮会进入执行阶段，finalAnswer 只表达已接令和正在分派，不要提前追问用户是否继续；真正的收束判断和继续推进问题应在执行结果回传后发生。
+        10. currentReply 是“当前回复”，用于语音/对话即时播报；它必须由你结合当前沟通内容、记忆、用户意图和态势感知动态生成，不要固定写“收到”或反复解释能力。
+        11. executionRequest 是“执行诉求”，只给任务线程和 agent 使用；不要把它写成面向用户的口吻。
+        12. finalAnswer/currentReply 不要出现“规划 agent：”“执行 agent：”等多角色对话格式。
+        13. finalAnswer/currentReply 不要提到 Codex、Auth、CLI、JSON、模型通道、底层调用、路由 JSON 等内部实现，除非用户明确问这些技术细节。
+        14. 如果用户问“你是谁”“你是什么”“你叫什么”“灵枢是谁”这类身份问题，needsAgents=false，agents=[]，currentReply/finalAnswer 必须简洁自信，例如：“我是灵枢，有什么可以帮你的？”
+        15. 如果用户的目标、对象、范围、交付物、权限边界或继续对象不明确，且无法从记忆中可靠判断，needsAgents=false，agents=[]，currentReply/finalAnswer 只问必要的澄清问题；不要创建任务线程，不要盲目分派 agent。
+        16. 生成 finalAnswer/currentReply 前做一次需求满足度判断：显性需求是否已满足、潜在下一步是否明显。如果满足度高，就干净回答；如果只完成了第一层交付，或后续很可能需要落地、验证、细化、保存、运行、审查、生成产物，只提出一个自然的继续推进问题。不要针对某个关键词使用固定追问模板。
+        17. 如果 needsAgents=true 且本轮会进入执行阶段，currentReply 只表达已接令和正在分派，不要提前追问用户是否继续；真正的收束判断和继续推进问题应在执行结果回传后发生。
 
         可用专家 agent：
         \(LingShuCapabilityRole.promptCatalog)
@@ -376,6 +379,7 @@ enum CodexBridge {
             let fallback = CodexRoutePayload(
                 needsAgents: false,
                 agents: [],
+                currentReply: rawReply,
                 directAnswer: rawReply,
                 finalAnswer: rawReply,
                 summary: "本轮没有形成明确分派，灵枢先直接回应。"
@@ -512,9 +516,12 @@ enum CodexBridge {
         return CodexRoutePayload(
             needsAgents: needsAgents,
             agents: needsAgents ? sanitizedTasks : [],
+            currentReply: payload.currentReply,
+            executionRequest: payload.executionRequest,
             directAnswer: payload.directAnswer,
             finalAnswer: payload.finalAnswer,
-            summary: payload.summary
+            summary: payload.summary,
+            choices: payload.choices
         )
     }
 

@@ -729,22 +729,8 @@ final class LingShuState: ObservableObject {
         chatMessages[index].isLoading = true
     }
 
-    /// 记忆提示 + 实时态势感知的统一组装：有有效感知信号时注入对话上下文。
-    func composedPromptHint(baseMemory: String) -> String {
-        var hint = mainThreadKernel.promptHint(baseMemory: baseMemory)
-        if let perception = livePerceptionContextProvider?(),
-           !perception.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            hint += "\n实时态势感知（来自麦克风/摄像头，已通过感知网关解析）：\n\(perception)"
-        }
-        // 情境上下文常驻注入：时间/时段、连续使用时长、后台任务状态。
-        // 怎么用这些情境（深夜提醒休息、结合环境打趣）由模型自行判断，不写死策略。
-        hint += "\n" + LingShuSituationContext.compose(.init(
-            sessionStartedAt: sessionStartedAt,
-            activeTaskTitle: isModelExecuting ? activeTaskThread.map { String($0.prompt.prefix(40)) } : nil,
-            activeTaskStage: isModelExecuting ? "\(missionTitle)，已进行 \(formatElapsed(executionElapsedSeconds))" : nil
-        ))
-        return hint
-    }
+    /// 记忆提示 + 实时态势感知 + 情境上下文的统一组装：见 LingShuState+Context.swift。
+    /// currentReplyAdapter 在 LingShuState+Streaming.swift 定义（按主通道选回复适配器）。
 
     /// 网关计量：记录本轮调用消耗的 token，供前端展示用量。
     func recordModelUsage(_ reply: LingShuRemoteModelReply, stage: String) {
@@ -1367,7 +1353,17 @@ final class LingShuState: ObservableObject {
                 self.chatMessages.append(.init(speaker: "灵枢", text: answer, isUser: false, taskRecordID: taskRecordID))
             }
 
-            self.applyTaskRecordRoute(taskRecordID, route: .init(needsAgents: false, agents: [], directAnswer: answer, finalAnswer: answer, summary: "无需创建专家 agent，本轮由灵枢直接回答。"))
+            self.applyTaskRecordRoute(
+                taskRecordID,
+                route: .init(
+                    needsAgents: false,
+                    agents: [],
+                    currentReply: answer,
+                    directAnswer: answer,
+                    finalAnswer: answer,
+                    summary: "无需创建专家 agent，本轮由灵枢直接回答。"
+                )
+            )
             self.appendTaskRecordMessage(taskRecordID, actor: "灵枢", role: "中枢", kind: .result, text: answer)
             self.finishTaskRecord(taskRecordID, status: .answered, summary: "灵枢直接回答，未创建专家 agent 任务。")
             self.mainThreadKernel.observeDirectAnswer(prompt: userPrompt, answer: answer)
@@ -1862,6 +1858,7 @@ final class LingShuState: ObservableObject {
                 let route = self.routePlanner.decodeRoutePayload(from: rawReply) ?? CodexRoutePayload(
                     needsAgents: false,
                     agents: [],
+                    currentReply: rawReply,
                     directAnswer: rawReply,
                     finalAnswer: rawReply,
                     summary: "API 模型没有返回结构化路由，本轮按直接回答处理。"
@@ -2184,6 +2181,14 @@ final class LingShuState: ObservableObject {
         }
     }
 
+    /// 用户在选择卡片上点了某个选项：标记该卡片已解决，并把选项作为一条输入提交，推进对话。
+    func selectRouteChoice(_ option: String, for messageID: UUID) {
+        guard let index = chatMessages.firstIndex(where: { $0.id == messageID }),
+              chatMessages[index].resolvedChoice == nil else { return }
+        chatMessages[index].resolvedChoice = option
+        _ = submitTextInput(option, source: .typed)
+    }
+
     private func requestBackgroundRouteReply(
         for userPrompt: String,
         memoryContext: MainThreadMemoryContext,
@@ -2339,6 +2344,7 @@ final class LingShuState: ObservableObject {
                 let route = self.routePlanner.decodeRoutePayload(from: reply.text) ?? CodexRoutePayload(
                     needsAgents: false,
                     agents: [],
+                    currentReply: reply.text,
                     directAnswer: reply.text,
                     finalAnswer: reply.text,
                     summary: "API 模型没有返回结构化路由，本轮按直接回答处理。"
@@ -2662,7 +2668,7 @@ final class LingShuState: ObservableObject {
 
         guard route.needsAgents, shouldForceDirectAnswer(userPrompt) else { return route }
 
-        let answer = route.userFacingAnswer.trimmingCharacters(in: .whitespacesAndNewlines)
+        let answer = route.currentUserReply.trimmingCharacters(in: .whitespacesAndNewlines)
         appendTrace(
             kind: .route,
             actor: "灵枢",
@@ -2673,6 +2679,7 @@ final class LingShuState: ObservableObject {
         return CodexRoutePayload(
             needsAgents: false,
             agents: [],
+            currentReply: answer,
             directAnswer: answer,
             finalAnswer: answer,
             summary: "本轮是直接回答请求，无需调用专家 agent。"
@@ -2720,6 +2727,8 @@ final class LingShuState: ObservableObject {
         return CodexRoutePayload(
             needsAgents: true,
             agents: orderedGovernanceTasks(tasks),
+            currentReply: route.currentReply,
+            executionRequest: route.executionRequest,
             directAnswer: route.directAnswer,
             finalAnswer: answer.isEmpty ? "收到。我会先形成规划，同步审议风险和权限，再调度必要能力节点执行。" : answer,
             summary: summary?.isEmpty == false ? summary : "本轮进入通用治理链路与任务运行时。"
@@ -2748,6 +2757,8 @@ final class LingShuState: ObservableObject {
         return CodexRoutePayload(
             needsAgents: true,
             agents: tasks,
+            currentReply: route.currentReply,
+            executionRequest: route.executionRequest,
             directAnswer: route.directAnswer,
             finalAnswer: answer.isEmpty ? "收到。我会让执行节点进入队列，给你一版可用结果。" : answer,
             summary: summary?.isEmpty == false ? summary : "本轮进入执行队列。"
@@ -3128,7 +3139,7 @@ final class LingShuState: ObservableObject {
     }
 
     private func applyRoutePlan(_ route: CodexRoutePayload, for userPrompt: String, taskRecordID: String?) -> String {
-        let answer = route.userFacingAnswer
+        let answer = route.currentUserReply
         let summary = route.summary?.trimmingCharacters(in: .whitespacesAndNewlines)
 
         guard route.needsAgents else {

@@ -20,13 +20,18 @@ struct LingShuDialogueAcknowledgement {
         willExecute: Bool
     ) -> String {
         guard route.needsAgents else {
-            let direct = route.userFacingAnswer.trimmingCharacters(in: .whitespacesAndNewlines)
+            let direct = route.currentUserReply.trimmingCharacters(in: .whitespacesAndNewlines)
             return direct.isEmpty ? fallback : direct
         }
 
         guard willExecute else {
-            let planned = route.userFacingAnswer.trimmingCharacters(in: .whitespacesAndNewlines)
+            let planned = route.currentUserReply.trimmingCharacters(in: .whitespacesAndNewlines)
             return planned.isEmpty ? fallback : planned
+        }
+
+        let currentReply = route.currentReply?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !currentReply.isEmpty {
+            return currentReply
         }
 
         let agentNames = route.agents
@@ -76,6 +81,10 @@ struct LingShuExecutionCoordinator {
             let rationale = task.rationale?.isEmpty == false ? task.rationale! : "灵枢判断需要参与"
             return "\(index + 1). \(task.agent)：\(task.task)；模式：\(mode)；节奏：\(cadence)；依据：\(rationale)"
         }.joined(separator: "\n")
+        let executionRequest = route.executionRequest?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let executionRequestText = executionRequest?.isEmpty == false
+            ? executionRequest!
+            : "主线程未单独给出执行诉求；请按原始用户指令、分派计划、记忆和权限边界执行。"
         let executionScope = isProjectExecutionRequest
             ? "本轮是项目执行任务。可以检查当前项目必要文件、做必要修改，并运行合理验证。"
             : "本轮是轻量开发产出任务，但用户没有授权修改当前项目。不要读取、扫描、修改工作区，不要运行构建或测试；请直接产出可运行结果、依赖说明和使用方式。"
@@ -89,6 +98,9 @@ struct LingShuExecutionCoordinator {
 
         原始用户指令：
         \(userPrompt)
+
+        灵枢主线程提炼的执行诉求：
+        \(executionRequestText)
 
         灵枢已经分派的专家 agent：
         \(plan)

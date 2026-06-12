@@ -3,6 +3,7 @@ import Foundation
 enum LingShuSpeechOutputProviderKind: String, Codable, CaseIterable, Equatable, Sendable {
     case appleSpeech
     case embeddedSherpaONNXTTS
+    case dataNetSpeakerTTS
     case indexTTS2Service
     case cosyVoice3Service
     case doubaoService
@@ -12,6 +13,7 @@ enum LingShuSpeechOutputProviderKind: String, Codable, CaseIterable, Equatable, 
         switch self {
         case .appleSpeech: "macOS 系统语音"
         case .embeddedSherpaONNXTTS: "内嵌 sherpa-onnx TTS"
+        case .dataNetSpeakerTTS: "数据网关情绪语音"
         case .indexTTS2Service: "IndexTTS2 服务"
         case .cosyVoice3Service: "CosyVoice3 服务"
         case .doubaoService: "豆包/火山云端音色"
@@ -56,6 +58,19 @@ struct LingShuSpeechOutputProviderDescriptor: Identifiable, Codable, Equatable, 
         supportsVoiceClone: false,
         isRuntimeAvailable: false,
         note: "开发环境预置 sherpa-onnx + 中文 VITS 模型；不依赖本机服务，但当前包采样率较低，仅作为完全离线兜底。"
+    )
+
+    static let dataNetSpeakerTTS = LingShuSpeechOutputProviderDescriptor(
+        id: "datanet-speaker-tts",
+        kind: .dataNetSpeakerTTS,
+        displayName: "数据网关情绪男声",
+        deployment: "数据网络模型网关",
+        defaultEndpoint: "https://model-gateway.datanet.bj.cn/v1/perception/swds-speaker-tts",
+        supportsStreaming: false,
+        supportsEmotion: true,
+        supportsVoiceClone: false,
+        isRuntimeAvailable: true,
+        note: "通过数据网络 swds-speaker-tts 合成中文语音；凭据从 App 包内 RuntimeConfig 读取。"
     )
 
     static let indexTTS2Service = LingShuSpeechOutputProviderDescriptor(
@@ -111,6 +126,7 @@ struct LingShuSpeechOutputProviderDescriptor: Identifiable, Codable, Equatable, 
     )
 
     static let recommendedProviders: [LingShuSpeechOutputProviderDescriptor] = [
+        .dataNetSpeakerTTS,
         .customHTTPService,
         .cosyVoice3Service,
         .doubaoService
@@ -227,10 +243,13 @@ enum LingShuSpeechOutputServiceContract {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("audio/wav, application/json", forHTTPHeaderField: "Accept")
         if !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+            if provider.kind == .dataNetSpeakerTTS {
+                request.setValue(apiKey, forHTTPHeaderField: "X-Model-Token")
+            } else {
+                request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+            }
         }
         request.httpBody = try JSONEncoder().encode(Self.request(text: text, provider: provider, persona: persona))
         return request
     }
 }
-

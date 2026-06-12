@@ -131,4 +131,27 @@ final class CloudPerceptionRouteTests: XCTestCase {
         XCTAssertEqual(gateway.activeRoute.id, "custom-endpoint", "云路由注册不应抢占用户手动选择的路由")
         XCTAssertTrue(gateway.availableRoutes.contains(where: { $0.id == LingShuDataNetPerceptionProvider.routeID }))
     }
+
+    // MARK: - VL 场景语义接入
+
+    func testReplySurfacesVLSceneSummaryFirst() {
+        let result = LingShuCloudPerceptionResult(
+            success: true, taskType: "image", transcript: "",
+            ocrTexts: ["会议室"], detectionCount: 2,
+            semanticSuggestions: "{\"summary\":\"画面中有三个人在开会\",\"tags\":[\"会议\"]}",
+            warnings: [], totalTokens: 100, model: "swds-vision-fast"
+        )
+        let reply = LingShuDataNetPerceptionProvider.makeReply(from: result)
+        XCTAssertTrue(reply.summary.contains("场景：画面中有三个人在开会"), reply.summary)
+        // 场景理解应排在画面文字/检测之前。
+        if let s = reply.summary.range(of: "场景"), let o = reply.summary.range(of: "画面文字") {
+            XCTAssertTrue(s.lowerBound < o.lowerBound)
+        }
+    }
+
+    func testDefaultDetectionQueriesNonEmpty() {
+        // 目标检测必须带 detection_queries 才生效，默认值不能为空。
+        XCTAssertFalse(LingShuCloudPerceptionClient.defaultDetectionQueries.isEmpty)
+        XCTAssertTrue(LingShuCloudPerceptionClient.defaultDetectionQueries.contains("person"))
+    }
 }

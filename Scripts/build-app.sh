@@ -40,6 +40,12 @@ sips -z 512 512   "$ICON_SRC/lingshu-512.png"  --out "$ICONSET/icon_512x512.png"
 sips -z 1024 1024 "$ICON_SRC/lingshu-1024.png" --out "$ICONSET/icon_512x512@2x.png" >/dev/null
 iconutil -c icns "$ICONSET" -o "$RES_DIR/AppIcon.icns"
 
+if [ -d "$ROOT_DIR/Resources/RuntimeConfig" ]; then
+  echo "==> copying runtime config"
+  mkdir -p "$RES_DIR/RuntimeConfig"
+  ditto "$ROOT_DIR/Resources/RuntimeConfig" "$RES_DIR/RuntimeConfig"
+fi
+
 cat > "$CONTENTS/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
