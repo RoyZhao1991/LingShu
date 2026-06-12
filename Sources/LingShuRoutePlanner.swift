@@ -12,8 +12,10 @@ struct LingShuRoutePlanner {
            {
              "needsAgents": true 或 false,
              "summary": "一句话说明你的路由判断",
+             "currentReply": "灵枢当前回复给用户的话：短、自然、动态，结合本轮消息、记忆和态势感知；不是固定话术",
+             "executionRequest": "如果 needsAgents=true，这里写给任务线程的执行诉求：目标、交付物、约束、默认假设、验收标准；否则可为空",
              "directAnswer": "如果 needsAgents=false，这里给用户的直接回答；否则可为空",
-             "finalAnswer": "灵枢最终回复给用户的话，只能用灵枢统一口吻",
+             "finalAnswer": "本轮路由阶段可展示给用户的收束回复；执行型任务可与 currentReply 一致，真正执行结果由执行阶段回传",
              "agents": [
                {
                  "agent": "\(LingShuCapabilityRole.promptChoiceList)",
@@ -34,10 +36,12 @@ struct LingShuRoutePlanner {
         6. 默认行为是“落地交付”，不是“问答”：只要用户点名了要产出的东西（PPT、代码、脚本、页面、接口、文档、报告、演示、方案、爬虫、demo 等），即使主题、受众、格式没说全，也直接按合理默认产出真实交付物，needsAgents=true。不要反问“主题是什么/给谁看/什么格式”，把可推断的默认假设写进任务，事后让用户修改即可。
         7. 只有在完全没有可执行对象时（例如只说“处理一下”“继续”却没有任何对象、且记忆里也没有可续接的线程）才 needsAgents=false 并在 finalAnswer 里问一个最关键的澄清问题。
         8. 纯知识性问题（“是什么/为什么/怎么理解/解释一下”）才按问答处理：needsAgents=false，finalAnswer 直接回答。其余“给我/做/写/生成/创建/改”类诉求一律按交付物落地，不要只给说明文本。
-        9. finalAnswer 不要提到底层模型、API Key、JSON、网关、CLI 等内部实现，除非用户明确询问技术接入。
-        10. 如果用户问“你是谁”“你是什么”“你叫什么”“灵枢是谁”，needsAgents=false，finalAnswer 只需：“我是灵枢，有什么可以帮你的？”
-        11. 不要自称通义千问、Qwen、MiniMax、GPT、Claude 或任何底层模型名称，你的身份只有“灵枢”。
-        12. 当本轮确实需要用户在有限方案里做选择（如风格、方向、范围 2~4 选项）时，把选项写进 "choices"，finalAnswer 用一句话引出问题；不要把选项铺成一长段文字让用户手打。普通回答不要填 choices。
+        9. currentReply 是“当前回复”，用于语音/对话即时播报；它必须由你结合当前沟通内容、记忆、用户意图和态势感知动态生成，不要固定写“收到”或反复解释能力。
+        10. executionRequest 是“执行诉求”，只给任务线程和 agent 使用；不要把它写成面向用户的口吻。
+        11. finalAnswer/currentReply 不要提到底层模型、API Key、JSON、网关、CLI 等内部实现，除非用户明确询问技术接入。
+        12. 如果用户问“你是谁”“你是什么”“你叫什么”“灵枢是谁”，needsAgents=false，currentReply/finalAnswer 只需：“我是灵枢，有什么可以帮你的？”
+        13. 不要自称通义千问、Qwen、MiniMax、GPT、Claude 或任何底层模型名称，你的身份只有“灵枢”。
+        14. 当本轮确实需要用户在有限方案里做选择（如风格、方向、范围 2~4 选项）时，把选项写进 "choices"，currentReply/finalAnswer 用一句话引出问题；不要把选项铺成一长段文字让用户手打。普通回答不要填 choices。
 
         当前权限边界：\(permission.boundary)
         可用专家 agent：
@@ -139,6 +143,8 @@ struct LingShuRoutePlanner {
         return CodexRoutePayload(
             needsAgents: needsAgents,
             agents: needsAgents ? sanitizedTasks : [],
+            currentReply: payload.currentReply,
+            executionRequest: payload.executionRequest,
             directAnswer: payload.directAnswer,
             finalAnswer: payload.finalAnswer,
             summary: payload.summary,

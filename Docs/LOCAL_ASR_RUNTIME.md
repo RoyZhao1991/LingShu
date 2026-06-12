@@ -58,8 +58,9 @@ Speech output must remain a replaceable gateway. LingShu no longer ships or reco
 
 Recommended Chinese TTS tiers:
 
-1. Custom cloud TTS gateway. This is the default path. Until an endpoint is configured, LingShu keeps text replies and does not fall back to a local persona voice.
-2. CosyVoice3 or another HTTP adapter for streaming product use. It is useful when the model is deployed in LAN or cloud and can provide stronger emotion control.
+1. DataNet `swds-speaker-tts` gateway. This is the default built-in speech output path. The endpoint returns `audio/wav`, and LingShu reads its packaged token from `Contents/Resources/RuntimeConfig/datanet-gateway.token`.
+2. Custom cloud TTS gateway. This remains the extension path for future providers. Until an endpoint is configured, LingShu keeps text replies and does not fall back to a local persona voice.
+3. CosyVoice3 or another HTTP adapter for streaming product use. It is useful when the model is deployed in LAN or cloud and can provide stronger emotion control.
 3. Doubao / Volcengine style cloud voice adapter for small app footprint and many managed voices. The app only stores endpoint, voice ID and credentials; model weights stay in the cloud.
 
 IndexTTS2 is not a default local dependency. It requires a larger Python / model runtime stack and should only be enabled after it can be packaged as a LingShu model pack or exposed through an explicit external adapter. LingShu must not silently assume a local IndexTTS2 service is already running.
@@ -118,4 +119,4 @@ LingShu's speech output path is a gateway. The UI selects a provider, endpoint a
 }
 ```
 
-The endpoint can return raw audio bytes or JSON containing `audio_base64` / `audio_url`. Large emotional TTS checkpoints are optional model packs or cloud adapters, not hidden runtime requirements.
+The endpoint can return raw audio bytes or JSON containing `audio_base64` / `audio_url`. Large emotional TTS checkpoints are optional model packs or cloud adapters, not hidden runtime requirements. Built-in model-gateway credentials must live in `RuntimeConfig` inside the app package rather than in source code or Keychain.

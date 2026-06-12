@@ -21,3 +21,8 @@ ValidationArtifacts/artifact-manifest-*
 ValidationArtifacts/presentation-*
 ValidationArtifacts/crawler-*
 ValidationArtifacts/software-*
+
+# Runtime credentials bundled into local app packages only
+Resources/RuntimeConfig/*.token
+Resources/RuntimeConfig/*.secret
+Resources/RuntimeConfig/*secrets*.plist
