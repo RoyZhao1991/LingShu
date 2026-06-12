@@ -82,6 +82,38 @@ final class LocalToolExecutorTests: XCTestCase {
         XCTAssertTrue(allowed.output.contains("lingshu-ok"))
     }
 
+    func testRunCommandDoesNotHangOnStdinReadingCommand() async {
+        // cat 无参会读 stdin；nullDevice 立即给 EOF，应快速退出而不是卡到超时。
+        let start = Date()
+        let result = await executor.runCommand("cat", workingDirectory: workDir, allowShell: true, timeout: 8)
+        XCTAssertLessThan(Date().timeIntervalSince(start), 5, "交互式读 stdin 的命令不应挂起")
+        XCTAssertTrue(result.success)
+    }
+
+    func testRunCommandTimesOutAndForceTerminates() async {
+        let start = Date()
+        let result = await executor.runCommand("sleep 30", workingDirectory: workDir, allowShell: true, timeout: 2)
+        let elapsed = Date().timeIntervalSince(start)
+        XCTAssertLessThan(elapsed, 6, "应在超时附近强制收口，不等 sleep 30 跑完")
+        XCTAssertFalse(result.success)
+        XCTAssertTrue(result.output.contains("超时"))
+    }
+
+    func testRunCommandDoesNotHangWhenChildSpawnsLingeringGrandchild() async {
+        // 命令起一个持有 stdout fd 的后台孙进程后立刻退出——
+        // 旧实现的 readDataToEndOfFile 会因孙进程不关 fd 而永久阻塞。
+        let start = Date()
+        let result = await executor.runCommand("(sleep 20 &) ; echo done", workingDirectory: workDir, allowShell: true, timeout: 8)
+        XCTAssertLessThan(Date().timeIntervalSince(start), 6, "孙进程僵死不应让工具调用挂起")
+        XCTAssertTrue(result.output.contains("done"))
+    }
+
+    func testRunCommandCapturesOutput() async {
+        let result = await executor.runCommand("echo hello-lingshu", workingDirectory: workDir, allowShell: true, timeout: 8)
+        XCTAssertTrue(result.success)
+        XCTAssertTrue(result.output.contains("hello-lingshu"))
+    }
+
     func testRunCommandBlocksDangerousCommands() async {
         let blocked = await executor.execute(
             .init(tool: "run_command", arguments: ["command": "sudo rm -rf /"]),

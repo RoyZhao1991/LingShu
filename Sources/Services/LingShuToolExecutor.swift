@@ -163,7 +163,7 @@ struct LingShuLocalToolExecutor: LingShuToolExecuting {
         }
     }
 
-    private func runCommand(_ command: String, workingDirectory: String, allowShell: Bool) async -> LingShuToolResult {
+    func runCommand(_ command: String, workingDirectory: String, allowShell: Bool, timeout: TimeInterval = 60) async -> LingShuToolResult {
         let trimmed = command.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
             return .init(tool: "run_command", success: false, output: "命令为空。")
@@ -178,38 +178,98 @@ struct LingShuLocalToolExecutor: LingShuToolExecuting {
         }
 
         return await withCheckedContinuation { continuation in
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: "/bin/zsh")
-            process.arguments = ["-c", trimmed]
-            process.currentDirectoryURL = URL(fileURLWithPath: workingDirectory)
-            let pipe = Pipe()
-            process.standardOutput = pipe
-            process.standardError = pipe
+            let runner = CommandRunner(timeout: timeout)
+            runner.start(command: trimmed, workingDirectory: workingDirectory, continuation: continuation)
+        }
+    }
+}
 
-            do {
-                try process.run()
-            } catch {
-                continuation.resume(returning: .init(tool: "run_command", success: false, output: "启动失败：\(error.localizedDescription)"))
-                return
-            }
+/// run_command 的进程驱动：把可变状态（累积输出、once-resume 标志）收进引用类型，
+/// 满足 Swift 6 并发要求，并实现"不依赖 EOF + 超时强制 SIGKILL"的健壮收口。
+private final class CommandRunner: @unchecked Sendable {
+    private let timeout: TimeInterval
+    private let sync = NSLock()
+    private let process = Process()
+    private var collected = Data()
+    private var finished = false
+    private var continuation: CheckedContinuation<LingShuToolResult, Never>?
 
-            DispatchQueue.global().async {
-                let deadline = Date().addingTimeInterval(60)
-                while process.isRunning && Date() < deadline {
-                    Thread.sleep(forTimeInterval: 0.2)
-                }
-                if process.isRunning {
-                    process.terminate()
-                }
-                let data = pipe.fileHandleForReading.readDataToEndOfFile()
-                let output = String(data: data.prefix(8192), encoding: .utf8) ?? ""
-                let timedOut = Date() >= deadline
-                continuation.resume(returning: .init(
-                    tool: "run_command",
-                    success: process.terminationStatus == 0 && !timedOut,
-                    output: timedOut ? "（60s 超时已终止）\n\(output)" : (output.isEmpty ? "（无输出，退出码 \(process.terminationStatus)）" : output)
-                ))
+    init(timeout: TimeInterval) {
+        self.timeout = timeout
+    }
+
+    func start(command: String, workingDirectory: String, continuation: CheckedContinuation<LingShuToolResult, Never>) {
+        self.continuation = continuation
+        process.executableURL = URL(fileURLWithPath: "/bin/zsh")
+        process.arguments = ["-c", command]
+        process.currentDirectoryURL = URL(fileURLWithPath: workingDirectory)
+        // 关键：关闭 stdin，避免交互式命令（python REPL、cat 无参等）等输入永久卡住。
+        process.standardInput = FileHandle.nullDevice
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = pipe
+        let handle = pipe.fileHandleForReading
+
+        // 进程运行期间持续异步读管道，避免缓冲区写满导致子进程阻塞（经典死锁）。
+        handle.readabilityHandler = { [weak self] fileHandle in
+            let chunk = fileHandle.availableData
+            guard !chunk.isEmpty, let self else { return }
+            self.sync.lock()
+            if self.collected.count < 8192 { self.collected.append(chunk) }
+            self.sync.unlock()
+        }
+
+        // 进程退出即收口——不等 EOF，所以孙进程僵死也不会挂起管线。
+        process.terminationHandler = { [weak self] _ in
+            DispatchQueue.global().asyncAfter(deadline: .now() + 0.1) {
+                self?.conclude(timedOut: false, handle: handle)
             }
         }
+
+        do {
+            try process.run()
+        } catch {
+            handle.readabilityHandler = nil
+            resumeOnce(.init(tool: "run_command", success: false, output: "启动失败：\(error.localizedDescription)"))
+            return
+        }
+
+        // 看门狗：到点强制终止（SIGTERM 后 SIGKILL 兜底）并收口，保证管线绝不无限挂起。
+        // 这里强引用 self 保活——runner 是调用方的局部变量，靠这个闭包持有到收口为止。
+        DispatchQueue.global().asyncAfter(deadline: .now() + timeout) {
+            self.sync.lock(); let done = self.finished; self.sync.unlock()
+            guard !done else { return }
+            if self.process.isRunning {
+                self.process.terminate()
+                kill(self.process.processIdentifier, SIGKILL)
+            }
+            self.conclude(timedOut: true, handle: handle)
+        }
+    }
+
+    private func conclude(timedOut: Bool, handle: FileHandle) {
+        sync.lock()
+        if finished { sync.unlock(); return }
+        finished = true
+        let output = collected
+        sync.unlock()
+        handle.readabilityHandler = nil
+        let text = String(data: output.prefix(8192), encoding: .utf8) ?? ""
+        let status = process.isRunning ? -1 : process.terminationStatus
+        resumeOnce(.init(
+            tool: "run_command",
+            success: !timedOut && status == 0,
+            output: timedOut
+                ? "（\(Int(timeout))s 超时已强制终止）\n\(text)"
+                : (text.isEmpty ? "（无输出，退出码 \(status)）" : text)
+        ))
+    }
+
+    private func resumeOnce(_ result: LingShuToolResult) {
+        sync.lock()
+        let pending = continuation
+        continuation = nil
+        sync.unlock()
+        pending?.resume(returning: result)
     }
 }
