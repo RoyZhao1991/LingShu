@@ -36,6 +36,15 @@ struct ChatBubbleView: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
 
+                if !message.isUser, !message.isLoading, let choices = message.choices {
+                    LingShuChoiceCard(
+                        prompt: choices,
+                        resolvedChoice: message.resolvedChoice
+                    ) { option in
+                        state.selectRouteChoice(option, for: message.id)
+                    }
+                }
+
                 if !message.isUser,
                    !message.isLoading,
                    let taskRecordID = message.taskRecordID,

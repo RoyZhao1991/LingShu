@@ -747,6 +747,11 @@ final class LingShuState: ObservableObject {
     }
 
     /// 记忆提示 + 实时态势感知的统一组装：有有效感知信号时注入对话上下文。
+    /// 按当前主通道选择回复适配器（M3 内联 think / 标准模型直通）。
+    var currentReplyAdapter: LingShuModelReplyAdapting {
+        LingShuModelReplyAdapters.adapter(provider: modelProvider, model: modelName)
+    }
+
     func composedPromptHint(baseMemory: String) -> String {
         var hint = mainThreadKernel.promptHint(baseMemory: baseMemory)
         if let perception = livePerceptionContextProvider?(),
@@ -1875,7 +1880,8 @@ final class LingShuState: ObservableObject {
                 }
                 guard !Task.isCancelled, self.missionRunID == runID else { return }
                 self.recordModelUsage(reply, stage: "路由判断")
-                let rawReply = reply.text
+                // 按当前模型适配器取干净正文（剥离 M3 的 <think> 等），再解析/兜底。
+                let rawReply = self.currentReplyAdapter.normalizedReplyText(reply.text)
                 let route = self.routePlanner.decodeRoutePayload(from: rawReply) ?? CodexRoutePayload(
                     needsAgents: false,
                     agents: [],
@@ -2158,13 +2164,25 @@ final class LingShuState: ObservableObject {
             finishTaskRecord(taskRecordID, status: .answered, summary: "灵枢直接回答，未创建专家 agent 任务。")
         }
 
+        // 仅在直接回答（无后台执行线程）时把选择卡片挂到这条回复上，
+        // 让用户在有限选项中一键选择，而不是手打。
+        let attachedChoices = willStartExecutionThread ? nil : effectiveRoute.choices
         if let index = chatMessages.firstIndex(where: { $0.id == messageID }) {
             chatMessages[index].text = finalText
             chatMessages[index].isLoading = false
             chatMessages[index].taskRecordID = taskRecordID
+            chatMessages[index].choices = attachedChoices
         } else {
-            chatMessages.append(.init(speaker: "灵枢", text: finalText, isUser: false, taskRecordID: taskRecordID))
+            chatMessages.append(.init(speaker: "灵枢", text: finalText, isUser: false, taskRecordID: taskRecordID, choices: attachedChoices))
         }
+    }
+
+    /// 用户在选择卡片上点了某个选项：标记该卡片已解决，并把选项作为一条输入提交，推进对话。
+    func selectRouteChoice(_ option: String, for messageID: UUID) {
+        guard let index = chatMessages.firstIndex(where: { $0.id == messageID }),
+              chatMessages[index].resolvedChoice == nil else { return }
+        chatMessages[index].resolvedChoice = option
+        _ = submitTextInput(option, source: .typed)
     }
 
     private func requestBackgroundRouteReply(
