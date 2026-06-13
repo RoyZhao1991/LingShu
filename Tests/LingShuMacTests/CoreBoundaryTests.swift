@@ -1513,13 +1513,17 @@ final class CoreBoundaryTests: XCTestCase {
         XCTAssertEqual(request.locale, "zh-CN")
     }
 
-    func testSpeechOutputRecommendedProvidersPreferCloudGatewayAndHideLocalVoices() {
-        let providers = LingShuSpeechOutputProviderDescriptor.recommendedProviders
+    func testSpeechOutputRecommendedProvidersShowOnlyRealOptions() {
+        let kinds = LingShuSpeechOutputProviderDescriptor.recommendedProviders.map(\.kind)
 
-        XCTAssertEqual(providers.first?.kind, .dataNetSpeakerTTS)
-        XCTAssertFalse(providers.contains(where: { $0.kind == .appleSpeech }))
-        XCTAssertFalse(providers.contains(where: { $0.kind == .embeddedSherpaONNXTTS }))
-        XCTAssertFalse(providers.contains(where: { $0.kind == .indexTTS2Service }))
+        // 只列真实可用：本机系统语音 + 已接入的数据网关云端 TTS。
+        XCTAssertEqual(kinds, [.appleSpeech, .dataNetSpeakerTTS])
+        // 未接入的占位/研究项（空端点 / localhost 未起服务 / example.com）不进选择器，避免误导。
+        XCTAssertFalse(kinds.contains(.customHTTPService))
+        XCTAssertFalse(kinds.contains(.cosyVoice3Service))
+        XCTAssertFalse(kinds.contains(.doubaoService))
+        XCTAssertFalse(kinds.contains(.indexTTS2Service))
+        XCTAssertFalse(kinds.contains(.embeddedSherpaONNXTTS))
     }
 
     func testEmbeddedTTSRuntimeDetectsReadyLocalBundle() throws {
