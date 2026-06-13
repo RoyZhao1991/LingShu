@@ -239,13 +239,12 @@ struct LingShuStableTopBar: View {
                 }
             }
 
-            if !dense {
-                TimelineView(.periodic(from: .now, by: 1)) { _ in
-                    LingShuHUDReadout(label: "STATE", value: state.coreStateDisplay, color: state.coreState.color)
-                }
-                LingShuHUDReadout(label: "AUTO", value: state.autonomousRunDisplayStatus, color: state.autonomousRun.isActive ? .orange : .lingFaint)
-                LingShuHUDReadout(label: "TRUST", value: "\(state.trustScore)%", color: .lingHolo)
+            // STATE/AUTO/TRUST 是运行状态，始终显示（不随窗口变窄隐藏）。
+            TimelineView(.periodic(from: .now, by: 1)) { _ in
+                LingShuHUDReadout(label: "STATE", value: state.coreStateDisplay, color: state.coreState.color)
             }
+            LingShuHUDReadout(label: "AUTO", value: state.autonomousRunDisplayStatus, color: state.autonomousRun.isActive ? .orange : .lingFaint)
+            LingShuHUDReadout(label: "TRUST", value: "\(state.trustScore)%", color: .lingHolo)
 
             Button {
                 if !state.autonomousRun.isActive {
@@ -276,19 +275,6 @@ struct LingShuStableTopBar: View {
             }
             .buttonStyle(.plain)
             .help("进入极简语音模式（双波形纯语音对话）")
-
-            Button {
-                state.startDemoMissionIfConnected()
-            } label: {
-                Image(systemName: "play.fill")
-                    .font(.system(size: 13, weight: .bold))
-                    .foregroundStyle(Color.lingHolo)
-                    .frame(width: 34, height: 30)
-                    .overlay { LingShuHUDCorners(accent: .lingHolo, cornerLength: 7) }
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .help("演示一次多 Agent 流转")
         }
         .padding(.horizontal, 22)
         .padding(.vertical, 10)
