@@ -378,7 +378,18 @@ final class LingShuRealtimePerceptionGateway: ObservableObject {
 
     func ingestAudioChunk(_ packet: LingShuAudioStreamPacket) {
         ownerIdentitySnapshot = ownerIdentityService.ingestAudioPacket(packet)
-        speakerProfiler.ingest(packet)
+
+        // 基频自相关较重，每个音频块都在主线程算会卡 UI（用户实测发现的根因）。
+        // 放后台线程算，主线程只 await（期间挂起、不阻塞渲染），算完回主线程做极轻的滚动更新。
+        let pcm = packet.pcm16Data
+        let sampleRate = packet.sampleRate
+        let channelCount = packet.channelCount
+        Task { @MainActor [weak self] in
+            let pitch = await Task.detached(priority: .userInitiated) {
+                LingShuSpeakerProfiler.estimatePitch(pcm16Data: pcm, sampleRate: sampleRate, channelCount: channelCount)
+            }.value
+            self?.speakerProfiler.ingest(pitch: pitch)
+        }
 
         guard shouldForwardRawSignal(.audioChunk) else {
             recordLocal(kind: .audioChunk, summary: "音频流本地保活：\(packet.byteCount) bytes")

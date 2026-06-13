@@ -27,11 +27,20 @@ final class LingShuSpeakerProfiler {
     private let staleInterval: TimeInterval = 180
 
     func ingest(_ packet: LingShuAudioStreamPacket, now: Date = Date()) {
-        guard let pitch = Self.estimatePitch(
-            pcm16Data: packet.pcm16Data,
-            sampleRate: packet.sampleRate,
-            channelCount: packet.channelCount
-        ) else { return }
+        ingest(
+            pitch: Self.estimatePitch(
+                pcm16Data: packet.pcm16Data,
+                sampleRate: packet.sampleRate,
+                channelCount: packet.channelCount
+            ),
+            now: now
+        )
+    }
+
+    /// 用**已算好**的基频更新滚动状态。基频自相关较重，由调用方在后台算好再传进来，
+    /// 避免每个音频块都在主线程做自相关把 UI 卡住；这步本身极轻（追加 + 裁剪滚动窗口）。
+    func ingest(pitch: Double?, now: Date = Date()) {
+        guard let pitch else { return }
 
         if now.timeIntervalSince(lastVoicedAt) > staleInterval {
             recentPitches.removeAll()
