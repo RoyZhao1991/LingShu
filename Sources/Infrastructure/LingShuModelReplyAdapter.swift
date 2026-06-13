@@ -76,25 +76,26 @@ final class LingShuPassthroughStreamParser: LingShuReplyStreamParsing {
 /// （比如 "<th" + "ink>"），所以末尾可能构成标签前缀的字符先留在缓冲里，
 /// 等下一个 chunk 进来再判定。
 final class LingShuInlineThinkStreamParser: LingShuReplyStreamParsing {
-    private static let openTag = "<think>"
-    private static let closeTag = "</think>"
+    // 覆盖多种命名空间/变体：<think> / <mm:think> / <thinking>。新增变体只要往这两个表里加。
+    private static let openTags = ["<think>", "<mm:think>", "<thinking>"]
+    private static let closeTags = ["</think>", "</mm:think>", "</thinking>"]
 
     private var buffer = ""
     private var inThink = false
+    private var currentTags: [String] { inThink ? Self.closeTags : Self.openTags }
 
     func ingest(_ rawDelta: String) -> LingShuReplyStreamEvent {
         buffer += rawDelta
         var event = LingShuReplyStreamEvent()
 
         while true {
-            let tag = inThink ? Self.closeTag : Self.openTag
-            if let range = buffer.range(of: tag, options: .caseInsensitive) {
-                let emitted = String(buffer[buffer.startIndex..<range.lowerBound])
+            if let match = earliestRange(of: currentTags, in: buffer) {
+                let emitted = String(buffer[buffer.startIndex..<match.lowerBound])
                 appendEmission(emitted, to: &event)
-                buffer.removeSubrange(buffer.startIndex..<range.upperBound)
+                buffer.removeSubrange(buffer.startIndex..<match.upperBound)
                 inThink.toggle()
             } else {
-                let keep = pendingTagPrefixLength(in: buffer, tag: tag)
+                let keep = maxPendingTagPrefixLength(in: buffer, tags: currentTags)
                 let emitCount = buffer.count - keep
                 if emitCount > 0 {
                     appendEmission(String(buffer.prefix(emitCount)), to: &event)
@@ -110,8 +111,7 @@ final class LingShuInlineThinkStreamParser: LingShuReplyStreamParsing {
         var event = LingShuReplyStreamEvent()
         // 流结束后缓冲里只可能剩下不完整的标签前缀；残缺标签不是用户内容，直接丢弃，
         // 其余文本按当前所在通道吐出。
-        let tag = inThink ? Self.closeTag : Self.openTag
-        let keep = pendingTagPrefixLength(in: buffer, tag: tag)
+        let keep = maxPendingTagPrefixLength(in: buffer, tags: currentTags)
         let emit = String(buffer.prefix(buffer.count - keep))
         appendEmission(emit, to: &event)
         buffer = ""
@@ -128,7 +128,23 @@ final class LingShuInlineThinkStreamParser: LingShuReplyStreamParsing {
         }
     }
 
-    /// 缓冲末尾可能正在"长出"一个标签的长度（如末尾是 "</thi" 返回 5），需要留待下个 chunk。
+    /// 缓冲里**最靠前**的任一标签变体出现位置。
+    private func earliestRange(of tags: [String], in text: String) -> Range<String.Index>? {
+        var best: Range<String.Index>?
+        for tag in tags {
+            if let r = text.range(of: tag, options: .caseInsensitive),
+               best == nil || r.lowerBound < best!.lowerBound {
+                best = r
+            }
+        }
+        return best
+    }
+
+    /// 缓冲末尾可能正在"长出"某个标签的最长前缀（取所有变体里最长的那个，避免吐出半截标签）。
+    private func maxPendingTagPrefixLength(in text: String, tags: [String]) -> Int {
+        tags.map { pendingTagPrefixLength(in: text, tag: $0) }.max() ?? 0
+    }
+
     private func pendingTagPrefixLength(in text: String, tag: String) -> Int {
         let maxKeep = min(tag.count - 1, text.count)
         guard maxKeep > 0 else { return 0 }
