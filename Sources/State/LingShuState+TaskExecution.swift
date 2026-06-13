@@ -49,6 +49,16 @@ extension LingShuState {
         reply: String,
         taskRecordID: String?
     ) -> [LingShuMaterializedArtifact] {
+        // 若协同管线的 agentic 工具执行已写出真实文件并登记产物，就直接采用，不再套模板产物——
+        // 避免给"写 hello.py"这类已有真实产出的任务再硬塞一份不相关的模板 demo（产物清单错配）。
+        if let taskRecordID,
+           let record = taskExecutionRecordLookup.first(where: { $0.id == taskRecordID }),
+           !record.artifacts.isEmpty {
+            return record.artifacts.map {
+                LingShuMaterializedArtifact(title: $0.title, location: $0.location, producer: $0.producer)
+            }
+        }
+
         let artifacts = engineeringArtifactService.materializeArtifacts(
             prompt: userPrompt,
             route: route,

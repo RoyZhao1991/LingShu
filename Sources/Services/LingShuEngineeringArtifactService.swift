@@ -66,13 +66,14 @@ struct LingShuEngineeringArtifactService {
             capabilities.append(.document)
         }
 
+        // 只有"确实是爬虫/网页抓取"才套爬虫模板产物；泛指的"代码/脚本"不再误触发——
+        // 那类任务的真实文件由协同管线的 agentic 工具执行直接写出（见 materializeTaskArtifacts），
+        // 不该再硬塞一份不相关的爬虫 demo（曾导致"写 hello.py"产出 crawler.py 的错配）。
         if text.contains("爬虫")
             || text.contains("crawler")
             || text.contains("spider")
             || text.contains("web scrape")
-            || text.contains("网页抓取")
-            || text.contains("代码")
-            || text.contains("脚本") {
+            || text.contains("网页抓取") {
             capabilities.append(.software)
         }
 

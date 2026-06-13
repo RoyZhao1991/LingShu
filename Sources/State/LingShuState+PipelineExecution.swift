@@ -82,11 +82,21 @@ extension LingShuState {
         // 外部 MCP 工具拼进工具目录（已发现的才列出，未配置则无额外开销）。
         let mcpTools = connectorRegistry.discoveredTools
         let mcpCatalog = mcpTools.isEmpty ? "" : "\n外部连接器工具（同样用【工具】行调用，tool 写工具名）：\n" + mcpTools.map { "- \($0.name)（\($0.serverName)）：\($0.description.prefix(80))" }.joined(separator: "\n")
-        let toolSystemPrompt = systemPrompt + "\n\n" + toolExecutor.catalogPrompt + mcpCatalog
+        let resolvedWorkingDirectory = workingDirectory ?? codexWorkingDirectory
+        // 明确告知工作目录 + shell 语法提醒：减少模型瞎猜路径（曾试图写 /tmp/pinchbench/…）
+        // 和漏空格的坏命令（grep-n / ls-l / cat>）。
+        let workingDirHint = """
+
+
+        你的工作目录是：\(resolvedWorkingDirectory)
+        - write_file 的 path 必须落在该目录内（用绝对路径，如 \(resolvedWorkingDirectory)/文件名），不要凭空假设其它路径。
+        - run_command 在该目录下执行；命令必须语法正确，注意命令与参数之间留空格（要写 `ls -l`、`grep -n`、`cat > 文件`，不是 `ls-l`、`grep-n`、`cat>文件`）。
+        """
+        let toolSystemPrompt = systemPrompt + "\n\n" + toolExecutor.catalogPrompt + mcpCatalog + workingDirHint
         var conversation: [LingShuModelMessage] = []
         var currentPrompt = userPrompt
         let allowShell = !requireHumanApproval
-        let workingDirectory = workingDirectory ?? codexWorkingDirectory
+        let workingDirectory = resolvedWorkingDirectory
         let mcpToolNames = Set(mcpTools.map(\.name))
 
         for turn in 0..<4 {

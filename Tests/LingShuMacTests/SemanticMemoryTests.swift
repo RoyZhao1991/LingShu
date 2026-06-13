@@ -27,6 +27,22 @@ final class SemanticMemoryTests: XCTestCase {
         XCTAssertEqual(hits.first?.entry.title, "灵枢周报整理")
     }
 
+    // MARK: - 幽灵相似度校准（NLEmbedding 改进）
+
+    func testShortUnrelatedQueryDoesNotGhostMatch() {
+        // 极短且无字面重叠的查询不应靠本地向量虚高命中无关条目（长度闸门 + 全文无重叠）。
+        store.remember(kind: "任务执行", title: "量子纠错研究", content: "整理量子计算纠错码的研究笔记。", tags: ["量子"])
+        let hits = store.recall(query: "在吗")
+        XCTAssertTrue(hits.isEmpty, "2 字无关查询触发长度闸门、向量路跳过，不应命中")
+    }
+
+    func testRelatedQueryStillRecallsAfterGhostGuards() {
+        // 回归：抬高余弦阈值 + 剥离填充词后，含"帮我/一下"的换措辞召回仍有效（全文 bigram 锚点）。
+        store.remember(kind: "任务执行", title: "销售周报", content: "把上周销售数据整理成周报。", tags: ["周报"])
+        let hits = store.recall(query: "帮我整理一下销售周报")
+        XCTAssertEqual(hits.first?.entry.title, "销售周报", "填充词不该挡住真实召回")
+    }
+
     func testSameKindAndTitleUpserts() {
         store.remember(kind: "研究课题", title: "上下文压缩", content: "第一版结论。")
         store.remember(kind: "研究课题", title: "上下文压缩", content: "第二版结论，更完整。")

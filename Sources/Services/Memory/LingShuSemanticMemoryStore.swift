@@ -73,8 +73,20 @@ final class LingShuLocalTextEmbedding: @unchecked Sendable {
         return loaded
     }
 
+    /// 向量化前剥离会话填充词：「帮我/麻烦/一下/我想…」这类无信息量词是中文幽灵相似度的主要来源。
+    /// 只剥多字安全填充词，不动单字（避免误伤"目的""申请"里的"的""请"）。剥光了则退回原文。
+    private static let embeddingFillerPhrases = [
+        "帮我", "帮忙", "麻烦你", "麻烦", "请问", "一下", "我想要", "我想",
+        "你能不能", "你可以", "可以帮", "然后", "另外", "顺便", "就是说", "对了"
+    ]
+
     private func normalizedSentence(_ text: String) -> String {
-        String(text.replacingOccurrences(of: "\n", with: " ").prefix(480))
+        var sentence = text.replacingOccurrences(of: "\n", with: " ")
+        for phrase in Self.embeddingFillerPhrases {
+            sentence = sentence.replacingOccurrences(of: phrase, with: "")
+        }
+        let cleaned = sentence.trimmingCharacters(in: .whitespaces)
+        return String((cleaned.isEmpty ? text : cleaned).prefix(480))
     }
 }
 
@@ -265,8 +277,14 @@ final class LingShuSemanticMemoryStore: @unchecked Sendable {
         return ids
     }
 
+    /// 本地 NLEmbedding 对无关中文短句有"幽灵相似度"（虚高余弦）。两道闸门压制：
+    /// ① 太短的查询不信任向量，交给全文路；② 抬高余弦阈值，短查询再加一档。
+    private static let minVectorSimilarity = 0.45
+
     private func vectorRankedIDs(query: String, limit: Int) -> [String] {
-        guard let queryVector = embedding.vectorWithLanguage(for: query) else { return [] }
+        let queryLength = query.trimmingCharacters(in: .whitespacesAndNewlines).count
+        guard queryLength >= 3, let queryVector = embedding.vectorWithLanguage(for: query) else { return [] }
+        let threshold = queryLength < 12 ? Self.minVectorSimilarity + 0.1 : Self.minVectorSimilarity
 
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(
@@ -285,7 +303,7 @@ final class LingShuSemanticMemoryStore: @unchecked Sendable {
             let data = Data(bytes: blob, count: byteCount)
             let vector = Self.decodeVector(data)
             let similarity = LingShuLocalTextEmbedding.cosineSimilarity(queryVector.vector, vector)
-            if similarity > 0.2 {
+            if similarity >= threshold {
                 scored.append((String(cString: idCString), similarity))
             }
         }
