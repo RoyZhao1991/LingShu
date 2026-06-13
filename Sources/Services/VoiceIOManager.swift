@@ -3,6 +3,32 @@ import Combine
 import Foundation
 @preconcurrency import Speech
 
+/// 轮换识别请求时复用的回调集合（onAudioChunk 不在内，它留在常驻 tap 里）。
+struct VoiceSpeechCallbacks {
+    let onText: @MainActor (String) -> Void
+    let onFinal: (@MainActor (String) -> Void)?
+    let onInterruption: (@MainActor () -> Void)?
+    let onResult: (@MainActor (LingShuVoiceTranscriptionResult) -> Void)?
+}
+
+/// 当前识别请求的线程安全持有器。音频 tap 在专用音频线程上调用 `append`，
+/// 主线程在每句结束时 `swap` 成新请求；用锁守一下保证 Swift 6 并发安全。
+/// 这样音频引擎与 tap 全程常驻，只轮换轻量的识别请求，消除"每句拆引擎重启"的卡顿与丢音。
+final class RecognitionRequestBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var current: SFSpeechAudioBufferRecognitionRequest?
+
+    func swap(_ request: SFSpeechAudioBufferRecognitionRequest?) {
+        lock.lock(); defer { lock.unlock() }
+        current = request
+    }
+
+    func append(_ buffer: AVAudioPCMBuffer) {
+        lock.lock(); let request = current; lock.unlock()
+        request?.append(buffer)
+    }
+}
+
 @MainActor
 final class VoiceIOManager: ObservableObject {
     @Published var isRecording = false {
@@ -43,6 +69,11 @@ final class VoiceIOManager: ObservableObject {
     let speechSynthesizer = AVSpeechSynthesizer()
     private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
     private var recognitionTask: SFSpeechRecognitionTask?
+    /// 当前识别请求的线程安全持有器：音频 tap 始终往"当前"请求灌音频，
+    /// 每句结束只轮换请求/任务（不拆引擎、不拆 tap），消除每句重启的卡顿与丢音。
+    let recognitionRequestBox = RecognitionRequestBox()
+    /// 轮换识别请求时复用的回调（onAudioChunk 留在常驻 tap 里，不在此存）。
+    private var speechCallbacks: VoiceSpeechCallbacks?
     private var embeddedASRProcess: Process?
     private var embeddedASROutputHandle: FileHandle?
     private var embeddedASRLineBuffer = ""
@@ -177,35 +208,44 @@ final class VoiceIOManager: ObservableObject {
             throw LingShuVoiceError.speechRecognizerUnavailable
         }
 
-        let request = SFSpeechAudioBufferRecognitionRequest()
-        request.shouldReportPartialResults = true
-        let usesOnDeviceRecognition = speechRecognizer.supportsOnDeviceRecognition
-        request.requiresOnDeviceRecognition = usesOnDeviceRecognition
-        if #available(macOS 13.0, *) {
-            request.addsPunctuation = true
-        }
-
         let inputNode = audioEngine.inputNode
         let recordingFormat = inputNode.outputFormat(forBus: 0)
         guard recordingFormat.sampleRate > 0 else {
             throw LingShuVoiceError.audioInputUnavailable
         }
 
+        // 引擎与 tap 只安装一次、全程常驻；tap 往 box 灌音频（每句只轮换请求，不动引擎）。
         inputNode.removeTap(onBus: 0)
         inputNode.installTap(
             onBus: 0,
             bufferSize: 1024,
             format: recordingFormat,
-            block: makeRecognitionAudioTap(request: request, onAudioChunk: onAudioChunk)
+            block: makeRecognitionAudioTap(box: recognitionRequestBox, onAudioChunk: onAudioChunk)
         )
-
         audioEngine.prepare()
         try audioEngine.start()
 
-        recognitionRequest = request
+        speechCallbacks = VoiceSpeechCallbacks(onText: onText, onFinal: onFinal, onInterruption: onInterruption, onResult: onResult)
         isRecording = true
         transcript = ""
-        setInputStatus(usesOnDeviceRecognition ? "正在听（本机）" : "正在听")
+        setInputStatus(speechRecognizer.supportsOnDeviceRecognition ? "正在听（本机）" : "正在听")
+        armSpeechRecognition()
+    }
+
+    /// 轮换识别请求：每句结束只换一个轻量请求/任务，引擎与 tap 不动——
+    /// 消除"每句重启引擎 + 450ms 空档"造成的卡顿和丢音，续听无缝。
+    private func armSpeechRecognition() {
+        guard isRecording, let speechRecognizer, let callbacks = speechCallbacks else { return }
+
+        recognitionTask?.cancel()
+        let request = SFSpeechAudioBufferRecognitionRequest()
+        request.shouldReportPartialResults = true
+        request.requiresOnDeviceRecognition = speechRecognizer.supportsOnDeviceRecognition
+        if #available(macOS 13.0, *) {
+            request.addsPunctuation = true
+        }
+        recognitionRequest = request
+        recognitionRequestBox.swap(request)
 
         recognitionTask = speechRecognizer.recognitionTask(with: request) { @Sendable [weak self] result, error in
             let recognizedText = result?.bestTranscription.formattedString
@@ -213,17 +253,19 @@ final class VoiceIOManager: ObservableObject {
             let hasError = error != nil
 
             Task { @MainActor in
-                guard let self else { return }
+                // 身份闸：只处理"当前"请求的回调；轮换后旧任务的迟到回调（含取消错误）一律忽略，
+                // 避免误触发整体停止把常驻引擎拆掉。
+                guard let self, self.isRecording, self.recognitionRequest === request else { return }
 
                 if let recognizedText {
                     let transcription = self.makeTranscriptionResult(text: recognizedText, isFinal: isFinal)
                     self.transcript = transcription.text
-                    onText(transcription.text)
-                    onResult?(transcription)
+                    callbacks.onText(transcription.text)
+                    callbacks.onResult?(transcription)
 
                     if isFinal {
-                        onFinal?(transcription.text)
-                        self.stopRecognition()
+                        callbacks.onFinal?(transcription.text)
+                        self.armSpeechRecognition()   // 无缝轮换到下一句
                     }
                 }
 
@@ -231,7 +273,7 @@ final class VoiceIOManager: ObservableObject {
                     self.stopRecognition()
                     self.setInputStatus("语音识别已中断")
                     if !isFinal {
-                        onInterruption?()
+                        callbacks.onInterruption?()
                     }
                 }
             }
@@ -449,10 +491,12 @@ final class VoiceIOManager: ObservableObject {
         }
 
         audioEngine.inputNode.removeTap(onBus: 0)
+        recognitionRequestBox.swap(nil)
         recognitionRequest?.endAudio()
         recognitionTask?.cancel()
         recognitionRequest = nil
         recognitionTask = nil
+        speechCallbacks = nil
         isRecording = false
         setInputStatus(transcript.isEmpty ? "收音待机" : "语音已转写")
     }

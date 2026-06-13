@@ -56,7 +56,7 @@ extension VoiceIOManager {
     }
 
     nonisolated func makeRecognitionAudioTap(
-        request: SFSpeechAudioBufferRecognitionRequest,
+        box: RecognitionRequestBox,
         onAudioChunk: (@MainActor (LingShuAudioStreamPacket) -> Void)?
     ) -> AVAudioNodeTapBlock {
         // 节流：音频 tap 每个缓冲（~40/s）都跳主线程的话，会让主线程满负荷跑声纹/认主 DSP
@@ -64,7 +64,7 @@ extension VoiceIOManager {
         // 不需要每缓冲一次）。真正的根治是把 DSP 移出主线程，这里先把洪泛掐掉。
         let throttle = AudioTapEmitThrottle()
         return { [weak self] buffer, _ in
-            request.append(buffer)
+            box.append(buffer)   // 灌进"当前"请求；每句结束只轮换请求，引擎与 tap 不动
             let now = Date()
 
             if throttle.shouldEmitLevel(at: now) {

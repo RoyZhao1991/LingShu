@@ -109,14 +109,7 @@ enum LingShuPerceptionActions {
                         voice: voice,
                         perceptionGateway: perceptionGateway
                     )
-
-                    if result.isFinal {
-                        scheduleRecognitionRestart(
-                            state: state,
-                            voice: voice,
-                            perceptionGateway: perceptionGateway
-                        )
-                    }
+                    // 每句结束的续听已由 VoiceIOManager 内部无缝轮换处理，不再整体重启识别。
                 }
             )
 
