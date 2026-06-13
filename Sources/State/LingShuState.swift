@@ -861,7 +861,9 @@ final class LingShuState: ObservableObject {
             return clarificationResponse
         }
 
-        var isPotentialTask = isCapabilityCollaborationRequest(trimmedPrompt)
+        // 续接已选定任务（forcedThreadID）= 明确要继续推进一个任务，按任务走（建线程 + 进路由/管线），
+        // 不能因为输入只是"继续"就当普通对话直答——那样任务永远不会真正执行。
+        var isPotentialTask = forcedThreadID != nil || isCapabilityCollaborationRequest(trimmedPrompt)
         var taskMemoryLookupOverride: LingShuTaskMemoryLookup?
 
         let taskRecordID = existingTaskRecordID ?? createTaskExecutionRecord(for: trimmedPrompt)
@@ -1042,9 +1044,9 @@ final class LingShuState: ObservableObject {
         )
         chatMessages.append(pending)
         activeThinkingMessageID = pending.id
-        // 普通对话走直答快路（无 JSON 包装、真流式，实测首字 ~1.6s）；
-        // 交付型诉求保留完整路由编排。误判由直答模型的升级标记兜底。
-        if isCapabilityCollaborationRequest(trimmedPrompt) {
+        // 普通对话走直答快路（无 JSON 包装、真流式，实测首字 ~1.6s）；交付型诉求 / 续接任务
+        // （isPotentialTask 含 forcedThreadID 续接）保留完整路由编排。误判由直答模型的升级标记兜底。
+        if isPotentialTask {
             requestAPIGatewayRouteReply(for: trimmedPrompt, memoryContext: mainMemoryContext, replacing: pending.id, taskRecordID: taskRecordID)
         } else {
             requestDirectChatReply(for: trimmedPrompt, memoryContext: mainMemoryContext, replacing: pending.id, taskRecordID: taskRecordID)

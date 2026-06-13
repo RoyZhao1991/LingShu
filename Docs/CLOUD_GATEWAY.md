@@ -17,9 +17,10 @@
 ## 鉴权与凭据安全
 
 - 所有请求携带 `X-Model-Token` 请求头（`LingShuModelGateway.headers` 对“数据网络”供应商的专用分支；感知客户端内置）。
-- **Token 不出现在仓库、UserDefaults 或明文文件里**。`LingShuCredentialStore`（`Sources/Services/LingShuCredentialStore.swift`）把凭据存入 macOS 钥匙串（service：`cn.lingshu.model-credentials`，account：provider id）。
-- 读取顺序：内存缓存 → 钥匙串 → 环境变量 `LINGSHU_TOKEN_DATANET_GATEWAY`（CI/调试用）。
-- 应用启动与切换供应商时自动从凭据仓库填充；在设置页修改 API Key 会写回钥匙串。
+- **凭据存进灵枢自有配置**：`LingShuCredentialStore`（`Sources/Services/LingShuCredentialStore.swift`）把 token 按 provider id 存进 `~/Library/Application Support/LingShu/Credentials/credentials.json`（权限 0600，仅当前用户可读）。**不进代码仓库、不写 UserDefaults。**
+  - 安全权衡：配置文件是**明文**（不再用钥匙串加密）。原因：灵枢 ad-hoc 签名，签名每次重建都变 → 读钥匙串项每次都要重新弹框授权，反复摩擦且多次卡住 TTS token；个人本机工具接受明文配置换取"启动不弹框、跨重建稳定"。
+- 读取顺序：内存缓存 → 配置文件 → 旧钥匙串（一次性迁移）→ 环境变量 `LINGSHU_TOKEN_DATANET_GATEWAY`（CI/调试用）。
+- 应用启动与切换供应商时自动从配置填充；在设置页修改 API Key 会写回配置文件；旧钥匙串里的凭据首次访问自动迁移进来，之后不再碰钥匙串。
 - 手工种入/更新 token：
   ```bash
   security add-generic-password -U -s cn.lingshu.model-credentials -a datanet-gateway -w "<TOKEN>"
