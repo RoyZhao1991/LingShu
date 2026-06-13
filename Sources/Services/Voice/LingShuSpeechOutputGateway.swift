@@ -37,14 +37,14 @@ struct LingShuSpeechOutputProviderDescriptor: Identifiable, Codable, Equatable, 
     static let appleSpeech = LingShuSpeechOutputProviderDescriptor(
         id: "apple-speech-output",
         kind: .appleSpeech,
-        displayName: "macOS 清晰中文男声",
+        displayName: "macOS 系统语音（兜底）",
         deployment: "macOS 系统能力",
         defaultEndpoint: "",
         supportsStreaming: false,
         supportsEmotion: false,
         supportsVoiceClone: false,
         isRuntimeAvailable: true,
-        note: "使用本机系统中文男声，优先保证吐字清楚和稳定响应；适合作为当前默认声线。"
+        note: "本机系统中文语音，**非默认通道**——默认走数据网关情绪男声（dataNetSpeakerTTS）；仅在云端不可用时作兜底。本机若没装中文男声会发出女声（这是系统能力限制，非本通道选择）。"
     )
 
     static let embeddedSherpaONNXTTS = LingShuSpeechOutputProviderDescriptor(

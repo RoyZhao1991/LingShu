@@ -213,7 +213,7 @@ extension VoiceIOManager {
 
         isSpeaking = true
         if !statusAlreadySet {
-            setOutputStatus("正在发声（macOS 中文男声）")
+            setOutputStatus("正在发声（本机系统语音·兜底）")
         }
         speechSynthesizer.speak(utterance)
 
