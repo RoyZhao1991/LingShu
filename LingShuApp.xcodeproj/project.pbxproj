@@ -42,7 +42,7 @@
 		7A0000000000000000000133 /* LingShuCallChainViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A0000000000000000000233 /* LingShuCallChainViews.swift */; };
 		7A0000000000000000000134 /* LingShuSettingsSurfaces.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A0000000000000000000234 /* LingShuSettingsSurfaces.swift */; };
 		7A0000000000000000000135 /* ReturnSubmittingTextEditor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A0000000000000000000235 /* ReturnSubmittingTextEditor.swift */; };
-		7A0000000000000000000136 /* JarvisChatViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A0000000000000000000236 /* JarvisChatViews.swift */; };
+		7A0000000000000000000136 /* LingShuChatViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A0000000000000000000236 /* LingShuChatViews.swift */; };
 		7A0000000000000000000137 /* LingShuMinimalVoiceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A0000000000000000000237 /* LingShuMinimalVoiceView.swift */; };
 		7A0000000000000000000138 /* LingShuSharedComponents.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A0000000000000000000238 /* LingShuSharedComponents.swift */; };
 		7A0000000000000000000139 /* ModelConfigurationViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A0000000000000000000239 /* ModelConfigurationViews.swift */; };
@@ -123,7 +123,7 @@
 		7A0000000000000000000233 /* LingShuCallChainViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/Views/LingShuCallChainViews.swift; sourceTree = "<group>"; };
 		7A0000000000000000000234 /* LingShuSettingsSurfaces.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/Views/LingShuSettingsSurfaces.swift; sourceTree = "<group>"; };
 		7A0000000000000000000235 /* ReturnSubmittingTextEditor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/Views/ReturnSubmittingTextEditor.swift; sourceTree = "<group>"; };
-		7A0000000000000000000236 /* JarvisChatViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/Views/JarvisChatViews.swift; sourceTree = "<group>"; };
+		7A0000000000000000000236 /* LingShuChatViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/Views/LingShuChatViews.swift; sourceTree = "<group>"; };
 		7A0000000000000000000237 /* LingShuMinimalVoiceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/Views/LingShuMinimalVoiceView.swift; sourceTree = "<group>"; };
 		7A0000000000000000000238 /* LingShuSharedComponents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/Views/LingShuSharedComponents.swift; sourceTree = "<group>"; };
 		7A0000000000000000000239 /* ModelConfigurationViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/Views/ModelConfigurationViews.swift; sourceTree = "<group>"; };
@@ -264,7 +264,7 @@
 				7A0000000000000000000233 /* LingShuCallChainViews.swift */,
 				7A0000000000000000000234 /* LingShuSettingsSurfaces.swift */,
 				7A0000000000000000000235 /* ReturnSubmittingTextEditor.swift */,
-				7A0000000000000000000236 /* JarvisChatViews.swift */,
+				7A0000000000000000000236 /* LingShuChatViews.swift */,
 				7A0000000000000000000237 /* LingShuMinimalVoiceView.swift */,
 				7A0000000000000000000238 /* LingShuSharedComponents.swift */,
 				7A0000000000000000000239 /* ModelConfigurationViews.swift */,
@@ -392,7 +392,7 @@
 				7A0000000000000000000133 /* LingShuCallChainViews.swift in Sources */,
 				7A0000000000000000000134 /* LingShuSettingsSurfaces.swift in Sources */,
 				7A0000000000000000000135 /* ReturnSubmittingTextEditor.swift in Sources */,
-				7A0000000000000000000136 /* JarvisChatViews.swift in Sources */,
+				7A0000000000000000000136 /* LingShuChatViews.swift in Sources */,
 				7A0000000000000000000137 /* LingShuMinimalVoiceView.swift in Sources */,
 				7A0000000000000000000138 /* LingShuSharedComponents.swift in Sources */,
 				7A0000000000000000000139 /* ModelConfigurationViews.swift in Sources */,
