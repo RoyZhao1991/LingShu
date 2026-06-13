@@ -30,7 +30,7 @@ final class VoiceIOManager: ObservableObject {
     @Published var speechOutputProvider = LingShuSpeechOutputProviderDescriptor.dataNetSpeakerTTS
     @Published var speechOutputEndpoint = LingShuSpeechOutputProviderDescriptor.dataNetSpeakerTTS.defaultEndpoint
     @Published var speechOutputAPIKey = ""
-    @Published var speechPersona = LingShuSpeechPersona.softDominantMale
+    @Published var speechPersona = LingShuSpeechPersona.calmJarvisMale
     /// 实时输入电平 0...1（麦克风 RMS），供极简模式的输入波形使用。
     @Published var inputLevel: Float = 0
     /// 实时输出电平 0...1（TTS 播放音量计），供极简模式的输出波形使用。
@@ -53,6 +53,7 @@ final class VoiceIOManager: ObservableObject {
     var speechQueue: [String] = []
     var speechQueueDrainTask: Task<Void, Never>?
     let bundledRuntimeConfig = LingShuBundledRuntimeConfig()
+    let credentialStore = LingShuCredentialStore()
 
     var availableTranscriptionProviders: [LingShuVoiceTranscriptionProviderDescriptor] {
         LingShuVoiceTranscriptionProviderDescriptor.recommendedChineseProviders.map { provider in

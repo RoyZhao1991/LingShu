@@ -77,8 +77,9 @@ extension VoiceIOManager {
                 self.isSpeaking = false
                 self.setOutputStatus(self.outputStandbyStatus(for: provider))
             } catch {
-                self.isSpeaking = false
-                self.setOutputStatus("\(provider.displayName) 未响应，已停止发声")
+                // 云端男声不可用（无凭据/网关异常）：降级本机语音兜底，避免完全没声音。
+                self.setOutputStatus("\(provider.displayName) 不可用，已降级本机语音")
+                self.speakWithAppleSpeech(cleanedText, statusAlreadySet: true)
             }
         }
     }
@@ -272,7 +273,14 @@ extension VoiceIOManager {
         guard explicitKey.isEmpty, provider.kind == .dataNetSpeakerTTS else {
             return explicitKey
         }
-        return bundledRuntimeConfig.token(forProvider: ModelProviderPreset.dataNetGateway.id) ?? ""
+        // 网关情绪男声的凭据：先包内 RuntimeConfig（随包交付），再退回钥匙串（用户已存的 datanet token）。
+        // 之前只读 RuntimeConfig，本机没放 token 文件 → 拿不到凭据 → 云端男声请求失败，这就是"还是女声/没声音"的根因。
+        let providerID = ModelProviderPreset.dataNetGateway.id
+        if let bundled = bundledRuntimeConfig.token(forProvider: providerID),
+           !bundled.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return bundled
+        }
+        return credentialStore.apiKey(forProvider: providerID) ?? ""
     }
 
     nonisolated static func fetchSpeechAudio(
