@@ -5,6 +5,7 @@ struct LingShuPendingTaskResume: Equatable {
     let prompt: String
     let source: LingShuDialogueInputSource
     let taskRecordID: String?
+    let choices: CodexRouteChoicePrompt
 }
 
 /// 任务回溯的语义匹配二次确认与候选挑选。
@@ -96,8 +97,6 @@ extension LingShuState {
         source: LingShuDialogueInputSource,
         taskRecordID: String?
     ) -> String {
-        pendingTaskResume = .init(prompt: prompt, source: source, taskRecordID: taskRecordID)
-
         var options: [CodexRouteChoiceOption] = candidates.compactMap { candidate in
             guard let taskID = candidate.taskID else { return nil }
             let detail = "\(candidate.summary.isEmpty ? "（无摘要）" : candidate.summary) · \(candidate.updatedAt.taskRecordDisplayTime) · \(candidate.matchedBy)"
@@ -111,6 +110,7 @@ extension LingShuState {
         options.append(.init(label: "都不是，按新任务开始", detail: "忽略历史，新建一个独立任务上下文。", action: "new-task"))
 
         let promptPayload = CodexRouteChoicePrompt(question: question, options: options)
+        pendingTaskResume = .init(prompt: prompt, source: source, taskRecordID: taskRecordID, choices: promptPayload)
         appendTrace(kind: .route, actor: "记忆", title: "任务回溯待确认", detail: "语义匹配置信不足，已请用户在 \(options.count) 个选项中确认。")
         appendTaskRecordMessage(taskRecordID, actor: "灵枢", role: "中枢", kind: .router, text: question)
 
@@ -123,6 +123,37 @@ extension LingShuState {
         )
         chatMessages.append(message)
         return question
+    }
+
+    func resolvePendingTaskResumeTextIfNeeded(
+        _ userReply: String,
+        source: LingShuDialogueInputSource,
+        appendUserMessage: Bool
+    ) -> String? {
+        guard let pending = pendingTaskResume,
+              let action = taskResumeAction(for: userReply, pending: pending) else {
+            return nil
+        }
+
+        if appendUserMessage {
+            chatMessages.append(.init(speaker: "你", text: userReply, isUser: true, taskRecordID: pending.taskRecordID))
+        }
+
+        if action == "needs-specific-choice" {
+            let response = "我找到了多个可继续的任务。你选第几个，我就接着推进哪个。"
+            chatMessages.append(.init(
+                speaker: "灵枢",
+                text: response,
+                isUser: false,
+                taskRecordID: pending.taskRecordID,
+                choices: pending.choices.sanitized
+            ))
+            appendTrace(kind: .route, actor: "记忆", title: "续接仍需选择", detail: "用户给出泛化继续指令，但当前存在多个候选任务。")
+            return response
+        }
+
+        performChoiceAction(action)
+        return "继续"
     }
 
     /// 选择卡上的结构化动作：resume:<taskID> 续接指定任务，new-task 开新任务。
@@ -159,5 +190,47 @@ extension LingShuState {
         }
 
         appendTrace(kind: .warning, actor: "记忆", title: "未知动作", detail: "无法识别的选择动作：\(action)。")
+    }
+
+    private func taskResumeAction(for userReply: String, pending: LingShuPendingTaskResume) -> String? {
+        let normalized = normalizeMemoryText(userReply)
+        let resumeOptions = pending.choices.options.filter { $0.action?.hasPrefix("resume:") == true }
+
+        if ["新任务", "都不是", "不是", "另起", "重新开始", "新开"].contains(where: { normalized.contains($0) }) {
+            return "new-task"
+        }
+
+        if let indexed = indexedResumeAction(from: normalized, options: pending.choices.options) {
+            return indexed
+        }
+
+        for option in pending.choices.options {
+            let label = normalizeMemoryText(option.label)
+            if !label.isEmpty, normalized.contains(label), let action = option.action {
+                return action
+            }
+        }
+
+        if LingShuMemoryTextToolkit.isAmbiguousTaskResumeRequest(userReply)
+            || ["是", "对", "这个", "继续这个", "确认", "就这个"].contains(where: { normalized.contains($0) }) {
+            guard resumeOptions.count == 1 else { return "needs-specific-choice" }
+            return resumeOptions.first?.action
+        }
+
+        return nil
+    }
+
+    private func indexedResumeAction(from normalized: String, options: [CodexRouteChoiceOption]) -> String? {
+        let indexMap: [(exact: [String], fuzzy: [String], index: Int)] = [
+            (["1", "一"], ["第1", "第一个", "第一", "1号", "选1", "选择1"], 0),
+            (["2", "二"], ["第2", "第二个", "第二", "2号", "选2", "选择2"], 1),
+            (["3", "三"], ["第3", "第三个", "第三", "3号", "选3", "选择3"], 2)
+        ]
+
+        for item in indexMap where item.exact.contains(normalized) || item.fuzzy.contains(where: { normalized.contains($0) }) {
+            guard options.indices.contains(item.index) else { return nil }
+            return options[item.index].action
+        }
+        return nil
     }
 }

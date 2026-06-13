@@ -3,6 +3,7 @@ import Foundation
 struct LingShuChatHistoryPage: Equatable {
     var messages: [ChatMessage]
     var hasMoreColdHistory: Bool
+    var contextDigest: String = ""
 }
 
 /// 聊天历史的热/冷分层存储。
@@ -14,6 +15,7 @@ final class LingShuChatHistoryStore: @unchecked Sendable {
     private let storageDirectory: URL
     private let hotFileName: String
     private let coldFileName: String
+    private let contextDigestFileName: String
     private let hotRetention: TimeInterval
     private let hotLimit: Int
     private let coldLimit: Int
@@ -24,6 +26,7 @@ final class LingShuChatHistoryStore: @unchecked Sendable {
         storageDirectory: URL = LingShuChatHistoryStore.defaultStorageDirectory(),
         hotFileName: String = "chat-hot.json",
         coldFileName: String = "chat-cold.json",
+        contextDigestFileName: String = "chat-context-digest.txt",
         hotRetention: TimeInterval = 3 * 24 * 60 * 60,
         hotLimit: Int = 600,
         coldLimit: Int = 5000
@@ -31,6 +34,7 @@ final class LingShuChatHistoryStore: @unchecked Sendable {
         self.storageDirectory = storageDirectory
         self.hotFileName = hotFileName
         self.coldFileName = coldFileName
+        self.contextDigestFileName = contextDigestFileName
         self.hotRetention = hotRetention
         self.hotLimit = hotLimit
         self.coldLimit = coldLimit
@@ -42,6 +46,10 @@ final class LingShuChatHistoryStore: @unchecked Sendable {
 
     var coldHistoryFileURL: URL {
         storageDirectory.appendingPathComponent(coldFileName)
+    }
+
+    var contextDigestFileURL: URL {
+        storageDirectory.appendingPathComponent(contextDigestFileName)
     }
 
     static func defaultStorageDirectory() -> URL {
@@ -63,7 +71,8 @@ final class LingShuChatHistoryStore: @unchecked Sendable {
 
             return LingShuChatHistoryPage(
                 messages: Array(hotMessages),
-                hasMoreColdHistory: !coldMessages.isEmpty
+                hasMoreColdHistory: !coldMessages.isEmpty,
+                contextDigest: contextDigest(for: coldMessages)
             )
         }
     }
@@ -77,10 +86,13 @@ final class LingShuChatHistoryStore: @unchecked Sendable {
 
             let page = Array(coldMessages.prefix(limit))
                 .sorted { $0.createdAt < $1.createdAt }
+            let remainingCold = Array(coldMessages.dropFirst(page.count))
+                .sorted { $0.createdAt < $1.createdAt }
 
             return LingShuChatHistoryPage(
                 messages: page,
-                hasMoreColdHistory: coldMessages.count > page.count
+                hasMoreColdHistory: coldMessages.count > page.count,
+                contextDigest: contextDigest(for: remainingCold)
             )
         }
     }
@@ -111,14 +123,19 @@ final class LingShuChatHistoryStore: @unchecked Sendable {
             .prefix(hotLimit))
             .sorted { $0.createdAt < $1.createdAt }
         let hotIDs = Set(hot.map(\.id))
-        let cold = Array(merged
+        let sortedColdCandidates = merged
             .filter { $0.createdAt < cutoff && !hotIDs.contains($0.id) }
             .sorted { $0.createdAt > $1.createdAt }
-            .prefix(coldLimit))
+        let overflowCold = Array(sortedColdCandidates.dropFirst(coldLimit))
+            .sorted { $0.createdAt < $1.createdAt }
+        let cold = Array(sortedColdCandidates.prefix(coldLimit))
             .sorted { $0.createdAt < $1.createdAt }
 
         save(hot, to: hotHistoryFileURL)
         save(cold, to: coldHistoryFileURL)
+        if !overflowCold.isEmpty {
+            saveContextDigest(contextDigest(for: overflowCold))
+        }
         cachedColdMessages = cold
     }
 
@@ -128,13 +145,18 @@ final class LingShuChatHistoryStore: @unchecked Sendable {
         let expiredHot = hot.filter { $0.createdAt < cutoff }
         guard retainedHot.count != hot.count else { return }
 
-        let cold = Array(unique(expiredHot + loadColdMessagesCached())
+        let sortedColdCandidates = unique(expiredHot + loadColdMessagesCached())
             .sorted { $0.createdAt > $1.createdAt }
-            .prefix(coldLimit))
+        let overflowCold = Array(sortedColdCandidates.dropFirst(coldLimit))
+            .sorted { $0.createdAt < $1.createdAt }
+        let cold = Array(sortedColdCandidates.prefix(coldLimit))
             .sorted { $0.createdAt < $1.createdAt }
 
         save(retainedHot.sorted { $0.createdAt < $1.createdAt }, to: hotHistoryFileURL)
         save(cold, to: coldHistoryFileURL)
+        if !overflowCold.isEmpty {
+            saveContextDigest(contextDigest(for: overflowCold))
+        }
         cachedColdMessages = cold
     }
 
@@ -169,6 +191,34 @@ final class LingShuChatHistoryStore: @unchecked Sendable {
         } catch {
             assertionFailure("Failed to save LingShu chat history: \(error.localizedDescription)")
         }
+    }
+
+    private func loadContextDigest() -> String {
+        guard let text = try? String(contentsOf: contextDigestFileURL, encoding: .utf8) else {
+            return ""
+        }
+        return text.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func saveContextDigest(_ digest: String) {
+        do {
+            try FileManager.default.createDirectory(
+                at: storageDirectory,
+                withIntermediateDirectories: true
+            )
+            try digest.write(to: contextDigestFileURL, atomically: true, encoding: .utf8)
+        } catch {
+            assertionFailure("Failed to save LingShu context digest: \(error.localizedDescription)")
+        }
+    }
+
+    private func contextDigest(for messages: [ChatMessage]) -> String {
+        let baseDigest = loadContextDigest()
+        let turns = messages
+            .filter { !$0.isLoading }
+            .map { (isUser: $0.isUser, content: $0.text) }
+        let nextDigest = LingShuContextCompressionEngine.digestText(for: turns, limit: 1600)
+        return LingShuContextCompressionEngine.mergeDigest(baseDigest, nextDigest, limit: 2200)
     }
 
     private func unique(_ messages: [ChatMessage]) -> [ChatMessage] {

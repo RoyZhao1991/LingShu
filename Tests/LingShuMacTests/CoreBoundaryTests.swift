@@ -301,6 +301,84 @@ final class CoreBoundaryTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: store.coldHistoryFileURL.path))
     }
 
+    func testColdChatHistoryContributesCompressedContextWithoutManualScroll() {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lingshu-chat-history-context-digest-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = LingShuChatHistoryStore(storageDirectory: directory, hotRetention: 3 * 24 * 60 * 60)
+        let now = Date(timeIntervalSince1970: 1_786_000_000)
+        let oldMessage = ChatMessage(
+            speaker: "你",
+            text: "五天前确定了灵枢要优先续接未完成任务",
+            isUser: true,
+            createdAt: now.addingTimeInterval(-5 * 24 * 60 * 60)
+        )
+        let recentMessage = ChatMessage(
+            speaker: "灵枢",
+            text: "当前主线程在线。",
+            isUser: false,
+            createdAt: now.addingTimeInterval(-60)
+        )
+
+        store.save([oldMessage, recentMessage], now: now)
+
+        let initial = store.loadInitialHistory(now: now)
+        XCTAssertEqual(initial.messages, [recentMessage])
+        XCTAssertTrue(initial.contextDigest.contains("未完成任务"))
+
+        let window = LingShuState.conversationWindow(
+            from: initial.messages,
+            budget: 16000,
+            excludingTrailingPromptMatching: nil,
+            persistedDigest: initial.contextDigest,
+            normalize: { $0 },
+            compact: { $0 }
+        )
+
+        XCTAssertTrue(window.first?.content.contains("压缩记忆") == true)
+        XCTAssertTrue(window.first?.content.contains("未完成任务") == true)
+        XCTAssertEqual(window.last?.content, recentMessage.text)
+    }
+
+    func testOverflowColdChatHistoryIsFoldedIntoPersistentDigest() {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lingshu-chat-history-overflow-digest-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = LingShuChatHistoryStore(
+            storageDirectory: directory,
+            hotRetention: 3 * 24 * 60 * 60,
+            coldLimit: 1
+        )
+        let now = Date(timeIntervalSince1970: 1_786_000_000)
+        let oldest = ChatMessage(
+            speaker: "你",
+            text: "七天前的超出冷备上限内容",
+            isUser: true,
+            createdAt: now.addingTimeInterval(-7 * 24 * 60 * 60)
+        )
+        let retainedCold = ChatMessage(
+            speaker: "灵枢",
+            text: "六天前的冷备内容",
+            isUser: false,
+            createdAt: now.addingTimeInterval(-6 * 24 * 60 * 60)
+        )
+        let recent = ChatMessage(
+            speaker: "你",
+            text: "今天继续",
+            isUser: true,
+            createdAt: now.addingTimeInterval(-60)
+        )
+
+        store.save([oldest, retainedCold, recent], now: now)
+
+        let initial = store.loadInitialHistory(now: now)
+        XCTAssertEqual(initial.messages, [recent])
+        XCTAssertTrue(initial.hasMoreColdHistory)
+        XCTAssertTrue(initial.contextDigest.contains("超出冷备上限内容"))
+        XCTAssertTrue(initial.contextDigest.contains("六天前的冷备内容"))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: store.contextDigestFileURL.path))
+    }
+
     func testTaskExecutionRecordKeepsRelatedHistoricalFlow() throws {
         let previous = LingShuTaskExecutionRecord.create(prompt: "帮我写一个简单的 web 爬虫")
         var current = LingShuTaskExecutionRecord.create(prompt: "继续刚才的爬虫任务")

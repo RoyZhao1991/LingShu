@@ -4,6 +4,41 @@ import Foundation
 /// 从 LingShuMemoryService 主文件拆出，保持单文件聚焦一类记忆职责。
 extension LingShuMemoryService {
 
+    /// 用户只说"继续/下一步"时，先找未完成或明确还有下一步的任务。
+    /// 单个候选高置信续接；多个候选交给上层渲染选择卡。
+    func ambiguousTaskResumeLookup(for prompt: String) -> LingShuTaskMemoryLookup? {
+        guard LingShuMemoryTextToolkit.isAmbiguousTaskResumeRequest(prompt) else { return nil }
+
+        let records = repository.loadTaskRecords()
+            .filter(Self.isContinuableTaskRecord)
+            .sorted { $0.updatedAt > $1.updatedAt }
+        guard let first = records.first else { return nil }
+
+        let candidates = records.prefix(3).map { record in
+            LingShuTaskResumeCandidate(
+                taskID: record.id,
+                title: record.title,
+                summary: record.summary,
+                updatedAt: record.updatedAt,
+                matchedBy: "未完成任务"
+            )
+        }
+        let hasSingleCandidate = records.count == 1
+
+        return .init(
+            taskID: first.id,
+            memoryStatus: hasSingleCandidate
+                ? "模糊续接指令命中一个可继续任务：\(first.title)"
+                : "模糊续接指令命中多个可继续任务，等待用户选择。",
+            restored: hasSingleCandidate,
+            hotMatch: hasSingleCandidate ? first : nil,
+            coldMatch: nil,
+            confidence: hasSingleCandidate ? .high : .medium,
+            candidates: Array(candidates),
+            explicitResume: true
+        )
+    }
+
     /// candidates 携带 top3 语义近似任务供用户挑选。
     func taskMemoryLookup(for prompt: String) -> LingShuTaskMemoryLookup {
         let tags = Set(LingShuMemoryTextToolkit.taskTags(from: prompt))
@@ -110,5 +145,22 @@ extension LingShuMemoryService {
             }
             .prefix(limit)
             .map { $0 }
+    }
+
+    private static func isContinuableTaskRecord(_ record: TaskMemoryRecord) -> Bool {
+        let status = LingShuMemoryTextToolkit.normalize(record.status)
+        let summary = LingShuMemoryTextToolkit.normalize(record.summary)
+        let nextStepSignals = [
+            "未完成", "没完成", "待", "下一步", "继续", "需要", "建议",
+            "验证", "修复", "风险", "阻断", "排队", "进行中", "inprogress",
+            "queued", "planned", "blocked", "todo"
+        ]
+        let hasNextStep = nextStepSignals.contains { summary.contains($0) || status.contains($0) }
+        let finishedSignals = ["completed", "delivered", "answered", "done", "已完成", "已交付", "完成", "交付"]
+
+        if finishedSignals.contains(where: { status.contains($0) }) {
+            return hasNextStep
+        }
+        return true
     }
 }

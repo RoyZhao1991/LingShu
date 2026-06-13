@@ -79,6 +79,63 @@ final class TaskSemanticMatchTests: XCTestCase {
         XCTAssertTrue(lookup.explicitResume, "明确回溯标记应透传给上层")
     }
 
+    func testAmbiguousResumePrefersSingleContinuableTask() {
+        let service = makeService()
+        service.rememberTask(
+            prompt: "写一个 web 爬虫",
+            status: "delivered",
+            summary: "已产出可运行爬虫代码，并建议下一步运行验证。",
+            taskID: "task-crawler"
+        )
+        service.rememberTask(
+            prompt: "修复登录 bug",
+            status: "completed",
+            summary: "已完成并交付。",
+            taskID: "task-login-done"
+        )
+
+        let lookup = service.ambiguousTaskResumeLookup(for: "继续")
+
+        XCTAssertEqual(lookup?.confidence, .high)
+        XCTAssertTrue(lookup?.restored == true)
+        XCTAssertEqual(lookup?.taskID, "task-crawler")
+    }
+
+    func testAmbiguousResumeOffersChoicesForParallelContinuableTasks() {
+        let service = makeService()
+        service.rememberTask(
+            prompt: "修复登录 bug",
+            status: "in_progress",
+            summary: "登录 bug 仍在修复中。",
+            taskID: "task-login"
+        )
+        service.rememberTask(
+            prompt: "优化语音模型",
+            status: "planned",
+            summary: "已形成方案，下一步接入验证。",
+            taskID: "task-voice"
+        )
+
+        let lookup = service.ambiguousTaskResumeLookup(for: "下一步")
+
+        XCTAssertEqual(lookup?.confidence, .medium)
+        XCTAssertFalse(lookup?.restored ?? true)
+        XCTAssertEqual(Set(lookup?.candidates.compactMap(\.taskID) ?? []), ["task-login", "task-voice"])
+    }
+
+    func testAmbiguousResumeIgnoresCompletedTaskWithoutNextStep() {
+        let service = makeService()
+        service.rememberTask(
+            prompt: "修复登录 bug",
+            status: "completed",
+            summary: "已完成并交付。",
+            taskID: "task-login-done"
+        )
+
+        XCTAssertNil(service.ambiguousTaskResumeLookup(for: "继续"))
+        XCTAssertFalse(LingShuMemoryTextToolkit.isAmbiguousTaskResumeRequest("继续说"))
+    }
+
     // MARK: - 选择卡 action 协议
 
     func testChoiceOptionDecodesActionField() throws {

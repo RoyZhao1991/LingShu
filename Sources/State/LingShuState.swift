@@ -119,6 +119,8 @@ final class LingShuState: ObservableObject {
     @Published var isTaskRecordPresented = false
     @Published var archivedTaskExecutionRecords: [LingShuTaskExecutionRecord] = []
     @Published var isExecutionConsoleExpanded = true
+    @Published var autonomousRun: LingShuAutonomousRunSnapshot = .idle
+    @Published var autonomousPermissionLevel: LingShuAutonomousPermissionLevel = .delegated
     @Published var eventLog: [String] = [
         "09:42  灵枢主线程在线，等待指令。",
         "09:42  通用 agent 能力池已注册：在线 13 / 运行 0 / 待启动 13。",
@@ -160,6 +162,9 @@ final class LingShuState: ObservableObject {
     let remoteConnectionPolicy = LingShuRemoteConnectionPolicy()
     let taskExecutionJournal = LingShuTaskExecutionJournal()
     let engineeringArtifactService = LingShuEngineeringArtifactService()
+    let autonomousEnvironmentProbe = LingShuAutonomousEnvironmentProbe()
+    let autonomousRunbookPlanner = LingShuAutonomousRunbookPlanner()
+    let autonomousSelfCheckRunner = LingShuAutonomousSelfCheckRunner()
     var missionRunID = 0
     /// 本次会话启动时间：情境上下文用它计算连续使用时长。
     let sessionStartedAt = Date()
@@ -195,6 +200,7 @@ final class LingShuState: ObservableObject {
     var pendingTaskResume: LingShuPendingTaskResume?
     var isRestoringChatHistory = false
     var chatHistoryPersistTask: Task<Void, Never>?
+    var persistedConversationDigest = ""
     /// 由根视图注入：返回当前实时态势感知上下文（无有效信号时返回空串）。
     var livePerceptionContextProvider: (() -> String)?
     /// 对话发生时按需刷新云端场景理解（根视图注册到感知网关）。
@@ -308,75 +314,6 @@ final class LingShuState: ObservableObject {
 
     var mainRoutingPermissionBoundary: String {
         "主线程路由：只做意图判断、记忆检索、任务分派和回应草拟，不直接修改工作区。"
-    }
-
-    var callChainSubtitle: String {
-        "\(agentRuntimeCounts.subtitle) · \(taskQueueSummary)"
-    }
-
-    var taskQueueSummary: String {
-        "线程 \(runningTaskThreadCount) / 排队 \(queuedTaskSegmentCount)"
-    }
-
-    var runningTaskThreadCount: Int {
-        taskThreads.filter { $0.hasRunningSegment }.count
-    }
-
-    var queuedTaskSegmentCount: Int {
-        taskThreads.reduce(0) { $0 + $1.queuedSegmentCount }
-    }
-
-    var visibleTaskThreads: [LingShuTaskThread] {
-        Array(taskThreads.filter { $0.hasRunningSegment || $0.hasQueuedSegments }.prefix(6))
-    }
-
-    var agentRuntimeCounts: LingShuAgentRuntimeCounts {
-        LingShuAgentRuntimeCounts.make(
-            agents: agents,
-            isModelConnected: isModelConnected,
-            canShowRuntime: canShowAgentRuntime
-        )
-    }
-
-    var coreStateDisplay: String {
-        switch coreState {
-        case .standby:
-            return coreState.rawValue
-        case .thinking:
-            return "\(coreState.rawValue) \(formatElapsed(thinkingElapsedSeconds))"
-        case .executing:
-            if isModelExecuting || runtimePhase != .idle {
-                return "\(coreState.rawValue) \(formatElapsed(executionElapsedSeconds))"
-            }
-            return coreState.rawValue
-        case .abnormal:
-            return "\(coreState.rawValue) \(formatElapsed(max(thinkingElapsedSeconds, executionElapsedSeconds)))"
-        }
-    }
-
-    var coreStateSubtitle: String {
-        switch coreState {
-        case .standby:
-            return "随时待命"
-        case .thinking:
-            return "已思考 \(thinkingElapsedText)"
-        case .executing:
-            return "已执行 \(executionElapsedText)"
-        case .abnormal:
-            return "异常持续 \(formatElapsed(max(thinkingElapsedSeconds, executionElapsedSeconds)))"
-        }
-    }
-
-    var thinkingElapsedText: String {
-        formatElapsed(thinkingElapsedSeconds)
-    }
-
-    var executionElapsedText: String {
-        formatElapsed(executionElapsedSeconds)
-    }
-
-    var modelHeartbeatIdleText: String {
-        formatElapsed(modelHeartbeatIdleSeconds)
     }
 
     func resetExecutionTrace(for prompt: String) {
@@ -634,6 +571,7 @@ final class LingShuState: ObservableObject {
         }
         refreshRemoteSessionStatus()
         tickMainRemoteConnectionGuard(now: now)
+        tickAutonomousRun(now: now)
 
         if hasActiveModelCall, let lastModelHeartbeatAt {
             modelHeartbeatIdleSeconds = max(0, Int(now.timeIntervalSince(lastModelHeartbeatAt)))
@@ -895,6 +833,15 @@ final class LingShuState: ObservableObject {
         guard !trimmedPrompt.isEmpty else { return "" }
         cancelMainRemoteHealthProbe(reason: "探活让路", detail: "收到用户指令，已停止后台探活，把主通道让给本轮任务。")
 
+        if let taskResumeResponse = resolvePendingTaskResumeTextIfNeeded(
+            trimmedPrompt,
+            source: source,
+            appendUserMessage: appendUserMessage
+        ) {
+            prompt = ""
+            return taskResumeResponse
+        }
+
         if let clarificationResponse = resolvePendingIntentClarificationIfNeeded(
             trimmedPrompt,
             source: source,
@@ -905,7 +852,8 @@ final class LingShuState: ObservableObject {
             return clarificationResponse
         }
 
-        let isPotentialTask = isCapabilityCollaborationRequest(trimmedPrompt)
+        var isPotentialTask = isCapabilityCollaborationRequest(trimmedPrompt)
+        var taskMemoryLookupOverride: LingShuTaskMemoryLookup?
 
         let taskRecordID = existingTaskRecordID ?? createTaskExecutionRecord(for: trimmedPrompt)
         if appendUserMessage {
@@ -930,11 +878,35 @@ final class LingShuState: ObservableObject {
         let mainMemoryContext = prepareMainThreadMemory(for: trimmedPrompt)
         appendTaskRecordMessage(taskRecordID, actor: "记忆", role: "主线程记忆", kind: .memory, text: mainMemoryContext.status)
 
+        if let autonomousResponse = handleAutonomousRunCommandIfNeeded(
+            prompt: trimmedPrompt,
+            taskRecordID: taskRecordID,
+            memoryContext: mainMemoryContext
+        ) {
+            return autonomousResponse
+        }
+
+        if forcedThreadID == nil,
+           let ambiguousLookup = memoryService.ambiguousTaskResumeLookup(for: trimmedPrompt) {
+            isPotentialTask = true
+            taskMemoryLookupOverride = ambiguousLookup
+            appendTaskRecordMessage(taskRecordID, actor: "记忆", role: "任务记忆", kind: .memory, text: ambiguousLookup.memoryStatus)
+            if let confirmation = presentTaskResumeConfirmationIfNeeded(
+                lookup: ambiguousLookup,
+                prompt: trimmedPrompt,
+                source: source,
+                taskRecordID: taskRecordID
+            ) {
+                return confirmation
+            }
+        }
+
         if let directAnswer = mainThreadDirectAnswer(for: trimmedPrompt, memoryContext: mainMemoryContext) {
             return requestLocalKnowledgeReply(for: trimmedPrompt, memoryContext: mainMemoryContext, answer: directAnswer, taskRecordID: taskRecordID)
         }
 
-        if let clarification = intentClarificationPolicy.clarification(
+        if taskMemoryLookupOverride == nil,
+           let clarification = intentClarificationPolicy.clarification(
             for: trimmedPrompt,
             memoryContext: mainMemoryContext,
             focusedTaskTitle: activeTaskThread?.prompt
@@ -957,7 +929,7 @@ final class LingShuState: ObservableObject {
         }
 
         if isPotentialTask {
-            let memoryLookup = memoryService.taskMemoryLookup(for: trimmedPrompt)
+            let memoryLookup = taskMemoryLookupOverride ?? memoryService.taskMemoryLookup(for: trimmedPrompt)
             // 置信不足时不赌——发选择卡二次确认（用户已通过 forcedThreadID 指定线程则跳过）。
             if forcedThreadID == nil,
                let confirmation = presentTaskResumeConfirmationIfNeeded(

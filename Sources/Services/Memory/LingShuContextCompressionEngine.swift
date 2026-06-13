@@ -24,6 +24,7 @@ enum LingShuContextCompressionEngine {
         messages: [ChatMessage],
         budget: Int,
         digestBudget: Int = 1200,
+        baseDigest: String = "",
         excludingTrailingPromptMatching rawPrompt: String?,
         normalize: (String) -> String,
         compact: (String) -> String
@@ -63,9 +64,10 @@ enum LingShuContextCompressionEngine {
         let verbatim = compacted[foldBoundary...]
             .filter { !$0.content.isEmpty }
             .map { LingShuModelMessage(role: $0.isUser ? "user" : "assistant", content: $0.content) }
-        let digest = foldBoundary > 0
+        let foldedDigest = foldBoundary > 0
             ? digestText(for: Array(compacted[..<foldBoundary]), limit: digestBudget)
             : ""
+        let digest = mergeDigest(baseDigest, foldedDigest, limit: digestBudget)
 
         return .init(digest: digest, verbatim: Array(verbatim), foldedTurnCount: foldBoundary)
     }
@@ -96,6 +98,14 @@ enum LingShuContextCompressionEngine {
             .init(role: "user", content: "【背景】以下是我们更早对话的压缩记忆，供你延续上下文，不需要逐条回应：\n\(trimmed)"),
             .init(role: "assistant", content: "好的，我已经衔接上更早的对话背景。")
         ]
+    }
+
+    static func mergeDigest(_ baseDigest: String, _ nextDigest: String, limit: Int = 1200) -> String {
+        let parts = [baseDigest, nextDigest]
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        guard !parts.isEmpty else { return "" }
+        return LingShuMemoryTextToolkit.compactSummary(parts.joined(separator: "\n"), limit: limit)
     }
 
     private static func clip(_ text: String, head: Int, tail: Int = 0) -> String {
