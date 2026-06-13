@@ -60,13 +60,24 @@ enum LingShuSkillLoader {
             .map { $0.trimmingCharacters(in: .whitespaces) }
             .filter { !$0.isEmpty }
 
+        // 可选的自带生成器脚本（## 生成脚本 里的代码块）：过安全门控才挂上，挡住危险代码。
+        let rawScript = extractCodeBlock(sections["生成脚本"] ?? sections["script"] ?? "")
+        var bundledScript: String?
+        var bundledScriptName: String?
+        if !rawScript.isEmpty, LingShuSkillSafetyGate.scan(rawScript).isSafe {
+            bundledScript = rawScript
+            bundledScriptName = frontmatter["script_name"]?.nonEmpty ?? "generator.py"
+        }
+
         let profile = LingShuExpertProfile(
             id: "skill-" + (frontmatter["id"]?.nonEmpty ?? fallbackID),
             title: title,
             mission: frontmatter["mission"]?.nonEmpty ?? "用户自定义专家技能。",
             knowledgeHighlights: knowledge,
             deliverableTemplate: template.isEmpty ? "# \(title) 交付\n## 内容" : template,
-            reviewChecklist: checklist.isEmpty ? ["交付物是否覆盖任务要求"] : checklist
+            reviewChecklist: checklist.isEmpty ? ["交付物是否覆盖任务要求"] : checklist,
+            bundledScript: bundledScript,
+            bundledScriptName: bundledScriptName
         )
         return .init(profile: profile, triggers: triggers)
     }
@@ -91,6 +102,23 @@ enum LingShuSkillLoader {
         }
         flush()
         return sections
+    }
+
+    /// 从小节里抽出第一个围栏代码块的内容；没有围栏则把整段当脚本。
+    private static func extractCodeBlock(_ text: String) -> String {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.contains("```") else { return trimmed }
+        let parts = trimmed.components(separatedBy: "```")
+        guard parts.count >= 2 else { return trimmed }
+        // parts[1] 是第一个 ``` 之后的内容；首行可能是语言标签（python），去掉。
+        var block = parts[1]
+        if let firstNewline = block.firstIndex(of: "\n") {
+            let firstLine = block[..<firstNewline].trimmingCharacters(in: .whitespaces)
+            if !firstLine.isEmpty, !firstLine.contains(" "), firstLine.count < 16 {
+                block = String(block[block.index(after: firstNewline)...])
+            }
+        }
+        return block.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private static func bulletLines(_ text: String) -> [String] {
@@ -121,11 +149,17 @@ struct LingShuCompositeExpertRegistry: LingShuExpertProfileProviding {
 
     func profile(for taskText: String) -> LingShuExpertProfile {
         let normalized = taskText.lowercased()
+        // ① 用户自有 skill 最优先——用户装的就是权威。
         if let matched = userSkills.first(where: { skill in
             skill.triggers.contains { normalized.contains($0.lowercased()) }
         }) {
             return matched.profile
         }
+        // ② 策展 skill 库自动引入（纯提示、质量分排序、零执行风险）——自进化 Phase 1。
+        if let curated = LingShuCuratedSkillRegistry.bestSkill(forTask: taskText) {
+            return curated.profile
+        }
+        // ③ 内置出厂专家兜底。
         return builtIn.profile(for: taskText)
     }
 

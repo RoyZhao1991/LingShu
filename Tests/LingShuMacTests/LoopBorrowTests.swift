@@ -100,7 +100,10 @@ final class SkillLoaderTests: XCTestCase {
         )
         let registry = LingShuCompositeExpertRegistry(userSkills: [userSkill])
         XCTAssertEqual(registry.profile(for: "帮我审一份采购合同").id, "skill-legal", "触发词命中应优先用户技能")
-        XCTAssertEqual(registry.profile(for: "做一个介绍杭州的PPT").id, "expert-design", "未命中回退内置")
+        // PPT 任务：没有用户 skill 时，自动引入策展 PPT skill（Phase 1 自进化），而不是通用内置专家。
+        XCTAssertEqual(registry.profile(for: "做一个介绍杭州的PPT").id, "skill-curated-ppt", "PPT 任务自动用策展 skill")
+        // 既不命中用户、也不命中策展库 → 回退内置出厂专家。
+        XCTAssertTrue(registry.profile(for: "帮我做需求分析").id.hasPrefix("expert-"), "无任何 skill 命中时回退内置")
         XCTAssertEqual(registry.reviewerProfile().id, "expert-reviewer", "评审官固定内置")
     }
 }

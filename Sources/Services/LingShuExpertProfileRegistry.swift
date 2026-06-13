@@ -13,6 +13,32 @@ struct LingShuExpertProfile: Identifiable, Equatable, Sendable {
     var deliverableTemplate: String
     /// 评审清单：审议节点按此逐条核对。
     var reviewChecklist: [String]
+    /// skill 自带的、已过安全门控的生成器脚本（如打磨好的 python-pptx 生成器）。
+    /// 非空时宿主把它写进任务工作目录，专家按逐页内容填参数后 run_command 跑它产出交付物，
+    /// 而不是每次从零现写。内置专家为 nil。
+    var bundledScript: String?
+    /// 生成器脚本落盘文件名（如 generator.py）。
+    var bundledScriptName: String?
+
+    init(
+        id: String,
+        title: String,
+        mission: String,
+        knowledgeHighlights: [String],
+        deliverableTemplate: String,
+        reviewChecklist: [String],
+        bundledScript: String? = nil,
+        bundledScriptName: String? = nil
+    ) {
+        self.id = id
+        self.title = title
+        self.mission = mission
+        self.knowledgeHighlights = knowledgeHighlights
+        self.deliverableTemplate = deliverableTemplate
+        self.reviewChecklist = reviewChecklist
+        self.bundledScript = bundledScript
+        self.bundledScriptName = bundledScriptName
+    }
 
     /// 拼进执行提示词的完整专家档案文本。
     var promptBlock: String {
