@@ -50,6 +50,9 @@ final class VoiceIOManager: ObservableObject {
     @Published var inputStatusMessage = "收音待机"
     @Published var outputStatusMessage = "发声待机"
     @Published var statusMessage = "语音待机"
+    /// 云端男声降级原因（缺凭据/请求失败等）。**持久**保留直到下一次云端合成成功才清空——
+    /// outputStatusMessage 在每句播完后会被重置成待机态，告警一闪就没；这个标记不闪，底部告警条据此常驻。
+    @Published var cloudVoiceDegradedReason: String?
     @Published var transcriptionProvider = LingShuVoiceTranscriptionProviderDescriptor.appleSpeech
     @Published private(set) var embeddedASRStatus = LingShuEmbeddedASRRuntimeLocator.senseVoiceSherpaONNXStatus()
     @Published private(set) var embeddedTTSStatus = LingShuEmbeddedTTSRuntimeLocator.sherpaONNXTTSStatus()
@@ -78,6 +81,8 @@ final class VoiceIOManager: ObservableObject {
     private var embeddedASROutputHandle: FileHandle?
     private var embeddedASRLineBuffer = ""
     var speechAudioPlayer: AVAudioPlayer?
+    /// 真流式 PCM 播放器（数据网关 /stream 边收边播时使用）；打断时一并 stop。
+    var activeStreamingPlayer: LingShuStreamingPCMPlayer?
     var activeSpeechTask: Task<Void, Never>?
     /// 分句早读队列：流式回复的整句按到达顺序排队播报；
     /// 排队/排空逻辑在 VoiceIOManager+SpeechQueue.swift。
@@ -471,6 +476,8 @@ final class VoiceIOManager: ObservableObject {
         speechQueueDrainTask = nil
         activeSpeechTask?.cancel()
         speechAudioPlayer?.stop()
+        activeStreamingPlayer?.stop()
+        activeStreamingPlayer = nil
         if speechSynthesizer.isSpeaking {
             speechSynthesizer.stopSpeaking(at: .immediate)
         }

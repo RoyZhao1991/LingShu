@@ -29,6 +29,8 @@ extension VoiceIOManager {
 
         activeSpeechTask?.cancel()
         speechAudioPlayer?.stop()
+        activeStreamingPlayer?.stop()
+        activeStreamingPlayer = nil
         if speechSynthesizer.isSpeaking {
             speechSynthesizer.stopSpeaking(at: .immediate)
         }
@@ -53,7 +55,9 @@ extension VoiceIOManager {
         // 网关男声需要 token；读不到就别发空请求——直接说明原因并降级，让"为什么是本机生硬音"一眼可诊断。
         if provider.kind == .dataNetSpeakerTTS,
            apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            setOutputStatus("云端男声缺凭据（钥匙串未读到 datanet token），已降级本机语音")
+            let reason = "云端男声缺凭据（未读到 datanet token），已降级本机语音"
+            cloudVoiceDegradedReason = reason
+            setOutputStatus(reason)
             speakWithAppleSpeech(cleanedText, statusAlreadySet: true)
             return
         }
@@ -65,6 +69,15 @@ extension VoiceIOManager {
             do {
                 if provider.kind == .embeddedSherpaONNXTTS {
                     try await self.speakWithEmbeddedSherpaONNXTTS(cleanedText, provider: provider, persona: persona)
+                } else if provider.supportsStreaming {
+                    // 真流式：整段文本交给 /stream，服务端边合成边吐 PCM，首块一到就出声（豆包式低延迟）。
+                    try await self.speakWithStreamingSpeechService(
+                        cleanedText,
+                        provider: provider,
+                        endpoint: endpoint,
+                        apiKey: apiKey,
+                        persona: persona
+                    )
                 } else if segments.count > 1 {
                     try await self.speakWithLowLatencySpeechService(
                         segments,
@@ -86,11 +99,82 @@ extension VoiceIOManager {
                 self.isSpeaking = false
                 self.setOutputStatus(self.outputStandbyStatus(for: provider))
             } catch {
-                // 云端男声请求失败（网关异常/鉴权失败）：显示原因并降级本机语音兜底。
-                self.setOutputStatus("云端男声请求失败（\(String(describing: error).prefix(50))），已降级本机语音")
+                // 云端男声请求失败（网关异常/超时/鉴权失败）：显示原因并降级本机语音兜底。
+                let reason = "云端男声请求失败（\(Self.shortFailureReason(error))），已降级本机语音"
+                self.cloudVoiceDegradedReason = reason
+                self.setOutputStatus(reason)
                 self.speakWithAppleSpeech(cleanedText, statusAlreadySet: true)
             }
         }
+    }
+
+    /// 真流式发声：POST 到 /stream，用 URLSession.bytes 边收边喂给 PCM 播放器——首块即出声、中途可打断。
+    private func speakWithStreamingSpeechService(
+        _ text: String,
+        provider: LingShuSpeechOutputProviderDescriptor,
+        endpoint: String,
+        apiKey: String,
+        persona: LingShuSpeechPersona
+    ) async throws {
+        let request = try LingShuSpeechOutputServiceContract.makeURLRequest(
+            endpoint: endpoint,
+            provider: provider,
+            persona: persona,
+            text: text,
+            apiKey: apiKey
+        )
+        let (bytes, response) = try await URLSession.shared.bytes(for: request)
+        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+            throw LingShuVoiceError.embeddedRuntimeLaunchFailed("流式 TTS HTTP 状态异常")
+        }
+
+        isSpeaking = true
+        setOutputStatus("正在发声（流式）")
+
+        var headerBytes: [UInt8] = []
+        var pcmBatch = Data()
+        var player: LingShuStreamingPCMPlayer?
+        let flushThreshold = 3200   // ≈100ms @16kHz/16-bit：小到低延迟、又不至于碎成太多 buffer。
+
+        do {
+            for try await byte in bytes {
+                try Task.checkCancellation()
+                if player == nil {
+                    headerBytes.append(byte)
+                    guard let located = LingShuStreamingWAVHeader.locate(in: headerBytes) else { continue }
+                    guard let started = LingShuStreamingPCMPlayer(sampleRate: located.sampleRate) else {
+                        throw LingShuVoiceError.embeddedRuntimeLaunchFailed("流式播放器初始化失败")
+                    }
+                    try started.start()
+                    player = started
+                    activeStreamingPlayer = started
+                    cloudVoiceDegradedReason = nil   // 流式拿到音频，清掉之前的降级标记。
+                    if located.pcmStart < headerBytes.count {
+                        started.enqueue(pcm16: Data(headerBytes[located.pcmStart...]))
+                    }
+                } else {
+                    pcmBatch.append(byte)
+                    if pcmBatch.count >= flushThreshold {
+                        player?.enqueue(pcm16: pcmBatch)
+                        pcmBatch.removeAll(keepingCapacity: true)
+                    }
+                }
+            }
+        } catch is CancellationError {
+            player?.stop()
+            activeStreamingPlayer = nil
+            throw CancellationError()
+        }
+
+        guard let player else {
+            throw LingShuVoiceError.embeddedRuntimeLaunchFailed("流式 TTS 未返回有效音频")
+        }
+        if !pcmBatch.isEmpty { player.enqueue(pcm16: pcmBatch) }
+
+        await player.finishAndDrain()
+        activeStreamingPlayer = nil
+        isSpeaking = false
+        setOutputStatus(outputStandbyStatus(for: provider))
     }
 
     private func speakWithLowLatencySpeechService(
@@ -199,6 +283,10 @@ extension VoiceIOManager {
         player.prepareToPlay()
         player.isMeteringEnabled = true
         isSpeaking = true
+        // 云端男声这次合成+播放成功 → 清掉降级告警（底部告警条随之消失）。
+        if provider.kind == .dataNetSpeakerTTS {
+            cloudVoiceDegradedReason = nil
+        }
         player.play()
 
         let duration = max(player.duration, 0.25)
@@ -290,6 +378,19 @@ extension VoiceIOManager {
             return bundled
         }
         return credentialStore.apiKey(forProvider: providerID) ?? ""
+    }
+
+    /// 把底层错误压成一句人话，优先把"超时"点名出来（这是云端 TTS 最常见的降级原因）。
+    nonisolated static func shortFailureReason(_ error: Error) -> String {
+        if let urlError = error as? URLError {
+            switch urlError.code {
+            case .timedOut: return "请求超时"
+            case .notConnectedToInternet, .networkConnectionLost: return "网络中断"
+            case .cannotConnectToHost, .cannotFindHost: return "网关连不上"
+            default: return "网络错误 \(urlError.code.rawValue)"
+            }
+        }
+        return String(describing: error).prefix(40).description
     }
 
     nonisolated static func fetchSpeechAudio(
