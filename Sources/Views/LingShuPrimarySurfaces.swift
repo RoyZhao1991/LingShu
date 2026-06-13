@@ -167,8 +167,13 @@ struct LingShuStableTopBar: View {
     @ObservedObject var voice: VoiceIOManager
     @ObservedObject var vision: VisionIOManager
     @ObservedObject var perceptionGateway: LingShuRealtimePerceptionGateway
+    @State private var headerWidth: CGFloat = 1400
 
     var body: some View {
+        // 顶栏随窗口宽度自适应：空间不足时先隐藏状态类文字，再紧到只剩导航图标——
+        // 不再被压缩换行。
+        let dense = headerWidth < 1300      // 隐藏感知值 / STATE·AUTO·TRUST / 副标题
+        let compact = headerWidth < 1080    // 进一步：导航也只剩图标
         HStack(spacing: 16) {
             HStack(spacing: 11) {
                 ZStack {
@@ -184,11 +189,13 @@ struct LingShuStableTopBar: View {
                     Text("灵枢")
                         .font(.system(size: 18, weight: .semibold))
                         .foregroundStyle(.white)
-                    Text("LINGSHU · GENERAL AGENT HUB")
-                        .font(.system(size: 8.5, weight: .bold, design: .monospaced))
-                        .tracking(1.8)
-                        .foregroundStyle(Color.lingHolo.opacity(0.6))
-                        .lineLimit(1)
+                    if !dense {
+                        Text("LINGSHU · GENERAL AGENT HUB")
+                            .font(.system(size: 8.5, weight: .bold, design: .monospaced))
+                            .tracking(1.8)
+                            .foregroundStyle(Color.lingHolo.opacity(0.6))
+                            .lineLimit(1)
+                    }
                 }
             }
 
@@ -196,7 +203,8 @@ struct LingShuStableTopBar: View {
                 state: state,
                 voice: voice,
                 vision: vision,
-                perceptionGateway: perceptionGateway
+                perceptionGateway: perceptionGateway,
+                compact: dense
             )
 
             Spacer()
@@ -208,9 +216,15 @@ struct LingShuStableTopBar: View {
                         state.selectedSurface = surface
                     } label: {
                         VStack(spacing: 5) {
-                            Label(surface.rawValue, systemImage: surface.icon)
-                                .font(.system(size: 12.5, weight: .semibold))
-                                .foregroundStyle(isSelected ? Color.lingHolo : .white.opacity(0.6))
+                            Group {
+                                if compact {
+                                    Image(systemName: surface.icon)
+                                } else {
+                                    Label(surface.rawValue, systemImage: surface.icon)
+                                }
+                            }
+                            .font(.system(size: compact ? 15 : 12.5, weight: .semibold))
+                            .foregroundStyle(isSelected ? Color.lingHolo : .white.opacity(0.6))
                             Rectangle()
                                 .fill(isSelected ? Color.lingHolo : .clear)
                                 .frame(height: 2)
@@ -221,14 +235,17 @@ struct LingShuStableTopBar: View {
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
+                    .help(surface.rawValue)
                 }
             }
 
-            TimelineView(.periodic(from: .now, by: 1)) { _ in
-                LingShuHUDReadout(label: "STATE", value: state.coreStateDisplay, color: state.coreState.color)
+            if !dense {
+                TimelineView(.periodic(from: .now, by: 1)) { _ in
+                    LingShuHUDReadout(label: "STATE", value: state.coreStateDisplay, color: state.coreState.color)
+                }
+                LingShuHUDReadout(label: "AUTO", value: state.autonomousRunDisplayStatus, color: state.autonomousRun.isActive ? .orange : .lingFaint)
+                LingShuHUDReadout(label: "TRUST", value: "\(state.trustScore)%", color: .lingHolo)
             }
-            LingShuHUDReadout(label: "AUTO", value: state.autonomousRunDisplayStatus, color: state.autonomousRun.isActive ? .orange : .lingFaint)
-            LingShuHUDReadout(label: "TRUST", value: "\(state.trustScore)%", color: .lingHolo)
 
             Button {
                 if !state.autonomousRun.isActive {
@@ -276,6 +293,13 @@ struct LingShuStableTopBar: View {
         .padding(.horizontal, 22)
         .padding(.vertical, 10)
         .background(Color.black.opacity(0.6))
+        .background {
+            GeometryReader { proxy in
+                Color.clear.onChange(of: proxy.size.width, initial: true) { _, newWidth in
+                    headerWidth = newWidth
+                }
+            }
+        }
         .overlay(alignment: .bottom) {
             LinearGradient(
                 colors: [.clear, Color.lingHolo.opacity(0.55), .clear],

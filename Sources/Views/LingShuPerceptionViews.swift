@@ -5,21 +5,24 @@ struct LingShuTopPerceptionStrip: View {
     @ObservedObject var voice: VoiceIOManager
     @ObservedObject var vision: VisionIOManager
     @ObservedObject var perceptionGateway: LingShuRealtimePerceptionGateway
+    /// 顶栏空间不足时只显示圆点+单字（隐藏状态值文字）。
+    var compact: Bool = false
     @State private var isDetailPresented = false
 
     var body: some View {
         Button {
             isDetailPresented.toggle()
         } label: {
-            HStack(spacing: 10) {
-                PerceptionDotStatus(title: "耳", value: earStatusText, isActive: state.voiceWakeListeningEnabled)
-                PerceptionDotStatus(title: "嘴", value: mouthStatusText, isActive: mouthIsActive)
-                PerceptionDotStatus(title: "眼", value: vision.isCameraRunning ? "看" : "待机", isActive: vision.isCameraRunning)
-                PerceptionDotStatus(title: "主", value: perceptionGateway.ownerIdentitySnapshot.shortStatus, isActive: perceptionGateway.isOwnerIdentityLocked)
+            HStack(spacing: compact ? 8 : 10) {
+                PerceptionDotStatus(title: "耳", value: earStatusText, isActive: state.voiceWakeListeningEnabled, compact: compact)
+                PerceptionDotStatus(title: "嘴", value: mouthStatusText, isActive: mouthIsActive, compact: compact)
+                PerceptionDotStatus(title: "眼", value: vision.isCameraRunning ? "看" : "待机", isActive: vision.isCameraRunning, compact: compact)
+                PerceptionDotStatus(title: "主", value: perceptionGateway.ownerIdentitySnapshot.shortStatus, isActive: perceptionGateway.isOwnerIdentityLocked, compact: compact)
                 PerceptionDotStatus(
                     title: "析",
                     value: perceptionGateway.isRemoteRouteActive ? "模型" : "本地",
-                    isActive: !perceptionGateway.statusText.contains("中断")
+                    isActive: !perceptionGateway.statusText.contains("中断"),
+                    compact: compact
                 )
             }
             .padding(.horizontal, 10)
@@ -83,6 +86,8 @@ struct PerceptionDotStatus: View {
     let title: String
     let value: String
     let isActive: Bool
+    /// 空间不足时只保留圆点+单字标题，隐藏状态值文字（避免被压缩/换行）。
+    var compact: Bool = false
 
     var body: some View {
         HStack(spacing: 5) {
@@ -95,10 +100,12 @@ struct PerceptionDotStatus: View {
                 .font(.system(size: 11.5, weight: .bold))
                 .foregroundStyle(.white.opacity(0.86))
 
-            Text(value)
-                .font(.system(size: 10.5, weight: .semibold))
-                .foregroundStyle(.white.opacity(0.48))
-                .lineLimit(1)
+            if !compact {
+                Text(value)
+                    .font(.system(size: 10.5, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.48))
+                    .lineLimit(1)
+            }
         }
     }
 }
