@@ -19,7 +19,11 @@ extension LingShuState {
         excludingCurrentRawPrompt rawPrompt: String,
         budget: Int = LingShuState.conversationContextBudget
     ) -> [LingShuModelMessage] {
-        var history = recentConversationTurns(budget: budget, excludingTrailingPromptMatching: rawPrompt)
+        var history = recentConversationTurns(
+            budget: budget,
+            excludingTrailingPromptMatching: rawPrompt,
+            persistedDigest: persistedConversationDigest
+        )
         history.append(.init(role: "user", content: finalUserPrompt))
         return history
     }
@@ -29,7 +33,8 @@ extension LingShuState {
     func backgroundConversationMessages(excludingTrailingPromptMatching rawPrompt: String) -> [LingShuModelMessage] {
         recentConversationTurns(
             budget: LingShuState.conversationContextBudget,
-            excludingTrailingPromptMatching: rawPrompt
+            excludingTrailingPromptMatching: rawPrompt,
+            persistedDigest: persistedConversationDigest
         )
     }
 
@@ -40,12 +45,14 @@ extension LingShuState {
         from messages: [ChatMessage],
         budget: Int,
         excludingTrailingPromptMatching rawPrompt: String?,
+        persistedDigest: String = "",
         normalize: (String) -> String,
         compact: (String) -> String
     ) -> [LingShuModelMessage] {
         let composition = LingShuContextCompressionEngine.compose(
             messages: messages,
             budget: budget,
+            baseDigest: persistedDigest,
             excludingTrailingPromptMatching: rawPrompt,
             normalize: normalize,
             compact: compact
@@ -55,12 +62,14 @@ extension LingShuState {
 
     private func recentConversationTurns(
         budget: Int,
-        excludingTrailingPromptMatching rawPrompt: String
+        excludingTrailingPromptMatching rawPrompt: String,
+        persistedDigest: String
     ) -> [LingShuModelMessage] {
         LingShuState.conversationWindow(
             from: chatMessages,
             budget: budget,
             excludingTrailingPromptMatching: rawPrompt,
+            persistedDigest: persistedDigest,
             normalize: { self.normalizeMemoryText($0) },
             compact: { LingShuState.compactForModelContext($0) }
         )

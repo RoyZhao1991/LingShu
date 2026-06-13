@@ -11,6 +11,8 @@ struct LingShuRuntimeSurface: View {
             VStack(spacing: 14) {
                 LingShuCoreHeader(state: state, voice: voice)
 
+                LingShuAutonomousRunPanel(state: state)
+
                 LingShuExecutionConsoleView(state: state)
                     .frame(maxHeight: .infinity)
             }

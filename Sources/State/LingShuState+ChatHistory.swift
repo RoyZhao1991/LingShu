@@ -13,6 +13,7 @@ extension LingShuState {
             existingIDs: existingIDs
         )
         hasMoreColdChatHistory = page.hasMoreColdHistory
+        persistedConversationDigest = page.contextDigest
         guard !page.messages.isEmpty else { return }
 
         chatMessages = page.messages + chatMessages
@@ -24,6 +25,7 @@ extension LingShuState {
 
         let page = chatHistoryStore.loadInitialHistory()
         hasMoreColdChatHistory = page.hasMoreColdHistory
+        persistedConversationDigest = page.contextDigest
         if !page.messages.isEmpty {
             chatMessages = page.messages
         }

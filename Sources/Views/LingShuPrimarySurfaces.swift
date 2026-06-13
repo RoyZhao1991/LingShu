@@ -227,7 +227,25 @@ struct LingShuStableTopBar: View {
             TimelineView(.periodic(from: .now, by: 1)) { _ in
                 LingShuHUDReadout(label: "STATE", value: state.coreStateDisplay, color: state.coreState.color)
             }
+            LingShuHUDReadout(label: "AUTO", value: state.autonomousRunDisplayStatus, color: state.autonomousRun.isActive ? .orange : .lingFaint)
             LingShuHUDReadout(label: "TRUST", value: "\(state.trustScore)%", color: .lingHolo)
+
+            Button {
+                if !state.autonomousRun.isActive {
+                    state.prepareAutonomousRun()
+                }
+                state.selectedSurface = .runtime
+            } label: {
+                Image(systemName: state.autonomousRun.isActive ? "bolt.circle.fill" : "bolt.circle")
+                    .font(.system(size: 15, weight: .bold))
+                    .foregroundStyle(state.autonomousRun.isActive ? Color.lingVoid : Color.lingHolo)
+                    .frame(width: 34, height: 30)
+                    .background(state.autonomousRun.isActive ? Color.orange : Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+                    .overlay { LingShuHUDCorners(accent: state.autonomousRun.isActive ? .orange : .lingHolo, cornerLength: 7) }
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("准备独立运行模式")
 
             Button {
                 state.isMinimalVoiceMode = true
