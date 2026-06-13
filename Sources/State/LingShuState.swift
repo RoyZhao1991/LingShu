@@ -36,7 +36,7 @@ enum LingShuDialogueInputSource: Equatable {
 final class LingShuState: ObservableObject {
     @Published var selectedSurface: AppSurface = .chat
     @Published var selectedNav: NavItem = .command
-    @Published var prompt: String = "我要做一个任务：让用户用语音向灵枢提交目标，由需要的能力节点分析、推进、执行、验证并最终交付。"
+    @Published var prompt: String = ""
     @Published var isListening = false
     @Published var missionTitle = "待机中"
     @Published var missionStatus = "我在。能力池已注册，等待你的目标。"

@@ -203,10 +203,11 @@ extension VoiceIOManager {
 
     private func speakWithAppleSpeech(_ cleanedText: String, statusAlreadySet: Bool = false) {
         let utterance = AVSpeechUtterance(string: cleanedText)
-        utterance.voice = preferredChineseVoice()
+        let voice = preferredChineseVoice()
+        utterance.voice = voice
         utterance.rate = 0.45
-        // 压低音高，贴近沉稳男声（贾维斯式）；中文 Eloquence 嗓偏中性，靠降 pitch 强化男性化。
-        utterance.pitchMultiplier = 0.82
+        // 有真男声（如用户下载的 Li-mu）用自然音高；本机只剩女声兜底时大幅压低音高近似男声。
+        utterance.pitchMultiplier = (voice?.gender == .male) ? 0.92 : 0.68
         utterance.volume = 1.0
 
         isSpeaking = true
@@ -229,32 +230,28 @@ extension VoiceIOManager {
     /// 这正是之前"灵枢说话是女声"的根因：旧逻辑虽优先 Eloquence 但首选嗓偏中性，听感像女声。
     /// 这里：先取 API 明确标记的男声（用户若下载了 Li-mu 等高质量神经男声会优先命中），
     /// 否则按名单锁定 Eloquence 男声并排除已知女声；实在没有才退回默认。
+    /// 选一个**能发声的**中文男声（贾维斯式沉稳男声为目标）。
+    /// 关键坑：macOS 自带 Eloquence 中文嗓（Eddy/Reed/Rocko/Grandpa…）在本机实测**渲染为静音**
+    /// （0.016s 空音频）——之前选了它就"没声音"。所以一律跳过 Eloquence，避免哑嗓。
+    /// 真男声（用户下载的 Li-mu 等高质量神经男声，gender==.male）优先；本机若只剩女声，
+    /// 退回最佳可发声中文嗓，由 speakWithAppleSpeech 压低音高近似男声。
     private func preferredChineseVoice() -> AVSpeechSynthesisVoice? {
-        let chineseVoices = AVSpeechSynthesisVoice.speechVoices().filter { $0.language.hasPrefix("zh") }
-        // Eloquence 约定男声 / 女声名单（含 Li-mu：zh-CN 高质量男声，需用户在系统设置下载）。
-        let maleNames: Set<String> = ["Li-mu", "Eddy", "Rocko", "Grandpa", "Reed"]
-        let femaleNames: Set<String> = ["Tingting", "Meijia", "Sinji", "Flo", "Grandma", "Sandy", "Shelley"]
+        let zh = AVSpeechSynthesisVoice.speechVoices().filter { $0.language.hasPrefix("zh") }
+        let audible = zh.filter { !$0.identifier.contains(".eloquence.") }
+        let pool = audible.isEmpty ? zh : audible
 
-        func isMale(_ voice: AVSpeechSynthesisVoice) -> Bool {
-            if voice.gender == .male { return true }
-            if voice.gender == .female || femaleNames.contains(voice.name) { return false }
-            return maleNames.contains(voice.name)
+        // 优先真正的男声（用户在系统设置下载 zh-CN 男声后命中，自然男声）。
+        if let male = pool.filter({ $0.gender == .male })
+            .sorted(by: { $0.quality.rawValue > $1.quality.rawValue })
+            .first {
+            return male
         }
 
-        let nameRank: (String) -> Int = { name in
-            ["Li-mu": 0, "Eddy": 1, "Rocko": 2, "Grandpa": 3, "Reed": 4][name] ?? 5
-        }
-        let maleVoices = chineseVoices.filter(isMale).sorted { lhs, rhs in
+        // 本机没有可发声的中文男声：退回最佳可发声中文嗓（优先 zh-CN、再优先高音质）。
+        return pool.sorted { lhs, rhs in
             if (lhs.language == "zh-CN") != (rhs.language == "zh-CN") { return lhs.language == "zh-CN" }
-            if lhs.quality.rawValue != rhs.quality.rawValue { return lhs.quality.rawValue > rhs.quality.rawValue }
-            return nameRank(lhs.name) < nameRank(rhs.name)
-        }
-        if let best = maleVoices.first {
-            return best
-        }
-
-        // 没有任何男声可用：退回中文默认（pitch 已压低，尽量中性）。
-        return AVSpeechSynthesisVoice(language: "zh-CN") ?? chineseVoices.first
+            return lhs.quality.rawValue > rhs.quality.rawValue
+        }.first ?? AVSpeechSynthesisVoice(language: "zh-CN")
     }
 
     func outputStandbyStatus(for provider: LingShuSpeechOutputProviderDescriptor) -> String {

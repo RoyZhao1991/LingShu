@@ -247,7 +247,7 @@ struct LingShuInputDock: View {
                 LingShuAttachmentTray(state: state)
             }
 
-            TextField("向灵枢下达需求、任务或约束...", text: $state.prompt, axis: .vertical)
+            TextField("", text: $state.prompt, axis: .vertical)
                 .textFieldStyle(.plain)
                 .font(.system(size: 15.5, weight: .medium))
                 .foregroundStyle(.white)
@@ -259,6 +259,15 @@ struct LingShuInputDock: View {
                     cornerLength: 10,
                     fillOpacity: 0.06
                 )
+                // 输入框为空时，中心位置显示提示语；一旦开始输入即隐藏。
+                .overlay(alignment: .center) {
+                    if state.prompt.isEmpty {
+                        Text("有什么需要我做的？")
+                            .font(.system(size: 15.5, weight: .medium))
+                            .foregroundStyle(.white.opacity(0.32))
+                            .allowsHitTesting(false)
+                    }
+                }
                 .overlay(alignment: .bottomTrailing) {
                     if voice.isRecording {
                         HStack(spacing: 6) {
