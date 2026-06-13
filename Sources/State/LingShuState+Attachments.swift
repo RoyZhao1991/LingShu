@@ -55,6 +55,16 @@ extension LingShuState {
         }
     }
 
+    /// 剪贴板粘贴进来的图片：落临时 PNG 后走与上传**完全相同**的解析管线
+    /// （图片 → 云视觉 → 文字描述 → 注入模型输入；零留存边界不变）。
+    func ingestPastedImage(_ data: Data) {
+        let stamp = Int(Date().timeIntervalSince1970)
+        let tempURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("粘贴图片-\(stamp)-\(UUID().uuidString.prefix(6)).png")
+        guard (try? data.write(to: tempURL)) != nil else { return }
+        ingestAttachment(at: tempURL)
+    }
+
     func removeAttachment(_ id: UUID) {
         pendingAttachments.removeAll { $0.id == id }
     }

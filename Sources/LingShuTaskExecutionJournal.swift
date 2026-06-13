@@ -6,6 +6,7 @@ enum LingShuTaskExecutionStatus: String, Codable, Equatable, Sendable {
     case answered = "已直接回答"
     case dispatched = "已分派"
     case completed = "已完成"
+    case needsRevision = "未达标"
     case blocked = "异常"
 }
 

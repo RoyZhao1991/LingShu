@@ -71,11 +71,25 @@ extension LingShuState {
             useStreaming: shouldUseLocalStreamingDialogue
         )
         let expert = expertProfileRegistry.profile(for: userPrompt + " " + route.agents.map(\.task).joined(separator: " "))
+        // 留痕本轮主笔专家及来源——让"到底用没用 skill"在执行窗一眼可查。
+        let expertSource = expert.id.hasPrefix("skill-curated-") ? "策展 skill"
+            : (expert.id.hasPrefix("skill-") ? "用户 skill" : "内置出厂专家")
+        appendTaskRecordMessage(taskRecordID, actor: "调度", role: "专家选择", kind: .router, text: "本轮主笔专家：\(expert.title)（来源：\(expertSource)）。")
+        appendTrace(kind: .route, actor: "调度", title: "专家选择", detail: "\(expert.title)（\(expertSource)）")
         let reviewer = expertProfileRegistry.reviewerProfile()
         let threadID = activeTaskThread?.id
         let inherited = taskIterationContext(threadID: threadID, currentRecordID: taskRecordID)
         // 任务级文件隔离：每个管线在独立子目录落盘，并行任务互不污染。
         let taskWorkDir = makeTaskWorkingDirectory(for: threadID ?? taskRecordID ?? UUID().uuidString)
+        // skill 自带且已过安全门控的生成器：写进工作目录，专家直接跑它产出交付物（不用从零写）。
+        var bundledScriptHint = ""
+        if let script = expert.bundledScript, let scriptName = expert.bundledScriptName {
+            let scriptURL = URL(fileURLWithPath: taskWorkDir).appendingPathComponent(scriptName)
+            if (try? script.write(to: scriptURL, atomically: true, encoding: .utf8)) != nil {
+                bundledScriptHint = "\n本 skill 自带的生成器已就绪：\(scriptURL.path)（设计系统已内置、已过安全门控）。按交付模板把内容写成数据文件后，用 run_command 跑它产出真交付物，不要从零另写生成代码。\n"
+                appendTaskRecordMessage(taskRecordID, actor: "调度", role: "技能装配", kind: .router, text: "已装配 \(expert.title) 自带生成器 \(scriptName)（安全门控通过），写入工作目录。")
+            }
+        }
         // 借鉴文章：召回同领域经验规则注入规划，避免重复踩坑（记忆复利）。
         let experienceRules = memoryService.recallExperienceRules(for: userPrompt)
         let pipelineToken = UUID()
@@ -125,10 +139,14 @@ extension LingShuState {
                 self.appendTaskRecordMessage(taskRecordID, actor: "规划", role: LingShuExpertProfileRegistry.projectManager.title, kind: .agent, text: plan)
 
                 // ② 草稿：领域专家按模板产出交付物，流式上屏。
+                // 专家是**一条长命 agent 对话**：草稿 + 后续所有重做共享 expertThread，全程持续记忆
+                // （工具调用 + 报错都留着），重做时带着前情继续——撞墙换方法，不再从零重撞。
+                let expertThread = LingShuAgentThread()
                 self.missionTitle = "专家产出中"
                 self.missionStatus = "\(expert.title)正在按模板产出交付物草稿。"
                 let draftPrompt = """
                 按你的专家档案产出本任务的完整交付物。要求：完整可落地，不要大纲后停下反问，不要提及内部流程。
+                需要在本机真实执行（生成文件、安装依赖、运行验证）就直接发 run_command，宿主会请用户授权后执行。\(bundledScriptHint)
                 执行计划与验收标准（产出必须满足）：
                 \(plan)
                 \(inherited.isEmpty ? "" : "前序迭代上下文：\n\(inherited)\n")
@@ -143,32 +161,61 @@ extension LingShuState {
                     taskRecordID: taskRecordID,
                     workingDirectory: taskWorkDir,
                     streamInto: bubbleID,
+                    thread: expertThread,
                     probe: &probe
                 )
                 self.appendTaskRecordMessage(taskRecordID, actor: "执行", role: expert.title, kind: .agent, text: draft)
 
-                // ③+④ 评审-纠正循环：评审官按验收标准逐条 ✅/❌ 核对（checklist 驱动，
-                // 不是给一句总评），全部通过才算过；任一不达标就打回——最多三轮（保险丝）。
+                // ③+④ 目标驱动循环：评审官按验收标准逐条 ✅/❌ 核对（含真实落盘产物），全部达标才算过；
+                // 没达标就打回重做——**不设轮次上限，做到达标为止**。只有连续多轮压不下未达标项（真卡死）才交回用户，
+                // 这是"无进展"探测、不是预算封顶（在持续进步时永不触发）。
                 var finalDraft = draft
                 var correctionRounds = 0
-                var lastCritique = ""
                 var reviewPassed = false
+                var lastCritique = ""
+                var bestFailedCount = Int.max
+                var noProgressRounds = 0
+                var stuckHandoff = false
+                // 固定时间戳：每轮按当前稿件重建交付文件、覆盖同一份（不堆积一堆 .pptx）。
+                let artifactBuildClock = Date()
+                var registeredArtifactLocations = Set<String>()
                 let criteriaBlock = "验收标准：\n\(plan)\n专家检查清单：\n\(expert.reviewChecklist.map { "- \($0)" }.joined(separator: "\n"))"
-                while correctionRounds <= 3 {
-                    self.missionTitle = "评审中"
+
+                while true {
+                    self.missionTitle = correctionRounds == 0 ? "落地+评审中" : "落地+评审中（第 \(correctionRounds) 轮重做）"
                     self.missionStatus = correctionRounds == 0
-                        ? "评审官正在逐条核对验收标准。"
-                        : "评审官正在复核第 \(correctionRounds) 轮修订稿。"
+                        ? "正在把草稿落成真实交付文件并逐条核对验收标准。"
+                        : "正在把第 \(correctionRounds) 轮重做稿落成真实文件并复核。"
+
+                    // 关键修复：把当前稿件**先落成真实交付文件**（宿主确定性构建真 .pptx/.docx 等），
+                    // 再交验收官核对——杜绝"交付物只在 conclude 才构建，验收期间盘上根本没文件→永远判❌→放弃"的死锁。
+                    let landed = self.engineeringArtifactService.materializeArtifacts(
+                        prompt: userPrompt, route: route, reply: finalDraft,
+                        workingDirectory: taskWorkDir, now: artifactBuildClock
+                    )
+                    let realFiles = landed.filter { FileManager.default.fileExists(atPath: $0.location) }
+                    for file in realFiles where !registeredArtifactLocations.contains(file.location) {
+                        self.appendTaskRecordArtifact(taskRecordID, title: file.title, location: file.location, producer: file.producer)
+                        registeredArtifactLocations.insert(file.location)
+                    }
+                    let realFilesBlock = realFiles.isEmpty
+                        ? "已真实落盘的文件：（无——本轮没能产出任何真实交付文件）"
+                        : "已真实落盘的文件（盘上确实存在，据此核对\"必须产出文件\"类标准）：\n"
+                            + realFiles.map { "- \($0.title)：\($0.location)" }.joined(separator: "\n")
+
                     let critiquePrompt = """
-                    逐条核对下面的\(correctionRounds == 0 ? "草稿" : "第 \(correctionRounds) 轮修订稿")是否满足每一条验收标准与检查清单。
+                    逐条核对下面的\(correctionRounds == 0 ? "草稿" : "第 \(correctionRounds) 轮重做稿")是否满足每一条验收标准与检查清单。
                     \(criteriaBlock)
-                    \(correctionRounds == 0 ? "" : "上一轮评审意见（核对是否已落实）：\n\(lastCritique)\n")
+                    \(realFilesBlock)
                     待评审稿：
                     \(finalDraft)
 
+                    核对规则：凡是"必须产出某文件/实物"的标准，以**上面真实落盘文件清单**为准——稿件里只声明"脚本已就绪/稍后生成"而盘上没有对应文件，该条判 ❌。
                     输出格式（严格遵守）：
-                    先逐条列出每一条标准的核对结果，每行以 ✅ 或 ❌ 开头，❌ 必须写明缺什么、怎么改。
-                    最后单独一行给结论：所有条目都 ✅ 写「结论：通过」，只要有一条 ❌ 写「结论：需修正」。
+                    1. 先逐条核对每一条标准，写清达标 / 未达标及理由（未达标必须写缺什么、怎么改）。
+                    2. 然后**另起一行**输出机器统计，格式固定、只数标准条目本身（每条标准算一条，不要把说明/举例/引用里的 ✅❌ 算进去）：
+                       核对统计 PASS=<达标条数> FAIL=<未达标条数>
+                    3. 最后单独一行给结论：全部达标写「结论：通过」，只要有未达标写「结论：需修正」。
                     """
                     let critique = try await self.pipelineModelCall(
                         channel: channel,
@@ -186,18 +233,35 @@ extension LingShuState {
                         reviewPassed = true
                         break
                     }
-                    guard correctionRounds < 3 else { break }
+
+                    // 进度信号：未达标项是否在被压下去。在进步就一直循环；连续 3 轮压不动才判卡死、交回用户。
+                    if checklist.failedCount < bestFailedCount {
+                        bestFailedCount = checklist.failedCount
+                        noProgressRounds = 0
+                    } else {
+                        noProgressRounds += 1
+                    }
+                    if noProgressRounds >= 3 {
+                        stuckHandoff = true
+                        self.appendTaskRecordMessage(taskRecordID, actor: "调度", role: "过程纠偏", kind: .warning, text: "连续 \(noProgressRounds) 轮没能把未达标项压下去（仍 \(checklist.failedCount) 项不达标），我先停下来交回你——补充信息或换个方向，回复「继续」我接着推到达标。")
+                        break
+                    }
 
                     correctionRounds += 1
-                    self.missionTitle = "纠正中（第 \(correctionRounds)/3 轮）"
-                    self.missionStatus = "\(expert.title)正在按未达标项进行第 \(correctionRounds) 轮修订。"
-                    self.appendTaskRecordMessage(taskRecordID, actor: "调度", role: "过程纠偏", kind: .router, text: "评审未通过（\(checklist.failedCount) 项未达标），打回\(expert.title)进行第 \(correctionRounds)/3 轮修订。")
+                    self.missionTitle = "重做中（第 \(correctionRounds) 轮）"
+                    self.missionStatus = "\(expert.title)正在按未达标项做第 \(correctionRounds) 轮重做（不设上限，做到达标为止）。"
+                    self.appendTaskRecordMessage(taskRecordID, actor: "调度", role: "过程纠偏", kind: .router, text: "评审未通过（\(checklist.failedCount) 项未达标），打回\(expert.title)做第 \(correctionRounds) 轮重做。")
+
+                    // 升级"换思路"力度：头两轮先把 ❌ 改到位；再不过就换结构性思路彻底重做，并鼓励真实执行。
+                    let strategyDirective = correctionRounds <= 2
+                        ? "把每个 ❌ 项改到位，输出修订后的完整交付物（全文，不要只列改动）。"
+                        : "前 \(correctionRounds - 1) 轮的改法没能过审——**别再在原方案上小修小补，换一个结构性思路彻底重做**（不同的组织方式 / 技术路径 / 落地手段），从根上解决每个 ❌ 项。需要在本机真实执行（生成 .pptx/文件、跑命令、装依赖）就直接发 run_command，宿主会弹窗请用户授权后执行——别再用「给你段脚本自己跑」搪塞。"
                     let revisePrompt = """
-                    你的稿件被评审打回（第 \(correctionRounds)/3 轮修订）。下面是逐条核对结果，把每个 ❌ 项改到位，输出修订后的完整交付物（全文，不要只列改动）。
+                    你的稿件被评审打回（第 \(correctionRounds) 轮，目标驱动：做到逐条全部达标为止，不设轮次上限）。
+                    \(strategyDirective)
+                    **你上面这条对话里有你之前跑过的所有命令和报错——直接据此换个真正能跑通的方法，别重复撞同一堵墙。**
                     评审逐条结果：
                     \(critique)
-                    当前稿件：
-                    \(finalDraft)
                     """
                     finalDraft = try await self.pipelineAgenticCall(
                         channel: channel,
@@ -207,14 +271,13 @@ extension LingShuState {
                         stageActor: "纠正",
                         taskRecordID: taskRecordID,
                         workingDirectory: taskWorkDir,
+                        thread: expertThread,
                         probe: &probe
                     )
                     self.appendTaskRecordMessage(taskRecordID, actor: "纠正", role: expert.title, kind: .agent, text: finalDraft)
                 }
                 let corrected = correctionRounds > 0
-                if !reviewPassed && corrected {
-                    self.appendTaskRecordMessage(taskRecordID, actor: "调度", role: "过程纠偏", kind: .warning, text: "三轮修订后仍有未达标项，按现稿进入验收（逐条意见已留档）。")
-                }
+                _ = stuckHandoff
 
                 // 借鉴文章：被打回又修正过的任务，把"问题→修正"提炼成经验规则沉淀（记忆复利）。
                 if corrected {
@@ -245,6 +308,7 @@ extension LingShuState {
                     finalDraft: finalDraft,
                     verdictText: verdictText,
                     corrected: corrected,
+                    reviewPassed: reviewPassed,
                     probe: probe
                 )
             } catch {
@@ -273,6 +337,7 @@ extension LingShuState {
         finalDraft: String,
         verdictText: String,
         corrected: Bool,
+        reviewPassed: Bool,
         probe: LingShuStreamLatencyProbe
     ) {
         executionPipelineTask = nil
@@ -283,25 +348,43 @@ extension LingShuState {
         let finalReply = postProcessExecutionReply(finalDraft, for: userPrompt, route: route)
         completeRouteExecution(route)
         completeTaskRuntime(for: userPrompt, reply: finalReply, taskRecordID: taskRecordID)
-        mainThreadKernel.observeExecution(prompt: userPrompt, summary: finalReply, completed: true)
         rememberMainThreadTurn(prompt: userPrompt, reply: finalReply, route: route)
-        if let threadID {
-            memoryService.rememberTask(prompt: userPrompt, status: "delivered", summary: String(finalReply.prefix(280)), taskID: threadID, taskRecordID: taskRecordID)
-        }
         finalizeStreamingBubble(bubbleID, text: finalReply, taskRecordID: taskRecordID)
         let artifacts = materializeTaskArtifacts(for: userPrompt, route: route, reply: finalReply, taskRecordID: taskRecordID)
+        // 只认真实落到磁盘的文件——避免"声明了产物但盘上没有"的虚报。
+        let realArtifacts = artifacts.filter { FileManager.default.fileExists(atPath: $0.location) }
+        // 达标 = 评审三轮内通过。未通过就不许报"完成"。
+        let delivered = reviewPassed
 
-        // 主动汇报：任务收口由灵枢主动发起，不等用户来问。
-        let report = """
-        任务完成，给你汇报：
-        · 交付：\(expert.title)主笔\(artifacts.isEmpty ? "，成果在上面这条消息里" : "，已落地 \(artifacts.count) 个文件（任务记录可预览）")。
-        · 过程：规划 → 专家产出 → 评审\(corrected ? "（首稿被打回，已按意见修正）" : "（一次通过）") → 验收。
-        · 验收：\(verdictText)
-        """
+        mainThreadKernel.observeExecution(prompt: userPrompt, summary: finalReply, completed: delivered)
+        if let threadID {
+            memoryService.rememberTask(prompt: userPrompt, status: delivered ? "delivered" : "needs-revision", summary: String(finalReply.prefix(280)), taskID: threadID, taskRecordID: taskRecordID)
+        }
+
+        let report: String
+        let status: LingShuTaskExecutionStatus
+        if delivered {
+            report = """
+            任务完成，给你汇报：
+            · 交付：\(expert.title)主笔\(realArtifacts.isEmpty ? "，成果在上面这条消息里" : "，已落地 \(realArtifacts.count) 个文件（任务记录可预览）")。
+            · 过程：规划 → 专家产出 → 评审\(corrected ? "（首稿被打回，已按意见修正）" : "（一次通过）") → 验收。
+            · 验收：\(verdictText)
+            """
+            status = .completed
+        } else {
+            // 评审未通过：诚实报「未达标」，绝不说"完成"。说清楚缺什么、下一步怎么推进。
+            report = """
+            任务未达标——我没有按"完成"上报：
+            · 现状：\(expert.title)主笔，目标驱动多轮重做后仍卡在未达标项，\(realArtifacts.isEmpty ? "尚无可验收的成果文件落盘" : "已落地 \(realArtifacts.count) 个文件，但未达验收标准")。
+            · 验收：\(verdictText)
+            · 下一步：回复「继续」我就接着推到达标；需要在本机执行命令（如生成 .pptx 实文件）时会弹窗请你授权。
+            """
+            status = .needsRevision
+        }
         appendTaskRecordMessage(taskRecordID, actor: "灵枢", role: "主动汇报", kind: .result, text: report)
         chatMessages.append(.init(speaker: "灵枢", text: report, isUser: false, taskRecordID: taskRecordID))
-        finishTaskRecord(taskRecordID, status: .completed, summary: report)
-        logEvent("现在  协同管线完成并已主动汇报。")
+        finishTaskRecord(taskRecordID, status: status, summary: report)
+        logEvent(delivered ? "现在  协同管线完成并已主动汇报。" : "现在  协同管线未达标，已诚实上报未完成。")
     }
 
     private func failPipeline(

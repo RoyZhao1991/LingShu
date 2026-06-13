@@ -21,6 +21,19 @@ struct LingShuChecklistVerdict: Equatable {
     }
 
     static func parse(_ text: String) -> LingShuChecklistVerdict {
+        let normalized = text.replacingOccurrences(of: " ", with: "")
+        // 明确判过：写了「结论：通过」且没写「需修正」。
+        let declaredPass = (normalized.contains("结论：通过") || normalized.contains("结论:通过"))
+            && !normalized.contains("需修正")
+
+        // 优先用结构化统计行 `PASS=N FAIL=M`——可靠，不受逐条标记位置、说明里勾叉的干扰。
+        // （评审官把标记写在加粗标题后、或正文里夹杂 ✅/❌ 时，行首计数会数成 0，统计行根治这个。）
+        if let pass = firstInt(in: text, pattern: "PASS\\s*=\\s*(\\d+)"),
+           let fail = firstInt(in: text, pattern: "FAIL\\s*=\\s*(\\d+)") {
+            return .init(passedCount: pass, failedCount: fail, declaredPass: declaredPass)
+        }
+
+        // 兜底：模型没给统计行时，数行首 ✅/❌。
         var passed = 0
         var failed = 0
         for rawLine in text.components(separatedBy: .newlines) {
@@ -28,12 +41,14 @@ struct LingShuChecklistVerdict: Equatable {
             if line.hasPrefix("✅") { passed += 1 }
             else if line.hasPrefix("❌") { failed += 1 }
         }
-
-        let normalized = text.replacingOccurrences(of: " ", with: "")
-        // 明确判过：写了「结论：通过」且没写「需修正」。容错：没有任何 ❌ 行且声明通过。
-        let declaredPass = (normalized.contains("结论：通过") || normalized.contains("结论:通过"))
-            && !normalized.contains("需修正")
-
         return .init(passedCount: passed, failedCount: failed, declaredPass: declaredPass)
+    }
+
+    private static func firstInt(in text: String, pattern: String) -> Int? {
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]),
+              let match = regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
+              match.numberOfRanges >= 2,
+              let range = Range(match.range(at: 1), in: text) else { return nil }
+        return Int(text[range])
     }
 }

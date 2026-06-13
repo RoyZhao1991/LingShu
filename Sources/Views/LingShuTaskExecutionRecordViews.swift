@@ -149,6 +149,12 @@ struct TaskExecutionRecordSheet: View {
                 .onAppear {
                     proxy.scrollTo("task-record-bottom", anchor: .bottom)
                 }
+                // 执行进行中：新阶段/工具消息一到就自动滚到底，实时跟住"一边执行一边汇报"。
+                .onChange(of: record.messages.count) { _, _ in
+                    withAnimation(.easeOut(duration: 0.18)) {
+                        proxy.scrollTo("task-record-bottom", anchor: .bottom)
+                    }
+                }
             }
     }
 }

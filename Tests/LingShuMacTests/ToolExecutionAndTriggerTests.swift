@@ -71,8 +71,8 @@ final class LocalToolExecutorTests: XCTestCase {
             .init(tool: "run_command", arguments: ["command": "echo hi"]),
             workingDirectory: workDir, allowShell: false
         )
-        XCTAssertFalse(refused.success, "人工确认开启时命令必须拒绝")
-        XCTAssertTrue(refused.output.contains("人工确认"))
+        XCTAssertFalse(refused.success, "未获授权（allowShell=false）时命令必须拒绝")
+        XCTAssertTrue(refused.output.contains("拒绝"))
 
         let allowed = await executor.execute(
             .init(tool: "run_command", arguments: ["command": "echo lingshu-ok"]),

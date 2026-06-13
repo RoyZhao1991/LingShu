@@ -163,13 +163,15 @@ struct LingShuLocalToolExecutor: LingShuToolExecuting {
         }
     }
 
-    func runCommand(_ command: String, workingDirectory: String, allowShell: Bool, timeout: TimeInterval = 60) async -> LingShuToolResult {
+    // 默认 240s：python-pptx 生成、LibreOffice 转 PDF→PNG、pip/brew 装依赖这类真实工程动作常 >60s。
+    // 旧的 60s 会把命令砍在半路（"疑似命令未跑完"→产物不落盘）。看门狗那边由执行期续心跳兜住。
+    func runCommand(_ command: String, workingDirectory: String, allowShell: Bool, timeout: TimeInterval = 240) async -> LingShuToolResult {
         let trimmed = command.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
             return .init(tool: "run_command", success: false, output: "命令为空。")
         }
         guard allowShell else {
-            return .init(tool: "run_command", success: false, output: "当前权限策略要求高风险动作人工确认，命令未执行。请改用专用工具，或由用户在配置中关闭「高风险动作需人工确认」。")
+            return .init(tool: "run_command", success: false, output: "用户已拒绝本次命令执行（授权弹窗选择了拒绝）。请勿重复发起同一命令；改用专用工具，或给出用户可手动运行的方案。")
         }
         let lowered = trimmed.lowercased()
         let blocked = ["sudo", "rm -rf /", "mkfs", "diskutil erase", "shutdown", "reboot", "> /dev/"]

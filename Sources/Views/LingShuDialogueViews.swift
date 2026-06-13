@@ -32,10 +32,18 @@ struct LingShuDialogueSurface: View {
                         .padding(.vertical, 6)
                         .padding(.horizontal, 2)
                     }
+                    // 初始就锚在底部：让 LazyVStack 在出现时就 realize 底部内容、直接显示最近消息——
+                    // 否则切到对话 Tab 是空白、要手动滚一下才"长出"历史记录（LazyVStack 懒加载坑）。
+                    .defaultScrollAnchor(.bottom)
                     .onAppear {
                         lastChatBottomSignature = chatBottomSignature(state.chatMessages)
+                        // 滚到最后一条**真实消息**（而非 1px 占位 spacer）：强制 realize 懒加载行。
                         DispatchQueue.main.async {
-                            proxy.scrollTo("lingshu-chat-bottom", anchor: .bottom)
+                            if let lastID = state.chatMessages.last?.id {
+                                proxy.scrollTo(lastID, anchor: .bottom)
+                            } else {
+                                proxy.scrollTo("lingshu-chat-bottom", anchor: .bottom)
+                            }
                         }
                     }
                     .onReceive(state.$chatMessages) { messages in
@@ -283,6 +291,15 @@ struct LingShuInputDock: View {
                 .onSubmit {
                     submit()
                 }
+                // 剪贴板粘贴图片（Cmd+V）：抓剪贴板里的图 → 走云视觉解析管线，作为输入的一部分。
+                // 仅拦截图片类型，纯文本粘贴仍由输入框默认处理。
+                .onPasteCommand(of: [.image, .png, .jpeg, .tiff]) { _ in
+                    guard let image = NSImage(pasteboard: .general),
+                          let tiff = image.tiffRepresentation,
+                          let rep = NSBitmapImageRep(data: tiff),
+                          let png = rep.representation(using: .png, properties: [:]) else { return }
+                    state.ingestPastedImage(png)
+                }
 
             HStack(spacing: 10) {
                 Button {
@@ -320,6 +337,22 @@ struct LingShuInputDock: View {
                 }
                 .buttonStyle(.plain)
                 .help(state.voiceOutputEnabled ? "关闭语音输出" : "开启语音输出")
+
+                // 正在播报时出现：一键打断当前 TTS（含分句早读队列）。
+                if voice.isSpeaking {
+                    Button {
+                        voice.stopSpeaking()
+                    } label: {
+                        Image(systemName: "stop.circle.fill")
+                            .font(.system(size: 17, weight: .bold))
+                            .foregroundStyle(.white)
+                            .frame(width: 46, height: 42)
+                            .background(Color.red.opacity(0.9), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    }
+                    .buttonStyle(.plain)
+                    .help("中断当前播放")
+                    .transition(.opacity)
+                }
 
                 Button {
                     toggleVision()
@@ -362,12 +395,14 @@ struct LingShuInputDock: View {
                 }
                 .buttonStyle(.plain)
             }
+            .animation(.easeInOut(duration: 0.2), value: voice.isSpeaking)
 
             HStack(spacing: 12) {
                 Text("Return 发送")
-                Spacer()
+                Spacer(minLength: 8)
                 if !activeAlerts.isEmpty {
                     LingShuAlertTicker(alerts: activeAlerts)
+                    Spacer(minLength: 8)
                 }
                 Text(state.modelConnectionState)
                     .foregroundStyle(state.isModelConnected ? Color.lingHolo : Color.orange.opacity(0.86))
@@ -381,13 +416,19 @@ struct LingShuInputDock: View {
     private var activeAlerts: [String] {
         var alerts: [String] = []
         if state.voiceOutputEnabled {
-            let tts = voice.outputStatusMessage
-            if ["不可用", "失败", "缺凭据", "降级"].contains(where: tts.contains) {
-                alerts.append("情绪 TTS：\(tts)")
+            // 优先用持久降级标记（云端男声失败后常驻，不随单句播完而消失）；
+            // 没有标记时再看实时输出状态里的降级关键词。
+            if let degraded = voice.cloudVoiceDegradedReason {
+                alerts.append("情绪 TTS：\(degraded)")
+            } else {
+                let tts = voice.outputStatusMessage
+                if ["不可用", "失败", "缺凭据", "降级", "未配置", "未就绪", "兜底"].contains(where: tts.contains) {
+                    alerts.append("情绪 TTS：\(tts)")
+                }
             }
         }
         let perception = perceptionGateway.statusText
-        if ["中断", "降级", "异常", "不可用"].contains(where: perception.contains) {
+        if ["中断", "降级", "异常", "不可用", "失败"].contains(where: perception.contains) {
             alerts.append("云感知：\(perception)")
         }
         return alerts

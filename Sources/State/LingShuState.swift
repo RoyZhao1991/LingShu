@@ -201,6 +201,10 @@ final class LingShuState: ObservableObject {
     private var pendingIntentClarification: LingShuPendingIntentClarification?
     /// 任务续接二次确认的挂起上下文：用户在选择卡上点选后据此重提原指令。
     var pendingTaskResume: LingShuPendingTaskResume?
+    /// 待用户授权的系统命令（高风险动作人工确认弹窗）：非空即弹中文授权框。
+    @Published var pendingShellApproval: LingShuPendingShellApproval?
+    /// 用户在本次会话里选了「完全授权」后置真：后续 run_command 不再逐条弹窗。
+    var sessionShellAlwaysAllowed = false
     var isRestoringChatHistory = false
     var chatHistoryPersistTask: Task<Void, Never>?
     var persistedConversationDigest = ""
@@ -259,6 +263,12 @@ final class LingShuState: ObservableObject {
 
     var selectedModelPreset: ModelProviderPreset? {
         ModelProviderPreset.catalog.first { $0.name == modelProvider }
+    }
+
+    /// 当前主模型是否原生多模态。true → 图片内联进消息直喂模型（KIMI K2.6 类）；
+    /// false → 图片走云视觉解析成文字再注入（MiniMax M3 类，零留存）。换模型只动这个判断。
+    var usesNativeMultimodal: Bool {
+        selectedModelPreset?.supportsNativeMultimodal ?? false
     }
 
     var usesLocalModelGateway: Bool {
@@ -642,6 +652,11 @@ final class LingShuState: ObservableObject {
 
     func cancelCurrentCall() {
         guard hasActiveModelCall else { return }
+
+        // 若正卡在系统命令授权弹窗上：按拒绝收口，解除挂起的工具协程，别让弹窗悬着。
+        if pendingShellApproval != nil {
+            resolveShellApproval(.deny)
+        }
 
         let messageID = activeThinkingMessageID
         cancelActiveCodexCalls()

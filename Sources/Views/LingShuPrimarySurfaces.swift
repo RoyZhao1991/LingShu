@@ -25,6 +25,11 @@ struct LingShuRootView: View {
             }
         }
         .preferredColorScheme(.dark)
+        .sheet(item: $state.pendingShellApproval) { pending in
+            LingShuPermissionApprovalView(pending: pending) { decision in
+                state.resolveShellApproval(decision)
+            }
+        }
         .onChange(of: state.isMinimalVoiceMode) { _, minimal in
             LingShuWindowPlacement.applyMinimalVoiceWindow(minimal)
         }

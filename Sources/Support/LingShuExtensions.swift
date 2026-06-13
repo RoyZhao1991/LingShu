@@ -150,6 +150,7 @@ extension LingShuTaskExecutionStatus {
         case .answered: .cyan
         case .dispatched: .orange
         case .completed: .green
+        case .needsRevision: .orange
         case .blocked: .red
         }
     }
