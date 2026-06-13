@@ -125,11 +125,12 @@ struct LingShuSpeechOutputProviderDescriptor: Identifiable, Codable, Equatable, 
         note: "用于接入后续任意云端语音合成模型；未配置前只显示文字回复，不回退本地声线。"
     )
 
+    /// 语音输出可选项：只列**真实可用**的——本机系统语音 + 已接入的数据网关云端 TTS。
+    /// customHTTPService / cosyVoice3Service / doubaoService 是未接入的占位/研究项（空端点、
+    /// localhost 未起服务、example.com），不再塞进选择器误导用户（曾出现"只接了一个却有四种"）。
     static let recommendedProviders: [LingShuSpeechOutputProviderDescriptor] = [
-        .dataNetSpeakerTTS,
-        .customHTTPService,
-        .cosyVoice3Service,
-        .doubaoService
+        .appleSpeech,
+        .dataNetSpeakerTTS
     ]
 
     func applyingRuntimeAvailability(_ status: LingShuEmbeddedTTSRuntimeStatus) -> LingShuSpeechOutputProviderDescriptor {
