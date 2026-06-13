@@ -136,3 +136,28 @@ final class ExpertProfileRegistryTests: XCTestCase {
         XCTAssertEqual(registry.reviewerProfile().id, "expert-reviewer")
     }
 }
+
+final class SituationComponentTests: XCTestCase {
+    private struct FireComponent: LingShuSituationComponent {
+        func contribute(_ inputs: LingShuSituationContext.Inputs) -> String? { "检测到明火，疑似起火。" }
+    }
+
+    func testNewDimensionPlugsInWithoutTouchingCompose() {
+        // 新增态势维度只要加一个组件——验证"组件拼装"可扩展。
+        let inputs = LingShuSituationContext.Inputs(now: Date())
+        let composed = LingShuSituationContext.compose(
+            inputs,
+            components: LingShuSituationContext.defaultComponents + [FireComponent()]
+        )
+        XCTAssertTrue(composed.contains("疑似起火"), "新组件的事实应被拼进【当前情境】")
+        XCTAssertTrue(composed.hasPrefix("【当前情境】"))
+    }
+
+    func testComponentsThatDontApplyAreOmitted() {
+        // 没有 session/视觉/任务 → 只剩时间一句，其余组件返回 nil 被略过。
+        let composed = LingShuSituationContext.compose(.init(now: Date()))
+        XCTAssertTrue(composed.contains("本机时间"))
+        XCTAssertFalse(composed.contains("连续使用"))
+        XCTAssertFalse(composed.contains("摄像头画面"))
+    }
+}
