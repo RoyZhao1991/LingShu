@@ -144,21 +144,21 @@ struct LingShuSpeechOutputProviderDescriptor: Identifiable, Codable, Equatable, 
 struct LingShuSpeechPersona: Identifiable, Codable, Equatable, Sendable {
     var id: String
     var displayName: String
-    var voiceID: String
-    var speakerID: Int
-    var personaPrompt: String
-    var emotionPrompt: String
+    /// 数据网关 TTS 服务端音色 id（实测可用：male_steady/male_elder/female_default/bright/soft）。
+    var cloudVoiceId: String
+    /// 数据网关 TTS 情绪枚举（neutral/calm/happy/sad/excited/angry/breathy），服务端转 CosyVoice2 控制 token。
+    var cloudEmotion: String
+    var speakerID: Int   // 仅本地 sherpa TTS（--sid）用
     var speed: Double
     var pitch: Double
     var volume: Double
 
     static let softDominantMale = LingShuSpeechPersona(
         id: "soft-dominant-young-male",
-        displayName: "清晰低频男声",
-        voiceID: "lingshu_soft_dominant_male",
+        displayName: "清晰沉稳男声",
+        cloudVoiceId: "male_steady",
+        cloudEmotion: "neutral",
         speakerID: 119,
-        personaPrompt: "年轻男性，声音干净、有亲近感，语气稳定自信，低压迫感但有掌控力；像克制、温柔、可靠的私人中枢。",
-        emotionPrompt: "冷静、笃定、轻微关切，回答短句时要自然，有一点笑意但不油腻。",
         speed: 0.96,
         pitch: 0.92,
         volume: 1.0
@@ -167,10 +167,9 @@ struct LingShuSpeechPersona: Identifiable, Codable, Equatable, Sendable {
     static let calmJarvisMale = LingShuSpeechPersona(
         id: "calm-jarvis-male",
         displayName: "冷静管家男声",
-        voiceID: "lingshu_calm_jarvis_male",
+        cloudVoiceId: "male_steady",   // 实测 F0≈101Hz 男声，贾维斯式沉稳
+        cloudEmotion: "calm",
         speakerID: 124,
-        personaPrompt: "成熟男性，克制、专业、清晰，像可靠的智能管家。",
-        emotionPrompt: "冷静、准确、少量温度，不夸张。",
         speed: 0.94,
         pitch: 0.88,
         volume: 1.0
@@ -182,18 +181,12 @@ struct LingShuSpeechPersona: Identifiable, Codable, Equatable, Sendable {
     ]
 }
 
+/// 数据网关 swds-speaker-tts 的请求体：服务端用枚举式 emotion + 音色 id，
+/// 自己转成 CosyVoice2 原生控制 token（别传自然语言提示）。
 struct LingShuSpeechSynthesisRequest: Codable, Equatable, Sendable {
     var text: String
-    var provider: String
-    var voiceID: String
-    var speakerID: Int
-    var personaPrompt: String
-    var emotionPrompt: String
-    var speed: Double
-    var pitch: Double
-    var volume: Double
-    var responseFormat: String
-    var locale: String
+    var voiceId: String
+    var emotion: String
 }
 
 struct LingShuSpeechSynthesisServiceResponse: Decodable, Sendable {
@@ -214,16 +207,8 @@ enum LingShuSpeechOutputServiceContract {
     ) -> LingShuSpeechSynthesisRequest {
         .init(
             text: text,
-            provider: provider.kind.rawValue,
-            voiceID: persona.voiceID,
-            speakerID: persona.speakerID,
-            personaPrompt: persona.personaPrompt,
-            emotionPrompt: persona.emotionPrompt,
-            speed: persona.speed,
-            pitch: persona.pitch,
-            volume: persona.volume,
-            responseFormat: "wav",
-            locale: "zh-CN"
+            voiceId: persona.cloudVoiceId,
+            emotion: persona.cloudEmotion
         )
     }
 

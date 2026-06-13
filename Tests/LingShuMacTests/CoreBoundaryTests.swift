@@ -1498,19 +1498,23 @@ final class CoreBoundaryTests: XCTestCase {
         XCTAssertTrue(status.activationNote.contains("已就绪"))
     }
 
-    func testSpeechOutputContractBuildsPersonaAwareIndexTTS2Request() throws {
-        let request = LingShuSpeechOutputServiceContract.request(
+    func testSpeechOutputContractBuildsVoiceIdAndEmotionRequest() throws {
+        // 数据网关新格式：服务端音色 id + 情绪枚举（不再传自然语言提示）。
+        let jarvis = LingShuSpeechOutputServiceContract.request(
             text: "我是灵枢，有什么可以帮你的？",
-            provider: .indexTTS2Service,
+            provider: .dataNetSpeakerTTS,
+            persona: .calmJarvisMale
+        )
+        XCTAssertEqual(jarvis.voiceId, "male_steady")
+        XCTAssertEqual(jarvis.emotion, "calm")
+
+        let soft = LingShuSpeechOutputServiceContract.request(
+            text: "你好",
+            provider: .dataNetSpeakerTTS,
             persona: .softDominantMale
         )
-
-        XCTAssertEqual(request.provider, LingShuSpeechOutputProviderKind.indexTTS2Service.rawValue)
-        XCTAssertEqual(request.voiceID, "lingshu_soft_dominant_male")
-        XCTAssertEqual(request.speakerID, 119)
-        XCTAssertTrue(request.personaPrompt.contains("年轻男性"))
-        XCTAssertTrue(request.emotionPrompt.contains("笃定"))
-        XCTAssertEqual(request.locale, "zh-CN")
+        XCTAssertEqual(soft.voiceId, "male_steady")
+        XCTAssertEqual(soft.emotion, "neutral")
     }
 
     func testSpeechOutputRecommendedProvidersShowOnlyRealOptions() {
