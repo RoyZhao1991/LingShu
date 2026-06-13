@@ -914,7 +914,11 @@ final class LingShuState: ObservableObject {
             return requestLocalKnowledgeReply(for: trimmedPrompt, memoryContext: mainMemoryContext, answer: directAnswer, taskRecordID: taskRecordID)
         }
 
-        if taskMemoryLookupOverride == nil,
+        // forcedThreadID 已设 = 用户在选择卡里明确点了要续接哪个任务（或新任务），意图已定，
+        // 不要再用"继续这件事还是新任务"的意图澄清问一遍（曾导致：选了 PPT 任务后又弹出
+        // 询问是否继续"普通对话"的二次确认，且引用的是过期的 activeTaskThread）。
+        if forcedThreadID == nil,
+           taskMemoryLookupOverride == nil,
            let clarification = intentClarificationPolicy.clarification(
             for: trimmedPrompt,
             memoryContext: mainMemoryContext,
