@@ -24,29 +24,68 @@ extension LingShuState {
             return nil
 
         case .medium:
-            guard let primary = lookup.candidates.first else { return nil }
-            return presentResumeCard(
+            // 只有用户措辞确实像在续接（isExplicitResumeRequest：显式回溯动词＋历史指代，
+            // 如"继续…那个任务""接着做…上次的"）才考虑续接。措辞完整的全新任务即便与历史
+            // 语义相近，也直接按新任务推进，不打断——否则每个沾边任务都被拦一道，且非交互
+            // 场景（测试 / 定时触发 / 无头驱动）会因无人应答选择卡而永久挂起在"执行中"。
+            guard lookup.explicitResume else { return nil }
+            return resolveResume(
                 question: "我记得有个相近的任务，但不太确定是不是它。你是想继续这个，还是当成新任务？",
                 candidates: Array(lookup.candidates.prefix(3)),
-                primaryHint: primary,
                 prompt: prompt,
                 source: source,
                 taskRecordID: taskRecordID
             )
 
         case .none:
-            // 明确点名要回溯却没精确命中：给语义近似候选让用户挑。
+            // 明确点名要回溯却没精确命中：给语义近似候选。
             let resumable = lookup.candidates.filter { $0.taskID != nil }
             guard lookup.explicitResume, !resumable.isEmpty else { return nil }
-            return presentResumeCard(
+            return resolveResume(
                 question: "我没有精确匹配到你说的那个任务。下面几个比较接近，你要继续哪个？都不是的话我就开个新任务。",
                 candidates: Array(resumable.prefix(3)),
-                primaryHint: nil,
                 prompt: prompt,
                 source: source,
                 taskRecordID: taskRecordID
             )
         }
+    }
+
+    /// 续接候选定夺：只有一个可续接项时**不弹卡**——说明续接的是哪个，直接开始执行；
+    /// 有多个才发选择卡让用户挑。
+    private func resolveResume(
+        question: String,
+        candidates: [LingShuTaskResumeCandidate],
+        prompt: String,
+        source: LingShuDialogueInputSource,
+        taskRecordID: String?
+    ) -> String? {
+        let resumable = candidates.filter { $0.taskID != nil }
+        guard !resumable.isEmpty else { return nil }   // 无可续接 → 主流程按新任务推进
+
+        if resumable.count == 1, let only = resumable.first, let taskID = only.taskID {
+            // 唯一候选：不打断确认，说明续接对象后直接续接执行。
+            let note = "我接着之前的「\(only.title)」继续推进。"
+            appendTrace(kind: .route, actor: "记忆", title: "唯一候选自动续接", detail: "仅一个可续接任务（\(taskID)），跳过确认直接续接。")
+            appendTaskRecordMessage(taskRecordID, actor: "记忆", role: "任务续接", kind: .memory, text: note)
+            chatMessages.append(.init(speaker: "灵枢", text: note, isUser: false, taskRecordID: taskRecordID))
+            return submitTextInput(
+                prompt,
+                source: source,
+                existingTaskRecordID: taskRecordID,
+                appendUserMessage: false,
+                forcedThreadID: taskID
+            )
+        }
+
+        return presentResumeCard(
+            question: question,
+            candidates: candidates,
+            primaryHint: candidates.first,
+            prompt: prompt,
+            source: source,
+            taskRecordID: taskRecordID
+        )
     }
 
     private func presentResumeCard(
