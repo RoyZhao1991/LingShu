@@ -47,6 +47,44 @@ struct LingShuModelInvocationContract: Equatable {
 struct LingShuModelMessage: Codable, Equatable, Sendable {
     var role: String
     var content: String
+    /// 助手发起的工具调用（role=assistant 时）；原生 function-calling 用。
+    var toolCalls: [LingShuToolCall]?
+    /// 工具结果回传时对应的调用 id（role=tool 时）。
+    var toolCallID: String?
+    /// 原生多模态：内联图片的 data URL（data:image/png;base64,…）。非空时该消息走多模态 content 数组。
+    var imageDataURLs: [String]?
+
+    init(role: String, content: String, toolCalls: [LingShuToolCall]? = nil, toolCallID: String? = nil, imageDataURLs: [String]? = nil) {
+        self.role = role
+        self.content = content
+        self.toolCalls = toolCalls
+        self.toolCallID = toolCallID
+        self.imageDataURLs = imageDataURLs
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case role, content
+        case toolCalls = "tool_calls"
+        case toolCallID = "tool_call_id"
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        role = try c.decode(String.self, forKey: .role)
+        content = (try? c.decodeIfPresent(String.self, forKey: .content)) ?? ""
+        toolCalls = try? c.decodeIfPresent([LingShuToolCall].self, forKey: .toolCalls)
+        toolCallID = try? c.decodeIfPresent(String.self, forKey: .toolCallID)
+        imageDataURLs = nil   // 内联图片只走 wire 路径，不参与 Codable 持久化。
+    }
+
+    // 自定义编码：工具字段为空时不写进 JSON，保证非工具路径的请求体与改造前逐字节一致。
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(role, forKey: .role)
+        try c.encode(content, forKey: .content)
+        try c.encodeIfPresent(toolCalls, forKey: .toolCalls)
+        try c.encodeIfPresent(toolCallID, forKey: .toolCallID)
+    }
 }
 
 private struct LingShuResponsesRequest: Codable, Equatable {
@@ -186,7 +224,8 @@ struct LingShuModelGateway {
         temperature: Double,
         stream: Bool,
         continuationToken: String? = nil,
-        conversationMessages: [LingShuModelMessage] = []
+        conversationMessages: [LingShuModelMessage] = [],
+        tools: [LingShuToolDefinition] = []
     ) throws -> LingShuModelInvocationContract {
         let format = requestFormat(provider: provider, endpoint: endpoint, protocolName: protocolName)
         switch format {
@@ -224,12 +263,28 @@ struct LingShuModelGateway {
                 previousResponseID: continuationToken?.nilIfBlank
             ))
         case .chatCompletions:
-            body = try encoder.encode(LingShuChatCompletionsRequest(
-                model: model,
-                messages: messages,
-                temperature: temperature,
-                stream: stream
-            ))
+            let hasInlineImages = messages.contains { $0.imageDataURLs?.isEmpty == false }
+            if tools.isEmpty && !hasInlineImages {
+                body = try encoder.encode(LingShuChatCompletionsRequest(
+                    model: model,
+                    messages: messages,
+                    temperature: temperature,
+                    stream: stream
+                ))
+            } else {
+                // 原生 function-calling / 多模态：tools 数组 + 可能带 tool_calls/tool_call_id/图片的消息，
+                // 自由 JSON 结构用 JSONSerialization 构建（不动既有 Codable 路径，零回归）。
+                var payload: [String: Any] = [
+                    "model": model,
+                    "messages": messages.map(Self.wireMessage),
+                    "temperature": temperature,
+                    "stream": stream
+                ]
+                if !tools.isEmpty {   // 仅多模态无工具时不带 tools 键，避免空数组惹某些网关。
+                    payload["tools"] = tools.map { $0.wireObject() }
+                }
+                body = try JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys])
+            }
         case .anthropicMessages:
             body = try encoder.encode(LingShuAnthropicMessagesRequest(
                 model: model,
@@ -250,6 +305,50 @@ struct LingShuModelGateway {
             body: body,
             format: format
         )
+    }
+
+    /// 把一条消息序列化成 OpenAI chat/completions 的 wire 对象（含 tool_calls / tool_call_id）。
+    static func wireMessage(_ message: LingShuModelMessage) -> [String: Any] {
+        var object: [String: Any] = ["role": message.role]
+        if let images = message.imageDataURLs, !images.isEmpty {
+            // 原生多模态：content 是 [文字, 图片…] 数组（OpenAI / KIMI 通用）。
+            var parts: [[String: Any]] = []
+            if !message.content.isEmpty {
+                parts.append(["type": "text", "text": message.content])
+            }
+            for url in images {
+                parts.append(["type": "image_url", "image_url": ["url": url]])
+            }
+            object["content"] = parts
+        } else {
+            object["content"] = message.content
+        }
+        if let calls = message.toolCalls, !calls.isEmpty {
+            object["tool_calls"] = calls.map { call -> [String: Any] in
+                ["id": call.id, "type": "function", "function": ["name": call.name, "arguments": call.arguments]]
+            }
+        }
+        if let toolCallID = message.toolCallID {
+            object["tool_call_id"] = toolCallID
+        }
+        return object
+    }
+
+    /// 从响应里解析原生工具调用（`choices[0].message.tool_calls`）。无则空数组。
+    func decodeToolCalls(data: Data) -> [LingShuToolCall] {
+        guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let choices = object["choices"] as? [[String: Any]],
+              let message = choices.first?["message"] as? [String: Any],
+              let rawCalls = message["tool_calls"] as? [[String: Any]] else {
+            return []
+        }
+        return rawCalls.compactMap { raw in
+            guard let function = raw["function"] as? [String: Any],
+                  let name = function["name"] as? String else { return nil }
+            let id = (raw["id"] as? String) ?? UUID().uuidString
+            let arguments = (function["arguments"] as? String) ?? "{}"
+            return LingShuToolCall(id: id, name: name, arguments: arguments)
+        }
     }
 
     func decodeStreamingTextDelta(line: String, format: LingShuModelGatewayRequestFormat) -> String? {
@@ -474,8 +573,11 @@ struct LingShuModelGateway {
         let cleanedConversation = conversationMessages.compactMap { message -> LingShuModelMessage? in
             let role = normalizedRole(message.role)
             let content = message.content.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !content.isEmpty else { return nil }
-            return .init(role: role, content: content)
+            // 带工具负载 / 内联图片的消息即便正文为空也必须保留，否则多轮会话/多模态会被掐断。
+            let hasToolPayload = (message.toolCalls?.isEmpty == false) || (message.toolCallID != nil)
+            let hasImages = message.imageDataURLs?.isEmpty == false
+            guard !content.isEmpty || hasToolPayload || hasImages else { return nil }
+            return .init(role: role, content: message.content, toolCalls: message.toolCalls, toolCallID: message.toolCallID, imageDataURLs: message.imageDataURLs)
         }
 
         if !cleanedConversation.isEmpty {

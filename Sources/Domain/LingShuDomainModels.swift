@@ -263,6 +263,11 @@ struct ModelProviderPreset: Identifiable {
     let authMode: String
     let defaultModels: [String]
     let note: String
+    /// 是否原生多模态（图片可直接喂主模型）。
+    /// false（如 MiniMax M3）→ 图片走云视觉解析成文字再注入（零留存）；
+    /// true（如 KIMI K2.6 这类原生多模态）→ 图片内联进消息，和 codex/claude 架构统一。
+    /// 换原生多模态模型时把这个置 true 即可，不必改调用链。
+    var supportsNativeMultimodal: Bool = false
 
     var displayName: String {
         "\(name) · \(region)"

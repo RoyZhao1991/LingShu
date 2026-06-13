@@ -13,6 +13,8 @@ struct LingShuRemoteModelRequest: Equatable {
     var timeout: TimeInterval
     var continuationToken: String?
     var conversationMessages: [LingShuModelMessage] = []
+    /// 原生 function-calling 工具定义；非空时随请求下发 `tools`（仅 chat/completions 生效）。
+    var tools: [LingShuToolDefinition] = []
 }
 
 struct LingShuRemoteModelReply: Equatable {
@@ -22,6 +24,8 @@ struct LingShuRemoteModelReply: Equatable {
     var continuationToken: String?
     /// usage.total_tokens（网关计量）。流式响应通常不携带，可能为 nil。
     var totalTokens: Int?
+    /// 模型返回的原生工具调用（choices[0].message.tool_calls）。无则空数组。
+    var toolCalls: [LingShuToolCall] = []
 }
 
 struct LingShuRemoteModelClient {
@@ -48,7 +52,8 @@ struct LingShuRemoteModelClient {
             temperature: request.temperature,
             stream: request.stream,
             continuationToken: request.continuationToken,
-            conversationMessages: request.conversationMessages
+            conversationMessages: request.conversationMessages,
+            tools: request.tools
         )
         var urlRequest = gateway.makeURLRequest(for: contract)
         urlRequest.timeoutInterval = request.timeout
@@ -58,12 +63,22 @@ struct LingShuRemoteModelClient {
             throw LingShuModelGatewayError.requestFailed(-1, "模型网关返回了非 HTTP 响应。")
         }
 
+        let toolCalls = gateway.decodeToolCalls(data: data)
+        // 工具调用回合常常没有正文，只有 tool_calls——此时 decodeTextResponse 会抛空响应，
+        // 但这是合法状态，不该当错误，给空正文即可。
+        let text: String
+        if toolCalls.isEmpty {
+            text = try gateway.decodeTextResponse(data: data, statusCode: httpResponse.statusCode)
+        } else {
+            text = (try? gateway.decodeTextResponse(data: data, statusCode: httpResponse.statusCode)) ?? ""
+        }
         return .init(
-            text: try gateway.decodeTextResponse(data: data, statusCode: httpResponse.statusCode),
+            text: text,
             statusCode: httpResponse.statusCode,
             format: contract.format,
             continuationToken: Self.decodeContinuationToken(data: data, format: contract.format),
-            totalTokens: Self.decodeTotalTokens(data: data)
+            totalTokens: Self.decodeTotalTokens(data: data),
+            toolCalls: toolCalls
         )
     }
 
