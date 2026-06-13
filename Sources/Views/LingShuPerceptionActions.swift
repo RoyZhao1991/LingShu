@@ -162,7 +162,13 @@ enum LingShuPerceptionActions {
     ) {
         perceptionGateway.ingestAudioTranscription(result)
 
-        guard !voice.isSpeaking, !state.hasActiveModelCall else { return }
+        // 被吞的语音必须可见（架构要求"被忽略的语句可审计"）：否则"麦克风开着却像没听到"无从诊断。
+        guard !voice.isSpeaking, !state.hasActiveModelCall else {
+            state.missionStatus = voice.isSpeaking
+                ? "我正在说话，先不接收你的语音。"
+                : "我还在处理上一件事（模型调用进行中），这句语音暂未接收。"
+            return
+        }
 
         let cleanedText = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cleanedText.isEmpty else { return }
