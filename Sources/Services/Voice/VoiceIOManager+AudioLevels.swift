@@ -2,6 +2,28 @@
 import Foundation
 @preconcurrency import Speech
 
+/// 音频 tap 的发射节流器。tap 在专用音频线程上串行回调，这里用锁守一下让它在
+/// Swift 6 并发下是 Sendable 安全的；只暴露"距上次是否够久"的判断。
+private final class AudioTapEmitThrottle: @unchecked Sendable {
+    private let lock = NSLock()
+    private var lastLevel = Date.distantPast
+    private var lastChunk = Date.distantPast
+
+    func shouldEmitLevel(at now: Date) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        guard now.timeIntervalSince(lastLevel) >= 0.05 else { return false }
+        lastLevel = now
+        return true
+    }
+
+    func shouldEmitChunk(at now: Date) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        guard now.timeIntervalSince(lastChunk) >= 0.2 else { return false }
+        lastChunk = now
+        return true
+    }
+}
+
 // 麦克风/播放的实时电平与音频缓冲处理。从 VoiceIOManager 拆出以守住 800 行硬上限。
 @MainActor
 extension VoiceIOManager {
@@ -37,15 +59,23 @@ extension VoiceIOManager {
         request: SFSpeechAudioBufferRecognitionRequest,
         onAudioChunk: (@MainActor (LingShuAudioStreamPacket) -> Void)?
     ) -> AVAudioNodeTapBlock {
-        { [weak self] buffer, _ in
+        // 节流：音频 tap 每个缓冲（~40/s）都跳主线程的话，会让主线程满负荷跑声纹/认主 DSP
+        // 把 UI 卡死。电平最多 ~20Hz 刷新（够波形流畅）；音频块最多 ~5Hz 转发（感知/声纹处理本就
+        // 不需要每缓冲一次）。真正的根治是把 DSP 移出主线程，这里先把洪泛掐掉。
+        let throttle = AudioTapEmitThrottle()
+        return { [weak self] buffer, _ in
             request.append(buffer)
+            let now = Date()
 
-            let level = Self.normalizedRMS(from: buffer)
-            Task { @MainActor in
-                self?.inputLevel = level
+            if throttle.shouldEmitLevel(at: now) {
+                let level = Self.normalizedRMS(from: buffer)
+                Task { @MainActor in
+                    self?.inputLevel = level
+                }
             }
 
             if let onAudioChunk,
+               throttle.shouldEmitChunk(at: now),
                let packet = Self.makePCM16Packet(from: buffer) {
                 Task { @MainActor in
                     onAudioChunk(packet)
