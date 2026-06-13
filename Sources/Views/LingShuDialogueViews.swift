@@ -363,15 +363,34 @@ struct LingShuInputDock: View {
                 .buttonStyle(.plain)
             }
 
-            HStack {
+            HStack(spacing: 12) {
                 Text("Return 发送")
                 Spacer()
+                if !activeAlerts.isEmpty {
+                    LingShuAlertTicker(alerts: activeAlerts)
+                }
                 Text(state.modelConnectionState)
                     .foregroundStyle(state.isModelConnected ? Color.lingHolo : Color.orange.opacity(0.86))
             }
             .font(.system(size: 11.5, weight: .semibold, design: .monospaced))
             .foregroundStyle(.white.opacity(0.48))
         }
+    }
+
+    /// 底部告警栏的数据源：把分散在各处、用户容易忽略的"降级/不可用"状态收集起来集中提示。
+    private var activeAlerts: [String] {
+        var alerts: [String] = []
+        if state.voiceOutputEnabled {
+            let tts = voice.outputStatusMessage
+            if ["不可用", "失败", "缺凭据", "降级"].contains(where: tts.contains) {
+                alerts.append("情绪 TTS：\(tts)")
+            }
+        }
+        let perception = perceptionGateway.statusText
+        if ["中断", "降级", "异常", "不可用"].contains(where: perception.contains) {
+            alerts.append("云感知：\(perception)")
+        }
+        return alerts
     }
 
     private func submit() {
@@ -393,5 +412,62 @@ struct LingShuInputDock: View {
 
     private func toggleVision() {
         LingShuPerceptionActions.toggleVision(state: state, vision: vision)
+    }
+}
+
+/// 底部告警条：单条直接显示；多条每 3 秒滚动一条，右侧带数量徽标；
+/// 点击展开弹窗一次性看全部告警。
+struct LingShuAlertTicker: View {
+    let alerts: [String]
+    @State private var showAll = false
+
+    var body: some View {
+        Button { showAll = true } label: {
+            TimelineView(.periodic(from: .now, by: 3)) { context in
+                let index = alerts.isEmpty
+                    ? 0
+                    : Int(context.date.timeIntervalSinceReferenceDate / 3) % alerts.count
+                HStack(spacing: 6) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.orange)
+                    Text(alerts.isEmpty ? "" : alerts[index])
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                        .foregroundStyle(.orange.opacity(0.92))
+                    if alerts.count > 1 {
+                        Text("\(alerts.count)")
+                            .font(.system(size: 9.5, weight: .bold, design: .monospaced))
+                            .foregroundStyle(Color.lingVoid)
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 1)
+                            .background(Color.orange, in: Capsule())
+                    }
+                }
+                .frame(maxWidth: 320, alignment: .trailing)
+            }
+        }
+        .buttonStyle(.plain)
+        .help("点击查看全部告警")
+        .popover(isPresented: $showAll, arrowEdge: .top) {
+            VStack(alignment: .leading, spacing: 10) {
+                Text("当前告警（\(alerts.count)）")
+                    .font(.system(size: 12.5, weight: .bold))
+                    .foregroundStyle(.orange)
+                ForEach(Array(alerts.enumerated()), id: \.offset) { _, alert in
+                    HStack(alignment: .top, spacing: 7) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .font(.system(size: 11))
+                            .foregroundStyle(.orange)
+                        Text(alert)
+                            .font(.system(size: 12))
+                            .foregroundStyle(.white.opacity(0.88))
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            }
+            .padding(16)
+            .frame(width: 360, alignment: .leading)
+            .background(Color.lingVoid)
+        }
     }
 }
