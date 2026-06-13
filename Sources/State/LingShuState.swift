@@ -150,6 +150,9 @@ final class LingShuState: ObservableObject {
     private let executionCoordinator = LingShuExecutionCoordinator()
     let dialogueAcknowledgement = LingShuDialogueAcknowledgement()
     private let intentClarificationPolicy = LingShuIntentClarificationPolicy()
+    /// 统一的待确认问题编排中心：多个澄清/续接/批准问题逐题呈现（多轮弹窗），
+    /// 不再用单槽互相覆盖；非交互场景按策略自动定夺。见 LingShuClarificationCenter。
+    let clarificationCenter = LingShuClarificationCenter()
     private let taskRuntimeCoordinator = LingShuTaskRuntimeCoordinator()
     private let modelGateway = LingShuModelGateway()
     let remoteModelClient = LingShuRemoteModelClient()
@@ -208,6 +211,12 @@ final class LingShuState: ObservableObject {
 
     init() {
         restoreChatHistory()
+        // 非交互裁决策略：自主运行中且非观察模式时，待确认问题自动按安全默认定夺，
+        // 不阻塞无人值守执行（任务续接死锁那一类的根治）。其余场景照常逐题询问用户。
+        clarificationCenter.isNonInteractive = { [weak self] in
+            guard let self else { return false }
+            return self.autonomousRun.phase == .running && self.autonomousRun.permissionLevel != .observe
+        }
         if let preset = selectedModelPreset,
            let storedKey = credentialStore.apiKey(forProvider: preset.id) {
             apiKey = storedKey
@@ -1049,6 +1058,7 @@ final class LingShuState: ObservableObject {
         guard let pending = pendingIntentClarification else { return nil }
 
         pendingIntentClarification = nil
+        clarificationCenter.advanceAfterExternalResolution()   // 多轮：本澄清已答，下一题浮现
 
         if appendUserMessage {
             chatMessages.append(.init(speaker: "你", text: userReply, isUser: true, taskRecordID: pending.recordID))
@@ -1113,54 +1123,51 @@ final class LingShuState: ObservableObject {
         decision: LingShuIntentClarificationDecision,
         taskRecordID: String?
     ) -> String {
-        pendingIntentClarification = .init(
+        let pending = LingShuPendingIntentClarification(
             originalPrompt: userPrompt,
             recordID: taskRecordID,
             question: decision.question,
             createdAt: Date()
         )
-
-        isModelReplying = false
-        isModelExecuting = false
-        activeThinkingMessageID = nil
-        taskRuntime = .idle
-        enterCoreState(.standby, resetTimer: false)
-        resetAgentRuntime(
-            title: "等待确认",
-            status: "\(agentRuntimeCounts.statusText)我需要先确认你的真实意图，再决定是否分派能力节点。"
+        // 经统一编排中心呈现：与任务续接确认共用同一队列，多个待确认问题逐题浮现（多轮）。
+        clarificationCenter.submit(
+            kind: "意图澄清",
+            taskRecordID: taskRecordID,
+            present: { [weak self] in
+                guard let self else { return }
+                self.pendingIntentClarification = pending
+                self.isModelReplying = false
+                self.isModelExecuting = false
+                self.activeThinkingMessageID = nil
+                self.taskRuntime = .idle
+                self.enterCoreState(.standby, resetTimer: false)
+                self.resetAgentRuntime(
+                    title: "等待确认",
+                    status: "\(self.agentRuntimeCounts.statusText)我需要先确认你的真实意图，再决定是否分派能力节点。"
+                )
+                self.appendTrace(kind: .route, actor: "主线程", title: "需要澄清", detail: decision.reason)
+                self.appendTaskRecordMessage(taskRecordID, actor: "主线程", role: "意图澄清", kind: .router, text: decision.reason)
+                self.applyTaskRecordRoute(
+                    taskRecordID,
+                    route: .init(
+                        needsAgents: false,
+                        agents: [],
+                        directAnswer: decision.question,
+                        finalAnswer: decision.question,
+                        summary: "需要澄清用户真实意图，暂不创建任务线程。"
+                    )
+                )
+                self.appendTaskRecordMessage(taskRecordID, actor: "灵枢", role: "中枢", kind: .result, text: decision.question)
+                self.finishTaskRecord(taskRecordID, status: .answered, summary: "灵枢发起澄清，暂不创建任务线程。")
+                self.chatMessages.append(.init(speaker: "灵枢", text: decision.question, isUser: false, taskRecordID: taskRecordID))
+            },
+            autoResolve: { [weak self] in
+                // 非交互（自主 / 无头）：澄清无法自动作答，按"暂不推进、留待用户"安全收口，绝不阻塞。
+                guard let self else { return }
+                self.appendTaskRecordMessage(taskRecordID, actor: "灵枢", role: "意图澄清", kind: .router, text: "自主模式下需要澄清，已记录该问题留待用户确认：\(decision.question)")
+                self.finishTaskRecord(taskRecordID, status: .answered, summary: "自主模式下意图需澄清，已留待用户。")
+            }
         )
-        appendTrace(
-            kind: .route,
-            actor: "主线程",
-            title: "需要澄清",
-            detail: decision.reason
-        )
-        appendTaskRecordMessage(
-            taskRecordID,
-            actor: "主线程",
-            role: "意图澄清",
-            kind: .router,
-            text: decision.reason
-        )
-        applyTaskRecordRoute(
-            taskRecordID,
-            route: .init(
-                needsAgents: false,
-                agents: [],
-                directAnswer: decision.question,
-                finalAnswer: decision.question,
-                summary: "需要澄清用户真实意图，暂不创建任务线程。"
-            )
-        )
-        appendTaskRecordMessage(
-            taskRecordID,
-            actor: "灵枢",
-            role: "中枢",
-            kind: .result,
-            text: decision.question
-        )
-        finishTaskRecord(taskRecordID, status: .answered, summary: "灵枢发起澄清，暂不创建任务线程。")
-        chatMessages.append(.init(speaker: "灵枢", text: decision.question, isUser: false, taskRecordID: taskRecordID))
         return decision.question
     }
 

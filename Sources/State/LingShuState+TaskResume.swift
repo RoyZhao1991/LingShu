@@ -104,24 +104,39 @@ extension LingShuState {
         }
         // 至少要有一个可续接项，否则退回新任务（不发空卡）。
         guard !options.isEmpty else {
-            pendingTaskResume = nil
             return ""
         }
         options.append(.init(label: "都不是，按新任务开始", detail: "忽略历史，新建一个独立任务上下文。", action: "new-task"))
 
         let promptPayload = CodexRouteChoicePrompt(question: question, options: options)
-        pendingTaskResume = .init(prompt: prompt, source: source, taskRecordID: taskRecordID, choices: promptPayload)
-        appendTrace(kind: .route, actor: "记忆", title: "任务回溯待确认", detail: "语义匹配置信不足，已请用户在 \(options.count) 个选项中确认。")
-        appendTaskRecordMessage(taskRecordID, actor: "灵枢", role: "中枢", kind: .router, text: question)
+        let pending = LingShuPendingTaskResume(prompt: prompt, source: source, taskRecordID: taskRecordID, choices: promptPayload)
+        let firstResumeAction = options.first(where: { $0.action?.hasPrefix("resume:") == true })?.action
 
-        let message = ChatMessage(
-            speaker: "灵枢",
-            text: question,
-            isUser: false,
+        // 经统一编排中心呈现：若已有待确认问题，本题排队，前一个答完再逐题浮现（多轮）。
+        clarificationCenter.submit(
+            kind: "任务续接",
             taskRecordID: taskRecordID,
-            choices: promptPayload.sanitized
+            present: { [weak self] in
+                guard let self else { return }
+                self.pendingTaskResume = pending
+                self.appendTrace(kind: .route, actor: "记忆", title: "任务回溯待确认", detail: "语义匹配置信不足，已请用户在 \(options.count) 个选项中确认。")
+                self.appendTaskRecordMessage(taskRecordID, actor: "灵枢", role: "中枢", kind: .router, text: question)
+                self.chatMessages.append(ChatMessage(
+                    speaker: "灵枢",
+                    text: question,
+                    isUser: false,
+                    taskRecordID: taskRecordID,
+                    choices: promptPayload.sanitized
+                ))
+            },
+            autoResolve: { [weak self] in
+                // 非交互（自主 / 无头 / 定时）：默认续接首个候选；没有可续接项则按新任务推进，绝不阻塞。
+                guard let self else { return }
+                let action = firstResumeAction ?? "new-task"
+                self.appendTrace(kind: .route, actor: "记忆", title: "非交互自动定夺", detail: "自主/无头场景，默认\(firstResumeAction != nil ? "续接首个候选" : "按新任务推进")。")
+                self.performResumeAction(action, pending: pending)
+            }
         )
-        chatMessages.append(message)
         return question
     }
 
@@ -153,19 +168,25 @@ extension LingShuState {
         }
 
         performChoiceAction(action)
+        clarificationCenter.advanceAfterExternalResolution()   // 多轮：本题已答，下一题浮现
         return "继续"
     }
 
     /// 选择卡上的结构化动作：resume:<taskID> 续接指定任务，new-task 开新任务。
+    /// 读取当前挂起的续接上下文并执行；非交互自动定夺走 performResumeAction(_:pending:)。
     func performChoiceAction(_ action: String) {
         guard let pending = pendingTaskResume else {
             appendTrace(kind: .warning, actor: "记忆", title: "动作已失效", detail: "续接上下文已不存在，忽略本次选择。")
             return
         }
         pendingTaskResume = nil
+        performResumeAction(action, pending: pending)
+    }
 
+    /// 真正执行续接动作（与"是否由用户点选"解耦：交互点选与非交互自动定夺共用）。
+    func performResumeAction(_ action: String, pending: LingShuPendingTaskResume) {
         if action == "new-task" {
-            appendTrace(kind: .route, actor: "记忆", title: "用户选择新任务", detail: "忽略历史候选，按新任务上下文推进。")
+            appendTrace(kind: .route, actor: "记忆", title: "选择新任务", detail: "忽略历史候选，按新任务上下文推进。")
             _ = submitTextInput(
                 pending.prompt,
                 source: pending.source,
@@ -178,7 +199,7 @@ extension LingShuState {
 
         if action.hasPrefix("resume:") {
             let taskID = String(action.dropFirst("resume:".count))
-            appendTrace(kind: .route, actor: "记忆", title: "用户确认续接", detail: "继续历史任务线程 \(taskID)，继承前序执行上下文。")
+            appendTrace(kind: .route, actor: "记忆", title: "确认续接", detail: "继续历史任务线程 \(taskID)，继承前序执行上下文。")
             _ = submitTextInput(
                 pending.prompt,
                 source: pending.source,

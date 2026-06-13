@@ -18,6 +18,7 @@ extension LingShuState {
 
         if let action = option.action {
             performChoiceAction(action)
+            clarificationCenter.advanceAfterExternalResolution()   // 多轮：消解后下一题浮现
             return
         }
         _ = submitTextInput(option.label, source: .typed)
