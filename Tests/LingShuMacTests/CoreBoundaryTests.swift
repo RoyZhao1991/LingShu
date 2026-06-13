@@ -1673,7 +1673,8 @@ final class CoreBoundaryTests: XCTestCase {
         XCTAssertEqual(urlRequest.httpMethod, "POST")
         XCTAssertEqual(urlRequest.value(forHTTPHeaderField: "X-Model-Token"), "model-token")
         XCTAssertNil(urlRequest.value(forHTTPHeaderField: "Authorization"))
-        XCTAssertEqual(urlRequest.url?.absoluteString, "https://model-gateway.datanet.bj.cn/v1/perception/swds-speaker-tts")
+        XCTAssertEqual(urlRequest.url?.absoluteString, "https://model-gateway.datanet.bj.cn/v1/perception/swds-speaker-tts/stream")
+        XCTAssertTrue(LingShuSpeechOutputProviderDescriptor.dataNetSpeakerTTS.supportsStreaming)
     }
 
     func testSpeechSegmenterSplitsLongChineseReplyForLowLatencyPlayback() {

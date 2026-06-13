@@ -65,12 +65,12 @@ struct LingShuSpeechOutputProviderDescriptor: Identifiable, Codable, Equatable, 
         kind: .dataNetSpeakerTTS,
         displayName: "数据网关情绪男声",
         deployment: "数据网络模型网关",
-        defaultEndpoint: "https://model-gateway.datanet.bj.cn/v1/perception/swds-speaker-tts",
-        supportsStreaming: false,
+        defaultEndpoint: "https://model-gateway.datanet.bj.cn/v1/perception/swds-speaker-tts/stream",
+        supportsStreaming: true,
         supportsEmotion: true,
         supportsVoiceClone: false,
         isRuntimeAvailable: true,
-        note: "通过数据网络 swds-speaker-tts 合成中文语音；凭据从 App 包内 RuntimeConfig 读取。"
+        note: "通过数据网络 swds-speaker-tts/stream 合成中文语音；凭据从 App 包内 RuntimeConfig 读取。"
     )
 
     static let indexTTS2Service = LingShuSpeechOutputProviderDescriptor(
