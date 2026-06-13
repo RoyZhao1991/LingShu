@@ -49,6 +49,15 @@ extension VoiceIOManager {
         let endpoint = speechOutputEndpoint
         let apiKey = resolvedSpeechOutputAPIKey(for: provider)
         let persona = speechPersona
+
+        // 网关男声需要 token；读不到就别发空请求——直接说明原因并降级，让"为什么是本机生硬音"一眼可诊断。
+        if provider.kind == .dataNetSpeakerTTS,
+           apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            setOutputStatus("云端男声缺凭据（钥匙串未读到 datanet token），已降级本机语音")
+            speakWithAppleSpeech(cleanedText, statusAlreadySet: true)
+            return
+        }
+
         let segments = LingShuSpeechSegmenter.segments(from: cleanedText)
 
         activeSpeechTask = Task { @MainActor [weak self] in
@@ -77,8 +86,8 @@ extension VoiceIOManager {
                 self.isSpeaking = false
                 self.setOutputStatus(self.outputStandbyStatus(for: provider))
             } catch {
-                // 云端男声不可用（无凭据/网关异常）：降级本机语音兜底，避免完全没声音。
-                self.setOutputStatus("\(provider.displayName) 不可用，已降级本机语音")
+                // 云端男声请求失败（网关异常/鉴权失败）：显示原因并降级本机语音兜底。
+                self.setOutputStatus("云端男声请求失败（\(String(describing: error).prefix(50))），已降级本机语音")
                 self.speakWithAppleSpeech(cleanedText, statusAlreadySet: true)
             }
         }
