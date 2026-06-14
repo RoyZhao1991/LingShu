@@ -156,8 +156,9 @@ extension VoiceIOManager {
         }
     }
 
-    /// 多段连续流式:用**一个**流式 PCM 播放器贯穿全程,各段音频并行预取(有界窗口)后按序把 PCM 背靠背
-    /// 排进同一播放器——段与段之间不再排空到静音、不再每段重新等首包,从而消除分段朗读的卡顿。
+    /// 多段连续流式:用**一个**流式 PCM 播放器贯穿全程。
+    /// **首段真流式**(边收边喂,首包即出声 → 首声最快),其余段并行预取整段 WAV、按序把 PCM 背靠背
+    /// 排进同一播放器——段间不再排空到静音、不再每段重等首包,从而首声快又全程不卡。
     private func speakSegmentsContinuously(
         _ parts: [String],
         provider: LingShuSpeechOutputProviderDescriptor,
@@ -165,53 +166,50 @@ extension VoiceIOManager {
         apiKey: String,
         persona: LingShuSpeechPersona
     ) async throws {
-        var player: LingShuStreamingPCMPlayer?
         var pending: [Int: Task<Data, Error>] = [:]
         let window = min(3, parts.count)
+        var nextToPrefetch = 1   // 第 0 段真流式,不预取;从第 1 段起并行预取整段音频
 
         func prefetch(_ index: Int) {
-            guard index < parts.count, pending[index] == nil else { return }
+            guard index >= 1, index < parts.count, pending[index] == nil else { return }
             let text = parts[index]
             pending[index] = Task.detached(priority: .userInitiated) {
                 try await Self.fetchSpeechAudio(text: text, provider: provider, endpoint: endpoint, apiKey: apiKey, persona: persona)
             }
         }
-        for index in 0..<window { prefetch(index) }
+        func topUpPrefetch() {
+            while nextToPrefetch < parts.count, pending.count < window {
+                prefetch(nextToPrefetch)
+                nextToPrefetch += 1
+            }
+        }
+        topUpPrefetch()   // 首段流式期间,第 1..window 段已在并行下载
         defer {
             pending.values.forEach { $0.cancel() }
-            if Task.isCancelled { player?.stop(); activeStreamingPlayer = nil }
+            if Task.isCancelled { activeStreamingPlayer?.stop(); activeStreamingPlayer = nil }
         }
 
-        for index in parts.indices {
+        // 首段:真流式喂进共享播放器(首包即播),返回仍在播的播放器——后续段继续往里灌,不排空。
+        let player = try await openStreamingSegment(parts[0], provider: provider, endpoint: endpoint, apiKey: apiKey, persona: persona)
+
+        // 其余段:用预取好的整段 WAV,剥头取 PCM 背靠背喂进同一播放器(连续无缝)。
+        for index in 1..<parts.count {
             try Task.checkCancellation()
+            if pending[index] == nil { prefetch(index) }
             guard let task = pending.removeValue(forKey: index) else { continue }
             let wav = try await task.value
-            prefetch(index + window)   // 维持预取窗口:下一批已在路上,播到这段时它已就绪
+            topUpPrefetch()
             try Task.checkCancellation()
-
             let bytes = [UInt8](wav)
             guard let located = LingShuStreamingWAVHeader.locate(in: bytes), located.pcmStart < bytes.count else { continue }
-            if player == nil {
-                guard let started = LingShuStreamingPCMPlayer(sampleRate: located.sampleRate) else {
-                    throw LingShuVoiceError.embeddedRuntimeLaunchFailed("流式播放器初始化失败")
-                }
-                try started.start()
-                player = started
-                activeStreamingPlayer = started
-                cloudVoiceDegradedReason = nil
-            }
-            player?.enqueue(pcm16: Data(bytes[located.pcmStart...]))
+            player.enqueue(pcm16: Data(bytes[located.pcmStart...]))
         }
 
-        guard let player else {
-            throw LingShuVoiceError.embeddedRuntimeLaunchFailed("流式 TTS 未返回有效音频")
-        }
         await player.finishAndDrain()
         activeStreamingPlayer = nil
     }
 
-    /// 单段流式:从 /stream 边收边喂流式 PCM 播放器(按字节喂,**不依赖 WAV 占位长度头**,
-    /// 避开 AVAudioPlayer 对占位长度 WAV 读出错误时长导致的卡死)。不动 isSpeaking,交外层统一管。
+    /// 单段流式:首包即播,播完排空。复用 openStreamingSegment(共享同一段流式实现)。
     private func streamSpeechSegment(
         _ text: String,
         provider: LingShuSpeechOutputProviderDescriptor,
@@ -219,6 +217,21 @@ extension VoiceIOManager {
         apiKey: String,
         persona: LingShuSpeechPersona
     ) async throws {
+        let player = try await openStreamingSegment(text, provider: provider, endpoint: endpoint, apiKey: apiKey, persona: persona)
+        await player.finishAndDrain()
+        activeStreamingPlayer = nil
+    }
+
+    /// 打开一段真流式:POST /stream,用 URLSession.bytes 边收边喂(按字节,**不依赖 WAV 占位长度头**,
+    /// 避开 AVAudioPlayer 对占位长度读出错误时长导致的卡死),返回**仍在播放**的播放器(不 drain)——
+    /// 供单段朗读或连续多段的首段复用。不动 isSpeaking,交外层统一管。
+    private func openStreamingSegment(
+        _ text: String,
+        provider: LingShuSpeechOutputProviderDescriptor,
+        endpoint: String,
+        apiKey: String,
+        persona: LingShuSpeechPersona
+    ) async throws -> LingShuStreamingPCMPlayer {
         let request = try LingShuSpeechOutputServiceContract.makeURLRequest(
             endpoint: endpoint,
             provider: provider,
@@ -270,8 +283,7 @@ extension VoiceIOManager {
             throw LingShuVoiceError.embeddedRuntimeLaunchFailed("流式 TTS 未返回有效音频")
         }
         if !pcmBatch.isEmpty { player.enqueue(pcm16: pcmBatch) }
-        await player.finishAndDrain()
-        activeStreamingPlayer = nil
+        return player
     }
 
     private func speakWithLowLatencySpeechService(
