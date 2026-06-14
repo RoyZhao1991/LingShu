@@ -204,16 +204,32 @@ struct TaskArtifactFilesPanel: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 ScrollView {
-                    VStack(spacing: 8) {
-                        ForEach(allArtifacts, id: \.artifact.id) { entry in
-                            TaskArtifactFileCard(artifact: entry.artifact, fromHistory: entry.fromHistory)
-                        }
+                    VStack(alignment: .leading, spacing: 14) {
+                        // 按文件操作类型分组(对齐 codex):新增 / 修改。
+                        fileSection("新增", color: .lingHolo, entries: allArtifacts.filter { ($0.artifact.operation ?? .created) == .created })
+                        fileSection("修改", color: .lingHoloAlt, entries: allArtifacts.filter { $0.artifact.operation == .modified })
                     }
                     .padding(10)
                 }
             }
         }
         .background(Color.black.opacity(0.28))
+    }
+
+    @ViewBuilder
+    private func fileSection(_ title: String, color: Color, entries: [(artifact: LingShuTaskExecutionArtifact, fromHistory: Bool)]) -> some View {
+        if !entries.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 5) {
+                    Circle().fill(color).frame(width: 6, height: 6)
+                    Text(title).font(.system(size: 10.5, weight: .bold)).foregroundStyle(color)
+                    Text("\(entries.count)").font(.system(size: 10, weight: .bold, design: .monospaced)).foregroundStyle(.white.opacity(0.4))
+                }
+                ForEach(entries, id: \.artifact.id) { entry in
+                    TaskArtifactFileCard(artifact: entry.artifact, fromHistory: entry.fromHistory)
+                }
+            }
+        }
     }
 }
 
@@ -274,6 +290,13 @@ struct TaskArtifactFileCard: View {
                         .foregroundStyle(.white.opacity(0.9))
                         .lineLimit(2)
                     HStack(spacing: 6) {
+                        let op = artifact.operation ?? .created
+                        Text(op.rawValue)
+                            .font(.system(size: 9, weight: .bold))
+                            .foregroundStyle(op == .modified ? Color.lingHoloAlt : Color.lingHolo)
+                            .padding(.horizontal, 4)
+                            .padding(.vertical, 1)
+                            .background((op == .modified ? Color.lingHoloAlt : Color.lingHolo).opacity(0.16), in: Capsule())
                         if fromHistory {
                             Text("历史")
                                 .font(.system(size: 9, weight: .bold))

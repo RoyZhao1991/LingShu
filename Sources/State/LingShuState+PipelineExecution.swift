@@ -28,6 +28,12 @@ extension LingShuState {
             }
         }
         defer { heartbeatKeepalive.cancel() }
+        // 执行前快照「目标文件是否已存在」——据此把产出物标为「新增」还是「修改」(对齐 codex 的文件操作区分)。
+        let fileManager = FileManager.default
+        let writeTargetExisted = (tool == "write_file") && fileManager.fileExists(atPath: arguments["path"] ?? "")
+        let commandPreexisting: Set<String> = (tool == "run_command")
+            ? Set(Self.extractRunCommandArtifacts(arguments["command"] ?? "", workingDirectory: workingDirectory).filter { fileManager.fileExists(atPath: $0) })
+            : []
         let mcpName = tool.hasPrefix("mcp:") ? String(tool.dropFirst(4)) : tool
         let result: LingShuToolResult
         if mcpToolNames.contains(mcpName), let client = connectorRegistry.client(forTool: mcpName) {
@@ -56,15 +62,16 @@ extension LingShuState {
         appendTaskRecordMessage(taskRecordID, actor: "工具", role: "执行结果", kind: .agent, text: result.journalText)
         appendTrace(kind: .tool, actor: "工具", title: result.success ? "\(result.tool) 完成" : "\(result.tool) 失败", detail: String(result.output.prefix(180)))
         if result.tool == "write_file", result.success, let path = arguments["path"] {
-            appendTaskRecordArtifact(taskRecordID, title: (path as NSString).lastPathComponent, location: path, producer: "工具执行")
+            appendTaskRecordArtifact(taskRecordID, title: (path as NSString).lastPathComponent, location: path, producer: "工具执行", operation: writeTargetExisted ? .modified : .created)
         }
         // run_command 产出的交付物(如 python 生成的 .pptx)不会被 write_file 自动登记——
         // 从命令与输出里抽出真实存在的交付型文件补登,让它出现在「任务产出文件」可预览/打开/定位(去重由 appendArtifact 负责)。
+        // 执行前已存在 → 标「修改」,否则「新增」。
         if result.tool == "run_command", result.success {
             let haystack = (arguments["command"] ?? "") + "\n" + result.output
             for path in Self.extractRunCommandArtifacts(haystack, workingDirectory: workingDirectory)
-            where FileManager.default.fileExists(atPath: path) {
-                appendTaskRecordArtifact(taskRecordID, title: (path as NSString).lastPathComponent, location: path, producer: "命令产出")
+            where fileManager.fileExists(atPath: path) {
+                appendTaskRecordArtifact(taskRecordID, title: (path as NSString).lastPathComponent, location: path, producer: "命令产出", operation: commandPreexisting.contains(path) ? .modified : .created)
             }
         }
         return result

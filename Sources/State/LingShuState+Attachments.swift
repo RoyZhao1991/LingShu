@@ -66,6 +66,27 @@ extension LingShuState {
         ingestAttachment(at: tempURL)
     }
 
+    /// 拖拽/粘贴进输入框的内容**整体就是**一个或多个真实存在的绝对文件路径时,转成附件并清空输入框。
+    /// 多行文本框会把拖入文件落成路径文本,这里纠正成附件芯片(与 📎/粘贴同管线)。
+    /// 只在"整框 = 纯路径(每行一个、均为存在的文件)"时触发——正文里顺带写的路径不动。
+    func convertDroppedFilePathsIfNeeded() {
+        let trimmed = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.hasPrefix("/") else { return }
+        let tokens = trimmed
+            .split(separator: "\n")
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+        let fileManager = FileManager.default
+        func isExistingFile(_ path: String) -> Bool {
+            guard path.hasPrefix("/") else { return false }
+            var isDirectory: ObjCBool = false
+            return fileManager.fileExists(atPath: path, isDirectory: &isDirectory) && !isDirectory.boolValue
+        }
+        guard !tokens.isEmpty, tokens.allSatisfy(isExistingFile) else { return }
+        prompt = ""
+        for path in tokens { ingestAttachment(at: URL(fileURLWithPath: path)) }
+    }
+
     func removeAttachment(_ id: UUID) {
         pendingAttachments.removeAll { $0.id == id }
     }

@@ -47,25 +47,35 @@ struct LingShuTaskExecutionMessage: Identifiable, Codable, Equatable, Sendable {
     }
 }
 
+/// 产出物的文件操作类型(对齐 codex 的「新增/修改」区分)。
+enum LingShuArtifactOperation: String, Codable, Equatable, Sendable {
+    case created = "新增"
+    case modified = "修改"
+}
+
 struct LingShuTaskExecutionArtifact: Identifiable, Codable, Equatable, Sendable {
     var id: String
     var title: String
     var location: String
     var producer: String
     var createdAt: Date
+    /// 文件操作:新增 or 修改。可空——旧持久化记录无此字段,解码时缺省为 nil(展示按"新增"处理)。
+    var operation: LingShuArtifactOperation?
 
     init(
         id: String = UUID().uuidString,
         title: String,
         location: String,
         producer: String,
-        createdAt: Date = Date()
+        createdAt: Date = Date(),
+        operation: LingShuArtifactOperation? = nil
     ) {
         self.id = id
         self.title = title
         self.location = location
         self.producer = producer
         self.createdAt = createdAt
+        self.operation = operation
     }
 }
 
@@ -186,13 +196,19 @@ struct LingShuTaskExecutionRecord: Identifiable, Codable, Equatable, Sendable {
         title: String,
         location: String,
         producer: String,
+        operation: LingShuArtifactOperation? = nil,
         now: Date = Date()
     ) {
         let cleanedLocation = location.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cleanedLocation.isEmpty else { return }
 
         let cleanedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
-        if artifacts.contains(where: { $0.location == cleanedLocation }) {
+        // 已登记过同一文件:若这次是"修改"而之前记的是"新增",升级标注为修改(同回合多次写同一文件)。
+        if let index = artifacts.firstIndex(where: { $0.location == cleanedLocation }) {
+            if operation == .modified, artifacts[index].operation != .modified {
+                artifacts[index].operation = .modified
+                updatedAt = now
+            }
             return
         }
 
@@ -200,7 +216,8 @@ struct LingShuTaskExecutionRecord: Identifiable, Codable, Equatable, Sendable {
             title: cleanedTitle.isEmpty ? "未命名产出物" : cleanedTitle,
             location: cleanedLocation,
             producer: producer,
-            createdAt: now
+            createdAt: now,
+            operation: operation
         ))
         updatedAt = now
     }

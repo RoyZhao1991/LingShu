@@ -33,12 +33,13 @@ extension LingShuState {
         _ recordID: String?,
         title: String,
         location: String,
-        producer: String
+        producer: String,
+        operation: LingShuArtifactOperation? = nil
     ) {
         guard let recordID,
               let index = taskExecutionRecords.firstIndex(where: { $0.id == recordID }) else { return }
 
-        taskExecutionRecords[index].appendArtifact(title: title, location: location, producer: producer)
+        taskExecutionRecords[index].appendArtifact(title: title, location: location, producer: producer, operation: operation)
         persistTaskExecutionRecords()
     }
 
