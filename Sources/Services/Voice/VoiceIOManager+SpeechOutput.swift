@@ -147,10 +147,67 @@ extension VoiceIOManager {
             isSpeaking = false
             setOutputStatus(outputStandbyStatus(for: provider))
         }
-        for segment in parts {
-            try Task.checkCancellation()
-            try await streamSpeechSegment(segment, provider: provider, endpoint: endpoint, apiKey: apiKey, persona: persona)
+        // 单段:真流式,首包即播(最低延迟)。多段:连续播放器 + 管线预取,段间背靠背不排空到静音——
+        // 根治"带格式/长回复分成很多小段、每段都等下一段首包"的卡顿。
+        if parts.count == 1 {
+            try await streamSpeechSegment(parts[0], provider: provider, endpoint: endpoint, apiKey: apiKey, persona: persona)
+        } else {
+            try await speakSegmentsContinuously(parts, provider: provider, endpoint: endpoint, apiKey: apiKey, persona: persona)
         }
+    }
+
+    /// 多段连续流式:用**一个**流式 PCM 播放器贯穿全程,各段音频并行预取(有界窗口)后按序把 PCM 背靠背
+    /// 排进同一播放器——段与段之间不再排空到静音、不再每段重新等首包,从而消除分段朗读的卡顿。
+    private func speakSegmentsContinuously(
+        _ parts: [String],
+        provider: LingShuSpeechOutputProviderDescriptor,
+        endpoint: String,
+        apiKey: String,
+        persona: LingShuSpeechPersona
+    ) async throws {
+        var player: LingShuStreamingPCMPlayer?
+        var pending: [Int: Task<Data, Error>] = [:]
+        let window = min(3, parts.count)
+
+        func prefetch(_ index: Int) {
+            guard index < parts.count, pending[index] == nil else { return }
+            let text = parts[index]
+            pending[index] = Task.detached(priority: .userInitiated) {
+                try await Self.fetchSpeechAudio(text: text, provider: provider, endpoint: endpoint, apiKey: apiKey, persona: persona)
+            }
+        }
+        for index in 0..<window { prefetch(index) }
+        defer {
+            pending.values.forEach { $0.cancel() }
+            if Task.isCancelled { player?.stop(); activeStreamingPlayer = nil }
+        }
+
+        for index in parts.indices {
+            try Task.checkCancellation()
+            guard let task = pending.removeValue(forKey: index) else { continue }
+            let wav = try await task.value
+            prefetch(index + window)   // 维持预取窗口:下一批已在路上,播到这段时它已就绪
+            try Task.checkCancellation()
+
+            let bytes = [UInt8](wav)
+            guard let located = LingShuStreamingWAVHeader.locate(in: bytes), located.pcmStart < bytes.count else { continue }
+            if player == nil {
+                guard let started = LingShuStreamingPCMPlayer(sampleRate: located.sampleRate) else {
+                    throw LingShuVoiceError.embeddedRuntimeLaunchFailed("流式播放器初始化失败")
+                }
+                try started.start()
+                player = started
+                activeStreamingPlayer = started
+                cloudVoiceDegradedReason = nil
+            }
+            player?.enqueue(pcm16: Data(bytes[located.pcmStart...]))
+        }
+
+        guard let player else {
+            throw LingShuVoiceError.embeddedRuntimeLaunchFailed("流式 TTS 未返回有效音频")
+        }
+        await player.finishAndDrain()
+        activeStreamingPlayer = nil
     }
 
     /// 单段流式:从 /stream 边收边喂流式 PCM 播放器(按字节喂,**不依赖 WAV 占位长度头**,
