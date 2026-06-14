@@ -49,7 +49,7 @@ struct LingShuTaskPoolView: View {
 
     private var header: some View {
         HStack(spacing: 14) {
-            Label("任务池", systemImage: "tray.full")
+            Label("归档", systemImage: "archivebox")
                 .font(.system(size: 16, weight: .bold))
                 .foregroundStyle(Color.lingHolo)
             Text("进行中 \(ongoing.count) · 已完成 \(done.count)")

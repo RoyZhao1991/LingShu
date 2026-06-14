@@ -38,6 +38,8 @@ struct LingShuAttachment: Identifiable, Equatable, Sendable {
     var byteCount: Int
     /// 解析中/解析失败的状态描述；nil 表示就绪。
     var status: String?
+    /// 本地源文件路径：输入框据此渲染缩略图预览（图片显真图、其余显类型图标）。
+    var localURL: URL?
 
     init(
         id: UUID = UUID(),
@@ -45,7 +47,8 @@ struct LingShuAttachment: Identifiable, Equatable, Sendable {
         kind: Kind,
         extractedContext: String,
         byteCount: Int,
-        status: String? = nil
+        status: String? = nil,
+        localURL: URL? = nil
     ) {
         self.id = id
         self.filename = filename
@@ -53,6 +56,7 @@ struct LingShuAttachment: Identifiable, Equatable, Sendable {
         self.extractedContext = extractedContext
         self.byteCount = byteCount
         self.status = status
+        self.localURL = localURL
     }
 }
 

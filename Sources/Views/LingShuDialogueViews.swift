@@ -207,10 +207,8 @@ struct LingShuAttachmentTray: View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
                 ForEach(state.pendingAttachments) { attachment in
-                    HStack(spacing: 7) {
-                        Image(systemName: attachment.kind.icon)
-                            .font(.system(size: 12, weight: .bold))
-                            .foregroundStyle(Color.lingHolo)
+                    HStack(spacing: 8) {
+                        attachmentThumbnail(attachment)
 
                         VStack(alignment: .leading, spacing: 1) {
                             Text(attachment.filename)
@@ -239,6 +237,25 @@ struct LingShuAttachmentTray: View {
                 }
             }
             .padding(.horizontal, 1)
+        }
+    }
+
+    /// 缩略图预览(对齐 codex/claude):图片显真实缩略图,其它文件显类型图标小图块。
+    @ViewBuilder
+    private func attachmentThumbnail(_ attachment: LingShuAttachment) -> some View {
+        if attachment.kind == .image, let url = attachment.localURL, let image = NSImage(contentsOf: url) {
+            Image(nsImage: image)
+                .resizable()
+                .aspectRatio(contentMode: .fill)
+                .frame(width: 34, height: 34)
+                .clipShape(RoundedRectangle(cornerRadius: 6))
+                .overlay(RoundedRectangle(cornerRadius: 6).stroke(.white.opacity(0.12), lineWidth: 1))
+        } else {
+            Image(systemName: attachment.kind.icon)
+                .font(.system(size: 15, weight: .bold))
+                .foregroundStyle(Color.lingHolo)
+                .frame(width: 34, height: 34)
+                .background(RoundedRectangle(cornerRadius: 6).fill(.white.opacity(0.06)))
         }
     }
 }

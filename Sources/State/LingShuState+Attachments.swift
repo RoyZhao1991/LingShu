@@ -30,7 +30,8 @@ extension LingShuState {
             kind: LingShuAttachmentIngestor.kind(forExtension: url.pathExtension),
             extractedContext: "",
             byteCount: 0,
-            status: "解析中…"
+            status: "解析中…",
+            localURL: url
         )
         pendingAttachments.append(placeholder)
 
@@ -40,14 +41,14 @@ extension LingShuState {
             await MainActor.run {
                 guard let self else { return }
                 if let index = self.pendingAttachments.firstIndex(where: { $0.id == placeholderID }) {
-                    var resolved = attachment
-                    resolved = LingShuAttachment(
+                    let resolved = LingShuAttachment(
                         id: placeholderID,
-                        filename: resolved.filename,
-                        kind: resolved.kind,
-                        extractedContext: resolved.extractedContext,
-                        byteCount: resolved.byteCount,
-                        status: resolved.status
+                        filename: attachment.filename,
+                        kind: attachment.kind,
+                        extractedContext: attachment.extractedContext,
+                        byteCount: attachment.byteCount,
+                        status: attachment.status,
+                        localURL: url
                     )
                     self.pendingAttachments[index] = resolved
                 }
