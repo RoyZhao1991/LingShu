@@ -97,18 +97,29 @@ enum LingShuCuratedSkillRegistry {
             run.font.name = 'PingFang SC'
             return box
 
+        CONTENT_W = 11.8   # 内容区宽(留左右安全边),标题字号据此自适应避免右边缘截断
         for i, s in enumerate(slides, 1):
             slide = prs.slides.add_slide(blank)
             fill = slide.background.fill
             fill.solid()
             fill.fore_color.rgb = BG
             text_box(slide, 0.9, 0.7, 2.0, 0.5, '%02d' % i, 18, ACCENT, bold=True)
-            text_box(slide, 0.9, 1.4, 11.5, 1.6, s.get('title', ''), 40, INK, bold=True)
+            # 标题字号按长度自适应(防止长标题溢出/被右边缘截断),并据估算行数动态下推副标题/正文——
+            # 杜绝"标题换两行就和副标题重叠"的版式崩。
+            title = str(s.get('title', ''))
+            tsize = 40 if len(title) <= 14 else (34 if len(title) <= 20 else 28)
+            chars_per_line = max(1, int(CONTENT_W * 72 / tsize))
+            tlines = max(1, (len(title) + chars_per_line - 1) // chars_per_line)
+            title_h = tlines * (tsize / 72.0) * 1.32
+            text_box(slide, 0.9, 1.2, CONTENT_W, title_h + 0.15, title, tsize, INK, bold=True)
+            y = 1.2 + title_h + 0.38
             if s.get('subtitle'):
-                text_box(slide, 0.9, 3.0, 11.5, 0.8, s.get('subtitle'), 20, ACCENT, bold=True)
+                text_box(slide, 0.9, y, CONTENT_W, 0.7, str(s.get('subtitle')), 20, ACCENT, bold=True)
+                y += 0.95
+            y = max(y, 3.9)   # 正文起始不高于此,留出呼吸感
             bullets = s.get('bullets', [])
             if bullets:
-                box = slide.shapes.add_textbox(Inches(0.9), Inches(4.0), Inches(11.5), Inches(3.0))
+                box = slide.shapes.add_textbox(Inches(0.9), Inches(y), Inches(CONTENT_W), Inches(max(1.5, 7.2 - y)))
                 tf = box.text_frame
                 tf.word_wrap = True
                 for j, b in enumerate(bullets):

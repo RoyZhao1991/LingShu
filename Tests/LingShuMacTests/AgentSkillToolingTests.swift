@@ -48,6 +48,15 @@ final class AgentSkillToolingTests: XCTestCase {
         XCTAssertNil(state.matchedSkillHint(for: "今天天气怎么样"), "无固化技能匹配(内置兜底)不应提示")
     }
 
+    func testExtractFilePathsFindsRunCommandArtifacts() {
+        // 验收门据此识别 run_command 产出(不会被 write_file 登记)的真实文件,杜绝"文件不在清单"死循环。
+        let reply = "已交付 ✅\n**文件路径**：`/Users/example/app/人工智能发展简史.pptx`（41,965 字节），另有 /Users/example/app/slides.json。"
+        let paths = LingShuState.extractFilePaths(from: reply)
+        XCTAssertTrue(paths.contains("/Users/example/app/人工智能发展简史.pptx"), "应抽出中文名 .pptx 路径")
+        XCTAssertTrue(paths.contains("/Users/example/app/slides.json"), "应抽出 .json 路径")
+        XCTAssertTrue(LingShuState.extractFilePaths(from: "我是灵枢，由 Roy Zhao 打造。").isEmpty, "纯对话不应误抽路径")
+    }
+
     @MainActor
     func testUnwrapMCPArgumentsParsesEnvelope() {
         let unwrapped = LingShuState.unwrapMCPArguments(["arguments_json": "{\"path\":\"/tmp/x\",\"n\":3}"])

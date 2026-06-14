@@ -54,39 +54,7 @@ extension LingShuState {
         return fileHints.contains { text.contains($0) }
     }
 
-    /// 独立 verifier(maker≠checker):用评审官人格 + 真实落盘清单核对交付,复用 LingShuChecklistVerdict。
-    /// 声称产出文件但盘上没有 → 判不通过(根治假完成)。
-    func verifyAgentDeliverable(userRequest: String, reply: String, taskRecordID: String?) async -> (passed: Bool, critique: String) {
-        let reviewer = expertProfileRegistry.reviewerProfile()
-        let realFiles = (taskExecutionRecords.first { $0.id == taskRecordID }?.artifacts ?? [])
-            .filter { FileManager.default.fileExists(atPath: $0.location) }
-        let filesBlock = realFiles.isEmpty
-            ? "真实落盘文件:(无——盘上没有任何本回合产出文件)"
-            : "真实落盘文件(盘上确实存在):\n" + realFiles.map { "- \($0.location)" }.joined(separator: "\n")
-        let prompt = """
-        逐条核对这次交付是否真正满足用户要求。
-        用户要求:\(userRequest)
-        交付答复:\(reply)
-        \(filesBlock)
-        核对规则:凡答复声称"已生成/已写入/已保存某文件",以上面【真实落盘文件】清单为准——清单里没有对应文件,该条判 ❌(这是假完成)。
-        输出格式(严格遵守):
-        1. 先逐条核对并写明达标/未达标及理由(未达标写清缺什么、怎么改)。
-        2. 另起一行:核对统计 PASS=<达标条数> FAIL=<未达标条数>
-        3. 最后单独一行:全部达标写「结论:通过」,有未达标写「结论:需修正」。
-        """
-        let verifier = LingShuAgentSession(
-            id: "verifier-\(UUID().uuidString.prefix(6))",
-            system: reviewer.promptBlock,
-            tools: [],
-            model: makeAgentModelAdapter(),
-            maxTurns: 1
-        )
-        let result = await verifier.send(prompt)
-        let critique: String
-        if case .completed(let value) = result { critique = value } else { critique = "" }
-        let verdict = LingShuChecklistVerdict.parse(critique)
-        return (verdict.allPassed, critique)
-    }
+    // 验收门 verifyAgentDeliverable 已移至 LingShuState+DeliveryReview.swift(与看图/取文同处一个子域)。
 
     /// 记忆归一:跨会话只喂【蒸馏摘要】,不原样回放历史助手输出——从根上断掉
     /// "历史里的旧错误自述/假完成声明被模型模仿"这类 seed 污染。会话内当轮仍走正常 verbatim 上下文。
@@ -226,8 +194,13 @@ extension LingShuState {
     /// 不再用固定轮数封顶。`verifyCeiling` 只是防失控的高位安全天花板,正常远到不了。
     func verifyAndContinue(session: LingShuAgentSession, result initial: LingShuAgentRunResult, userRequest: String, taskRecordID: String?) async -> LingShuAgentRunResult {
         var result = initial
-        // 纯闲聊/无产出物声明不触发,省 token。
-        guard case .completed = result, Self.replyClaimsArtifact(Self.runResultText(result)) else { return result }
+        // 触发验收门的可靠信号:**本回合真有产出物落盘**(write_file 自动登记)——比抠回复动词稳得多
+        // (旧的只认"已生成/已写入"会漏掉"已交付"这类措辞,导致验收形同虚设);
+        // 纯闲聊/自我介绍不写文件→无产出物→不触发,省 token 且不误触。回复显式声称产出文件也触发。
+        let producedRealArtifacts = !((taskExecutionRecords.first { $0.id == taskRecordID }?.artifacts ?? [])
+            .filter { FileManager.default.fileExists(atPath: $0.location) }.isEmpty)
+        guard case .completed = result,
+              producedRealArtifacts || Self.replyClaimsArtifact(Self.runResultText(result)) else { return result }
         let verifyCeiling = 8   // 安全天花板,非目标位
         var round = 0
         var lastArtifactCount = -1
