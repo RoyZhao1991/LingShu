@@ -22,6 +22,40 @@ enum LingShuTaskExecutionMessageKind: String, Codable, Equatable, Sendable {
     case warning
 }
 
+/// 一条执行消息的**结构化载荷**(对齐 codex 窗口:工具调用/命令输出/文件 diff 渲染成卡片,而非裸文本)。
+/// 可空——旧持久化记录无此字段,synthesized Codable 对 Optional 走 decodeIfPresent → nil(向后兼容)。
+enum LingShuTaskExecutionDetail: Codable, Equatable, Sendable {
+    /// 工具/命令调用:工具名 + 一句话摘要 + 完整参数(供卡片展开)。
+    case toolCall(tool: String, summary: String, arguments: String)
+    /// 工具/命令结果:工具名 + 成功与否 + 输出(供卡片折叠/展开)。
+    case toolResult(tool: String, success: Bool, output: String)
+    /// 文件改动:路径 + 新增/修改 + 增删行数 + 统一 diff 文本(供 diff 卡片彩色展开 + 撤销)。
+    case fileEdit(path: String, operation: LingShuArtifactOperation, added: Int, removed: Int, diff: String)
+}
+
+/// 执行计划的一步(对齐 codex/LOOP 标准:先列计划清单,再逐步执行并更新状态)。
+struct LingShuPlanStep: Codable, Equatable, Sendable, Identifiable {
+    enum Status: String, Codable, Equatable, Sendable {
+        case pending = "待办"
+        case inProgress = "进行中"
+        case completed = "已完成"
+    }
+    var id: String = UUID().uuidString
+    var title: String
+    var status: Status = .pending
+
+    enum CodingKeys: String, CodingKey { case id, title, status }
+    init(id: String = UUID().uuidString, title: String, status: Status = .pending) {
+        self.id = id; self.title = title; self.status = status
+    }
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = (try? c.decode(String.self, forKey: .id)) ?? UUID().uuidString
+        title = try c.decode(String.self, forKey: .title)
+        status = (try? c.decode(Status.self, forKey: .status)) ?? .pending
+    }
+}
+
 struct LingShuTaskExecutionMessage: Identifiable, Codable, Equatable, Sendable {
     var id: String
     var timestamp: Date
@@ -29,6 +63,10 @@ struct LingShuTaskExecutionMessage: Identifiable, Codable, Equatable, Sendable {
     var role: String
     var kind: LingShuTaskExecutionMessageKind
     var text: String
+    /// codex 式渲染的结构化载荷;nil = 纯文本/状态消息,按 kind 渲染。
+    var detail: LingShuTaskExecutionDetail?
+    /// 文件改动是否已被用户撤销(仅 fileEdit detail 有意义)。
+    var undone: Bool?
 
     init(
         id: String = UUID().uuidString,
@@ -36,7 +74,9 @@ struct LingShuTaskExecutionMessage: Identifiable, Codable, Equatable, Sendable {
         actor: String,
         role: String,
         kind: LingShuTaskExecutionMessageKind,
-        text: String
+        text: String,
+        detail: LingShuTaskExecutionDetail? = nil,
+        undone: Bool? = nil
     ) {
         self.id = id
         self.timestamp = timestamp
@@ -44,8 +84,11 @@ struct LingShuTaskExecutionMessage: Identifiable, Codable, Equatable, Sendable {
         self.role = role
         self.kind = kind
         self.text = text
+        self.detail = detail
+        self.undone = undone
     }
 }
+// 行级 diff(LCS)已拆为独立模块 → Sources/Support/LingShuLineDiff.swift(纯算法,可单测)。
 
 /// 产出物的文件操作类型(对齐 codex 的「新增/修改」区分)。
 enum LingShuArtifactOperation: String, Codable, Equatable, Sendable {
@@ -91,6 +134,12 @@ struct LingShuTaskExecutionRecord: Identifiable, Codable, Equatable, Sendable {
     var updatedAt: Date
     var messages: [LingShuTaskExecutionMessage]
     var artifacts: [LingShuTaskExecutionArtifact]
+    /// 执行计划清单(LOOP 标准:先 plan 再逐步执行)。模型经 update_plan 维护,在窗口顶部渲染为 todo。
+    var plan: [LingShuPlanStep]
+    /// 设计质量分(0–1,PPT 等视觉交付物的过程内审计/最终验收打分)。nil=未评。供 dreaming 进化 DesignKB。
+    var designScore: Double?
+    /// 设计审计抓到的**失败点/待改进项**(低分页问题)。供 dreaming 从"失败"里学经验。
+    var designIssues: [String]
 
     enum CodingKeys: String, CodingKey {
         case id
@@ -104,6 +153,9 @@ struct LingShuTaskExecutionRecord: Identifiable, Codable, Equatable, Sendable {
         case updatedAt
         case messages
         case artifacts
+        case plan
+        case designScore
+        case designIssues
     }
 
     init(
@@ -117,7 +169,10 @@ struct LingShuTaskExecutionRecord: Identifiable, Codable, Equatable, Sendable {
         createdAt: Date,
         updatedAt: Date,
         messages: [LingShuTaskExecutionMessage],
-        artifacts: [LingShuTaskExecutionArtifact] = []
+        artifacts: [LingShuTaskExecutionArtifact] = [],
+        plan: [LingShuPlanStep] = [],
+        designScore: Double? = nil,
+        designIssues: [String] = []
     ) {
         self.id = id
         self.title = title
@@ -130,6 +185,9 @@ struct LingShuTaskExecutionRecord: Identifiable, Codable, Equatable, Sendable {
         self.updatedAt = updatedAt
         self.messages = messages
         self.artifacts = artifacts
+        self.plan = plan
+        self.designScore = designScore
+        self.designIssues = designIssues
     }
 
     init(from decoder: Decoder) throws {
@@ -145,6 +203,9 @@ struct LingShuTaskExecutionRecord: Identifiable, Codable, Equatable, Sendable {
         updatedAt = try container.decode(Date.self, forKey: .updatedAt)
         messages = try container.decode([LingShuTaskExecutionMessage].self, forKey: .messages)
         artifacts = try container.decodeIfPresent([LingShuTaskExecutionArtifact].self, forKey: .artifacts) ?? []
+        plan = try container.decodeIfPresent([LingShuPlanStep].self, forKey: .plan) ?? []
+        designScore = try container.decodeIfPresent(Double.self, forKey: .designScore)
+        designIssues = try container.decodeIfPresent([String].self, forKey: .designIssues) ?? []
     }
 
     static func create(prompt: String, now: Date = Date()) -> LingShuTaskExecutionRecord {
@@ -171,18 +232,21 @@ struct LingShuTaskExecutionRecord: Identifiable, Codable, Equatable, Sendable {
         role: String,
         kind: LingShuTaskExecutionMessageKind,
         text: String,
+        detail: LingShuTaskExecutionDetail? = nil,
         now: Date = Date()
     ) {
         let cleaned = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !cleaned.isEmpty else { return }
+        // 结构化卡片(detail)即使文本为空也要保留(diff/输出在 detail 里);纯文本消息空了才跳过。
+        guard !cleaned.isEmpty || detail != nil else { return }
 
-        if messages.last?.actor == actor,
+        if detail == nil,
+           messages.last?.actor == actor,
            messages.last?.kind == kind,
            messages.last?.text == cleaned {
             return
         }
 
-        messages.append(.init(timestamp: now, actor: actor, role: role, kind: kind, text: cleaned))
+        messages.append(.init(timestamp: now, actor: actor, role: role, kind: kind, text: cleaned, detail: detail))
         if !participants.contains(actor) {
             participants.append(actor)
         }

@@ -1748,14 +1748,29 @@ final class CoreBoundaryTests: XCTestCase {
         XCTAssertTrue(LingShuSpeechOutputProviderDescriptor.dataNetSpeakerTTS.supportsStreaming)
     }
 
-    func testSpeechSegmenterSplitsLongChineseReplyForLowLatencyPlayback() {
+    func testSpeechSegmenterSplitsByNewlineOnly() {
+        // 按换行拆:多行 → 多段;一行内即便有多个句末标点也保持整段(不再按标点拆)。
         let segments = LingShuSpeechSegmenter.segments(
-            from: "收到。我会先判断你的意图，然后把任务拆给合适的能力节点，同时保持过程可追踪。执行完成后，我会给你一个明确的交付结果。"
+            from: "收到。我会先判断你的意图。\n然后把任务拆给合适的能力节点。\n\n执行完成后给你明确的交付结果。"
         )
 
-        XCTAssertGreaterThan(segments.count, 1)
-        XCTAssertTrue(segments.first?.contains("收到") == true)
-        XCTAssertTrue(segments.allSatisfy { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty })
+        XCTAssertEqual(segments.count, 3)
+        XCTAssertEqual(segments.first, "收到。我会先判断你的意图。")   // 同一行内多句不拆
+        XCTAssertTrue(segments.allSatisfy { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty })  // 空行不产生空段
+    }
+
+    func testSpeechSegmenterKeepsShortMultiSentenceLineWhole() {
+        // 短的整段(多句但不长)保持一段——不被句末标点切碎,听感自然。
+        let segments = LingShuSpeechSegmenter.segments(from: "收到。好的,这就做。")
+        XCTAssertEqual(segments.count, 1)
+    }
+
+    func testSpeechSegmenterSubSplitsOverlongLine() {
+        // 超长单行(无换行、多句)→ 按句末标点二次切,避免云端 /stream 长段超时/只合成首句。
+        let long = "工程化交付:PPT、文档、脚本、爬虫、代码……有产出物的需求,我都会真实落盘到你的工作目录,而不是只口头说已做好。"
+        let segments = LingShuSpeechSegmenter.segments(from: long)
+        XCTAssertGreaterThan(segments.count, 1, "超长行应被二次切成多段")
+        XCTAssertTrue(segments.allSatisfy { $0.count <= LingShuSpeechSegmenter.maxSegmentChars * 2 }, "二次切后不应再有过长段")
     }
 
     func testSpeechAudioDecoderAcceptsDirectWAVBytes() throws {

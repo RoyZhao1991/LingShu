@@ -22,6 +22,30 @@ final class CuratedSkillTests: XCTestCase {
         XCTAssertTrue(profile.id.contains("curated-ppt"), "无用户 skill 时,PPT 任务应自动用策展 PPT 专家")
     }
 
+    func testReloadUserSkillsPicksUpNewlyDroppedSkillWithoutRebuild() throws {
+        // 热加载:dreaming 固化/用户新增 .md 落盘后,registry.reloadUserSkills() 免重启即时生效。
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("lingshu-skill-reload-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let registry = LingShuCompositeExpertRegistry(userSkills: [])
+        // 起初没有用户 skill,爬虫任务回退(非用户 skill)。
+        XCTAssertFalse(registry.profile(for: "写个爬虫抓数据").id.hasPrefix("skill-dreamed"))
+
+        // 落盘一个自固化纯提示 skill,再热加载。
+        let md = LingShuDreamingConsolidator.skillMarkdown(
+            domain: "crawler", title: "网页爬虫", triggers: ["爬虫", "抓取"],
+            body: "## 专业要点\n- 先看 robots\n## 评审清单\n- 数据真实落盘",
+            qualityScore: 0.8, sampleCount: 4
+        )
+        try md.write(to: dir.appendingPathComponent("dreamed-crawler.md"), atomically: true, encoding: .utf8)
+        registry.reloadUserSkills(from: dir)
+
+        let profile = registry.profile(for: "写个爬虫抓数据")
+        XCTAssertTrue(profile.id.hasPrefix("skill-dreamed-crawler"), "热加载后新固化 skill 应即时命中,无需重启")
+        XCTAssertEqual(registry.userSkillCount, 1)
+    }
+
     func testUserSkillStillBeatsCurated() {
         let userSkill = LingShuSkillLoader.parse("""
         ---

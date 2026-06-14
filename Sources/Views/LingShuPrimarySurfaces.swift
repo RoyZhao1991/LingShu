@@ -99,8 +99,12 @@ struct LingShuRootView: View {
 
         state.lastSpokenMessageID = message.id
         lingShuControlLog("speak: 朗读消息 id=\(message.id.uuidString.prefix(8)) 文本「\(String(message.text.prefix(40)))」")
-        voice.speak(message.text)
-        perceptionGateway.ingestSpeechOutput(message.text)
+        // 任务型交付只念简短摘要(避免整段念路径/英文/代码);对话/汇报型念全文。决策需模型,异步。
+        Task { @MainActor in
+            let toSpeak = await state.spokenReplyText(for: message)
+            voice.speak(toSpeak)
+        }
+        perceptionGateway.ingestSpeechOutput(message.text)   // 感知/记忆仍用全文
     }
 
     private var standardLayout: some View {

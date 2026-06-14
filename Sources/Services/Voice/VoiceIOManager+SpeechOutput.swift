@@ -24,6 +24,8 @@ extension VoiceIOManager {
     }
 
     /// 朗读用文本清洗:去掉代码块、表格行、markdown 标记,只留可念的正文。
+    /// **保留换行**(用 \n 连接清洗后的各行)——朗读分段一律按换行切(见 LingShuSpeechSegmenter),
+    /// 所以这里不能把行拼成一长串(否则就只剩一段、丢了分段)。空行/代码/表格已在此剔除,不会产生空段。
     static func strippedForSpeech(_ text: String) -> String {
         var lines: [String] = []
         var inCode = false
@@ -31,13 +33,14 @@ extension VoiceIOManager {
             let t = raw.trimmingCharacters(in: .whitespaces)
             if t.hasPrefix("```") { inCode.toggle(); continue }
             if inCode || t.hasPrefix("|") { continue }   // 代码块、表格行不念
+            if t.hasPrefix("⏱") { continue }             // "总用时" 后缀不念(纯展示用,念出来很怪)
             if t.isEmpty { continue }
             var line = t.replacingOccurrences(of: "^[#>\\-*+\\s]+", with: "", options: .regularExpression)
             for marker in ["**", "`", "#"] { line = line.replacingOccurrences(of: marker, with: "") }
             line = line.trimmingCharacters(in: .whitespaces)
             if !line.isEmpty { lines.append(line) }
         }
-        let joined = lines.joined(separator: "。 ")
+        let joined = lines.joined(separator: "\n")
         return joined.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
@@ -171,7 +174,9 @@ extension VoiceIOManager {
         persona: LingShuSpeechPersona
     ) async throws {
         var pending: [Int: Task<Data, Error>] = [:]
-        let window = min(3, parts.count)
+        // 预取窗口要够深:每段是一次完整合成往返,段又短(换行+超长行二次切后更短),
+        // 窗口太浅(3)会被播放追上→段间饿出长间隔。开 8 路并行预取,让合成远跑在播放前面。
+        let window = min(8, parts.count)
         var nextToPrefetch = 1   // 第 0 段真流式,不预取;从第 1 段起并行预取整段音频
 
         func prefetch(_ index: Int) {
@@ -624,29 +629,46 @@ extension VoiceIOManager {
 }
 
 enum LingShuSpeechSegmenter {
-    /// **仅按句末标点(。！？及半角 !? …)与换行**切分朗读段——干净的整句分段。
-    /// 不再按逗号/冒号/字数硬切(那会把一句话碎成怪异短段、还让段间多出停顿)。
-    /// 单句很长也不强切:它本就是一句,云端按整句合成不会被截断。
+    /// 超长行兜底阈值:一行超过这么多字,就按句末标点二次切。
+    /// 云端 `/stream` 对长段又慢又只合成首句——短行保持整段(自然),长行才拆,避免超时/漏读后半。
+    static let maxSegmentChars = 36
+
+    /// **主切分=换行**(一行=一段,短行不拆,听感自然);**超长行按句末标点二次切**(兜住云端长段限制)。
+    /// `strippedForSpeech` 已保留换行;空行已剔除,不产生空段。
     static func segments(from text: String) -> [String] {
-        var result: [String] = []
+        text
+            .split(whereSeparator: { $0 == "\n" || $0 == "\r" })
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .flatMap { $0.count <= maxSegmentChars ? [$0] : splitLongLine($0) }
+    }
+
+    /// 长行二次切:先按句末标点(。！？!?…；;)切;若某片仍极长(无标点的长句),再按字数硬切兜底。
+    private static func splitLongLine(_ line: String) -> [String] {
+        let enders = Set("。！？!?…；;")
+        var pieces: [String] = []
         var buffer = ""
-        let sentenceEnders = Set("。！？!?…")
-
-        func flush() {
-            let segment = buffer.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !segment.isEmpty { result.append(segment) }
-            buffer = ""
-        }
-
-        for char in text {
-            if char == "\n" || char == "\r" {   // 换行即分段
-                flush()
-                continue
-            }
+        for char in line {
             buffer.append(char)
-            if sentenceEnders.contains(char) { flush() }   // 句末标点即分段
+            if enders.contains(char) {
+                let piece = buffer.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !piece.isEmpty { pieces.append(piece) }
+                buffer = ""
+            }
         }
-        flush()
-        return result
+        let tail = buffer.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !tail.isEmpty { pieces.append(tail) }
+        // 仍有超长片(无句末标点的长句)→ 按字数硬切,保证每段都在云端可承受范围。
+        return pieces.flatMap { piece -> [String] in
+            guard piece.count > maxSegmentChars * 2 else { return [piece] }
+            var chunks: [String] = []
+            var idx = piece.startIndex
+            while idx < piece.endIndex {
+                let end = piece.index(idx, offsetBy: maxSegmentChars, limitedBy: piece.endIndex) ?? piece.endIndex
+                chunks.append(String(piece[idx..<end]))
+                idx = end
+            }
+            return chunks
+        }
     }
 }

@@ -66,12 +66,27 @@ extension LingShuState {
         ingestAttachment(at: tempURL)
     }
 
-    /// 拖拽/粘贴进输入框的内容**整体就是**一个或多个真实存在的绝对文件路径时,转成附件并清空输入框。
-    /// 多行文本框会把拖入文件落成路径文本,这里纠正成附件芯片(与 📎/粘贴同管线)。
-    /// 只在"整框 = 纯路径(每行一个、均为存在的文件)"时触发——正文里顺带写的路径不动。
+    /// 拖拽/粘贴进主输入框的内容**整体就是**真实存在的绝对文件路径时,转成附件并清空输入框。
     func convertDroppedFilePathsIfNeeded() {
-        let trimmed = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard trimmed.hasPrefix("/") else { return }
+        if convertDroppedFilePaths(in: prompt) { prompt = "" }
+    }
+
+    /// 通用:给定一段文本,若它**整体 = 一个或多个真实存在的绝对文件路径**(每行一个),全部转成附件并返回 true
+    /// (调用方据此清空对应输入框);否则不动、返回 false。任务窗口底栏用独立 draft,故走这个通用版而非 prompt 版。
+    /// 只在"整框 = 纯路径"时触发——正文里顺带写的路径不动。
+    @discardableResult
+    func convertDroppedFilePaths(in text: String) -> Bool {
+        let paths = Self.droppedFilePaths(in: text)
+        guard !paths.isEmpty else { return false }
+        for path in paths { ingestAttachment(at: URL(fileURLWithPath: path)) }
+        return true
+    }
+
+    /// 纯函数(可单测):文本若**整体 = 一个或多个存在的绝对文件路径**(每行一个),返回这些路径;否则返回 []。
+    /// 正文里顺带写的路径 → 返回 []( 不误转)。
+    nonisolated static func droppedFilePaths(in text: String) -> [String] {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.hasPrefix("/") else { return [] }
         let tokens = trimmed
             .split(separator: "\n")
             .map { $0.trimmingCharacters(in: .whitespaces) }
@@ -82,9 +97,8 @@ extension LingShuState {
             var isDirectory: ObjCBool = false
             return fileManager.fileExists(atPath: path, isDirectory: &isDirectory) && !isDirectory.boolValue
         }
-        guard !tokens.isEmpty, tokens.allSatisfy(isExistingFile) else { return }
-        prompt = ""
-        for path in tokens { ingestAttachment(at: URL(fileURLWithPath: path)) }
+        guard !tokens.isEmpty, tokens.allSatisfy(isExistingFile) else { return [] }
+        return tokens
     }
 
     func removeAttachment(_ id: UUID) {

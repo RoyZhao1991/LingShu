@@ -20,12 +20,14 @@ extension LingShuState {
         actor: String,
         role: String,
         kind: LingShuTaskExecutionMessageKind,
-        text: String
+        text: String,
+        detail: LingShuTaskExecutionDetail? = nil
     ) {
         guard let recordID,
               let index = taskExecutionRecords.firstIndex(where: { $0.id == recordID }) else { return }
 
-        taskExecutionRecords[index].append(actor: actor, role: role, kind: kind, text: text)
+        // 净化(剥模型名泄露 + 裸 tool_calls JSON)走独立模块 LingShuTaskMessageFormatting。
+        taskExecutionRecords[index].append(actor: actor, role: role, kind: kind, text: LingShuTaskMessageFormatting.sanitize(text), detail: detail)
         persistTaskExecutionRecords()
     }
 
@@ -73,6 +75,8 @@ extension LingShuState {
             DispatchQueue.main.async { [weak self] in
                 self?.startNextQueuedTaskIfAvailable()
             }
+            // 任务收尾 → 触发 dreaming 离线固化(内部有空闲守卫 + 1h 节流,不打扰当前流程)。
+            scheduleDreamingConsolidationIfIdle()
         }
     }
 

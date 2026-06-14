@@ -139,18 +139,34 @@ private extension String {
 
 /// 组合专家注册表：内置专家 + 用户技能。用户技能触发词命中时优先，否则回退内置匹配。
 /// 评审官固定走内置（保证评审基线不被用户覆盖）。
-struct LingShuCompositeExpertRegistry: LingShuExpertProfileProviding {
+///
+/// **class（非 struct):支持运行时热重载用户 skill**——dreaming 离线固化把新 skill 落盘到用户 Skills 目录后,
+/// 调 `reloadUserSkills()` 即可**免重启生效**(原 struct 单次加载需重启)。userSkills 受锁保护,@unchecked Sendable。
+final class LingShuCompositeExpertRegistry: LingShuExpertProfileProviding, @unchecked Sendable {
     private let builtIn = LingShuExpertProfileRegistry()
-    private let userSkills: [LingShuSkillLoader.LoadedSkill]
+    private let lock = NSLock()
+    private var userSkills: [LingShuSkillLoader.LoadedSkill]
 
     init(userSkills: [LingShuSkillLoader.LoadedSkill] = LingShuSkillLoader.loadSkills()) {
         self.userSkills = userSkills
     }
 
+    /// 热重载:从磁盘重新读用户 Skills 目录(dreaming 固化 / 用户新增 .md 后调用,免重启即时生效)。
+    /// `directory` 仅测试注入用;生产用默认目录。
+    func reloadUserSkills(from directory: URL = LingShuSkillLoader.defaultDirectory) {
+        let reloaded = LingShuSkillLoader.loadSkills(from: directory)
+        lock.lock(); userSkills = reloaded; lock.unlock()
+    }
+
+    private var snapshotUserSkills: [LingShuSkillLoader.LoadedSkill] {
+        lock.lock(); defer { lock.unlock() }
+        return userSkills
+    }
+
     func profile(for taskText: String) -> LingShuExpertProfile {
         let normalized = taskText.lowercased()
         // ① 用户自有 skill 最优先——用户装的就是权威。
-        if let matched = userSkills.first(where: { skill in
+        if let matched = snapshotUserSkills.first(where: { skill in
             skill.triggers.contains { normalized.contains($0.lowercased()) }
         }) {
             return matched.profile
@@ -168,8 +184,8 @@ struct LingShuCompositeExpertRegistry: LingShuExpertProfileProviding {
     }
 
     var allProfiles: [LingShuExpertProfile] {
-        builtIn.allProfiles + userSkills.map(\.profile)
+        builtIn.allProfiles + snapshotUserSkills.map(\.profile)
     }
 
-    var userSkillCount: Int { userSkills.count }
+    var userSkillCount: Int { snapshotUserSkills.count }
 }

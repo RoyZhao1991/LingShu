@@ -48,6 +48,10 @@ struct LingShuTaskProgressIndicator: View {
 struct ChatBubbleView: View {
     let message: ChatMessage
     @ObservedObject var state: LingShuState
+    /// 霓虹侧条的"呼吸"相位——轻微动效,看着更科幻(只动一根 2px 条 + 描边,开销极小)。
+    @State private var glow = false
+
+    private var accent: Color { message.isUser ? .lingHolo : .lingHoloAlt }
 
     var body: some View {
         HStack {
@@ -155,14 +159,16 @@ struct ChatBubbleView: View {
                 )
             )
             .overlay(alignment: message.isUser ? .trailing : .leading) {
+                // 霓虹侧条:缓慢呼吸的辉光(opacity + shadow 在两值间往返),像"通电"的感觉。
                 Rectangle()
-                    .fill(message.isUser ? Color.lingHolo.opacity(0.85) : Color.lingHoloAlt.opacity(0.6))
+                    .fill(accent.opacity(glow ? 0.95 : 0.55))
                     .frame(width: 2)
-                    .shadow(color: (message.isUser ? Color.lingHolo : Color.lingHoloAlt).opacity(0.6), radius: 3)
+                    .shadow(color: accent.opacity(glow ? 0.85 : 0.3), radius: glow ? 6 : 2)
             }
             .overlay {
+                // 描边也随呼吸极轻微地亮一下(克制,避免闪烁)。
                 Rectangle()
-                    .stroke(message.isUser ? Color.lingHolo.opacity(0.22) : Color.white.opacity(0.08), lineWidth: 0.8)
+                    .stroke((message.isUser ? Color.lingHolo : Color.white).opacity((message.isUser ? 0.22 : 0.08) + (glow ? 0.06 : 0)), lineWidth: 0.8)
             }
 
             if !message.isUser {
@@ -170,5 +176,8 @@ struct ChatBubbleView: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: message.isUser ? .trailing : .leading)
+        .onAppear {
+            withAnimation(.easeInOut(duration: 2.6).repeatForever(autoreverses: true)) { glow = true }
+        }
     }
 }

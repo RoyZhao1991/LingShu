@@ -43,7 +43,7 @@ extension LingShuState {
         **重要:上面【真实落盘文件】是宿主已用文件系统逐一核实存在的清单,作为权威事实——不要因"你无法独立验证"而怀疑其存在性。** 你只负责判内容与版式。
         逐条核对这四个维度(每条写达标/未达标+理由):
         1. 真实性:用户要的产出物在上面【真实落盘文件】清单里就算达标;只有"声称生成了某文件、但它不在清单里"才 ❌(假完成)。清单里有对应文件 = 真实性达标,**不要再以"无法独立验证/存疑"为由打回**。
-        2. 事实准确性:用你的知识逐条审查正文里的关键数据/年份/事件/数字/人名,**发现明确错误或与公认事实不符才 ❌ 并写出正确值**;不要把"我没法 100% 确认"当作不达标。
+        2. 事实准确性:用你的知识逐条审查正文里的关键数据/年份/事件/数字/人名,**发现明确错误或与公认事实不符才 ❌ 并写出正确值**;不要把"我没法 100% 确认"当作不达标。**但忽略"自指/易变"事实**——产出物描述它自己的文件体积/字节数/页数/生成时间戳这类(每次重生成都会变、且与用户关心的内容无关),以及 KB 四舍五入这种琐碎数值差(如 41KB vs 40KB),**一律不算事实错误、不得据此打回**,以免陷入自指返工死循环。
         3. 完整性:是否覆盖用户要求的主题、结构与数量。
         4. 版式:若有视觉评审,凡文字重叠/被截断/溢出/错位空白 → ❌ 并指出第几页;无视觉评审则此项默认达标。
         输出格式(严格遵守):
@@ -63,6 +63,35 @@ extension LingShuState {
         if case .completed(let value) = result { critique = value } else { critique = "" }
         let verdict = LingShuChecklistVerdict.parse(critique)
         return (verdict.allPassed, critique)
+    }
+
+    /// 交付话术与返工文本解耦:验收经返工后才通过时,maker 最后一轮文本是"逐条修正"的内部 QA 记录
+    /// (用户看到会觉得驴唇不对马嘴)。这里用一个**无工具**的小会话,据原始请求 + 真实产出物清单,
+    /// 生成一句面向用户的干净交付说明;为空/失败则回退原文,绝不卡住交付。
+    func composeDeliveryMessage(userRequest: String, makerText: String, taskRecordID: String?) async -> String {
+        let artifacts = (taskExecutionRecords.first { $0.id == taskRecordID }?.artifacts ?? [])
+            .filter { FileManager.default.fileExists(atPath: $0.location) }
+        let artifactLines = artifacts.map { "- \($0.title):\($0.location)" }.joined(separator: "\n")
+        let prompt = """
+        任务已完成。请面向用户写一段简洁的交付说明(2–4 句):说清完成了什么、产出物在哪(给绝对路径)、一两个关键亮点。
+        **不要复述内部返工/校对/逐条修正的过程,也不要提"验收/评审/修正"这些词**——用户只关心结果。
+        用户原始请求:\(userRequest)
+        本次真实产出物:
+        \(artifactLines.isEmpty ? "(无登记文件)" : artifactLines)
+        """
+        let composer = LingShuAgentSession(
+            id: "deliver-\(UUID().uuidString.prefix(6))",
+            system: "你是交付播报助手,只输出面向用户的最终交付说明,不复述任何内部过程。",
+            tools: [],
+            model: makeAgentModelAdapter(),
+            maxTurns: 1
+        )
+        let result = await composer.send(prompt)
+        if case .completed(let text) = result {
+            let cleaned = LingShuReasoningText.stripThinkTags(text).trimmingCharacters(in: .whitespacesAndNewlines)
+            if !cleaned.isEmpty { return cleaned }
+        }
+        return makerText
     }
 
     /// 内部受信 shell 抓取(**不走 run_command 审批门**;仅供验收门提取/渲染自己的产出物)。

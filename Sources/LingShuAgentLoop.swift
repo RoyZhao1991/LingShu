@@ -86,12 +86,19 @@ actor LingShuAgentSession {
     let maxTurns: Int
     /// 阻塞工具名:模型调用这些工具即视为"卡住等外部输入"(默认 ask_user)。
     let blockingToolNames: Set<String>
+    /// 上下文历史窗口上限(非系统消息条数)。0=不裁剪。常驻主会话设上限,杜绝旧任务无限堆积污染新任务
+    /// (例:被问"做自我介绍 PPT"却把几轮前的「人工智能发展简史.pptx」当素材塞进去)。
+    let maxHistoryMessages: Int
     private(set) var messages: [LingShuAgentMessage]
     private(set) var turnsUsed = 0
     /// 按序记录工具调用名,便于可观测与测试。
     private(set) var toolInvocations: [String] = []
     /// 卡住时挂起的阻塞工具调用 id(供 resume 回填答案)。
     private var pendingBlockToolCallID: String?
+    /// 用户中途下达的纠正(看到 agent 跑偏时干预):循环在**回合边界**采纳,立即据此调整方向。
+    private var pendingCorrection: String?
+    /// 子任务完成后回灌主线程的**简报**(信息同步,非完整上下文同步):在回合边界作为 system 提示注入。
+    private var pendingBriefings: [String] = []
 
     init(
         id: String,
@@ -100,12 +107,14 @@ actor LingShuAgentSession {
         tools: [LingShuAgentTool],
         model: any LingShuAgentModel,
         maxTurns: Int = 40,   // 安全天花板(防失控),非目标预算;目标达成/卡住/停滞才是真正的停止位
+        maxHistoryMessages: Int = 0,   // 0=不裁剪(短命子会话);常驻主会话传正数设窗口
         blockingToolNames: Set<String> = ["ask_user"]
     ) {
         self.id = id
         self.tools = tools
         self.model = model
         self.maxTurns = max(1, maxTurns)
+        self.maxHistoryMessages = max(0, maxHistoryMessages)
         self.blockingToolNames = blockingToolNames
         var seeded: [LingShuAgentMessage] = []
         if let system { seeded.append(.init(role: .system, content: system)) }
@@ -117,8 +126,62 @@ actor LingShuAgentSession {
 
     /// 投入一条用户输入,跑完整循环直到模型收尾、卡住或到轮次上限。
     func send(_ userText: String) async -> LingShuAgentRunResult {
+        pendingCorrection = nil   // 新回合不带上一回合可能残留的纠正
+        consumePendingBriefings() // 子任务简报先入上下文(在用户新输入之前)——主线程信息同步
+        trimHistoryIfNeeded()     // 在回合边界(无挂起工具调用)裁剪旧上下文,新输入永远保留
         messages.append(.init(role: .user, content: userText))
         return await runLoop()
+    }
+
+    /// 子任务简报回灌(信息同步,非完整上下文):只把**摘要**塞进主线程,不搬子任务的完整 transcript。
+    /// 在回合边界作为最高优先级 system 提示注入(像 codex 的 subagent 汇报)。
+    func injectBriefing(_ text: String) {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        pendingBriefings.append(trimmed)
+    }
+
+    /// 回合边界采纳子任务简报:合并成一条 system 提示注入(不必复述、仅供主线程知悉进展)。
+    private func consumePendingBriefings() {
+        guard !pendingBriefings.isEmpty else { return }
+        let joined = pendingBriefings.map { "- \($0)" }.joined(separator: "\n")
+        pendingBriefings.removeAll()
+        messages.append(.init(role: .system, content: "【子任务进展简报(仅供你知悉当前状态,不必主动复述)】\n\(joined)"))
+    }
+
+    /// 流程纠正(干预):用户看到 agent 跑偏时中途下达的纠正。**不直接动 messages**(避免与在飞工具调用
+    /// 产生半截状态),只置标志;循环在回合边界(工具结果已补齐 / 模型刚出文本)安全地把它作为最高优先级
+    /// user 消息注入,模型下一步即据此改方向。返回是否被一个**正在跑的循环**接住(false=当前没在跑)。
+    @discardableResult
+    func injectCorrection(_ text: String) -> Bool {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+        pendingCorrection = trimmed
+        return isRunning
+    }
+
+    /// 当前是否有循环在跑(供干预判定)。
+    private(set) var isRunning = false
+
+    /// 回合边界采纳纠正:此刻 messages 良构(上一步工具结果已补齐),把纠正作为最高优先级 user 注入。
+    private func consumePendingCorrection() -> Bool {
+        guard let correction = pendingCorrection else { return false }
+        pendingCorrection = nil
+        messages.append(.init(role: .user, content: "【用户中途纠正,最高优先级——立即停止当前偏离方向,据此重新规划并执行】\(correction)"))
+        return true
+    }
+
+    /// 回合边界裁剪:系统消息(身份/seed)永远保留;非系统历史只留最近 `maxHistoryMessages` 条。
+    /// **只在 send 入口调用**——此刻上一回合已收尾,不存在"裁掉某个 tool_call 却留下其 tool 结果"的半截调用。
+    /// 仍兜底:裁剪后若开头是孤儿 tool 结果(其 assistant 调用已被裁),继续往后丢到一条完整起点,避免 OpenAI 协议报错。
+    private func trimHistoryIfNeeded() {
+        guard maxHistoryMessages > 0 else { return }
+        let systemCount = messages.prefix { $0.role == .system }.count
+        let body = Array(messages[systemCount...])
+        guard body.count > maxHistoryMessages else { return }
+        var kept = Array(body.suffix(maxHistoryMessages))
+        while let first = kept.first, first.role == .tool { kept.removeFirst() }   // 不留孤儿 tool 结果
+        messages = Array(messages[..<systemCount]) + kept
     }
 
     /// 续接:把外部给的答案回填到卡住的阻塞工具调用上,继续跑循环。
@@ -138,16 +201,27 @@ actor LingShuAgentSession {
     /// `maxTurns` 不是目标预算,而是防失控的安全天花板(高位,正常远到不了)——不靠它来"到点收工"。
     /// 模型自己判断完成就 `.text` 收尾;撞墙就换方法继续(失败结果回灌进上下文,这就是 agent 循环)。
     private func runLoop() async -> LingShuAgentRunResult {
+        isRunning = true
+        defer { isRunning = false }
         var lastText = ""
         var recentToolSignatures: [String] = []
         var step = 0
         while step < maxTurns {   // maxTurns = 安全天花板,非目标停止位
+            // 用户停止:真停(任务取消)→ 诚实交还,不假装收尾。
+            if Task.isCancelled {
+                return .maxTurnsReached(lastText: lastText.isEmpty ? "（已被用户停止）" : lastText)
+            }
+            // 回合边界采纳子任务简报(信息同步)+ 纠正(最高优先级 user 指令)。
+            consumePendingBriefings()
+            _ = consumePendingCorrection()
             step += 1
             turnsUsed += 1
             let response = await model.respond(messages: messages, tools: tools)
             switch response {
             case .text(let text):
                 messages.append(.init(role: .assistant, content: text))
+                // 模型自认收尾,但用户刚下了纠正 → 不收尾,带着纠正继续(纠正跑偏的"假收尾")。
+                if pendingCorrection != nil { continue }
                 return .completed(text: text)
             case .toolCalls(let calls):
                 guard !calls.isEmpty else {

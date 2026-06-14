@@ -49,6 +49,28 @@ extension LingShuState {
                 if let path = self.materializeBundledScript(for: profile, into: workingDir) {
                     out += "\n自带生成器已就绪:\(path)(设计系统已内置、已过安全门)。按交付模板把内容写成数据文件后，用 run_command 跑它产出真交付物，不要从零另写生成代码。"
                 }
+                // PPT 设计 skill:生成器在 DesignKB(多版式 + 配色 + 图标 + 配图,数据驱动),就地跑、自动读同目录素材。
+                if profile.id == "skill-curated-ppt", let generator = LingShuDesignKB.generatorPath {
+                    let layouts = LingShuDesignKB.layoutIDs().joined(separator: "/")
+                    let palettes = LingShuDesignKB.paletteIDs().joined(separator: "/")
+                    out += """
+
+                    【DesignKB 高质量生成器(已就绪,就地跑别复制别从零写)】
+                    0) **先找资源**:`acquire_resource(kind:"pptx-template", query:<品类,如 business/tech/report>)` 找模板——本地有直接用,没有它联网找并入库;拿到 .pptx 路径就填进 slides.json 的 `template` 字段做底。需要图标/字体也可 acquire_resource。
+                    1) 把逐页内容按上面 slides.json 模板写到工作目录(每页选 layout、选 theme);需要配图先调 find_images 取本地图片路径填进 image 字段。
+                    2) run_command 跑:python3 "\(generator)" slides.json 演示.pptx
+                       (配色/版式/图标素材库在生成器同目录自动读取;缺依赖先 pip3 install python-pptx pillow)
+                    3) ls -la 演示.pptx && file 演示.pptx 确认落盘。
+                    4) **过程内自审(必做,别等最终验收)**:调 review_design(path=刚生成的 .pptx)拿设计质量分 + 逐页问题;**分 < 0.7 或有版式硬伤(重叠/截断/纯文字/失衡)就改对应页的 slides.json(换 layout/精简文字/补图标配图),重新跑生成器,再 review_design,直到 ≥0.7 再交付。**
+                    **直接走以上四步,别去探测/启动任何 office 应用(wps/wpsoffice/LibreOffice/Keynote/PowerPoint)——生成与自审都用这个 python 生成器 + review_design,不需要它们(那些 GUI 程序会卡住命令)。**
+                    可用版式:\(layouts.isEmpty ? "cover/agenda/section/bullets/bignumber/image-right/image-left/image-full/twocol/timeline/quote/chart/closing" : layouts)
+                    可用配色:\(palettes.isEmpty ? "midnight/graphite/ivory/sand/forest/royal" : palettes)
+                    """
+                    // 自进化闭环:dreaming 从历史设计评分学到的经验,注入提示指导本次选版式/配色(热加载)。
+                    if let insights = LingShuDesignKB.designInsights() {
+                        out += "\n\n【自固化设计经验(dreaming 从历史评分学来,务必参考)】\n\(insights)"
+                    }
+                }
                 return out
             }
         }

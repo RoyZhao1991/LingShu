@@ -27,7 +27,7 @@ enum NavItem: String, CaseIterable, Identifiable {
 enum AppSurface: String, CaseIterable, Identifiable {
     case chat = "对话"
     case taskPool = "归档"
-    case runtime = "运行态"
+    case runtime = "状态"
     case operations = "运维"
     case settings = "配置"
 

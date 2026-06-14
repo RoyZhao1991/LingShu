@@ -31,119 +31,57 @@ enum LingShuCuratedSkillRegistry {
 
     // MARK: - 策展 skill 内容（纯提示）
 
-    /// 首个策展 skill：专业 PPT 设计 —— 把"做 PPT"从通用专家升级成有设计系统 + 真实生成路线 +
-    /// 可达验收标准（不依赖 LibreOffice/OCR 那套重工具链）。
+    /// 首个策展 skill：专业 PPT 设计 —— 由 DesignKB(设计系统 + 多版式生成器 + 图标 + 配图)驱动,
+    /// 把"做 PPT"从"背景+文字"升级成有版式变化/图片/图标/图表的专业排版。生成器不内联在此(在 DesignKB),
+    /// `apply_skill` 会把生成器绝对路径与跑法给模型(见 LingShuState+AgentSkills.applySkillTool)。
     private static let presentation: CuratedSkill? = {
         let markdown = """
         ---
         id: curated-ppt
-        title: PPT 设计专家（策展）
-        mission: 产出真实可打开、设计专业的 .pptx 演示文件，而不是给用户一段脚本让他自己跑。
-        triggers: ppt,演示,幻灯,slides,presentation,自我介绍,汇报材料,路演
-        script_name: generator.py
+        title: PPT 设计专家（策展·DesignKB 驱动）
+        mission: 产出排版专业、有版式变化、带图片/图标/图表的 .pptx，而不是"背景 + 一堆文字"。
+        triggers: ppt,演示,幻灯,slides,presentation,自我介绍,汇报材料,路演,述职,招商,产品介绍
         ---
 
         ## 专业要点
-        - 先定受众 + 一句话核心讯息，再排叙事弧：封面 → 我是谁/定位 → 核心能力 → 案例或亮点 → 价值/愿景 → 收尾行动点。
-        - 每页只讲一件事；**页标题写成结论（断言式）**，不是话题词（"三年降本 40%"而非"成本情况"）。
-        - 页数 8–12 页之间；单页正文要点 3–5 条、每条一行。
-        - **工作目录已备好本 skill 自带的生成器 `generator.py`（设计系统、配色 #0B1220/#25F4E4、字号层级、版式网格已内置且打磨过）。你不要从零写生成代码。**
-        - 流程：① 按下面模板把逐页内容写成 `slides.json`（write_file）；② run_command 跑 `python3 generator.py slides.json 自我介绍.pptx` 生成真文件（python-pptx 通常已装，缺了先 `pip3 install python-pptx`）；③ 自检：generator 会打印页数，再 `ls -la 自我介绍.pptx && file 自我介绍.pptx` 确认落盘。
-        - **绝不把脚本甩给用户让他自己跑**——你自己用 run_command 跑。
+        - 先定受众 + 一句话核心讯息，排叙事弧：封面 → 目录 → 章节/定位 → 核心能力 → 数据/案例 → 对比/路线 → 价值愿景 → 收尾行动点。
+        - **每页选一个最合适的版式**(layout 字段),让全篇有节奏、不是一个模子:cover/agenda/section/bullets/bignumber/image-right/image-left/image-full/twocol/timeline/quote/chart/closing。
+        - 每页只讲一件事；**页标题写成结论(断言式)**，不是话题词("三年降本 40%"而非"成本情况")。页数 8–14。
+        - **要有视觉,但配图必须切题**:`find_images` 用**具体英文关键词**(贴主题,如 "smart home sensors" 而非泛词);**找不到切题的好图就别硬塞**——不相关的会议照/通用照/带水印图会拉低质感,这种时候宁可用 `icons`(Lucide 名如 check/zap/target)+ 色块 + `chart`(柱/折/饼)做视觉,更专业。要点尽量配图标。
+        - 选一个贴合主题气质的 `theme`(配色见 DesignKB palettes:midnight/graphite/ivory/sand/forest/royal)。
+        - **先找资源再动手,别凭空硬造**:① 先 `acquire_resource(kind:"pptx-template", query:<品类,如 business/tech/report>)` 找模板——本地有直接用,没有它会联网找并入库;拿到模板路径就填进 slides.json 的 `template` 字段当底(继承专业母版/主题)。② 配图先 `find_images`(切题);需要图标集/字体也可 `acquire_resource`。
+        - 流程:① 先 `acquire_resource` 找模板/素材;② 按模板把逐页内容(含 layout/theme/template/image/icons/chart)写成 `slides.json`(write_file);③ 用 **apply_skill 给出的生成器路径** run_command 跑出 .pptx;④ `review_design` 自审,不达标改了重跑;⑤ `ls -la *.pptx && file *.pptx` 确认落盘。**绝不把脚本甩给用户自己跑、绝不不找资源就空造。**
 
         ## 交付物模板
-        把逐页内容写成 slides.json，结构如下（generator.py 直接吃它）：
+        slides.json(DesignKB generator 直接吃;每页 layout 决定排版):
         {
+          "theme": "midnight",
+          "template": "(可选)acquire_resource 拿到的 .pptx 模板绝对路径,做底继承专业母版",
+          "title": "演示标题(页脚用)",
           "slides": [
-            {"title": "结论式标题", "subtitle": "副标题(可选)", "bullets": ["要点一", "要点二", "要点三"]}
+            {"layout":"cover","title":"主标题","subtitle":"副标题","tagline":"一句话主旨","image":"assets/封面.jpg"},
+            {"layout":"agenda","title":"目录","items":["第一部分","第二部分","第三部分"]},
+            {"layout":"section","index":"01","title":"章节名","subtitle":"小标题"},
+            {"layout":"bullets","title":"结论式标题","bullets":["要点一","要点二","要点三"],"icons":["zap","target","users"]},
+            {"layout":"bignumber","number":"40%","label":"关键指标","title":"一句说明"},
+            {"layout":"image-right","title":"论点","bullets":["..."],"image":"assets/图.jpg","icons":["check"]},
+            {"layout":"twocol","title":"对比","left":{"heading":"方案A","bullets":["..."]},"right":{"heading":"方案B","bullets":["..."]}},
+            {"layout":"timeline","title":"路线","steps":[{"label":"阶段1","desc":"说明"},{"label":"阶段2","desc":"说明"}]},
+            {"layout":"chart","title":"数据结论","chart":{"type":"bar","categories":["Q1","Q2","Q3"],"series":[{"name":"营收","values":[10,20,35]}]}},
+            {"layout":"quote","quote":"金句","attrib":"出处"},
+            {"layout":"closing","title":"收尾标题","bullets":["行动点1","行动点2"],"contact":"联系方式"}
           ]
         }
-        要点：8–12 页；首页封面、末页行动点；每页 title 是结论、bullets 3–5 条。
-
-        ## 生成脚本
-        ```python
-        import sys, json
-        from pptx import Presentation
-        from pptx.util import Inches, Pt
-        from pptx.dml.color import RGBColor
-        from pptx.enum.text import PP_ALIGN
-
-        BG = RGBColor(0x0B, 0x12, 0x20)
-        ACCENT = RGBColor(0x25, 0xF4, 0xE4)
-        INK = RGBColor(0xF2, 0xFF, 0xFD)
-        MUTED = RGBColor(0x9F, 0xB8, 0xB4)
-
-        src = sys.argv[1] if len(sys.argv) > 1 else 'slides.json'
-        out = sys.argv[2] if len(sys.argv) > 2 else '演示.pptx'
-        data = json.load(open(src, encoding='utf-8'))
-        slides = data.get('slides', data if isinstance(data, list) else [])
-
-        prs = Presentation()
-        prs.slide_width = Inches(13.333)
-        prs.slide_height = Inches(7.5)
-        blank = prs.slide_layouts[6]
-
-        def text_box(slide, left, top, width, height, text, size, color, bold=False, align=PP_ALIGN.LEFT):
-            box = slide.shapes.add_textbox(Inches(left), Inches(top), Inches(width), Inches(height))
-            tf = box.text_frame
-            tf.word_wrap = True
-            p = tf.paragraphs[0]
-            p.alignment = align
-            run = p.add_run()
-            run.text = str(text)
-            run.font.size = Pt(size)
-            run.font.bold = bold
-            run.font.color.rgb = color
-            run.font.name = 'PingFang SC'
-            return box
-
-        CONTENT_W = 11.8   # 内容区宽(留左右安全边),标题字号据此自适应避免右边缘截断
-        for i, s in enumerate(slides, 1):
-            slide = prs.slides.add_slide(blank)
-            fill = slide.background.fill
-            fill.solid()
-            fill.fore_color.rgb = BG
-            text_box(slide, 0.9, 0.7, 2.0, 0.5, '%02d' % i, 18, ACCENT, bold=True)
-            # 标题字号按长度自适应(防止长标题溢出/被右边缘截断),并据估算行数动态下推副标题/正文——
-            # 杜绝"标题换两行就和副标题重叠"的版式崩。
-            title = str(s.get('title', ''))
-            tsize = 40 if len(title) <= 14 else (34 if len(title) <= 20 else 28)
-            chars_per_line = max(1, int(CONTENT_W * 72 / tsize))
-            tlines = max(1, (len(title) + chars_per_line - 1) // chars_per_line)
-            title_h = tlines * (tsize / 72.0) * 1.32
-            text_box(slide, 0.9, 1.2, CONTENT_W, title_h + 0.15, title, tsize, INK, bold=True)
-            y = 1.2 + title_h + 0.38
-            if s.get('subtitle'):
-                text_box(slide, 0.9, y, CONTENT_W, 0.7, str(s.get('subtitle')), 20, ACCENT, bold=True)
-                y += 0.95
-            y = max(y, 3.9)   # 正文起始不高于此,留出呼吸感
-            bullets = s.get('bullets', [])
-            if bullets:
-                box = slide.shapes.add_textbox(Inches(0.9), Inches(y), Inches(CONTENT_W), Inches(max(1.5, 7.2 - y)))
-                tf = box.text_frame
-                tf.word_wrap = True
-                for j, b in enumerate(bullets):
-                    p = tf.paragraphs[0] if j == 0 else tf.add_paragraph()
-                    run = p.add_run()
-                    run.text = '•  ' + str(b)
-                    run.font.size = Pt(18)
-                    run.font.color.rgb = MUTED
-                    run.font.name = 'PingFang SC'
-                    p.space_after = Pt(10)
-
-        print(len(prs.slides))
-        prs.save(out)
-        ```
 
         ## 评审清单
-        - .pptx 文件真实落盘（file / ls 输出可证，且体积 > 10KB）
-        - 页数在 8–12 之间（generator 打印的 len 或 python-pptx 实测，不靠声明）
-        - 有封面页与收尾行动页，中间每页一个核心点
-        - 每页标题是结论式断言，而非话题词
-        - 用了自带 generator.py（设计系统统一），不是从零拼朴素板式
-        - 叙事有起承转合，不是要点平铺
+        - .pptx 真实落盘(file/ls 可证，体积 > 20KB)；页数 8–14(python-pptx 实测，不靠声明)
+        - **版式有变化**:不是每页同一个模子;至少用到封面 + 章节/目录 + 要点 + 图文/数字/图表 + 收尾
+        - **有视觉支撑**:有真实配图(image)或图标(icons)或图表(chart)，不是纯文字
+        - 每页一个核心点，标题是结论式断言而非话题词
+        - 用了 DesignKB 生成器(版式/配色/图标统一)，不是从零拼朴素文本框
+        - 配色统一克制、对齐到网格、无文字重叠/截断
         """
         guard let loaded = LingShuSkillLoader.parse(markdown, fallbackID: "curated-ppt") else { return nil }
-        return CuratedSkill(loaded: loaded, domain: "presentation", qualityScore: 0.9)
+        return CuratedSkill(loaded: loaded, domain: "presentation", qualityScore: 0.95)
     }()
 }

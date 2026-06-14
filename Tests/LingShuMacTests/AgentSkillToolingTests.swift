@@ -14,6 +14,18 @@ final class AgentSkillToolingTests: XCTestCase {
     }
 
     @MainActor
+    func testMinimalVoiceModeRefusesSpawnTask() async {
+        // 极简对话模式:纯聊天,spawn_task 直接拒绝,绝不派生子任务(用户要求)。
+        let state = LingShuState()
+        state.isMinimalVoiceMode = true
+        let tool = state.spawnTaskTool(adapter: state.makeAgentModelAdapter())
+        let result = await tool.handler("{\"objective\":\"跑个爬虫\"}")
+        XCTAssertTrue(result.contains("极简对话模式") && result.contains("不派生子任务"), "极简对话模式应拒绝派生子任务")
+        let running = await state.agentOrchestrator.runningCount()
+        XCTAssertEqual(running, 0, "极简对话模式下不应真的派生任何子任务")
+    }
+
+    @MainActor
     func testReadOnlyPolicyDropsWritesShellAndSkill() {
         let state = LingShuState()
         let names = Set(state.agentBuiltinTools(recordIDProvider: { nil }, executionPolicy: .readOnly).map(\.name))
@@ -24,7 +36,7 @@ final class AgentSkillToolingTests: XCTestCase {
     }
 
     @MainActor
-    func testApplySkillReturnsCuratedPlanAndMaterializesGenerator() async {
+    func testApplySkillReturnsCuratedPlanAndDesignKBGenerator() async {
         let state = LingShuState()
         let tempDir = NSTemporaryDirectory() + "lingshu-skill-test-\(UUID().uuidString)"
         try? FileManager.default.createDirectory(atPath: tempDir, withIntermediateDirectories: true)
@@ -34,11 +46,11 @@ final class AgentSkillToolingTests: XCTestCase {
         let tool = state.applySkillTool()
         let output = await tool.handler("{\"task\":\"帮我做一个自我介绍 PPT\"}")
 
-        // 命中策展 PPT 技能:返回设计要点 + 自带生成器路径。
-        XCTAssertTrue(output.contains("交付物模板") || output.contains("专家档案"), "应返回固化技能的专家提示")
-        XCTAssertTrue(output.contains("生成器"), "命中含 generator 的技能应给出脚本路径")
-        // 生成器真物化到工作目录(不是只口头说就绪)。
-        XCTAssertTrue(FileManager.default.fileExists(atPath: tempDir + "/generator.py"), "自带生成器应真写入工作目录")
+        // 命中策展 PPT 技能:返回设计要点 + 模板 + DesignKB 高质量生成器路径与跑法(就地跑,不再物化副本)。
+        XCTAssertTrue(output.contains("交付物模板") || output.contains("slides.json"), "应返回固化技能的专家提示/模板")
+        XCTAssertTrue(output.contains("DesignKB") && output.contains("generator.py"), "应给出 DesignKB 生成器路径")
+        XCTAssertTrue(output.contains("python3"), "应给出运行命令")
+        XCTAssertTrue(output.contains("find_images") || output.contains("配图"), "应提示用 find_images 取真实配图")
     }
 
     @MainActor

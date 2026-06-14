@@ -2,11 +2,24 @@ import SwiftUI
 import AppKit
 
 struct TaskExecutionRecordSheet: View {
-    let record: LingShuTaskExecutionRecord
-    let lineageRecords: [LingShuTaskExecutionRecord]
+    @ObservedObject var state: LingShuState
     @Environment(\.dismiss) private var dismiss
 
+    // 从 state 实时取记录:执行流/diff/追问续跑都会即时反映到窗口。
+    private var record: LingShuTaskExecutionRecord? { state.selectedTaskRecord }
+    private var lineageRecords: [LingShuTaskExecutionRecord] { state.selectedTaskRecordLineage }
+
     var body: some View {
+        Group {
+            if let record {
+                content(record: record)
+            } else {
+                Color.lingVoid.frame(minWidth: 1020, minHeight: 620)
+            }
+        }
+    }
+
+    private func content(record: LingShuTaskExecutionRecord) -> some View {
         VStack(spacing: 0) {
             HStack(alignment: .top, spacing: 12) {
                 Image(systemName: "bubble.left.and.bubble.right.fill")
@@ -50,7 +63,12 @@ struct TaskExecutionRecordSheet: View {
             .background(Color.black.opacity(0.72))
 
             HStack(spacing: 0) {
-                timelineColumn
+                VStack(spacing: 0) {
+                    timelineColumn(record: record)
+                    Divider().overlay(Color.white.opacity(0.08))
+                    // 窗口内追问 + 模型选择 + 反馈(codex 式聊天窗口)。
+                    TaskWindowFooter(state: state, recordID: record.id)
+                }
                 Divider()
                     .overlay(Color.white.opacity(0.1))
                 TaskArtifactFilesPanel(record: record, lineageRecords: lineageRecords)
@@ -61,7 +79,7 @@ struct TaskExecutionRecordSheet: View {
         .background(Color.lingVoid)
     }
 
-    private var timelineColumn: some View {
+    private func timelineColumn(record: LingShuTaskExecutionRecord) -> some View {
             ScrollViewReader { proxy in
                 ScrollView {
                     VStack(alignment: .leading, spacing: 12) {
@@ -96,6 +114,10 @@ struct TaskExecutionRecordSheet: View {
                                     .font(.system(size: 12.5, weight: .bold))
                                     .foregroundStyle(.white.opacity(0.92))
                             }
+                        }
+
+                        if !record.plan.isEmpty {
+                            TaskPlanCard(steps: record.plan)
                         }
 
                         VStack(alignment: .leading, spacing: 6) {
@@ -137,7 +159,7 @@ struct TaskExecutionRecordSheet: View {
                         }
 
                         ForEach(record.messages) { message in
-                            TaskExecutionMessageRow(message: message)
+                            TaskExecutionMessageRow(message: message, state: state, recordID: record.id)
                         }
 
                         Color.clear
@@ -479,11 +501,46 @@ struct TaskExecutionArtifactRow: View {
 
 struct TaskExecutionMessageRow: View {
     let message: LingShuTaskExecutionMessage
+    /// 非空 = 可交互(本轮记录,diff 卡可撤销);nil = 历史/只读。
+    var state: LingShuState? = nil
+    var recordID: String? = nil
 
     var body: some View {
+        if let detail = message.detail {
+            // 结构化载荷 → codex 式卡片(命令/结果/diff),左对齐 + actor 徽标。
+            HStack(alignment: .top, spacing: 10) {
+                actorBadge
+                detailCard(detail)
+                    .frame(maxWidth: 560, alignment: .leading)
+                Spacer(minLength: 40)
+            }
+        } else {
+            textRow
+        }
+    }
+
+    @ViewBuilder
+    private func detailCard(_ detail: LingShuTaskExecutionDetail) -> some View {
+        switch detail {
+        case let .toolCall(tool, summary, arguments):
+            TaskToolCallCard(tool: tool, summary: summary, arguments: arguments)
+        case let .toolResult(tool, success, output):
+            TaskToolResultCard(tool: tool, success: success, output: output)
+        case let .fileEdit(path, operation, added, removed, diff):
+            TaskFileDiffCard(
+                path: path, operation: operation, added: added, removed: removed, diff: diff,
+                undone: message.undone ?? false,
+                onUndo: (state != nil && recordID != nil) ? { [id = message.id, recordID] in
+                    if let recordID { state?.undoFileEdit(messageID: id, recordID: recordID) }
+                } : nil
+            )
+        }
+    }
+
+    private var textRow: some View {
         let isUser = message.kind == .user
 
-        HStack(alignment: .top, spacing: 10) {
+        return HStack(alignment: .top, spacing: 10) {
             if isUser {
                 Spacer(minLength: 90)
             } else {
@@ -504,21 +561,29 @@ struct TaskExecutionMessageRow: View {
                         .foregroundStyle(.white.opacity(0.34))
                 }
 
-                Text(message.text)
-                    .font(.system(size: 13.5, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.88))
-                    .fixedSize(horizontal: false, vertical: true)
-                    .padding(12)
-                    .background(isUser ? Color.lingHolo.opacity(0.20) : Color.white.opacity(0.075), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-                    .overlay {
-                        RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .stroke(isUser ? Color.lingHolo.opacity(0.28) : message.kind.color.opacity(0.18))
+                Group {
+                    if isUser {
+                        // 用户输入:纯文本气泡。
+                        Text(message.text)
+                            .font(.system(size: 13.5, weight: .medium))
+                            .foregroundStyle(.white.opacity(0.92))
+                            .fixedSize(horizontal: false, vertical: true)
+                    } else {
+                        // 灵枢分析/答复:markdown 渲染(代码块/列表/表格),对齐 codex 阅读体验。
+                        LingShuMessageContentView(text: message.text, textColor: .white.opacity(0.88))
                     }
+                }
+                .padding(12)
+                .background(isUser ? Color.lingHolo.opacity(0.20) : Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .stroke(isUser ? Color.lingHolo.opacity(0.28) : message.kind.color.opacity(0.18))
+                }
             }
-            .frame(maxWidth: 520, alignment: isUser ? .trailing : .leading)
+            .frame(maxWidth: 560, alignment: isUser ? .trailing : .leading)
 
             if !isUser {
-                Spacer(minLength: 90)
+                Spacer(minLength: 60)
             }
         }
     }

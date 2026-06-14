@@ -1,0 +1,28 @@
+{
+  "palettes": [
+    {
+      "id": "midnight", "name": "午夜霓虹", "tone": "科技/产品/AI", "mode": "dark", "weight": 1.0,
+      "bg": "#0B1220", "surface": "#131C2E", "ink": "#F2FFFD", "muted": "#9FB8B4", "accent": "#25F4E4", "accent2": "#7C5CFF"
+    },
+    {
+      "id": "graphite", "name": "石墨商务", "tone": "汇报/商业/咨询", "mode": "dark", "weight": 1.0,
+      "bg": "#13161C", "surface": "#1E232C", "ink": "#F5F7FA", "muted": "#9AA4B2", "accent": "#4F8CFF", "accent2": "#FFB020"
+    },
+    {
+      "id": "ivory", "name": "象牙简洁", "tone": "通用/教育/文档", "mode": "light", "weight": 1.0,
+      "bg": "#FBFAF7", "surface": "#FFFFFF", "ink": "#1A1F2B", "muted": "#6B7280", "accent": "#2563EB", "accent2": "#10B981"
+    },
+    {
+      "id": "sand", "name": "暖沙人文", "tone": "品牌/人文/故事", "mode": "light", "weight": 0.9,
+      "bg": "#F6F1EA", "surface": "#FFFFFF", "ink": "#2B2118", "muted": "#8A7A68", "accent": "#D2693C", "accent2": "#2F6F6B"
+    },
+    {
+      "id": "forest", "name": "深林生长", "tone": "可持续/医疗/自然", "mode": "dark", "weight": 0.85,
+      "bg": "#0E1A14", "surface": "#16271E", "ink": "#EAF6EF", "muted": "#94B3A3", "accent": "#3DDC84", "accent2": "#E8C547"
+    },
+    {
+      "id": "royal", "name": "皇家典雅", "tone": "高端/金融/发布会", "mode": "dark", "weight": 0.85,
+      "bg": "#15101F", "surface": "#221833", "ink": "#F6F1FF", "muted": "#B0A3C8", "accent": "#C8A04A", "accent2": "#8B6CF0"
+    }
+  ]
+}

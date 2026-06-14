@@ -59,9 +59,16 @@ struct LingShuExecutionConsoleView: View {
                         .padding(.horizontal, 12)
                         .padding(.vertical, 10)
                     }
+                    // 默认就停在最新一条(打开/切回本视图即看到最近执行,而不是最早的)。
+                    .defaultScrollAnchor(.bottom)
                     .onChange(of: state.executionTrace.count) { _, _ in
                         guard let lastID = state.executionTrace.last?.id else { return }
                         withAnimation(.easeOut(duration: 0.18)) {
+                            proxy.scrollTo(lastID, anchor: .bottom)
+                        }
+                    }
+                    .onAppear {
+                        if let lastID = state.executionTrace.last?.id {
                             proxy.scrollTo(lastID, anchor: .bottom)
                         }
                     }

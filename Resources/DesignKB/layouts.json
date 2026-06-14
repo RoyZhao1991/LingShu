@@ -1,0 +1,18 @@
+{
+  "comment": "版式原型注册表。generator.py 为每个 id 实现专门渲染;weight 供 dreaming 按质量分进化(高分升/低分降),selection 由模型按 when 选。",
+  "layouts": [
+    { "id": "cover", "name": "封面", "when": "首页:满版强调色块/图 + 大标题 + 副标题 + 主旨", "weight": 1.0 },
+    { "id": "agenda", "name": "目录", "when": "议程/大纲:编号条目纵列", "weight": 0.8 },
+    { "id": "section", "name": "章节分隔", "when": "进入新部分:大号章节号 + 章节名 + 强调色背景", "weight": 0.9 },
+    { "id": "bullets", "name": "要点页", "when": "一个核心论点 + 3–5 条要点(每条可带图标)", "weight": 1.0 },
+    { "id": "bignumber", "name": "大数字", "when": "突出一个关键指标/结论数字 + 说明", "weight": 0.9 },
+    { "id": "image-right", "name": "右图文", "when": "左文右图:论点 + 配图(场景/产品/示意)", "weight": 0.95 },
+    { "id": "image-left", "name": "左图文", "when": "左图右文:配图 + 论点", "weight": 0.95 },
+    { "id": "image-full", "name": "满版图", "when": "强视觉冲击:满版图 + 遮罩 + 一句话", "weight": 0.85 },
+    { "id": "twocol", "name": "两栏对比", "when": "对比/前后/优劣:左右两列卡片", "weight": 0.9 },
+    { "id": "timeline", "name": "时间线", "when": "流程/历程/路线图:横向节点", "weight": 0.85 },
+    { "id": "quote", "name": "引言", "when": "金句/用户证言/愿景:居中大字引言", "weight": 0.7 },
+    { "id": "chart", "name": "图表", "when": "有数据:柱/折/饼原生图表 + 结论标题", "weight": 0.8 },
+    { "id": "closing", "name": "收尾", "when": "末页:行动点/致谢/联系方式 + 强调色块", "weight": 1.0 }
+  ]
+}

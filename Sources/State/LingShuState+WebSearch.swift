@@ -40,6 +40,39 @@ extension LingShuState {
         }
     }
 
+    /// 联网搜索返回**结果真实 URL**(供 acquire_resource 抓资源用)。DDG 结果链接常是 `/l/?uddg=<编码真链>`,这里解出真链。
+    nonisolated static func webSearchLinks(_ query: String, limit: Int = 8) async -> [URL] {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty,
+              let encoded = trimmed.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
+              let url = URL(string: "https://html.duckduckgo.com/html/?q=\(encoded)") else { return [] }
+        var request = URLRequest(url: url)
+        request.setValue("Mozilla/5.0 (Macintosh) LingShu/1.0", forHTTPHeaderField: "User-Agent")
+        request.timeoutInterval = 15
+        guard let (data, _) = try? await URLSession.shared.data(for: request),
+              let html = String(data: data, encoding: .utf8) else { return [] }
+        var urls: [URL] = []
+        var seen = Set<String>()
+        for href in matches(in: html, pattern: "result__a[^>]*href=\"([^\"]+)\"").prefix(limit * 2) {
+            let real = decodeDDGRedirect(href)
+            guard let u = URL(string: real), (u.scheme == "http" || u.scheme == "https"), !seen.contains(u.absoluteString) else { continue }
+            seen.insert(u.absoluteString)
+            urls.append(u)
+            if urls.count >= limit { break }
+        }
+        return urls
+    }
+
+    private nonisolated static func decodeDDGRedirect(_ href: String) -> String {
+        if let r = href.range(of: "uddg=") {
+            let after = String(href[r.upperBound...])
+            let enc = after.split(separator: "&").first.map(String.init) ?? after
+            if let dec = enc.removingPercentEncoding { return dec }
+        }
+        if href.hasPrefix("//") { return "https:" + href }
+        return href
+    }
+
     private nonisolated static func extractSearchResults(from html: String, limit: Int) -> [String] {
         // DDG html:结果标题在 class="result__a"…>标题</a>,摘要在 class="result__snippet"…>摘要</a>。
         let titles = matches(in: html, pattern: "result__a[^>]*>(.*?)</a>")

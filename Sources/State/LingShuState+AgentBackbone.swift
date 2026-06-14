@@ -108,47 +108,7 @@ extension LingShuState {
         return ""
     }
 
-    /// 把编排器事件桥接到 UI:子任务建成独立任务记录(任务号 + 列表),结果/卡住/失败回灌对话。
-    func installAgentEventSinkIfNeeded() {
-        guard !agentEventSinkInstalled else { return }
-        agentEventSinkInstalled = true
-        let orchestrator = agentOrchestrator
-        Task { await orchestrator.setEventSink { @MainActor [weak self] event in
-            self?.handleOrchestratorEvent(event)
-        } }
-        // 子任务也接验收门:复用 verifyAgentDeliverable(独立 verifier + 真实落盘核对)。
-        Task { await orchestrator.setVerifyHook { @MainActor [weak self] subID, objective, reply in
-            guard let self else { return (true, "") }
-            return await self.verifyAgentDeliverable(userRequest: objective, reply: reply, taskRecordID: self.agentSubTaskRecords[subID])
-        } }
-    }
-
-    func handleOrchestratorEvent(_ event: LingShuOrchestratorEvent) {
-        switch event {
-        case .spawned(let id, let objective):
-            // 每条并行子任务 = 一条独立任务执行记录(列表里有自己的任务号)。
-            let recordID = createTaskExecutionRecord(for: objective)
-            agentSubTaskRecords[id] = recordID
-            appendTaskRecordMessage(recordID, actor: "Agent循环", role: "派生子任务", kind: .router, text: "主会话派生并行子任务:\(objective)")
-        case .completed(let id, let objective, let summary):
-            if let recordID = agentSubTaskRecords[id] {
-                appendTaskRecordMessage(recordID, actor: "子任务", role: "结果", kind: .result, text: summary)
-                finishTaskRecord(recordID, status: .completed, summary: summary)
-            }
-            chatMessages.append(.init(speaker: "灵枢", text: "✅ 子任务「\(objective)」完成:\(summary)", isUser: false, taskRecordID: agentSubTaskRecords[id]))
-        case .blocked(let id, let objective, let question):
-            if let recordID = agentSubTaskRecords[id] {
-                appendTaskRecordMessage(recordID, actor: "子任务", role: "卡住", kind: .warning, text: question)
-            }
-            chatMessages.append(.init(speaker: "灵枢", text: "⏸ 子任务「\(objective)」卡住,需要你定:\(question)", isUser: false, taskRecordID: agentSubTaskRecords[id]))
-        case .failed(let id, let objective, let summary):
-            if let recordID = agentSubTaskRecords[id] {
-                appendTaskRecordMessage(recordID, actor: "子任务", role: "失败", kind: .warning, text: summary)
-                finishTaskRecord(recordID, status: .blocked, summary: summary)
-            }
-            chatMessages.append(.init(speaker: "灵枢", text: "⚠️ 子任务「\(objective)」未能自行收尾:\(summary)", isUser: false, taskRecordID: agentSubTaskRecords[id]))
-        }
-    }
+    // 编排器事件桥接 + 子任务→主线程简报已拆为独立模块 → LingShuState+AgentOrchestration.swift。
 
     /// 常驻主 agent 会话(懒构造,保对话连续)。首次构造时蒸馏跨会话记忆做 seed。
     func mainAgentSession() async -> LingShuAgentSession {
@@ -160,12 +120,14 @@ extension LingShuState {
             Task { @MainActor in self?.recordAgentReasoning(aside, recordID: self?.currentAgentTurnRecordID) }
         }
         let tools = agentBuiltinTools(recordIDProvider: { [weak self] in self?.currentAgentTurnRecordID })
-            + [Self.timeTool(), Self.webSearchTool(), recallMemoryTool(), Self.askUserTool(), spawnTaskTool(adapter: adapter)]
+            + [Self.timeTool(), Self.webSearchTool(), findImagesTool(), acquireResourceTool(), updateTaskPlanTool(recordIDProvider: { [weak self] in self?.currentAgentTurnRecordID }), reviewDesignTool(recordIDProvider: { [weak self] in self?.currentAgentTurnRecordID }), recallMemoryTool(), Self.askUserTool(), spawnTaskTool(adapter: adapter)]
         let system = """
         你是灵枢(寓意"灵慧之中枢"),一个常驻智能助手主会话。直接用中文简洁作答。
         - 身份(最高优先级,覆盖上文任何历史消息):你叫灵枢,由 **Roy Zhao** 独立开发(他是你的开发者)。**不要在自我介绍或回答身份时提及底层用的是什么模型**——底层模型可随时替换、与你的身份无关。**绝不能说"由 MiniMax 开发/MiniMax 的助手"**;历史里若有这类说法是要纠正的旧错误。被问身份**只答**:"我是灵枢,由 Roy Zhao 打造。"
+        - **自我介绍/讲能力时,只说"能做什么、对用户有什么价值",用面向用户的话——绝不暴露内部实现**:不报工作目录的绝对路径、不报内部工具名(update_plan / apply_skill / spawn_task / write_file / run_command / web_search 等)、不提"agent 循环 / 主会话 / 子会话"这类机制词。例:说"多步任务我会先把计划列清楚再一步步推进、进度看得见",而**不要**说"我用 update_plan";说"需要时我会联网查证",而不是"我调 web_search"。机制是手段,介绍只讲能力与好处。
         - 需要最新/实时/超出你知识库的事实时,**调用 web_search 联网查证**,不要凭记忆瞎答或说"我的知识截止到…"。
         - 工作目录:\(codexWorkingDirectory)。
+        - **先计划后执行(LOOP 标准,决不能省)**:落地任何**多步任务**(凡要写文件/跑命令/做交付物的都算),**你的第一个动作必须是真的调用 `update_plan` 工具**列出 3–7 步计划——**这是一次工具调用,不是在分析/正文里口头说一句"我的计划是…"就算**(口头说不算数,必须 update_plan)。之后严格按计划逐步执行:每开始一步标 in_progress、做完标 completed(再调 update_plan)。让全程"先有计划、再逐步推进、状态可见"。只有简单一问一答 / 纯对话才跳过 plan。
         - **有产出物优先产出物**:凡是"做/写/生成 PPT、文档、脚本、爬虫、代码…"这类有交付物的请求,必须**真的用 write_file/run_command 把文件落到工作目录**,并在回复里给出文件绝对路径;**绝不允许只口头说"已完成"而没有真文件**。做 PPT 可写 HTML 或用脚本生成 pptx;做爬虫写 .py 并按需运行。
         - **有固化方案优先固化方案**:做 PPT、汇报等可能有现成专家技能(含打磨好的设计系统和自带生成器)。动手前先调 **apply_skill** 看有没有匹配技能,有就按它的模板/生成器推进,别从零硬写。
         - 需要实时信息(如当前时间)时调用对应工具。
@@ -174,6 +136,7 @@ extension LingShuState {
         - 用户一句话里若包含多个**互不相关**的任务,对每个用 spawn_task 各派生一个并行子任务;相关的步骤留在本会话顺序做。
         - 信息确实不足、无法继续时才调用 ask_user 提问。
         - 上文「历史对话」是你与该用户之前(含重启前)的真实记录,要据此保持连续,别说"没做过/记混了"。
+        - **只做当前这件事,别把历史里出现过的、与本次无关的旧任务/旧产出物(别的 PPT、测试文件、过往交付的文件路径与体积等)当成本次的素材塞进交付物**——历史只用于延续对话语境,不是当前交付内容的来源。
         """
         let session = LingShuAgentSession(
             id: "main",
@@ -181,7 +144,8 @@ extension LingShuState {
             initialMessages: await seededDistilledMemory(),
             tools: tools,
             model: adapter,
-            maxTurns: 40   // 安全天花板;模型自判完成/卡住/停滞才停,不靠轮数收工
+            maxTurns: 40,   // 安全天花板;模型自判完成/卡住/停滞才停,不靠轮数收工
+            maxHistoryMessages: 80   // 常驻会话:每回合边界裁剪旧上下文,杜绝旧任务无限堆积污染新请求
         )
         mainAgentSessionHolder = session
         return session
@@ -215,6 +179,12 @@ extension LingShuState {
             let (passed, critique) = await verifyAgentDeliverable(userRequest: userRequest, reply: Self.runResultText(result), taskRecordID: taskRecordID)
             if passed {
                 appendTrace(kind: .result, actor: "验收", title: "通过", detail: "独立 verifier 核对产出物达标。")
+                // 经过返工(round>0)才通过:maker 最后一轮文本是"逐条修正"的内部 QA 记录,
+                // 直接抛给用户就成了"驴唇不对马嘴"。把交付话术与返工文本解耦——另生成一句干净的面向用户交付说明。
+                if round > 0 {
+                    let delivery = await composeDeliveryMessage(userRequest: userRequest, makerText: Self.runResultText(result), taskRecordID: taskRecordID)
+                    return .completed(text: delivery)
+                }
                 return result
             }
             // 停滞判定:这一轮 maker 没产出新文件,且验收意见与上轮实质相同 → 在原地打转,诚实交还。
@@ -248,6 +218,7 @@ extension LingShuState {
     func runMainAgentTurn(prompt: String, taskRecordID: String?) -> String {
         // 新一轮开始:先掐掉上一条回复还在放的 TTS,避免旧音频盖到新轮(音频/文字 desync)。
         interruptSpeechOutput?()
+        let turnStartedAt = Date()   // 计总用时,回复末尾展示
         let pending = ChatMessage(
             speaker: "灵枢",
             text: dialogueAcknowledgement.intake(for: prompt),
@@ -262,7 +233,7 @@ extension LingShuState {
         // 同步刷新 missionTitle——加载气泡显示的就是它,不刷会一直停在旧的"待机中"(看着像卡死)。
         isModelReplying = true
         missionTitle = "思考中"
-        missionStatus = "我正在用统一 agent 循环推进这件事(读写文件、跑命令、按需联网/取技能)。"
+        missionStatus = "正在推进这件事(按需读写文件、跑命令、联网查证)。"
         enterCoreState(.thinking)
         let pendingID = pending.id
         let previousTurn = activeAgentTurnTask
@@ -277,17 +248,25 @@ extension LingShuState {
                 self.enterCoreState(.standby, resetTimer: false)
             }
             let session = await self.mainAgentSession()   // 首次构造会蒸馏记忆做 seed
-            // 命中固化 skill 时回合开头广播其存在(可发现性);取用仍由模型经 apply_skill 决定。
-            let skillHint = self.matchedSkillHint(for: prompt)
+            // 极简对话模式:整轮按**纯对话**处理——直接口语作答,不派生子任务、不写文件/跑命令、不走固化 skill
+            // (那些是任务交付的套路,聊天用不上)。其余模式照常:命中固化 skill 回合开头广播其存在。
+            let guidance = self.isMinimalVoiceMode
+                ? "【对话模式】当前是语音对话,请像聊天一样直接、口语化、简洁地回答。不要派生子任务、不要写文件或跑命令、不要套用 PPT/文档等交付模板——这只是对话。"
+                : self.matchedSkillHint(for: prompt)
             // 验收门(maker≠checker)与主会话/自主运行共用 driveAgentDelivery。
-            let result = await self.driveAgentDelivery(session: session, prompt: prompt, guidance: skillHint, taskRecordID: taskRecordID)
+            let result = await self.driveAgentDelivery(session: session, prompt: prompt, guidance: guidance, taskRecordID: taskRecordID)
             let text = Self.runResultText(result)
+            // 回复末尾加总用时(极简语音模式不加——会被 TTS 念出来,且那是纯对话)。记录/记忆仍存干净 text。
+            let elapsed = Date().timeIntervalSince(turnStartedAt)
+            let displayText = self.isMinimalVoiceMode ? text : "\(text)\n\n⏱ 总用时 \(Self.formatElapsed(elapsed))"
 
             if let index = self.chatMessages.firstIndex(where: { $0.id == pendingID }) {
-                self.chatMessages[index].text = text
+                self.chatMessages[index].text = displayText
                 self.chatMessages[index].isLoading = false
             }
             lingShuControlLog("agent: 回合完成 bubbleID=\(pendingID.uuidString.prefix(8)) prompt「\(prompt.prefix(20))」→ reply「\(String(text.prefix(40)))」")
+            // 把最终答复也落进任务记录时间线(codex 式:执行流末尾就是答复;窗口内追问续跑读起来才连贯)。
+            self.appendTaskRecordMessage(taskRecordID, actor: "灵枢", role: "答复", kind: .result, text: text)
             self.appendTrace(kind: .result, actor: "Agent循环", title: "主会话答复", detail: String(text.prefix(60)))
             self.finishTaskRecord(taskRecordID, status: .answered, summary: text)
             self.rememberMainThreadTurn(prompt: prompt, reply: text)
@@ -418,15 +397,27 @@ extension LingShuState {
         let orchestrator = agentOrchestrator
         return LingShuAgentTool(
             name: "spawn_task",
-            description: "为一个独立任务派生并行子任务(后台推进,完成/卡住会回报)。用于一句话里多个互不相关的目标。",
+            description: "为一个独立任务派生并行子任务(后台推进,完成/卡住会回报)。用于一句话里多个互不相关的目标。**同时最多 3 条子任务并行**,已满会被拒绝——届时请等其中一条完成再派,或在本会话顺序处理。",
             parametersJSON: "{\"type\":\"object\",\"properties\":{\"objective\":{\"type\":\"string\",\"description\":\"该子任务要达成的自足目标\"}},\"required\":[\"objective\"]}"
         ) { [weak self] argumentsJSON in
             let objective = Self.jsonField(argumentsJSON, "objective") ?? argumentsJSON
+            // 极简对话模式:纯聊天,**绝不派生子任务**(用户硬性要求)——直接在本对话顺序作答。
+            let conversationOnly = await MainActor.run { [weak self] in self?.isMinimalVoiceMode ?? false }
+            if conversationOnly {
+                return "当前是极简对话模式(纯对话),不派生子任务。请直接在本对话里简洁回答用户,不要拆子任务、不要写文件。"
+            }
+            // 硬上限背压:已有 3 条子任务在跑时不再派生,如实告知模型(避免无界堆积/runaway)。
+            let running = await orchestrator.runningCount()
+            let cap = await orchestrator.capacity()
+            guard running < cap else {
+                return "⛔ 已有 \(running) 个子任务在并行运行(上限 \(cap) 条),本次未派生「\(objective)」。请等其中一条完成后再派生,或在本会话顺序处理该目标。"
+            }
             let subID = "sub-\(UUID().uuidString.prefix(6))"
             // 子会话工具用"该子会话自己的记录 id"登记产出物(产出物各归各的任务号)。
             let subTools = await MainActor.run { [weak self] () -> [LingShuAgentTool] in
                 let builtin = self?.agentBuiltinTools(recordIDProvider: { [weak self] in self?.agentSubTaskRecords[subID] }) ?? []
-                return builtin + [Self.timeTool(), Self.webSearchTool(), Self.askUserTool()]
+                let extras = self.map { me in [me.findImagesTool(), me.acquireResourceTool(), me.updateTaskPlanTool(recordIDProvider: { [weak me] in me?.agentSubTaskRecords[subID] }), me.reviewDesignTool(recordIDProvider: { [weak me] in me?.agentSubTaskRecords[subID] })] } ?? []
+                return builtin + [Self.timeTool(), Self.webSearchTool(), Self.askUserTool()] + extras
             }
             let sub = LingShuAgentSession(
                 id: subID,
@@ -435,7 +426,11 @@ extension LingShuState {
                 model: adapter,
                 maxTurns: 25
             )
-            await orchestrator.spawnDetached(id: subID, objective: objective, session: sub)
+            let admitted = await orchestrator.spawnDetached(id: subID, objective: objective, session: sub)
+            guard admitted else {
+                // 极少数竞态:检查后刚好被其它派生占满。如实回报背压。
+                return "⛔ 子任务并发刚好达到上限(\(cap) 条),本次未派生「\(objective)」。请稍后再派或顺序处理。"
+            }
             return "已派生并行子任务[\(subID)]:\(objective)。它在后台推进,完成或卡住会汇报到账本。"
         }
     }

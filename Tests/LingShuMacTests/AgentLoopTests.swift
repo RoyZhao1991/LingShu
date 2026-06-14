@@ -76,6 +76,81 @@ final class AgentLoopTests: XCTestCase {
         XCTAssertTrue(invocations.isEmpty)
     }
 
+    func testBoundedHistoryTrimsOldTurnsButKeepsSystemAndLatest() async {
+        // 常驻会话设了历史窗口:多轮后旧上下文在回合边界被裁,系统身份恒保留、最近一轮恒保留——
+        // 杜绝旧任务无限堆积污染新请求(根因 1a)。
+        let model = ScriptedAgentModel([])   // 每轮返回"(脚本耗尽)"文本 → 单轮收尾
+        let session = LingShuAgentSession(id: "trim", system: "系统身份", tools: [], model: model, maxHistoryMessages: 4)
+        for i in 0..<10 { _ = await session.send("第\(i)轮") }
+
+        let msgs = await session.messages
+        XCTAssertEqual(msgs.first?.role, .system, "系统消息恒在最前")
+        let body = msgs.filter { $0.role != .system }
+        XCTAssertLessThanOrEqual(body.count, 6, "非系统历史被裁到窗口附近(窗口4 + 当轮 user+assistant)")
+        XCTAssertNotEqual(body.first?.role, .tool, "裁剪后不留孤儿 tool 结果")
+        XCTAssertTrue(msgs.contains { $0.content == "第9轮" }, "最近一轮永远保留")
+        XCTAssertFalse(msgs.contains { $0.content == "第0轮" }, "最早的旧轮已被裁掉")
+    }
+
+    func testMidFlightCorrectionSteersTheLoop() async {
+        // 模拟用户看到 agent 跑偏后中途纠正:循环在回合边界采纳纠正,模型下一步据此改方向。
+        final class InjectingModel: LingShuAgentModel, @unchecked Sendable {
+            weak var session: LingShuAgentSession?
+            var step = 0
+            private(set) var sawCorrection = false
+            func respond(messages: [LingShuAgentMessage], tools: [LingShuAgentTool]) async -> LingShuAgentModelResponse {
+                if messages.contains(where: { $0.role == .user && $0.content.contains("改用 markdown") }) {
+                    sawCorrection = true
+                    return .text("已按你的纠正改用 markdown 重做完成")
+                }
+                step += 1
+                if step == 1 {
+                    // 第 1 步:模拟用户中途下达纠正(干预),同时模型还在按错方向继续。
+                    await session?.injectCorrection("方向不对,改用 markdown")
+                    return .toolCalls([.init(id: "c1", name: "noop", argumentsJSON: "{}")])
+                }
+                return .text("（按错误方向收尾）")
+            }
+        }
+        let model = InjectingModel()
+        let noop = LingShuAgentTool(name: "noop", description: "空转") { _ in "ok" }
+        let session = LingShuAgentSession(id: "fix", tools: [noop], model: model)
+        model.session = session
+
+        let result = await session.send("做个东西")
+        XCTAssertEqual(result, .completed(text: "已按你的纠正改用 markdown 重做完成"))
+        XCTAssertTrue(model.sawCorrection, "纠正应在回合边界注入,模型下一步能看到")
+        let messages = await session.messages
+        XCTAssertTrue(messages.contains { $0.role == .user && $0.content.contains("最高优先级") && $0.content.contains("改用 markdown") },
+                      "纠正应作为最高优先级 user 指令注入上下文")
+    }
+
+    func testSubtaskBriefingSyncsToMainThreadOnNextTurn() async {
+        // 子任务完成 → 简报回灌主线程:下一回合作为 system 提示注入(信息同步,非完整上下文)。
+        final class CaptureModel: LingShuAgentModel, @unchecked Sendable {
+            private(set) var sawBriefing = false
+            func respond(messages: [LingShuAgentMessage], tools: [LingShuAgentTool]) async -> LingShuAgentModelResponse {
+                if messages.contains(where: { $0.role == .system && $0.content.contains("子任务进展简报") && $0.content.contains("抓取100条") }) {
+                    sawBriefing = true
+                }
+                return .text("ok")
+            }
+        }
+        let model = CaptureModel()
+        let session = LingShuAgentSession(id: "main", tools: [], model: model)
+        await session.injectBriefing("子任务「爬虫」已完成:抓取100条")
+        _ = await session.send("接着干")
+        XCTAssertTrue(model.sawBriefing, "子任务简报应在下一回合以 system 提示同步进主线程上下文")
+    }
+
+    func testTaskDeliveryReplyClassification() {
+        // 任务交付报告(声称产出文件/含代码/含路径)→ 念摘要;干净对话/汇报正文 → 念全文。
+        XCTAssertTrue(LingShuState.replyLooksLikeTaskDelivery("已生成 /Users/x/a.pptx,共 10 页。"))
+        XCTAssertTrue(LingShuState.replyLooksLikeTaskDelivery("脚本如下:\n```python\nprint(1)\n```"))
+        XCTAssertFalse(LingShuState.replyLooksLikeTaskDelivery("我是灵枢,由 Roy Zhao 打造,很高兴见到你。"))
+        XCTAssertFalse(LingShuState.replyLooksLikeTaskDelivery("今天的会议要点是:先对齐目标,再分工推进,最后定下周复盘时间。"))
+    }
+
     func testMaxTurnsGuardStopsRunawayLoop() async {
         // 模型每轮都要调工具、永不收尾 → 应在 maxTurns 处停。
         let loopingScript = Array(repeating: LingShuAgentModelResponse.toolCalls([.init(id: "c", name: "noop", argumentsJSON: "{}")]), count: 50)

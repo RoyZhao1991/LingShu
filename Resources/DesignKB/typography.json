@@ -1,0 +1,17 @@
+{
+  "pairings": [
+    { "id": "pingfang", "name": "苹方系统(稳)", "title_font": "PingFang SC", "body_font": "PingFang SC", "weight": 1.0 },
+    { "id": "songti-hei", "name": "黑标题宋正文(人文)", "title_font": "PingFang SC", "body_font": "Songti SC", "weight": 0.7 }
+  ],
+  "scale": {
+    "cover_title": 54, "cover_subtitle": 22,
+    "section_index": 20, "section_title": 40,
+    "title": 32, "subtitle": 18,
+    "bignum": 120, "bignum_label": 22,
+    "bullet": 18, "caption": 13, "quote": 30
+  },
+  "grid": {
+    "slide_w_in": 13.333, "slide_h_in": 7.5,
+    "margin_in": 0.9, "gutter_in": 0.45, "content_top_in": 1.15
+  }
+}

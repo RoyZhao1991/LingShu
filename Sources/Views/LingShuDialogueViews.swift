@@ -69,8 +69,8 @@ struct LingShuDialogueSurface: View {
         .padding(.horizontal, 24)
         .padding(.vertical, 16)
         .sheet(isPresented: $state.isTaskRecordPresented) {
-            if let record = state.selectedTaskRecord {
-                TaskExecutionRecordSheet(record: record, lineageRecords: state.selectedTaskRecordLineage)
+            if state.selectedTaskRecord != nil {
+                TaskExecutionRecordSheet(state: state)
             } else {
                 Text("任务记录不存在")
                     .frame(width: 520, height: 320)
@@ -202,42 +202,74 @@ struct LingShuCoreHeader: View {
 /// 待发送附件托盘：每个 chip = 文件名（字面）+ 解析状态（底层服务状态：解析中/就绪/失败）。
 struct LingShuAttachmentTray: View {
     @ObservedObject var state: LingShuState
+    /// 滑动窗口起点:附件多于 pageSize 时,一次只显示 pageSize 个,左右箭头滑动。
+    @State private var startIndex = 0
+    private let pageSize = 3
 
     var body: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
-                ForEach(state.pendingAttachments) { attachment in
-                    HStack(spacing: 8) {
-                        attachmentThumbnail(attachment)
+        let items = state.pendingAttachments
+        let total = items.count
+        let maxStart = max(0, total - pageSize)
+        let start = min(max(0, startIndex), maxStart)   // 删附件后不越界
+        let window = total > pageSize ? Array(items[start..<min(start + pageSize, total)]) : items
 
-                        VStack(alignment: .leading, spacing: 1) {
-                            Text(attachment.filename)
-                                .font(.system(size: 11.5, weight: .semibold))
-                                .foregroundStyle(.white.opacity(0.9))
-                                .lineLimit(1)
-                            Text(attachment.status ?? (attachment.extractedContext.isEmpty ? "已登记" : "已解析 · 可改写"))
-                                .font(.system(size: 9, weight: .bold, design: .monospaced))
-                                .foregroundStyle(attachment.status == nil ? Color.lingHolo.opacity(0.85) : .orange.opacity(0.85))
-                                .lineLimit(1)
-                        }
-
-                        Button {
-                            state.removeAttachment(attachment.id)
-                        } label: {
-                            Image(systemName: "xmark")
-                                .font(.system(size: 9, weight: .bold))
-                                .foregroundStyle(.white.opacity(0.6))
-                        }
-                        .buttonStyle(.plain)
-                    }
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 7)
-                    .frame(maxWidth: 220)
-                    .lingShuHUDPanel(cornerLength: 6, fillOpacity: 0.05)
-                }
+        HStack(spacing: 8) {
+            if total > pageSize {
+                pageArrow("chevron.left", enabled: start > 0) { startIndex = max(0, start - 1) }
             }
-            .padding(.horizontal, 1)
+            ForEach(window) { attachment in chip(attachment) }
+            if total > pageSize {
+                pageArrow("chevron.right", enabled: start + pageSize < total) { startIndex = min(maxStart, start + 1) }
+                Text("\(start + 1)-\(min(start + pageSize, total))/\(total)")
+                    .font(.system(size: 9.5, weight: .bold, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.45))
+            }
+            Spacer(minLength: 0)
         }
+    }
+
+    /// 左右翻页箭头(到头/到尾禁用置灰)。
+    private func pageArrow(_ icon: String, enabled: Bool, _ action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: icon)
+                .font(.system(size: 11, weight: .bold))
+                .foregroundStyle(enabled ? Color.lingHolo : .white.opacity(0.2))
+                .frame(width: 22, height: 38)
+                .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .disabled(!enabled)
+    }
+
+    /// 单个附件芯片:缩略图 + 文件名 + 解析状态 + 移除。
+    private func chip(_ attachment: LingShuAttachment) -> some View {
+        HStack(spacing: 8) {
+            attachmentThumbnail(attachment)
+
+            VStack(alignment: .leading, spacing: 1) {
+                Text(attachment.filename)
+                    .font(.system(size: 11.5, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.9))
+                    .lineLimit(1)
+                Text(attachment.status ?? (attachment.extractedContext.isEmpty ? "已登记" : "已解析 · 可改写"))
+                    .font(.system(size: 9, weight: .bold, design: .monospaced))
+                    .foregroundStyle(attachment.status == nil ? Color.lingHolo.opacity(0.85) : .orange.opacity(0.85))
+                    .lineLimit(1)
+            }
+
+            Button {
+                state.removeAttachment(attachment.id)
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(.white.opacity(0.6))
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
+        .frame(maxWidth: 220)
+        .lingShuHUDPanel(cornerLength: 6, fillOpacity: 0.05)
     }
 
     /// 缩略图预览(对齐 codex/claude):图片显真实缩略图,其它文件显类型图标小图块。

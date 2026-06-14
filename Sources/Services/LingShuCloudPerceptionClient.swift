@@ -79,9 +79,13 @@ struct LingShuCloudPerceptionClient {
         includeOCR: Bool = true,
         includeGrounding: Bool = true,
         detectionQueries: [String] = LingShuCloudPerceptionClient.defaultDetectionQueries,
-        includeQwenSemantics: Bool = true
+        includeQwenSemantics: Bool = true,
+        model: String = "qwen2.5-vl"
     ) async throws -> LingShuCloudPerceptionResult {
+        // 单图视觉理解走 swds-vision-fast,但显式指定 model=qwen2.5-vl(实测它给出更扎实的场景/版式语义;
+        // deep 端点是视频专用、不收单图)。深度=视频 + 周期性态势感知里用 analyzeVideo→swds-vision-deep。
         var body: [String: Any] = [
+            "model": model,
             "prompt": prompt,
             "include_ocr": includeOCR,
             "include_grounding": includeGrounding,

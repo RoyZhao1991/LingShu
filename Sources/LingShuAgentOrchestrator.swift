@@ -62,6 +62,10 @@ actor LingShuAgentOrchestrator {
     func pendingPushes() -> [String] { pushes }
     func runningCount() -> Int { concurrency.runningCount }
     func waitingCount() -> Int { concurrency.waitingCount }
+    /// 同时可并行运行的子任务硬上限(= 有界并发 maxConcurrent)。spawn_task 据此做背压。
+    func capacity() -> Int { concurrency.maxConcurrent }
+    /// 当前是否还能再派生一条子任务(运行数 < 上限)。
+    func hasSpawnCapacity() -> Bool { concurrency.hasCapacity }
     func blockedIDs() -> [String] { ledger().filter { $0.status == .blocked }.map { $0.id } }
 
     // MARK: 派生 / 续接
@@ -81,14 +85,19 @@ actor LingShuAgentOrchestrator {
 
     /// 非阻塞派生:子会话在后台跑(真并行),立即返回;完成/失败后自动纳入下一条排队线程。
     /// 主会话用它"派生即走",子会话经账本/推送回报,不阻塞主会话。
-    func spawnDetached(id: String, objective: String, session: LingShuAgentSession) async {
+    ///
+    /// **硬上限(背压):已有 `maxConcurrent`(=3)条在跑时直接拒绝,不入队**——返回 false,由
+    /// spawn_task 把"已满,稍后再派/本会话顺序做"如实回报给模型。这样杜绝无界排队堆积(模型一次
+    /// 甩出几十个子任务排队空耗),把"最多 3 条正在运行"做成派生点的硬闸,而非仅靠内部队列兜。
+    @discardableResult
+    func spawnDetached(id: String, objective: String, session: LingShuAgentSession) async -> Bool {
+        guard concurrency.hasCapacity else { return false }   // 满 3 → 拒绝(背压),不排队
         sessions[id] = session
-        let admitted = concurrency.requestAdmission(threadID: id, summary: objective)
-        upsert(id: id, objective: objective, status: .running, summary: admitted ? "已开始(后台)" : "排队中(超并发上限)")
+        concurrency.requestAdmission(threadID: id, summary: objective)   // 有容量,必纳入运行
+        upsert(id: id, objective: objective, status: .running, summary: "已开始(后台)")
         await onEvent?(.spawned(id: id, objective: objective))
-        if admitted {
-            Task { await self.drive(id: id, objective: objective) }
-        }
+        Task { await self.drive(id: id, objective: objective) }
+        return true
     }
 
     private func drive(id: String, objective: String) async {

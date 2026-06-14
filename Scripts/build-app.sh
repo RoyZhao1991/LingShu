@@ -46,6 +46,13 @@ if [ -d "$ROOT_DIR/Resources/RuntimeConfig" ]; then
   ditto "$ROOT_DIR/Resources/RuntimeConfig" "$RES_DIR/RuntimeConfig"
 fi
 
+# DesignKB(自进化 PPT 设计知识库:生成器 + 配色/版式/字体 + rubric + Lucide 图标)随包交付。
+if [ -d "$ROOT_DIR/Resources/DesignKB" ]; then
+  echo "==> copying DesignKB"
+  mkdir -p "$RES_DIR/DesignKB"
+  ditto "$ROOT_DIR/Resources/DesignKB" "$RES_DIR/DesignKB"
+fi
+
 cat > "$CONTENTS/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

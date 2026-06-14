@@ -89,6 +89,113 @@ final class LingShuControlRouter {
             ]
         ],
         [
+            "name": "lingshu_interject",
+            "description": "流程纠正/干预:看到 agent 跑偏时,把纠正注入正在跑的会话,回合边界即采纳改方向(不打断在飞工具)。args: text。",
+            "inputSchema": [
+                "type": "object",
+                "properties": ["text": ["type": "string", "description": "纠正指令"]],
+                "required": ["text"]
+            ]
+        ],
+        [
+            "name": "lingshu_stop",
+            "description": "停止当前在飞回合(等价任务窗口停止按钮)。",
+            "inputSchema": ["type": "object", "properties": [:] as [String: Any]]
+        ],
+        [
+            "name": "lingshu_task_records",
+            "description": "列任务执行记录(热+冷):id/标题/状态/消息数/产出物数/反馈。供挑选后 inspect 或操作。args: limit。",
+            "inputSchema": ["type": "object", "properties": ["limit": ["type": "integer", "description": "返回条数,默认 15"]]]
+        ],
+        [
+            "name": "lingshu_task_detail",
+            "description": "取一条任务的 codex 式执行时间线:每条消息含结构化 detail(toolCall/toolResult/fileEdit+diff)+ 产出物 + 反馈。免点开窗口即可核验卡片内容。args: recordId。",
+            "inputSchema": [
+                "type": "object",
+                "properties": ["recordId": ["type": "string", "description": "任务记录 id(来自 lingshu_task_records)"]],
+                "required": ["recordId"]
+            ]
+        ],
+        [
+            "name": "lingshu_task_followup",
+            "description": "对某条任务窗口内追问续跑(同一记录继续,等价底栏发送)。args: recordId, text。",
+            "inputSchema": [
+                "type": "object",
+                "properties": [
+                    "recordId": ["type": "string", "description": "任务记录 id"],
+                    "text": ["type": "string", "description": "追问内容"]
+                ],
+                "required": ["recordId", "text"]
+            ]
+        ],
+        [
+            "name": "lingshu_task_feedback",
+            "description": "给任务设反馈(等价 👍👎;👎 的输出不进 dreaming 固化样本)。args: recordId, value(up/down/clear)。",
+            "inputSchema": [
+                "type": "object",
+                "properties": [
+                    "recordId": ["type": "string", "description": "任务记录 id"],
+                    "value": ["type": "string", "description": "up / down / clear"]
+                ],
+                "required": ["recordId", "value"]
+            ]
+        ],
+        [
+            "name": "lingshu_undo_edit",
+            "description": "撤销一次文件改动(等价 diff 卡的撤销;新增删文件、修改还原改前内容)。args: recordId, messageId(来自 lingshu_task_detail 的 fileEdit 消息)。",
+            "inputSchema": [
+                "type": "object",
+                "properties": [
+                    "recordId": ["type": "string", "description": "任务记录 id"],
+                    "messageId": ["type": "string", "description": "fileEdit 消息 id"]
+                ],
+                "required": ["recordId", "messageId"]
+            ]
+        ],
+        [
+            "name": "lingshu_attach",
+            "description": "按文件路径加附件(等价 📎),走与主输入框同一 ingest 管线;随后 lingshu_send_prompt / lingshu_task_followup 会带上附件正文。args: path。",
+            "inputSchema": [
+                "type": "object",
+                "properties": ["path": ["type": "string", "description": "本机文件绝对路径"]],
+                "required": ["path"]
+            ]
+        ],
+        [
+            "name": "lingshu_clear_attachments",
+            "description": "清空当前待发送附件缓冲。",
+            "inputSchema": ["type": "object", "properties": [:] as [String: Any]]
+        ],
+        [
+            "name": "lingshu_acquire_resource",
+            "description": "资源自获取:先查本地资源库,没有就联网下载(模板/图标/字体/参考)入库复用。args: kind(pptx-template/icon-set/font/reference)、query。",
+            "inputSchema": [
+                "type": "object",
+                "properties": [
+                    "kind": ["type": "string", "description": "pptx-template / icon-set / font / reference"],
+                    "query": ["type": "string", "description": "主题/品类关键词"]
+                ],
+                "required": ["kind", "query"]
+            ]
+        ],
+        [
+            "name": "lingshu_set_credential",
+            "description": "把凭据(如数据网关 VL/感知 token)写入灵枢配置数据库(加密落盘,跨重启持久)。args: provider(如 datanet-gateway)、token。",
+            "inputSchema": [
+                "type": "object",
+                "properties": [
+                    "provider": ["type": "string", "description": "provider id,如 datanet-gateway"],
+                    "token": ["type": "string", "description": "凭据 token"]
+                ],
+                "required": ["provider", "token"]
+            ]
+        ],
+        [
+            "name": "lingshu_main_session",
+            "description": "读常驻主会话上下文尾部(role/内容片段/工具调用),用于核验子任务简报、纠正是否注入了主线程上下文。args: limit。",
+            "inputSchema": ["type": "object", "properties": ["limit": ["type": "integer", "description": "返回条数,默认 12"]]]
+        ],
+        [
             "name": "lingshu_get_trace",
             "description": "读取最近若干条执行轨迹事件(路由/模型调用/工具输出等),用于核验内部流转。",
             "inputSchema": [
@@ -162,12 +269,99 @@ final class LingShuControlRouter {
             let source: LingShuDialogueInputSource = (arguments["source"] as? String) == "voice" ? .voice : .typed
             let reply = state.submitTextInput(text, source: source)
             return (jsonText(["submitted": text, "immediateReply": reply]), false)
+        case "lingshu_interject":
+            // 流程纠正(干预):把纠正注入正在跑的会话,看到 agent 跑偏时即时纠偏(回合边界采纳)。
+            guard let text = (arguments["text"] as? String), !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                return ("缺少参数 text", true)
+            }
+            let wasActive = state.hasActiveModelCall
+            state.interjectCorrection(text, recordID: state.currentAgentTurnRecordID)
+            return (jsonText(["interjected": text, "wasActive": wasActive]), false)
         case "lingshu_get_chat":
             let limit = (arguments["limit"] as? Int) ?? 20
             return (jsonText(["messages": chatPayload(limit: limit)]), false)
         case "lingshu_get_trace":
             let limit = (arguments["limit"] as? Int) ?? 30
             return (jsonText(["trace": tracePayload(limit: limit)]), false)
+        case "lingshu_stop":
+            // 停止在飞回合(等价任务窗口"停止"按钮)。
+            let wasActive = state.hasActiveModelCall
+            state.cancelCurrentCall()
+            return (jsonText(["stopped": wasActive]), false)
+        case "lingshu_task_records":
+            // 列任务记录(热+冷),供挑选/inspect。
+            let limit = (arguments["limit"] as? Int) ?? 15
+            let records = state.taskExecutionRecordLookup.prefix(max(1, limit)).map { r -> [String: Any] in
+                [
+                    "id": r.id, "title": r.title, "status": r.status.rawValue,
+                    "messageCount": r.messages.count, "artifactCount": r.artifacts.count,
+                    "feedback": state.taskRecordFeedback[r.id].map { $0 ? "up" : "down" } ?? "none"
+                ]
+            }
+            return (jsonText(["records": Array(records)]), false)
+        case "lingshu_task_detail":
+            // 取一条任务的 codex 式执行时间线(消息 + 结构化 detail:toolCall/toolResult/fileEdit+diff)+ 产出物。
+            guard let id = arguments["recordId"] as? String, let payload = taskDetailPayload(recordID: id) else {
+                return ("缺少/无效参数 recordId", true)
+            }
+            return (jsonText(payload), false)
+        case "lingshu_task_followup":
+            // 窗口内追问续跑(等价底栏发送)。args: recordId, text。
+            guard let id = arguments["recordId"] as? String, let text = arguments["text"] as? String else {
+                return ("缺少参数 recordId / text", true)
+            }
+            state.submitTaskFollowup(text, recordID: id)
+            return (jsonText(["ok": true, "recordId": id]), false)
+        case "lingshu_task_feedback":
+            // 设置任务反馈(等价 👍👎)。args: recordId, value(up/down/clear)。
+            guard let id = arguments["recordId"] as? String, let value = arguments["value"] as? String else {
+                return ("缺少参数 recordId / value", true)
+            }
+            state.setTaskFeedback(value == "up" ? true : (value == "down" ? false : nil), recordID: id)
+            return (jsonText(["ok": true, "recordId": id, "value": value]), false)
+        case "lingshu_undo_edit":
+            // 撤销一次文件改动(等价 diff 卡"撤销")。args: recordId, messageId。
+            guard let recordId = arguments["recordId"] as? String, let messageId = arguments["messageId"] as? String else {
+                return ("缺少参数 recordId / messageId", true)
+            }
+            state.undoFileEdit(messageID: messageId, recordID: recordId)
+            return (jsonText(["ok": true, "recordId": recordId, "messageId": messageId]), false)
+        case "lingshu_attach":
+            // 按路径加附件(等价 📎),走与主输入框同一 ingest 管线。args: path。
+            guard let path = arguments["path"] as? String, FileManager.default.fileExists(atPath: path) else {
+                return ("缺少/无效参数 path(文件不存在)", true)
+            }
+            state.ingestAttachment(at: URL(fileURLWithPath: path))
+            return (jsonText(["ok": true, "pending": state.pendingAttachments.count]), false)
+        case "lingshu_clear_attachments":
+            // 清空待发送附件(等价逐个移除)。
+            let count = state.pendingAttachments.count
+            state.clearAttachments()
+            return (jsonText(["ok": true, "cleared": count]), false)
+        case "lingshu_acquire_resource":
+            // 资源自获取:本地无→联网找模板/图标/字体/参考下载入库(测试/驱动用)。args: kind, query。
+            guard let kind = arguments["kind"] as? String, let query = arguments["query"] as? String else {
+                return ("缺少参数 kind / query", true)
+            }
+            let outcome = await LingShuState.acquireResource(kind: kind, query: query)
+            return (jsonText(["result": outcome, "registryCount": LingShuResourceRegistry.shared.count]), false)
+        case "lingshu_set_credential":
+            // 把凭据(如数据网关 VL token)写入灵枢配置数据库(AES-GCM 加密落盘,durable)。args: provider, token。
+            guard let provider = arguments["provider"] as? String,
+                  let token = (arguments["token"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !token.isEmpty else {
+                return ("缺少参数 provider / token", true)
+            }
+            state.credentialStore.setAPIKey(token, forProvider: provider)
+            let stored = (state.credentialStore.apiKey(forProvider: provider)?.isEmpty == false)
+            return (jsonText(["ok": stored, "provider": provider, "tokenSuffix": String(token.suffix(6))]), false)
+        case "lingshu_main_session":
+            // 读常驻主会话上下文尾部(验证子任务简报/纠正是否注入)。args: limit。
+            let limit = (arguments["limit"] as? Int) ?? 12
+            let messages = await state.mainAgentSessionHolder?.messages ?? []
+            let tail = messages.suffix(max(1, limit)).map { m -> [String: Any] in
+                ["role": String(describing: m.role), "content": String(m.content.prefix(220)), "toolCalls": m.toolCalls.map(\.name)]
+            }
+            return (jsonText(["exists": state.mainAgentSessionHolder != nil, "messageCount": messages.count, "tail": tail]), false)
         case "meeting_start_capture":
             // 采集帧直接喂 ASR:听会议 → 实时转写。
             LingShuSystemAudioCapture.shared.onPCMChunk = { samples, sampleRate in
@@ -300,6 +494,39 @@ final class LingShuControlRouter {
                 ]
             }
         ]
+    }
+
+    /// 一条任务的 codex 式执行时间线 + 产出物 + 反馈(供 MCP inspect,免点开窗口看卡片)。
+    private func taskDetailPayload(recordID: String) -> [String: Any]? {
+        guard let record = state.taskExecutionRecordLookup.first(where: { $0.id == recordID }) else { return nil }
+        return [
+            "id": record.id,
+            "title": record.title,
+            "status": record.status.rawValue,
+            "summary": record.summary,
+            "feedback": state.taskRecordFeedback[record.id].map { $0 ? "up" : "down" } ?? "none",
+            "plan": record.plan.map { ["title": $0.title, "status": $0.status.rawValue] },
+            "designScore": record.designScore as Any,
+            "artifacts": record.artifacts.map { ["title": $0.title, "location": $0.location, "operation": ($0.operation ?? .created).rawValue] },
+            "messages": record.messages.map { message -> [String: Any] in
+                var object: [String: Any] = ["id": message.id, "actor": message.actor, "role": message.role, "kind": message.kind.rawValue, "text": message.text]
+                if let detail = message.detail { object["detail"] = Self.detailPayload(detail) }
+                if let undone = message.undone { object["undone"] = undone }
+                return object
+            }
+        ]
+    }
+
+    /// 结构化消息载荷序列化(toolCall/toolResult/fileEdit)——让 MCP 端能拿到命令/输出/diff 原文。
+    private static func detailPayload(_ detail: LingShuTaskExecutionDetail) -> [String: Any] {
+        switch detail {
+        case let .toolCall(tool, summary, arguments):
+            return ["type": "toolCall", "tool": tool, "summary": summary, "arguments": arguments]
+        case let .toolResult(tool, success, output):
+            return ["type": "toolResult", "tool": tool, "success": success, "output": output]
+        case let .fileEdit(path, operation, added, removed, diff):
+            return ["type": "fileEdit", "path": path, "operation": operation.rawValue, "added": added, "removed": removed, "diff": diff]
+        }
     }
 
     private func chatPayload(limit: Int) -> [[String: Any]] {

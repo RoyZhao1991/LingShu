@@ -39,8 +39,8 @@ struct LingShuTaskPoolView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .sheet(isPresented: $state.isTaskRecordPresented) {
-            if let record = state.selectedTaskRecord {
-                TaskExecutionRecordSheet(record: record, lineageRecords: state.selectedTaskRecordLineage)
+            if state.selectedTaskRecord != nil {
+                TaskExecutionRecordSheet(state: state)
             } else {
                 Text("任务记录不存在").frame(width: 520, height: 320)
             }

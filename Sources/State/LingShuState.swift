@@ -117,6 +117,8 @@ final class LingShuState: ObservableObject {
     @Published var taskExecutionRecords: [LingShuTaskExecutionRecord] = []
     @Published var selectedTaskRecordID: String?
     @Published var isTaskRecordPresented = false
+    /// 任务窗口的用户反馈:recordID → 👍true/👎false(持久 UserDefaults)。👎 的任务不进 dreaming 固化样本。
+    @Published var taskRecordFeedback: [String: Bool] = [:]
     @Published var archivedTaskExecutionRecords: [LingShuTaskExecutionRecord] = []
     @Published var isExecutionConsoleExpanded = true
     @Published var autonomousRun: LingShuAutonomousRunSnapshot = .idle
@@ -160,6 +162,8 @@ final class LingShuState: ObservableObject {
     var activeAgentTurnTask: Task<Void, Never>?
     /// 编排器事件 sink 是否已注入(幂等)。
     var agentEventSinkInstalled = false
+    /// 上次 dreaming 离线固化时间(节流,见 LingShuState+Dreaming);nil=本次会话还没固化过。
+    var lastDreamConsolidationAt: Date?
     // 自主运行执行(统一 agent 循环驱动):在飞 Task / 本轮记录 id / 执行会话 / ask_user 待答问题。
     var autonomousRunTask: Task<Void, Never>?
     var autonomousRunRecordID: String?
@@ -233,6 +237,7 @@ final class LingShuState: ObservableObject {
         mainThreadHeartbeatText = report.heartbeatText
         mainMemoryStatus = report.memoryStatus
         taskExecutionRecords = taskExecutionJournal.loadRecords()
+        taskRecordFeedback = (UserDefaults.standard.dictionary(forKey: "lingshu.taskFeedback") as? [String: Bool]) ?? [:]
         archivedTaskExecutionRecords = taskExecutionJournal.loadArchivedRecords()
         refreshRemoteSessionStatus()
         logEvent("现在  \(report.statusText)")
@@ -592,15 +597,28 @@ final class LingShuState: ObservableObject {
     /// 图片/音频/视频仍用数据网关的凭据（按 datanet-gateway 从钥匙串取），互不影响。
     var cloudPerceptionClient: LingShuCloudPerceptionClient? {
         let gateway = ModelProviderPreset.dataNetGateway
-        // 当前主通道就是数据网关时用当前 apiKey，否则从钥匙串取数据网关自己的 key。
-        let currentKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        let token = (selectedModelPreset?.id == gateway.id && !currentKey.isEmpty)
-            ? currentKey
-            : credentialStore.apiKey(forProvider: gateway.id)
-        guard let token, !token.isEmpty, let url = URL(string: gateway.endpoint) else {
+        guard let token = dataNetGatewayToken(), let url = URL(string: gateway.endpoint) else {
             return nil
         }
         return LingShuCloudPerceptionClient(baseEndpoint: url, token: token)
+    }
+
+    /// 数据网关 token 的统一解析(VL/感知与 TTS 共用同一口径,避免"TTS 能用、VL 却说没配"的不一致):
+    /// ① 主通道就是网关 → 用当前 apiKey;② 凭据库(灵枢配置数据库,加密落盘,用户写入的权威来源);
+    /// ③ 随包 RuntimeConfig 兜底。任一非空即用。
+    func dataNetGatewayToken() -> String? {
+        let gateway = ModelProviderPreset.dataNetGateway
+        let currentKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        if selectedModelPreset?.id == gateway.id, !currentKey.isEmpty { return currentKey }
+        if let stored = credentialStore.apiKey(forProvider: gateway.id),
+           !stored.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return stored
+        }
+        if let bundled = LingShuBundledRuntimeConfig().token(forProvider: gateway.id),
+           !bundled.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return bundled
+        }
+        return nil
     }
 
     func applyModelProvider(_ providerName: String) {
