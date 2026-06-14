@@ -21,6 +21,7 @@ ValidationArtifacts/artifact-manifest-*
 ValidationArtifacts/presentation-*
 ValidationArtifacts/crawler-*
 ValidationArtifacts/software-*
+ValidationArtifacts/document-local-*
 
 # Runtime credentials bundled into local app packages only
 Resources/RuntimeConfig/*.token
