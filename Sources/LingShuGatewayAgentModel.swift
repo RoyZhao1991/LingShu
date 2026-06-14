@@ -13,6 +13,9 @@ final class LingShuGatewayAgentModel: LingShuAgentModel, @unchecked Sendable {
     private let apiKey: String
     private let temperature: Double
     private let timeout: TimeInterval
+    /// 每步「边做边想」的旁白:模型在发起工具调用时附带的自然语言推理(剥 think 后)经此上报,
+    /// 让执行流像 codex 一样可读(我观察到X→打算做Y→为什么)。@unchecked Sendable 持有。
+    var onReasoning: (@Sendable (String) -> Void)?
 
     init(
         client: LingShuRemoteModelClient,
@@ -61,6 +64,9 @@ final class LingShuGatewayAgentModel: LingShuAgentModel, @unchecked Sendable {
             do {
                 let reply = try await client.send(request)
                 if !reply.toolCalls.isEmpty {
+                    // 边做边想:把模型发起动作时的旁白上报(供执行流像 codex 一样显示「分析→动作」)。
+                    let aside = LingShuReasoningText.stripThinkTags(reply.text).trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !aside.isEmpty { onReasoning?(aside) }
                     return .toolCalls(reply.toolCalls.map {
                         LingShuAgentToolCall(id: $0.id, name: $0.name, argumentsJSON: $0.arguments)
                     })

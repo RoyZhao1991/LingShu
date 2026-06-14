@@ -155,6 +155,10 @@ extension LingShuState {
         installAgentEventSinkIfNeeded()
         if let existing = mainAgentSessionHolder { return existing }
         let adapter = makeAgentModelAdapter()
+        // 边做边想:把模型每步动作前的旁白落进当前回合记录(执行流像 codex 一样「分析→动作」可读)。
+        adapter.onReasoning = { [weak self] aside in
+            Task { @MainActor in self?.recordAgentReasoning(aside, recordID: self?.currentAgentTurnRecordID) }
+        }
         let tools = agentBuiltinTools(recordIDProvider: { [weak self] in self?.currentAgentTurnRecordID })
             + [Self.timeTool(), Self.webSearchTool(), recallMemoryTool(), Self.askUserTool(), spawnTaskTool(adapter: adapter)]
         let system = """
@@ -165,6 +169,8 @@ extension LingShuState {
         - **有产出物优先产出物**:凡是"做/写/生成 PPT、文档、脚本、爬虫、代码…"这类有交付物的请求,必须**真的用 write_file/run_command 把文件落到工作目录**,并在回复里给出文件绝对路径;**绝不允许只口头说"已完成"而没有真文件**。做 PPT 可写 HTML 或用脚本生成 pptx;做爬虫写 .py 并按需运行。
         - **有固化方案优先固化方案**:做 PPT、汇报等可能有现成专家技能(含打磨好的设计系统和自带生成器)。动手前先调 **apply_skill** 看有没有匹配技能,有就按它的模板/生成器推进,别从零硬写。
         - 需要实时信息(如当前时间)时调用对应工具。
+        - **边做边想(像资深工程师)**:每次发起工具调用前,先用**一句话**说清你观察到了什么、这一步要做什么、为什么(例:"上一步生成失败是因为缺 python-pptx,我先装依赖再重跑")。这句话会显示在执行流里,别省。
+        - **高效核查,别空耗**:要查实时/不确定的事实就用 **web_search** 工具(一两次即可),**不要手写一长串 curl|grep 反复抓网页、跟 shell 正则较劲**;已经确定的常识不用反复查。
         - 用户一句话里若包含多个**互不相关**的任务,对每个用 spawn_task 各派生一个并行子任务;相关的步骤留在本会话顺序做。
         - 信息确实不足、无法继续时才调用 ask_user 提问。
         - 上文「历史对话」是你与该用户之前(含重启前)的真实记录,要据此保持连续,别说"没做过/记混了"。
@@ -225,6 +231,16 @@ extension LingShuState {
             result = await session.resume("验收未通过,逐条意见如下:\n\(critique)\n请真正用 write_file/run_command 修正,确保你声称的产出物在硬盘真实存在,再重新交付。")
         }
         return result
+    }
+
+    /// 边做边想:把模型每步动作前的自然语言旁白落进任务记录(执行流像 codex 一样「分析→动作」可读),
+    /// 并把简短版同步到主气泡状态,让主线程也瞥得见在想什么。
+    func recordAgentReasoning(_ aside: String, recordID: String?) {
+        let trimmed = aside.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        appendTaskRecordMessage(recordID, actor: "灵枢", role: "分析", kind: .core, text: String(trimmed.prefix(600)))
+        appendTrace(kind: .model, actor: "Agent循环", title: "分析", detail: String(trimmed.prefix(90)))
+        missionStatus = String(trimmed.prefix(48))
     }
 
     /// 主入口:常规输入交给主 agent 会话(异步跑循环,结果回填气泡)。

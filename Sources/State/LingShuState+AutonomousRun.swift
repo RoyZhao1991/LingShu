@@ -197,6 +197,9 @@ extension LingShuState {
     ) async -> LingShuAgentSession {
         let policy = autonomousExecutionPolicy(for: permissionLevel)
         let adapter = makeAgentModelAdapter()
+        adapter.onReasoning = { [weak self] aside in   // 边做边想:每步旁白落进独立运行记录
+            Task { @MainActor in self?.recordAgentReasoning(aside, recordID: self?.autonomousRunRecordID) }
+        }
         var tools = agentBuiltinTools(recordIDProvider: { [weak self] in self?.autonomousRunRecordID }, executionPolicy: policy)
         tools += [Self.timeTool(), Self.webSearchTool(), recallMemoryTool(), Self.askUserTool()]
         if policy != .readOnly { tools.append(spawnTaskTool(adapter: adapter)) }   // 观察模式不派生可写子任务
