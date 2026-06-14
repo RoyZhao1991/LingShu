@@ -120,7 +120,11 @@ extension VoiceIOManager {
                 self.isSpeaking = false
                 self.setOutputStatus(self.outputStandbyStatus(for: provider))
             } catch {
-                // 云端男声请求失败（网关异常/超时/鉴权失败）：显示原因并降级本机语音兜底。
+                // 云端男声请求失败（网关异常/超时/鉴权失败）：降级本机语音兜底。
+                // **先停掉可能还在放的云端流式播放器**——否则本机声线会和云端声线叠在一起(双声线)。
+                self.activeStreamingPlayer?.stop()
+                self.activeStreamingPlayer = nil
+                self.speechAudioPlayer?.stop()
                 let reason = "云端男声请求失败（\(Self.shortFailureReason(error))），已降级本机语音"
                 self.cloudVoiceDegradedReason = reason
                 self.setOutputStatus(reason)
@@ -197,7 +201,18 @@ extension VoiceIOManager {
             try Task.checkCancellation()
             if pending[index] == nil { prefetch(index) }
             guard let task = pending.removeValue(forKey: index) else { continue }
-            let wav = try await task.value
+            // 单段失败只**跳过**,不抛错——一旦抛错会冒到外层触发本机语音兜底,而云端播放器还在放 → 双声线。
+            // (首段已成功=云端可用;后面偶发的某段失败不该让整轮回落。)用户主动取消才停止并上抛。
+            let wav: Data
+            do {
+                wav = try await task.value
+            } catch is CancellationError {
+                player.stop(); activeStreamingPlayer = nil
+                throw CancellationError()
+            } catch {
+                topUpPrefetch()
+                continue
+            }
             topUpPrefetch()
             try Task.checkCancellation()
             let bytes = [UInt8](wav)
@@ -609,39 +624,29 @@ extension VoiceIOManager {
 }
 
 enum LingShuSpeechSegmenter {
-    static func segments(from text: String, maxCharacters: Int = 34, minCharacters: Int = 8) -> [String] {
-        let normalized = text
-            .replacingOccurrences(of: "\n", with: "。")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        guard normalized.count > maxCharacters else {
-            return normalized.isEmpty ? [] : [normalized]
-        }
-
+    /// **仅按句末标点(。！？及半角 !? …)与换行**切分朗读段——干净的整句分段。
+    /// 不再按逗号/冒号/字数硬切(那会把一句话碎成怪异短段、还让段间多出停顿)。
+    /// 单句很长也不强切:它本就是一句,云端按整句合成不会被截断。
+    static func segments(from text: String) -> [String] {
         var result: [String] = []
         var buffer = ""
-        let strongBreaks = Set("。！？!?；;")
-        let softBreaks = Set("，,、：:")
+        let sentenceEnders = Set("。！？!?…")
 
         func flush() {
             let segment = buffer.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !segment.isEmpty {
-                result.append(segment)
-            }
+            if !segment.isEmpty { result.append(segment) }
             buffer = ""
         }
 
-        for char in normalized {
-            buffer.append(char)
-            if strongBreaks.contains(char), buffer.count >= minCharacters {
+        for char in text {
+            if char == "\n" || char == "\r" {   // 换行即分段
                 flush()
-            } else if softBreaks.contains(char), buffer.count >= max(minCharacters, maxCharacters / 2) {
-                flush()
-            } else if buffer.count >= maxCharacters {
-                flush()
+                continue
             }
+            buffer.append(char)
+            if sentenceEnders.contains(char) { flush() }   // 句末标点即分段
         }
         flush()
-
         return result
     }
 }
