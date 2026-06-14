@@ -265,6 +265,8 @@ struct LingShuInputDock: View {
     @ObservedObject var voice: VoiceIOManager
     @ObservedObject var vision: VisionIOManager
     @ObservedObject var perceptionGateway: LingShuRealtimePerceptionGateway
+    /// 拖拽文件悬停在输入框上时高亮提示。
+    @State private var isDropTargeted = false
 
     var body: some View {
         VStack(spacing: 10) {
@@ -317,6 +319,30 @@ struct LingShuInputDock: View {
                           let png = rep.representation(using: .png, properties: [:]) else { return }
                     state.ingestPastedImage(png)
                 }
+                // 从访达/桌面拖拽文件到输入框即添加附件(与 📎 选择、Cmd+V 粘贴同一条解析管线)。
+                .dropDestination(for: URL.self) { urls, _ in
+                    let files = urls.filter { $0.isFileURL }
+                    for url in files { state.ingestAttachment(at: url) }
+                    return !files.isEmpty
+                } isTargeted: { targeted in
+                    isDropTargeted = targeted
+                }
+                // 悬停高亮:拖拽文件经过时给输入框描一圈强调边,告诉用户"松手即添加"。
+                .overlay {
+                    if isDropTargeted {
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .strokeBorder(Color.lingHolo, style: StrokeStyle(lineWidth: 2, dash: [6, 4]))
+                            .background(Color.lingHolo.opacity(0.06), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                            .overlay(
+                                Label("松开添加为附件", systemImage: "tray.and.arrow.down")
+                                    .font(.system(size: 13, weight: .semibold))
+                                    .foregroundStyle(Color.lingHolo)
+                            )
+                            .allowsHitTesting(false)
+                            .transition(.opacity)
+                    }
+                }
+                .animation(.easeInOut(duration: 0.12), value: isDropTargeted)
 
             HStack(spacing: 10) {
                 Button {
