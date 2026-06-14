@@ -151,27 +151,19 @@ struct LingShuMacApp: App {
                 vision: vision,
                 perceptionGateway: perceptionGateway
             )
+            .task {
+                // 启动本机回环 MCP 控制服务(幂等),让外部测试/MCP 客户端可驱动灵枢内部动作。
+                LingShuControlServer.shared.start(state: state)
+                // 后台预热主 agent 会话(含记忆蒸馏),消除首条消息的蒸馏延迟。
+                Task { _ = await state.mainAgentSession() }
+            }
         }
         .windowResizability(.contentMinSize)
         .defaultSize(width: 1360, height: 900)
-        .commands {
-            CommandMenu("灵枢") {
-                Button("演示一次能力流转") {
-                    NotificationCenter.default.post(name: .startDemoMission, object: nil)
-                }
-                .keyboardShortcut("r", modifiers: [.command])
-
-                Button("执行工程验证") {
-                    NotificationCenter.default.post(name: .runEngineeringValidation, object: nil)
-                }
-                .keyboardShortcut("e", modifiers: [.command, .shift])
-            }
-        }
-
         // 菜单栏常驻：主窗关闭后这里是灵枢的值守入口。
         MenuBarExtra("灵枢", systemImage: "brain") {
             Text("状态：\(state.coreStateDisplay)")
-            if state.hasRunningCollaborationPipeline {
+            if state.hasActiveModelCall {
                 Text("后台任务：\(state.missionTitle)")
             }
             let enabledTriggers = state.scheduledTriggers.triggers.filter(\.enabled).count
@@ -190,7 +182,3 @@ struct LingShuMacApp: App {
     }
 }
 
-extension Notification.Name {
-    static let startDemoMission = Notification.Name("startDemoMission")
-    static let runEngineeringValidation = Notification.Name("runEngineeringValidation")
-}

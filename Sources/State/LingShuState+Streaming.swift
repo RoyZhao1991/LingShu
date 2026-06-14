@@ -9,18 +9,26 @@ extension LingShuState {
         LingShuModelReplyAdapters.adapter(provider: modelProvider, model: modelName)
     }
 
-    /// 用户在选择卡片上点了某个选项：标记卡片已解决。带 action 的选项执行结构化
-    /// 动作（任务续接/新任务）；普通选项把 label 作为一条输入提交，推进对话。
+    /// 守护/探活类 actor 的轨迹不上主时间线（appendTrace 据此抑制噪声）。
+    func isGuardActor(_ actor: String) -> Bool {
+        actor.contains("守护") || actor.contains("探活")
+    }
+
+    /// 轨迹/底层输出文本清洗：剥 ANSI 控制符、归一回车、超长截断。
+    func cleanTraceText(_ rawText: String) -> String {
+        let withoutControlCharacters = rawText
+            .replacingOccurrences(of: "\u{001B}\\[[0-9;]*[A-Za-z]", with: "", options: .regularExpression)
+            .replacingOccurrences(of: "\r", with: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard withoutControlCharacters.count > 420 else { return withoutControlCharacters }
+        return String(withoutControlCharacters.prefix(420)) + "..."
+    }
+
+    /// 用户在选择卡片上点了某个选项：标记已解决，把 label 作为一条输入提交，交 agent 循环推进。
     func selectRouteChoice(_ option: CodexRouteChoiceOption, for messageID: UUID) {
         guard let index = chatMessages.firstIndex(where: { $0.id == messageID }),
               chatMessages[index].resolvedChoice == nil else { return }
         chatMessages[index].resolvedChoice = option.label
-
-        if let action = option.action {
-            performChoiceAction(action)
-            clarificationCenter.advanceAfterExternalResolution()   // 多轮：消解后下一题浮现
-            return
-        }
         _ = submitTextInput(option.label, source: .typed)
     }
 
@@ -158,26 +166,4 @@ extension LingShuState {
         chatMessages.append(.init(speaker: "灵枢", text: text, isUser: false, taskRecordID: taskRecordID))
     }
 
-    func handleModelTimeout(stage: String, messageID: UUID?) {
-        cancelActiveCodexCalls()
-        isModelReplying = false
-        isModelExecuting = false
-        let response = "主通道连续 \(Int(codexTimeoutSeconds)) 秒没有心跳，我已停止本轮\(stage)。"
-        appendTrace(kind: .warning, actor: "灵枢", title: "\(stage)失联", detail: response)
-        blockTaskRuntime(response)
-        resetAgentRuntime(title: "异常", status: response)
-        enterCoreState(.abnormal, resetTimer: false)
-        activeLayer = "异常"
-
-        if let messageID,
-           let index = chatMessages.firstIndex(where: { $0.id == messageID }) {
-            clearThinkingPreview(for: messageID)
-            chatMessages[index].text = response
-            chatMessages[index].isLoading = false
-        } else {
-            chatMessages.append(.init(speaker: "灵枢", text: response, isUser: false))
-        }
-
-        logEvent("现在  \(stage)连续 \(Int(codexTimeoutSeconds)) 秒没有心跳，已停止本轮。")
-    }
 }

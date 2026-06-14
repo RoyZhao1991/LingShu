@@ -221,7 +221,10 @@ struct LingShuTaskThreadScheduler {
         let fingerprint = Self.fingerprint(for: prompt, restoredTaskID: restoredTaskID)
         let runningThreads = activeThreads.filter { $0.hasRunningSegment }
 
-        if let sameThread = activeThreads.first(where: { $0.id == memoryLookup.taskID || $0.fingerprint == fingerprint }) {
+        // 同线程命中：要么话题指纹一致，要么记忆「高置信」续接到该 taskID。
+        // 不再用任意 memoryLookup.taskID（中/无置信时它是模糊匹配或新鲜 id），
+        // 否则会把无关请求静默并进运行中的任务。
+        if let sameThread = activeThreads.first(where: { $0.fingerprint == fingerprint || (restoredTaskID != nil && $0.id == restoredTaskID) }) {
             let action: LingShuTaskSubmissionAction = sameThread.hasRunningSegment ? .enqueueSameThread : (hasForegroundCall ? .startParallel : .startForeground)
             return .init(
                 action: action,
@@ -231,7 +234,7 @@ struct LingShuTaskThreadScheduler {
             )
         }
 
-        if isLikelyContinuation(prompt), let focusedThread {
+        if let focusedThread, isLikelyContinuation(prompt, focusedThread: focusedThread) {
             return .init(
                 action: focusedThread.hasRunningSegment ? .enqueueSameThread : (hasForegroundCall ? .startParallel : .startForeground),
                 threadID: focusedThread.id,
@@ -266,25 +269,39 @@ struct LingShuTaskThreadScheduler {
         )
     }
 
+    /// 话题信号词 → 话题标记。指纹归一与「续接话题绑定」共用同一张表。
+    private static let topicSignals: [(String, String)] = [
+        ("ppt", "ppt"), ("幻灯片", "ppt"), ("演示文稿", "ppt"), ("汇报", "presentation"),
+        ("爬虫", "crawler"), ("web", "web"), ("网页", "web"), ("app", "app"),
+        ("语音", "voice"), ("音频", "voice"), ("视觉", "vision"), ("摄像头", "vision"),
+        ("架构", "architecture"), ("代码", "code"), ("测试", "test"), ("修复", "fix"),
+        ("灵枢", "lingshu"), ("安全票夹", "receipt-vault")
+    ]
+
+    /// 从文本中抽出话题标记集合。
+    static func topicTokens(from text: String) -> Set<String> {
+        let normalized = normalize(text)
+        return Set(topicSignals.compactMap { normalized.contains($0.0) ? $0.1 : nil })
+    }
+
+    /// 从「topic-a-b」指纹反解出话题标记集合（非话题指纹返回空集，不会误匹配）。
+    static func topicTokens(fromFingerprint fingerprint: String) -> Set<String> {
+        guard fingerprint.hasPrefix("topic-") else { return [] }
+        let body = fingerprint.dropFirst("topic-".count)
+        return Set(body.split(separator: "-").map(String.init))
+    }
+
     static func fingerprint(for prompt: String, restoredTaskID: String? = nil) -> String {
         if let restoredTaskID, !restoredTaskID.isEmpty {
             return restoredTaskID
         }
 
-        let normalized = normalize(prompt)
-        let signals: [(String, String)] = [
-            ("ppt", "ppt"), ("幻灯片", "ppt"), ("演示文稿", "ppt"), ("汇报", "presentation"),
-            ("爬虫", "crawler"), ("web", "web"), ("网页", "web"), ("app", "app"),
-            ("语音", "voice"), ("视觉", "vision"), ("摄像头", "vision"),
-            ("架构", "architecture"), ("代码", "code"), ("测试", "test"), ("修复", "fix"),
-            ("灵枢", "lingshu"), ("安全票夹", "receipt-vault")
-        ]
-        let matched = signals.compactMap { normalized.contains($0.0) ? $0.1 : nil }
+        let matched = topicTokens(from: prompt)
         if !matched.isEmpty {
-            return "topic-\(Array(Set(matched)).sorted().joined(separator: "-"))"
+            return "topic-\(matched.sorted().joined(separator: "-"))"
         }
 
-        let trimmed = normalized
+        let trimmed = normalize(prompt)
             .replacingOccurrences(of: "帮我", with: "")
             .replacingOccurrences(of: "给我", with: "")
             .replacingOccurrences(of: "做一个", with: "")
@@ -292,13 +309,38 @@ struct LingShuTaskThreadScheduler {
         return "topic-\(trimmed.prefix(18))"
     }
 
-    private func isLikelyContinuation(_ prompt: String) -> Bool {
+    /// 是否为「续接焦点任务」。修复误路由的核心：不再让裸连接词把无关任务吞进焦点线程。
+    /// 续接成立须满足其一：
+    /// ① 明确回指上一产物/历史任务（强信号）；
+    /// ② 短小省略式追问（≤14 字）带编辑/连接信号——这类话本身没有完整话题，归焦点任务；
+    /// ③ 带编辑信号且与焦点任务话题指纹有重叠（长请求也算续接）。
+    /// 长、自带完整且不同话题的全新请求（如把 PPT 任务里突然插入的音频自检需求）一律不算续接。
+    private func isLikelyContinuation(_ prompt: String, focusedThread: LingShuTaskThread?) -> Bool {
         let normalized = Self.normalize(prompt)
-        let continuationSignals = [
-            "继续", "再", "然后", "接着", "刚才", "上一个", "上一版", "这个", "这版",
-            "优化", "调整", "修改", "补充", "迭代", "改一下", "加上", "去掉"
+
+        let backReferenceAnchors = [
+            "刚才", "上一个", "上一版", "上次", "之前那", "前面那",
+            "那个任务", "这个任务", "这个项目", "原来的", "这版", "接着上"
         ]
-        return continuationSignals.contains { normalized.contains($0) }
+        if backReferenceAnchors.contains(where: { normalized.contains($0) }) {
+            return true
+        }
+
+        let weakSignals = ["继续", "再", "然后", "接着", "优化", "调整", "修改", "补充", "迭代", "改一下", "加上", "去掉"]
+        guard weakSignals.contains(where: { normalized.contains($0) }) else { return false }
+
+        // 短省略式追问：归焦点任务。
+        if normalized.count <= 14 { return true }
+
+        // 长请求：必须与焦点任务话题重叠才算续接，否则视为新任务（隔离推进）。
+        if let focusedThread {
+            let promptTopics = Self.topicTokens(from: normalized)
+            let focusedTopics = Self.topicTokens(fromFingerprint: focusedThread.fingerprint)
+            if !promptTopics.isEmpty, !promptTopics.isDisjoint(with: focusedTopics) {
+                return true
+            }
+        }
+        return false
     }
 
     private static func normalize(_ text: String) -> String {

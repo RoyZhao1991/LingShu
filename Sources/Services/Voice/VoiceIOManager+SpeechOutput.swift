@@ -23,8 +23,27 @@ extension VoiceIOManager {
         setOutputStatus("\(persona.displayName) 已选定")
     }
 
+    /// 朗读用文本清洗:去掉代码块、表格行、markdown 标记,只留可念的正文。
+    static func strippedForSpeech(_ text: String) -> String {
+        var lines: [String] = []
+        var inCode = false
+        for raw in text.components(separatedBy: "\n") {
+            let t = raw.trimmingCharacters(in: .whitespaces)
+            if t.hasPrefix("```") { inCode.toggle(); continue }
+            if inCode || t.hasPrefix("|") { continue }   // 代码块、表格行不念
+            if t.isEmpty { continue }
+            var line = t.replacingOccurrences(of: "^[#>\\-*+\\s]+", with: "", options: .regularExpression)
+            for marker in ["**", "`", "#"] { line = line.replacingOccurrences(of: marker, with: "") }
+            line = line.trimmingCharacters(in: .whitespaces)
+            if !line.isEmpty { lines.append(line) }
+        }
+        let joined = lines.joined(separator: "。 ")
+        return joined.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     func speak(_ text: String) {
-        let cleanedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        // 朗读前剥 markdown(代码块/表格/标记):否则长回复会把 `**`、`|`、`-` 等当文本念,既乱又可能整段失败。
+        let cleanedText = Self.strippedForSpeech(text)
         guard !cleanedText.isEmpty else { return }
 
         activeSpeechTask?.cancel()
@@ -70,15 +89,17 @@ extension VoiceIOManager {
                 if provider.kind == .embeddedSherpaONNXTTS {
                     try await self.speakWithEmbeddedSherpaONNXTTS(cleanedText, provider: provider, persona: persona)
                 } else if provider.supportsStreaming {
-                    // 真流式：整段文本交给 /stream，服务端边合成边吐 PCM，首块一到就出声（豆包式低延迟）。
-                    try await self.speakWithStreamingSpeechService(
-                        cleanedText,
+                    // 流式 provider(如 dataNet):统一走流式 PCM 播放器,按段循环——
+                    // 首段首包即播(低延迟),多段顺序播(避开服务端长文本只合成第一句 + AVAudioPlayer 占位WAV 卡死)。
+                    try await self.speakWithStreamingSegments(
+                        segments.isEmpty ? [cleanedText] : segments,
                         provider: provider,
                         endpoint: endpoint,
                         apiKey: apiKey,
                         persona: persona
                     )
                 } else if segments.count > 1 {
+                    // 非流式 provider:逐段拉全量音频(AVAudioPlayer)再顺序播。
                     try await self.speakWithLowLatencySpeechService(
                         segments,
                         provider: provider,
@@ -109,7 +130,32 @@ extension VoiceIOManager {
     }
 
     /// 真流式发声：POST 到 /stream，用 URLSession.bytes 边收边喂给 PCM 播放器——首块即出声、中途可打断。
-    private func speakWithStreamingSpeechService(
+    /// 多段顺序流式:服务端 /stream 对长文本只合成第一句就停,故按句**逐段**流式播放、首段首包即播。
+    /// 全程统一管 isSpeaking(段间不翻转,避免语音通话误判"回应结束"而提前重新听)。
+    private func speakWithStreamingSegments(
+        _ segments: [String],
+        provider: LingShuSpeechOutputProviderDescriptor,
+        endpoint: String,
+        apiKey: String,
+        persona: LingShuSpeechPersona
+    ) async throws {
+        let parts = segments.filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        guard !parts.isEmpty else { return }
+        isSpeaking = true
+        setOutputStatus("正在发声（流式）")
+        defer {
+            isSpeaking = false
+            setOutputStatus(outputStandbyStatus(for: provider))
+        }
+        for segment in parts {
+            try Task.checkCancellation()
+            try await streamSpeechSegment(segment, provider: provider, endpoint: endpoint, apiKey: apiKey, persona: persona)
+        }
+    }
+
+    /// 单段流式:从 /stream 边收边喂流式 PCM 播放器(按字节喂,**不依赖 WAV 占位长度头**,
+    /// 避开 AVAudioPlayer 对占位长度 WAV 读出错误时长导致的卡死)。不动 isSpeaking,交外层统一管。
+    private func streamSpeechSegment(
         _ text: String,
         provider: LingShuSpeechOutputProviderDescriptor,
         endpoint: String,
@@ -128,13 +174,10 @@ extension VoiceIOManager {
             throw LingShuVoiceError.embeddedRuntimeLaunchFailed("流式 TTS HTTP 状态异常")
         }
 
-        isSpeaking = true
-        setOutputStatus("正在发声（流式）")
-
         var headerBytes: [UInt8] = []
         var pcmBatch = Data()
         var player: LingShuStreamingPCMPlayer?
-        let flushThreshold = 3200   // ≈100ms @16kHz/16-bit：小到低延迟、又不至于碎成太多 buffer。
+        let flushThreshold = 3200   // ≈100ms：小到低延迟、又不至于碎成太多 buffer。
 
         do {
             for try await byte in bytes {
@@ -170,11 +213,8 @@ extension VoiceIOManager {
             throw LingShuVoiceError.embeddedRuntimeLaunchFailed("流式 TTS 未返回有效音频")
         }
         if !pcmBatch.isEmpty { player.enqueue(pcm16: pcmBatch) }
-
         await player.finishAndDrain()
         activeStreamingPlayer = nil
-        isSpeaking = false
-        setOutputStatus(outputStandbyStatus(for: provider))
     }
 
     private func speakWithLowLatencySpeechService(

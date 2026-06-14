@@ -56,8 +56,17 @@ enum LingShuMemoryTextToolkit {
 
     static func shouldRecallHistory(for prompt: String) -> Bool {
         let normalized = normalize(prompt)
-        let signals = ["继续", "上次", "之前", "历史", "记得", "回到", "刚才", "前面", "这个项目", "当前项目", "当前任务", "上一轮", "刚刚"]
-        return signals.contains { normalized.contains($0) }
+        // 明确指向历史的信号（本身就引用过去的会话/任务）。
+        let recallSignals = ["上次", "之前", "历史", "记得", "回到", "刚才", "前面", "这个项目", "当前项目", "当前任务", "上一轮", "刚刚"]
+        if recallSignals.contains(where: { normalized.contains($0) }) {
+            return true
+        }
+        // 「继续/接着」是裸连接词，容易误判（如"否则就继续处理"）；只有带历史指代时才算回溯。
+        if ["继续", "接着"].contains(where: { normalized.contains($0) }),
+           ["上次", "之前", "那个", "上一", "原来", "这个", "刚才"].contains(where: { normalized.contains($0) }) {
+            return true
+        }
+        return false
     }
 
     /// 明确的任务回溯请求：用户点名要续接某个历史任务（"继续做上次那个PPT"），

@@ -126,9 +126,87 @@ struct LingShuMarkdownText: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            ForEach(Array(content.components(separatedBy: "\n").enumerated()), id: \.offset) { _, raw in
-                lineView(raw)
+            ForEach(Array(Self.elements(from: content).enumerated()), id: \.offset) { _, element in
+                switch element {
+                case .line(let raw):
+                    lineView(raw)
+                case .table(let header, let rows):
+                    tableView(header: header, rows: rows)
+                }
             }
+        }
+    }
+
+    /// 正文元素:普通行,或一张 Markdown 表格(连续 `|...|` 行 + 第二行分隔线)。
+    private enum MDElement {
+        case line(String)
+        case table(header: [String], rows: [[String]])
+    }
+
+    private static func elements(from content: String) -> [MDElement] {
+        let lines = content.components(separatedBy: "\n")
+        var out: [MDElement] = []
+        var i = 0
+        while i < lines.count {
+            if isTableRow(lines[i]), i + 1 < lines.count, isTableSeparator(lines[i + 1]) {
+                let header = tableCells(lines[i])
+                var rows: [[String]] = []
+                i += 2
+                while i < lines.count, isTableRow(lines[i]), !isTableSeparator(lines[i]) {
+                    rows.append(tableCells(lines[i]))
+                    i += 1
+                }
+                out.append(.table(header: header, rows: rows))
+            } else {
+                out.append(.line(lines[i]))
+                i += 1
+            }
+        }
+        return out
+    }
+
+    private static func isTableRow(_ s: String) -> Bool {
+        let t = s.trimmingCharacters(in: .whitespaces)
+        return t.hasPrefix("|") && t.dropFirst().contains("|")
+    }
+
+    private static func isTableSeparator(_ s: String) -> Bool {
+        let t = s.trimmingCharacters(in: .whitespaces)
+        guard t.hasPrefix("|"), t.contains("-") else { return false }
+        return t.allSatisfy { "|-: ".contains($0) }
+    }
+
+    private static func tableCells(_ s: String) -> [String] {
+        var t = s.trimmingCharacters(in: .whitespaces)
+        if t.hasPrefix("|") { t.removeFirst() }
+        if t.hasSuffix("|") { t.removeLast() }
+        return t.components(separatedBy: "|").map { $0.trimmingCharacters(in: .whitespaces) }
+    }
+
+    @ViewBuilder
+    private func tableView(header: [String], rows: [[String]]) -> some View {
+        let colCount = max(header.count, rows.map(\.count).max() ?? 0)
+        Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 5) {
+            GridRow {
+                ForEach(0..<colCount, id: \.self) { c in
+                    inline(c < header.count ? header[c] : "")
+                        .font(.system(size: 13, weight: .bold)).foregroundStyle(color)
+                }
+            }
+            Divider().overlay(Color.white.opacity(0.16)).gridCellColumns(colCount)
+            ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
+                GridRow {
+                    ForEach(0..<colCount, id: \.self) { c in
+                        inline(c < row.count ? row[c] : "")
+                            .font(.system(size: 13, weight: .medium)).foregroundStyle(color.opacity(0.92))
+                    }
+                }
+            }
+        }
+        .padding(10)
+        .background(Color.white.opacity(0.04), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 7, style: .continuous).stroke(Color.white.opacity(0.10), lineWidth: 0.8)
         }
     }
 

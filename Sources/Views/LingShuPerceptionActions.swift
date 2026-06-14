@@ -196,6 +196,7 @@ enum LingShuPerceptionActions {
         guard state.isVoiceConversationActive, !command.isEmpty else { return }
 
         state.prompt = command
+        lingShuControlLog("voice: 识别结果 isFinal=\(result.isFinal) callMode=\(state.isMinimalVoiceMode) command=「\(String(command.prefix(30)))」")
 
         if result.isFinal {
             // 声线寻址闸门：以主人声线为最高优先，多人环境未点名不插话，
@@ -212,8 +213,10 @@ enum LingShuPerceptionActions {
 
             switch verdict {
             case .respond:
+                lingShuControlLog("voice: 闸门=respond → 提交「\(String(command.prefix(30)))」")
                 _ = state.submitVoiceTranscript(command)
             case .ignore(let reason):
+                lingShuControlLog("voice: 闸门=ignore(\(reason)) → 丢弃「\(String(command.prefix(30)))」")
                 state.prompt = ""
                 state.appendTrace(
                     kind: .system,

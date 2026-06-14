@@ -71,13 +71,24 @@ cat > "$CONTENTS/Info.plist" <<PLIST
 </plist>
 PLIST
 
-echo "==> code signing (ad-hoc, with entitlements)"
-codesign --force --deep --sign - \
-  --entitlements "$ROOT_DIR/LingShu.entitlements" \
-  --options runtime \
-  "$APP_DIR" 2>/dev/null || \
-codesign --force --deep --sign - \
-  --entitlements "$ROOT_DIR/LingShu.entitlements" \
-  "$APP_DIR"
+# 稳定签名身份让 TCC 授权（屏幕录制/麦克风等）可持久、重建不丢；ad-hoc 做不到。
+# 默认用本机的 Apple Development 证书，可用 LINGSHU_SIGN_IDENTITY 覆盖；缺证书时回退 ad-hoc。
+SIGN_IDENTITY="${LINGSHU_SIGN_IDENTITY:-Apple Development: Yang Zhao (N69MT44KA3)}"
+if security find-identity -v -p codesigning 2>/dev/null | grep -q "$SIGN_IDENTITY"; then
+  echo "==> code signing ($SIGN_IDENTITY)"
+  codesign --force --deep --sign "$SIGN_IDENTITY" \
+    --entitlements "$ROOT_DIR/LingShu.entitlements" \
+    --options runtime \
+    "$APP_DIR"
+else
+  echo "==> code signing (ad-hoc 回退；未找到身份「$SIGN_IDENTITY」)"
+  codesign --force --deep --sign - \
+    --entitlements "$ROOT_DIR/LingShu.entitlements" \
+    --options runtime \
+    "$APP_DIR" 2>/dev/null || \
+  codesign --force --deep --sign - \
+    --entitlements "$ROOT_DIR/LingShu.entitlements" \
+    "$APP_DIR"
+fi
 
 echo "$APP_DIR"

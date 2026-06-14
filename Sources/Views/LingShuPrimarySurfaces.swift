@@ -6,7 +6,6 @@ struct LingShuRootView: View {
     @ObservedObject var vision: VisionIOManager
     @ObservedObject var perceptionGateway: LingShuRealtimePerceptionGateway
     @State private var lastVisionTraceAt = Date.distantPast
-    @State private var didRunLaunchValidation = false
     private let coreTimer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
 
     var body: some View {
@@ -51,14 +50,9 @@ struct LingShuRootView: View {
                 voice.speakQueued(sentence)
                 perceptionGateway?.ingestSpeechOutput(sentence)
             }
+            // 新一轮开始时掐掉上一条朗读(防音频/文字 desync)。
+            state.interruptSpeechOutput = { [weak voice] in voice?.stopSpeaking() }
             perceptionGateway.registerCloudPerceptionRoute(client: state.cloudPerceptionClient)
-            if !didRunLaunchValidation,
-               ProcessInfo.processInfo.arguments.contains("--lingshu-engineering-validation") {
-                didRunLaunchValidation = true
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
-                    state.runEngineeringValidationSuite()
-                }
-            }
             [0.1, 0.8, 1.6].forEach { delay in
                 DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
                     LingShuWindowPlacement.bringWindowsToMainScreen()
@@ -74,12 +68,6 @@ struct LingShuRootView: View {
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
             state.flushChatHistory()
             state.taskExecutionJournal.flush()
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .startDemoMission)) { _ in
-            state.startDemoMissionIfConnected()
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .runEngineeringValidation)) { _ in
-            state.runEngineeringValidationSuite()
         }
         .onReceive(coreTimer) { _ in
             state.tickCoreTimers()
@@ -110,6 +98,7 @@ struct LingShuRootView: View {
         }
 
         state.lastSpokenMessageID = message.id
+        lingShuControlLog("speak: 朗读消息 id=\(message.id.uuidString.prefix(8)) 文本「\(String(message.text.prefix(40)))」")
         voice.speak(message.text)
         perceptionGateway.ingestSpeechOutput(message.text)
     }

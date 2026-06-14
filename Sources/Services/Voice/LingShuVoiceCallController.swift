@@ -89,14 +89,14 @@ final class LingShuVoiceCallController: ObservableObject {
 
         adaptiveVAD.observe(level: level, isCapturingSpeech: hasCapturedSpeech || voice.isSpeakingOrQueued)
 
-        // 灵枢正在回应（含分句早读的排队间隙）：暂停麦克风避免回声；监听用户是否要打断。
+        // 灵枢正在回应（TTS）：暂停麦克风避免自听；只在【确认是真指令】(持续真实说话 ≥0.7s)才打断，
+        // 短促噪音/回声忽略。
         if voice.isSpeakingOrQueued {
             phase = .responding
             if voice.isRecording { voice.stopRecognition() }
             if level > adaptiveVAD.bargeInThreshold {
                 if let started = bargeInStartedAt {
-                    if now.timeIntervalSince(started) > 0.25 {
-                        // 用户开口打断：停掉 TTS，立即重新听。
+                    if now.timeIntervalSince(started) > 0.7 {
                         voice.stopSpeaking()
                         bargeInStartedAt = nil
                         resetUtterance()
@@ -112,15 +112,10 @@ final class LingShuVoiceCallController: ObservableObject {
             return
         }
 
-        // 灵枢正在思考：等结果，不收音。
-        if state.hasActiveModelCall {
-            phase = .thinking
-            if voice.isRecording { voice.stopRecognition() }
-            resetUtterance()
-            return
-        }
+        // 灵枢正在思考：**不停麦**,继续听。噪音(达不到 VAD 说话门槛)直接忽略;
+        // 确认是真指令(持续说话 → 收口)才打断在飞调用并接管。
+        let thinking = state.hasActiveModelCall
 
-        // 空闲：确保在监听，并跑 VAD 断句。
         if !voice.isRecording {
             LingShuPerceptionActions.resumeListening(state: state, voice: voice, perceptionGateway: perceptionGateway)
         }
@@ -132,7 +127,8 @@ final class LingShuVoiceCallController: ObservableObject {
         } else if hasCapturedSpeech, level < adaptiveVAD.silenceThreshold {
             if let started = silenceStartedAt {
                 if now.timeIntervalSince(started) >= silenceHold {
-                    // 一句话说完：收口，触发最终识别并自动提交。
+                    // 一句真话说完(已过 VAD 噪音门槛):若正在思考,先打断在飞回合,再收口提交新指令。
+                    if thinking { state.interruptActiveModelCall() }
                     voice.finishCurrentUtterance()
                     resetUtterance()
                     phase = .thinking
@@ -141,7 +137,8 @@ final class LingShuVoiceCallController: ObservableObject {
                 silenceStartedAt = now
             }
         } else if phase != .capturing {
-            phase = .listening
+            // 没在捕获真实说话:思考中保持"思考中"状态,否则回到"在听你说"。
+            phase = thinking ? .thinking : .listening
         }
     }
 }

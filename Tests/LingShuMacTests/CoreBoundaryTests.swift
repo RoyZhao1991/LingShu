@@ -1001,6 +1001,77 @@ final class CoreBoundaryTests: XCTestCase {
         XCTAssertEqual(decision.action, .enqueueUntilCapacity)
     }
 
+    /// 回归：误路由致命 bug——PPT 任务在跑时，发一条含"然后/继续"但话题完全无关的长请求，
+    /// 绝不能被吞进 PPT 线程，应隔离为并行任务。
+    func testTaskThreadSchedulerDoesNotGlueUnrelatedLongRequestToFocusedThread() {
+        let scheduler = LingShuTaskThreadScheduler(maxParallelThreads: 3)
+        let focused = LingShuTaskThread.create(
+            id: "task-ppt",
+            fingerprint: "topic-ppt",
+            prompt: "给我做一个介绍灵枢的 PPT",
+            memoryStatus: "新任务",
+            restored: false,
+            recordID: "record-1"
+        )
+        let lookup = LingShuTaskMemoryLookup(
+            taskID: "task-new",
+            memoryStatus: "未命中历史任务，创建新任务线程。",
+            restored: false,
+            hotMatch: nil,
+            coldMatch: nil
+        )
+
+        let decision = scheduler.decide(
+            prompt: "算力机器上有音频识别模型和音频生成模型，你自己闭环一下，用音频识别模型生成固定文字，然后用音频生成模型识别，必须保证完全一致，否则就继续处理",
+            memoryLookup: lookup,
+            activeThreads: [focused],
+            focusedThread: focused,
+            hasForegroundCall: true
+        )
+
+        XCTAssertNotEqual(decision.action, .enqueueSameThread)
+        XCTAssertNotEqual(decision.threadID, "task-ppt")
+        XCTAssertEqual(decision.action, .startParallel)
+    }
+
+    /// 回归：长请求但与焦点任务同话题（PPT），仍应识别为续接并进同线程队列。
+    func testTaskThreadSchedulerQueuesLongTopicMatchedFollowUpOnFocusedThread() {
+        let scheduler = LingShuTaskThreadScheduler(maxParallelThreads: 3)
+        let focused = LingShuTaskThread.create(
+            id: "task-ppt",
+            fingerprint: "topic-ppt",
+            prompt: "给我做一个介绍灵枢的 PPT",
+            memoryStatus: "新任务",
+            restored: false,
+            recordID: "record-1"
+        )
+        let lookup = LingShuTaskMemoryLookup(
+            taskID: "task-new",
+            memoryStatus: "未命中历史任务，创建新任务线程。",
+            restored: false,
+            hotMatch: nil,
+            coldMatch: nil
+        )
+
+        let decision = scheduler.decide(
+            prompt: "然后把这个 PPT 第二页的标题字号调大一些，并补充一页风险说明",
+            memoryLookup: lookup,
+            activeThreads: [focused],
+            focusedThread: focused,
+            hasForegroundCall: true
+        )
+
+        XCTAssertEqual(decision.action, .enqueueSameThread)
+        XCTAssertEqual(decision.threadID, "task-ppt")
+    }
+
+    func testShouldRecallHistoryIgnoresBareContinueVerb() {
+        XCTAssertFalse(LingShuMemoryTextToolkit.shouldRecallHistory(for: "否则就继续处理"))
+        XCTAssertFalse(LingShuMemoryTextToolkit.shouldRecallHistory(for: "你自己闭环一下，用音频识别模型生成固定文字，然后用音频生成模型识别，必须完全一致，否则就继续处理"))
+        XCTAssertTrue(LingShuMemoryTextToolkit.shouldRecallHistory(for: "继续上次的项目"))
+        XCTAssertTrue(LingShuMemoryTextToolkit.shouldRecallHistory(for: "回到之前没做完的爬虫"))
+    }
+
     func testRoutePlannerDecodesMarkdownWrappedRouteAndNormalizesAgents() throws {
         let planner = LingShuRoutePlanner()
         let raw = """
