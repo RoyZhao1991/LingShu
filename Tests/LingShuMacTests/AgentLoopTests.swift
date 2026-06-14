@@ -91,6 +91,20 @@ final class AgentLoopTests: XCTestCase {
         }
     }
 
+    func testStuckRepeatHandsBackBeforeCeiling() async {
+        // 目标驱动:模型连续发起完全相同的工具调用=原地打转,应在停滞阈值处诚实交还,
+        // 而不是空转到(高位)安全天花板。证明停止位是"停滞",不是固定轮数预算。
+        let spinScript = Array(repeating: LingShuAgentModelResponse.toolCalls([.init(id: "c", name: "noop", argumentsJSON: "{\"q\":\"same\"}")]), count: 50)
+        let model = ScriptedAgentModel(spinScript)
+        let noop = LingShuAgentTool(name: "noop", description: "空转") { _ in "still stuck" }
+        let session = LingShuAgentSession(id: "s7", tools: [noop], model: model, maxTurns: 40)
+        let result = await session.send("原地打转")
+        guard case .maxTurnsReached = result else { return XCTFail("停滞应触发交还") }
+        let used = await session.turnsUsed
+        XCTAssertEqual(used, LingShuAgentSession.stuckRepeatThreshold, "应在停滞阈值处停,而非跑满天花板")
+        XCTAssertLessThan(used, 40, "停止位是停滞检测,不是 maxTurns 天花板")
+    }
+
     func testToolReceivesArgumentsJSON() async {
         let model = ScriptedAgentModel([
             .toolCalls([.init(id: "c1", name: "echo", argumentsJSON: "{\"text\":\"在\"}")]),

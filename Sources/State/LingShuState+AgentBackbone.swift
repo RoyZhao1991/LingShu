@@ -207,7 +207,7 @@ extension LingShuState {
             initialMessages: await seededDistilledMemory(),
             tools: tools,
             model: adapter,
-            maxTurns: 8
+            maxTurns: 40   // 安全天花板;模型自判完成/卡住/停滞才停,不靠轮数收工
         )
         mainAgentSessionHolder = session
         return session
@@ -221,21 +221,34 @@ extension LingShuState {
         return await verifyAndContinue(session: session, result: initial, userRequest: prompt, taskRecordID: taskRecordID)
     }
 
-    /// 验收门(maker≠checker):有产出物的交付,独立 verifier 逐条核对真实落盘;不过把意见反馈续跑(≤3轮)。
-    /// 接收已有运行结果(send 或 resume 产出),便于主会话/自主运行/答复续跑共用同一验收逻辑。
+    /// 验收门(maker≠checker):**目标(验收通过)是唯一成功停止位**。
+    /// 一直续跑直到通过;只有「maker 一轮没有任何新进展(盘上产出物没增、意见还和上轮实质相同)」=停滞才诚实交还,
+    /// 不再用固定轮数封顶。`verifyCeiling` 只是防失控的高位安全天花板,正常远到不了。
     func verifyAndContinue(session: LingShuAgentSession, result initial: LingShuAgentRunResult, userRequest: String, taskRecordID: String?) async -> LingShuAgentRunResult {
         var result = initial
         // 纯闲聊/无产出物声明不触发,省 token。
         guard case .completed = result, Self.replyClaimsArtifact(Self.runResultText(result)) else { return result }
+        let verifyCeiling = 8   // 安全天花板,非目标位
         var round = 0
-        while round < 3 {
+        var lastArtifactCount = -1
+        var lastCritique = ""
+        while round < verifyCeiling {
             let (passed, critique) = await verifyAgentDeliverable(userRequest: userRequest, reply: Self.runResultText(result), taskRecordID: taskRecordID)
             if passed {
                 appendTrace(kind: .result, actor: "验收", title: "通过", detail: "独立 verifier 核对产出物达标。")
-                break
+                return result
+            }
+            // 停滞判定:这一轮 maker 没产出新文件,且验收意见与上轮实质相同 → 在原地打转,诚实交还。
+            let artifactCount = (taskExecutionRecords.first { $0.id == taskRecordID }?.artifacts ?? [])
+                .filter { FileManager.default.fileExists(atPath: $0.location) }.count
+            if round > 0, artifactCount <= lastArtifactCount, critique.prefix(120) == lastCritique.prefix(120) {
+                appendTrace(kind: .warning, actor: "验收", title: "停滞交还", detail: "连续未通过且无新进展,交还用户。")
+                return .maxTurnsReached(lastText: Self.runResultText(result) + "\n\n（验收一直没通过且我已无新进展:\(critique.prefix(160))。先停下交还——需要你的判断或补充信息。）")
             }
             round += 1
-            appendTrace(kind: .warning, actor: "验收", title: "未通过(第\(round)轮)", detail: String(critique.prefix(80)))
+            lastArtifactCount = artifactCount
+            lastCritique = critique
+            appendTrace(kind: .warning, actor: "验收", title: "未通过(第\(round)轮,继续修)", detail: String(critique.prefix(80)))
             result = await session.resume("验收未通过,逐条意见如下:\n\(critique)\n请真正用 write_file/run_command 修正,确保你声称的产出物在硬盘真实存在,再重新交付。")
         }
         return result
@@ -431,7 +444,7 @@ extension LingShuState {
                 system: "你是子任务执行者,完成给定目标。**有产出物的必须用 write_file/run_command 真把文件落到工作目录并汇报路径,不要只口头说完成**;信息确实不足才调用 ask_user。",
                 tools: subTools,
                 model: adapter,
-                maxTurns: 6
+                maxTurns: 25
             )
             await orchestrator.spawnDetached(id: subID, objective: objective, session: sub)
             return "已派生并行子任务[\(subID)]:\(objective)。它在后台推进,完成或卡住会汇报到账本。"

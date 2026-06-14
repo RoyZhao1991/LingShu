@@ -99,7 +99,7 @@ actor LingShuAgentSession {
         initialMessages: [LingShuAgentMessage] = [],
         tools: [LingShuAgentTool],
         model: any LingShuAgentModel,
-        maxTurns: Int = 12,
+        maxTurns: Int = 40,   // 安全天花板(防失控),非目标预算;目标达成/卡住/停滞才是真正的停止位
         blockingToolNames: Set<String> = ["ask_user"]
     ) {
         self.id = id
@@ -131,9 +131,18 @@ actor LingShuAgentSession {
         return await runLoop()
     }
 
+    /// 连续多少次发起完全相同的工具调用即判"原地打转"(停滞)。
+    static let stuckRepeatThreshold = 5
+
+    /// 目标驱动循环:**停止条件只有「目标达成(模型给出最终答复)/ 卡住等人(ask_user)/ 原地打转交还」**。
+    /// `maxTurns` 不是目标预算,而是防失控的安全天花板(高位,正常远到不了)——不靠它来"到点收工"。
+    /// 模型自己判断完成就 `.text` 收尾;撞墙就换方法继续(失败结果回灌进上下文,这就是 agent 循环)。
     private func runLoop() async -> LingShuAgentRunResult {
         var lastText = ""
-        for _ in 0..<maxTurns {
+        var recentToolSignatures: [String] = []
+        var step = 0
+        while step < maxTurns {   // maxTurns = 安全天花板,非目标停止位
+            step += 1
             turnsUsed += 1
             let response = await model.respond(messages: messages, tools: tools)
             switch response {
@@ -151,6 +160,15 @@ actor LingShuAgentSession {
                     pendingBlockToolCallID = blocking.id
                     return .blocked(question: Self.extractQuestion(from: blocking.argumentsJSON))
                 }
+                // 停滞检测:连续 N 次发起完全相同(同名+同参)的工具调用 = 原地打转,
+                // 提前**诚实交还**(说明卡在哪、试过什么),而不是空转到天花板或伪装成完成。
+                let signature = calls.map { "\($0.name)#\($0.argumentsJSON)" }.joined(separator: "|")
+                recentToolSignatures.append(signature)
+                let tail = recentToolSignatures.suffix(Self.stuckRepeatThreshold)
+                if tail.count == Self.stuckRepeatThreshold, Set(tail).count == 1 {
+                    let name = calls.first?.name ?? "同一动作"
+                    return .maxTurnsReached(lastText: "（我连续 \(Self.stuckRepeatThreshold) 次重复「\(name)」仍无进展，这条路可能走不通。已停下交还，需要你的判断或更多信息。最近结果：\(lastText.prefix(200))）")
+                }
                 for call in calls {
                     toolInvocations.append(call.name)
                     let result: String
@@ -164,7 +182,8 @@ actor LingShuAgentSession {
                 }
             }
         }
-        return .maxTurnsReached(lastText: lastText)
+        // 撞到安全天花板(极少):同样诚实交还,不假装收尾。
+        return .maxTurnsReached(lastText: lastText.isEmpty ? "（已推进很多步仍未收敛，先停下交还以免空耗。）" : lastText)
     }
 
     /// 从阻塞工具的 arguments JSON 抽出问题文本(取 question 字段,缺则用原文)。

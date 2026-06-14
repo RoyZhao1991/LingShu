@@ -206,7 +206,7 @@ extension LingShuState {
             initialMessages: await seededDistilledMemory(),
             tools: tools,
             model: adapter,
-            maxTurns: 16
+            maxTurns: 80   // 自主运行可长程;安全天花板,非目标预算
         )
     }
 
