@@ -121,6 +121,8 @@ struct LingShuRootView: View {
                         vision: vision,
                         perceptionGateway: perceptionGateway
                     )
+                case .taskPool:
+                    LingShuTaskPoolView(state: state)
                 case .runtime:
                     LingShuRuntimeSurface(state: state, voice: voice)
                 case .operations:

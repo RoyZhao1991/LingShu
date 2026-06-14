@@ -149,6 +149,22 @@ extension LingShuState {
         return png.base64EncodedString()
     }
 
+    /// 从命令/输出抽取交付型文件(绝对或相对路径,相对则相对工作目录解析)。只认交付型扩展名,
+    /// 不收脚本/中间数据(.py/.json/.sh),避免「任务产出文件」被噪声塞满。供 run_command 补登产出物。
+    nonisolated static func extractRunCommandArtifacts(_ text: String, workingDirectory: String) -> [String] {
+        let pattern = "[\\w\\u4e00-\\u9fff./~_-]+\\.(?:pptx|docx|xlsx|pdf|html?|md|csv|png|jpe?g)"
+        guard let re = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else { return [] }
+        let range = NSRange(text.startIndex..., in: text)
+        var out: [String] = []
+        for m in re.matches(in: text, range: range) {
+            guard let r = Range(m.range, in: text) else { continue }
+            var path = String(text[r])
+            if !path.hasPrefix("/") { path = (workingDirectory as NSString).appendingPathComponent(path) }
+            if !out.contains(path) { out.append(path) }
+        }
+        return out
+    }
+
     /// 从回复文本抽取提到的绝对文件路径(常见产出物扩展名;允许中文文件名)。供验收门核实"真有这个文件"。
     nonisolated static func extractFilePaths(from text: String) -> [String] {
         let pattern = "/[^\\s`\"'）)，。、；;】]+?\\.(?:pptx|docx|xlsx|pdf|html?|md|csv|txt|py|json|sh|png|jpe?g)"

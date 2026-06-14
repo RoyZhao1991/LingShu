@@ -247,6 +247,8 @@ final class LingShuTaskExecutionJournal: @unchecked Sendable {
     private let archiveStorageKey: String
     private let maxRecords: Int
     private let maxArchivedRecords: Int
+    /// 热数据时间窗:最近一个月(参考上下文冷备策略——按时间分热/冷,而不是单纯靠条数)。
+    private let hotRetention: TimeInterval
     private let ioQueue = DispatchQueue(label: "lingshu.task-journal.io", qos: .utility)
     private var cachedArchivedRecords: [LingShuTaskExecutionRecord]?
 
@@ -254,14 +256,16 @@ final class LingShuTaskExecutionJournal: @unchecked Sendable {
         defaults: UserDefaults = .standard,
         storageKey: String = "lingshu.task-execution.records",
         archiveStorageKey: String = "lingshu.task-execution.records.archive",
-        maxRecords: Int = 80,
-        maxArchivedRecords: Int = 320
+        maxRecords: Int = 300,
+        maxArchivedRecords: Int = 1000,
+        hotRetention: TimeInterval = 30 * 24 * 3600
     ) {
         self.defaults = defaults
         self.storageKey = storageKey
         self.archiveStorageKey = archiveStorageKey
         self.maxRecords = maxRecords
         self.maxArchivedRecords = maxArchivedRecords
+        self.hotRetention = hotRetention
     }
 
     func loadRecords() -> [LingShuTaskExecutionRecord] {
@@ -286,9 +290,11 @@ final class LingShuTaskExecutionJournal: @unchecked Sendable {
     func saveRecords(_ records: [LingShuTaskExecutionRecord]) -> (active: [LingShuTaskExecutionRecord], archived: [LingShuTaskExecutionRecord]) {
         ioQueue.sync {
             let sorted = unique(records).sorted { $0.updatedAt > $1.updatedAt }
-            let retained = Array(sorted.prefix(maxRecords))
+            // 热 = 最近一个月内的(再设条数上限防爆);超一个月或超上限的转冷备。参考上下文冷备策略。
+            let cutoff = Date().addingTimeInterval(-hotRetention)
+            let retained = Array(sorted.filter { $0.updatedAt >= cutoff }.prefix(maxRecords))
             let retainedIDs = Set(retained.map(\.id))
-            let overflow = sorted.dropFirst(maxRecords)
+            let overflow = sorted.filter { !retainedIDs.contains($0.id) }
             let archived = unique(Array(overflow) + loadArchivedRecordsCached())
                 .filter { !retainedIDs.contains($0.id) }
                 .sorted { $0.updatedAt > $1.updatedAt }

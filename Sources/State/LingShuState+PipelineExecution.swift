@@ -58,6 +58,15 @@ extension LingShuState {
         if result.tool == "write_file", result.success, let path = arguments["path"] {
             appendTaskRecordArtifact(taskRecordID, title: (path as NSString).lastPathComponent, location: path, producer: "工具执行")
         }
+        // run_command 产出的交付物(如 python 生成的 .pptx)不会被 write_file 自动登记——
+        // 从命令与输出里抽出真实存在的交付型文件补登,让它出现在「任务产出文件」可预览/打开/定位(去重由 appendArtifact 负责)。
+        if result.tool == "run_command", result.success {
+            let haystack = (arguments["command"] ?? "") + "\n" + result.output
+            for path in Self.extractRunCommandArtifacts(haystack, workingDirectory: workingDirectory)
+            where FileManager.default.fileExists(atPath: path) {
+                appendTaskRecordArtifact(taskRecordID, title: (path as NSString).lastPathComponent, location: path, producer: "命令产出")
+            }
+        }
         return result
     }
 
