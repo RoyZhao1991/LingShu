@@ -102,7 +102,33 @@ if security find-identity -v -p codesigning 2>/dev/null | grep -q "$SIGN_IDENTIT
     echo "   ==> signing nested HAL driver ($SIGN_IDENTITY)"
     codesign --force --sign "$SIGN_IDENTITY" --options runtime --timestamp "$DRIVER_BUNDLE" 2>/dev/null \
       || codesign --force --sign "$SIGN_IDENTITY" --options runtime "$DRIVER_BUNDLE"
+
+    # 公证(关键!):实测 coreaudiod **只加载已公证的 HAL 插件**——Developer ID 签名还不够,
+    # 未公证驱动 `spctl` 判 "Unnotarized Developer ID → rejected",coreaudiod 静默拒载、设备不出现。
+    # 提供凭据才执行(否则跳过并提示):LINGSHU_NOTARY_PROFILE(notarytool keychain profile),
+    # 或 LINGSHU_APPLE_ID + LINGSHU_APPLE_TEAM_ID + LINGSHU_APPLE_APP_PW(app 专用密码)。
+    # 顺序:先签驱动→公证+staple 驱动→**最后**再签 app(让 app seal 已 staple 的驱动,不破坏其票)。
+    NOTARY_ARGS=""
+    if [ -n "$LINGSHU_NOTARY_PROFILE" ]; then
+      NOTARY_ARGS="--keychain-profile $LINGSHU_NOTARY_PROFILE"
+    elif [ -n "$LINGSHU_APPLE_ID" ] && [ -n "$LINGSHU_APPLE_APP_PW" ] && [ -n "$LINGSHU_APPLE_TEAM_ID" ]; then
+      NOTARY_ARGS="--apple-id $LINGSHU_APPLE_ID --password $LINGSHU_APPLE_APP_PW --team-id $LINGSHU_APPLE_TEAM_ID"
+    fi
+    if [ -d "$DRIVER_BUNDLE" ] && [ -n "$NOTARY_ARGS" ] && [[ "$SIGN_IDENTITY" == Developer\ ID* ]]; then
+      echo "   ==> notarizing HAL driver (notarytool submit --wait)"
+      NZIP="$(mktemp -d)/LingShuAudioDriver.zip"
+      ditto -c -k --keepParent "$DRIVER_BUNDLE" "$NZIP"
+      if xcrun notarytool submit "$NZIP" $NOTARY_ARGS --wait; then
+        xcrun stapler staple "$DRIVER_BUNDLE" && echo "   ==> driver notarized + stapled ✅" \
+          || echo "   ==> staple 失败(公证可能仍在传播,可稍后手动 stapler staple)"
+      else
+        echo "   ==> 公证失败/超时——驱动未公证,coreaudiod 仍不会加载(见 notarytool 输出)"
+      fi
+    elif [[ "$SIGN_IDENTITY" == Developer\ ID* ]]; then
+      echo "   ==> (跳过公证:未提供 LINGSHU_NOTARY_PROFILE 或 Apple ID 凭据;coreaudiod 需**公证后**才加载驱动——见 Drivers/LingShuAudioDriver/README)"
+    fi
   fi
+  # app 最后签,seal 住已 staple 的驱动。
   codesign --force --deep --sign "$SIGN_IDENTITY" \
     --entitlements "$ROOT_DIR/LingShu.entitlements" \
     --options runtime \

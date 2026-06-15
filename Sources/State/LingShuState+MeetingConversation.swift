@@ -14,16 +14,16 @@ extension LingShuState {
             return "语音管理器未就绪(UI 尚未注入),无法开始会议对话。"
         }
         guard !meetingConversation.isActive else { return "会议对话已在进行中。" }
-        // 虚拟麦是灵枢的内置能力:没装就自安装(一次系统授权,不需用户手动跑脚本)。在后台跑(会弹授权框)。
-        if !LingShuAudioDriverInstaller.isInstalled() {
-            appendTrace(kind: .runtime, actor: "会议", title: "自安装虚拟麦克风", detail: "首次使用:请在弹出的系统授权框允许,装好后即为常驻能力。")
-            Task.detached {
-                let r = LingShuAudioDriverInstaller.installIfNeeded()
-                await MainActor.run { [weak self] in
-                    self?.appendTrace(kind: r == .installed || r == .alreadyInstalled ? .result : .warning,
-                                      actor: "会议", title: "虚拟麦克风安装", detail: "\(r)")
-                    _ = LingShuAudioRouting.selectOutputDevice(named: "灵枢虚拟麦")
-                }
+        // 虚拟麦是灵枢的内置能力:没装(或已装但签名/内容与随包驱动不一致,如 Apple Development→Developer ID 升级)
+        // 就自安装(一次系统授权,不需用户手动跑脚本)。**总是交给 installIfNeeded 自己判**——别在这里用 isInstalled()
+        // 短路,否则残留的旧签名驱动永远不会被升级(coreaudiod 拒载旧的→设备永不出现)。在后台跑(会弹授权框)。
+        appendTrace(kind: .runtime, actor: "会议", title: "自安装/校验虚拟麦克风", detail: "首次或升级:请在弹出的系统授权框允许,装好后即为常驻能力。")
+        Task.detached {
+            let r = LingShuAudioDriverInstaller.installIfNeeded()
+            await MainActor.run { [weak self] in
+                self?.appendTrace(kind: r == .installed || r == .alreadyInstalled ? .result : .warning,
+                                  actor: "会议", title: "虚拟麦克风安装", detail: "\(r)")
+                _ = LingShuAudioRouting.selectOutputDevice(named: "灵枢虚拟麦")
             }
         }
         // 尝试把 TTS 定向到灵枢虚拟麦克风(装了才有);没装则回落系统默认输出(本机闭环仍可验证)。
