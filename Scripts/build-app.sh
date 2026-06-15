@@ -92,14 +92,24 @@ PLIST
 # 稳定签名身份让 TCC 授权（屏幕录制/麦克风等）可持久、重建不丢；ad-hoc 做不到。
 # 默认用本机的 Apple Development 证书，可用 LINGSHU_SIGN_IDENTITY 覆盖；缺证书时回退 ad-hoc。
 SIGN_IDENTITY="${LINGSHU_SIGN_IDENTITY:-Apple Development: Yang Zhao (N69MT44KA3)}"
+DRIVER_BUNDLE="$RES_DIR/LingShuAudioDriver.driver"
 if security find-identity -v -p codesigning 2>/dev/null | grep -q "$SIGN_IDENTITY"; then
   echo "==> code signing ($SIGN_IDENTITY)"
+  # 关键:HAL 驱动必须**单独**用同一身份签——`--deep` 不会遍历 Contents/Resources 里的 .driver
+  # (它只签 Frameworks/PlugIns 等常规嵌套位置),漏签会让驱动是 ad-hoc → coreaudiod 静默拒载、设备不出现。
+  # 不给驱动套 app 的相机/麦克风 entitlements(HAL 插件不需要);带安全时戳(离线则回退无时戳)。
+  if [ -d "$DRIVER_BUNDLE" ]; then
+    echo "   ==> signing nested HAL driver ($SIGN_IDENTITY)"
+    codesign --force --sign "$SIGN_IDENTITY" --options runtime --timestamp "$DRIVER_BUNDLE" 2>/dev/null \
+      || codesign --force --sign "$SIGN_IDENTITY" --options runtime "$DRIVER_BUNDLE"
+  fi
   codesign --force --deep --sign "$SIGN_IDENTITY" \
     --entitlements "$ROOT_DIR/LingShu.entitlements" \
     --options runtime \
     "$APP_DIR"
 else
   echo "==> code signing (ad-hoc 回退；未找到身份「$SIGN_IDENTITY」)"
+  [ -d "$DRIVER_BUNDLE" ] && codesign --force --sign - --options runtime "$DRIVER_BUNDLE" 2>/dev/null || true
   codesign --force --deep --sign - \
     --entitlements "$ROOT_DIR/LingShu.entitlements" \
     --options runtime \
