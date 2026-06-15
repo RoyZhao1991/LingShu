@@ -227,8 +227,8 @@ enum LingShuSpeechOutputServiceContract {
         request.httpMethod = "POST"
         // 云端 CosyVoice2 合成耗时随文本长度走：实测一句短话约 3-4s、整段长句约 9s+。
         // 旧的 8s 死超时对正常长度回复就会超时 → 每次都降级本机女声（"没用云端 TTS"的真因）。
-        // 按字数给足余量（下限 12s、上限 40s），既不卡死也不误降级。
-        request.timeoutInterval = min(40, max(12, Double(text.count) * 0.2 + 8))
+        // 适当延长余量（下限 20s、上限 60s），减少误降级；真超时再降级,且降级后由发声代次切断过期云端音频(不重叠)。
+        request.timeoutInterval = min(60, max(20, Double(text.count) * 0.25 + 12))
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("audio/wav, application/json", forHTTPHeaderField: "Accept")
         if !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {

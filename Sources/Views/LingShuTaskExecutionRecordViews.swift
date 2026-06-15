@@ -43,6 +43,11 @@ struct TaskExecutionRecordSheet: View {
                         Text(record.updatedAt.taskRecordDisplayTime)
                             .font(.system(size: 11, weight: .semibold, design: .monospaced))
                             .foregroundStyle(.white.opacity(0.42))
+                        // 开发任务:头部补仓库 + 分支 chip(对齐 codex 开发窗口)。
+                        if let code = record.codeChanges {
+                            headerChip(code.repoName, icon: "folder.fill")
+                            headerChip(code.branch, icon: "arrow.triangle.branch")
+                        }
                     }
                 }
 
@@ -71,12 +76,25 @@ struct TaskExecutionRecordSheet: View {
                 }
                 Divider()
                     .overlay(Color.white.opacity(0.1))
-                TaskArtifactFilesPanel(record: record, lineageRecords: lineageRecords)
-                    .frame(width: 272)
+                // 统一侧栏:所有任务都用 TaskDevToolsPanel(目标/任务摘要/进度/产出物);
+                // 「Git 工具」段仅开发任务显示,交付任务(PPT 等)自动隐藏。
+                TaskDevToolsPanel(state: state, record: record, lineageRecords: lineageRecords)
+                    .frame(width: 300)
             }
         }
         .frame(minWidth: 1020, minHeight: 620)
         .background(Color.lingVoid)
+    }
+
+    private func headerChip(_ text: String, icon: String) -> some View {
+        HStack(spacing: 4) {
+            Image(systemName: icon).font(.system(size: 9, weight: .bold))
+            Text(text).font(.system(size: 10, weight: .bold, design: .monospaced))
+                .lineLimit(1).truncationMode(.middle)
+        }
+        .foregroundStyle(Color.lingHoloAlt.opacity(0.9))
+        .padding(.horizontal, 7).padding(.vertical, 2)
+        .background(Color.lingHoloAlt.opacity(0.12), in: Capsule())
     }
 
     private func timelineColumn(record: LingShuTaskExecutionRecord) -> some View {
@@ -116,47 +134,8 @@ struct TaskExecutionRecordSheet: View {
                             }
                         }
 
-                        if !record.plan.isEmpty {
-                            TaskPlanCard(steps: record.plan)
-                        }
-
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text("任务摘要")
-                                .font(.system(size: 12, weight: .bold))
-                                .foregroundStyle(Color.lingHolo.opacity(0.88))
-                            Text(record.summary)
-                                .font(.system(size: 12.5, weight: .medium))
-                                .foregroundStyle(.white.opacity(0.64))
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-                        .padding(12)
-                        .background(Color.white.opacity(0.055), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-
-                        if !record.artifacts.isEmpty {
-                            VStack(alignment: .leading, spacing: 10) {
-                                HStack(spacing: 8) {
-                                    Image(systemName: "shippingbox.fill")
-                                        .font(.system(size: 12, weight: .bold))
-                                        .foregroundStyle(Color.lingHolo)
-                                    Text("产出物")
-                                        .font(.system(size: 12.5, weight: .bold))
-                                        .foregroundStyle(.white.opacity(0.92))
-                                    Text("\(record.artifacts.count) 项")
-                                        .font(.system(size: 11, weight: .bold, design: .monospaced))
-                                        .foregroundStyle(.white.opacity(0.42))
-                                }
-
-                                ForEach(record.artifacts) { artifact in
-                                    TaskExecutionArtifactRow(artifact: artifact)
-                                }
-                            }
-                            .padding(12)
-                            .background(Color.white.opacity(0.045), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-                            .overlay {
-                                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                    .stroke(Color.lingHolo.opacity(0.15))
-                            }
-                        }
+                        // 计划 / 任务摘要 / 产出物 一律移到右侧侧栏(TaskDevToolsPanel);
+                        // 左栏对**所有**任务(开发与交付统一)只留对话叙述(据用户反馈 2026-06-15)。
 
                         ForEach(record.messages) { message in
                             TaskExecutionMessageRow(message: message, state: state, recordID: record.id)

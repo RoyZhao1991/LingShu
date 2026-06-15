@@ -329,6 +329,7 @@ struct LingShuInputDock: View {
     @ObservedObject var voice: VoiceIOManager
     @ObservedObject var vision: VisionIOManager
     @ObservedObject var perceptionGateway: LingShuRealtimePerceptionGateway
+    @State private var showClearConfirm = false
 
     var body: some View {
         VStack(spacing: 10) {
@@ -439,6 +440,24 @@ struct LingShuInputDock: View {
                     .buttonStyle(.plain)
                     .help("中断当前播放")
                     .transition(.opacity)
+                }
+
+                Button {
+                    showClearConfirm = true
+                } label: {
+                    Image(systemName: "square.and.pencil")
+                        .font(.system(size: 15, weight: .bold))
+                        .foregroundStyle(.white.opacity(0.86))
+                        .frame(width: 46, height: 42)
+                        .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                }
+                .buttonStyle(.plain)
+                .help("清空上下文 / 新会话")
+                .confirmationDialog("清空当前对话上下文?", isPresented: $showClearConfirm, titleVisibility: .visible) {
+                    Button("清空(新会话)", role: .destructive) { state.clearMainContext() }
+                    Button("取消", role: .cancel) {}
+                } message: {
+                    Text("清掉当前聊天与执行轨迹、重置会话。任务线程与长期记忆保留。")
                 }
 
                 Button {

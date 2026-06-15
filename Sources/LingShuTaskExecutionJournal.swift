@@ -168,6 +168,27 @@ struct LingShuTaskExecutionRecord: Identifiable, Codable, Equatable, Sendable {
     /// 代码交付任务的代码改动概览(分支 + 未提交文件)。nil=非代码任务/工作目录非 git 仓/无未提交改动。
     var codeChanges: LingShuCodeChangeSummary?
 
+    /// 开发任务判定 → 仅决定任务窗口右侧是否显示「Git 工具」段。
+    /// **严格成立条件:已捕获的 git 改动里含真·源码文件**(收尾后 `captureCodeChanges` 扫描)。
+    /// 关键:`.md`/文档/`.pptx` 等**非源码**即便在 git 仓里被改、被 `captureCodeChanges` 收进 codeChanges,
+    /// 也**不算**开发任务——"读代码写架构总结/PPT"这类非代码流程**绝不出现 Git 工具**(用户反馈 2026-06-15)。
+    /// 不再用"codeChanges 非空"或"产出/编辑过源码扩展名"等宽松信号(会把改 .md 的文档任务误判为开发)。
+    var isDevelopmentTask: Bool {
+        guard let code = codeChanges else { return false }
+        return code.files.contains { Self.isSourceCodePath($0.path) }
+    }
+
+    /// 真·源码/标记/样式扩展名(紧凑白名单,不含 json/yaml 等配置——避免把 PPT 的 slides.json 误判为开发)。
+    static let sourceCodeExtensions: Set<String> = [
+        "swift", "py", "js", "mjs", "cjs", "ts", "tsx", "jsx", "go", "rs", "java", "kt",
+        "c", "cpp", "cc", "cxx", "h", "hpp", "m", "mm", "rb", "php", "cs", "sh", "bash",
+        "sql", "html", "htm", "css", "scss", "less", "vue", "svelte", "gradle"
+    ]
+
+    static func isSourceCodePath(_ path: String) -> Bool {
+        sourceCodeExtensions.contains((path as NSString).pathExtension.lowercased())
+    }
+
     enum CodingKeys: String, CodingKey {
         case id
         case title

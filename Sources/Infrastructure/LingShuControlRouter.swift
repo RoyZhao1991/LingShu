@@ -167,6 +167,11 @@ final class LingShuControlRouter {
             "inputSchema": ["type": "object", "properties": [:] as [String: Any]]
         ],
         [
+            "name": "lingshu_clear_context",
+            "description": "清空主对话上下文(开启新会话):停掉在飞回合、丢弃常驻会话、聊天与执行轨迹回到初始态。不动任务线程/执行记录,长期记忆保留。",
+            "inputSchema": ["type": "object", "properties": [:] as [String: Any]]
+        ],
+        [
             "name": "lingshu_acquire_resource",
             "description": "资源自获取:先查本地资源库,没有就联网下载(模板/图标/字体/参考)入库复用。args: kind(pptx-template/icon-set/font/reference)、query。",
             "inputSchema": [
@@ -349,6 +354,10 @@ final class LingShuControlRouter {
             let count = state.pendingAttachments.count
             state.clearAttachments()
             return (jsonText(["ok": true, "cleared": count]), false)
+        case "lingshu_clear_context":
+            // 清空主对话上下文(新会话):停在飞回合 + 丢弃常驻会话 + 聊天/轨迹重置;任务线程与长期记忆保留。
+            let hadSession = state.clearMainContext()
+            return (jsonText(["ok": true, "hadSession": hadSession]), false)
         case "lingshu_acquire_resource":
             // 资源自获取:本地无→联网找模板/图标/字体/参考下载入库(测试/驱动用)。args: kind, query。
             guard let kind = arguments["kind"] as? String, let query = arguments["query"] as? String else {

@@ -46,4 +46,20 @@ extension LingShuState {
         missionStatus = "会议对话已结束。"
         return "已结束会议对话。"
     }
+
+    /// 演示/会议进行中,把对方的**现场提问**注入「当前正在跑的那条脑回路」(自主演示会话优先,否则主会话):
+    /// 复用会话的回合/步骤边界注入机制(`injectCorrection` 这条底层注入,但语义是"提问"非"纠正")——
+    /// 大脑在下一步边界看到问题 → 先口头作答 → 接着汇报。**同一个大脑边讲边答,不另起独立汇报人。**
+    /// 与 `interjectCorrection` 区别:不做"纠正"措辞、不进 dreaming 设计反馈、只注入正在跑的那条会话(不双投)。
+    func injectMeetingQuestion(_ utterance: String) {
+        let trimmed = utterance.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        guard let target = autonomousSessionHolder ?? mainAgentSessionHolder else { return }
+        let recordID = autonomousRunRecordID ?? currentAgentTurnRecordID
+        appendTaskRecordMessage(recordID, actor: "现场", role: "提问", kind: .user, text: trimmed)
+        appendTrace(kind: .system, actor: "会议", title: "现场提问", detail: trimmed)
+        missionStatus = "收到现场提问,正在作答…"
+        let framed = "[现场提问] \(trimmed)\n\n先简要口头回答这个问题(用 speak),再接着汇报。"
+        Task { await target.injectCorrection(framed) }
+    }
 }

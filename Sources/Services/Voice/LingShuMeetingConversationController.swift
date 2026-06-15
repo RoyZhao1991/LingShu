@@ -76,8 +76,13 @@ final class LingShuMeetingConversationController: ObservableObject {
 
     private func tick() {
         guard let state, let voice else { return }
-        // 灵枢正在思考/说话:不收口,把当前转写"已读"指针跟到最新(灵枢说话期间对方若插话,等它说完再算新轮)。
-        if state.hasActiveModelCall || voice.isSpeakingOrQueued {
+        // 自主演示中:大脑在长回合里一直 hasActiveModelCall=真。此时仍要捕获对方的**现场提问**,
+        // 改为 interject 注入当前自主循环(下方收口处),**不能丢**——这是"边讲边答"的关键。
+        let autonomousPresenting = state.autonomousRun.phase == .running
+
+        // 灵枢正在思考/说话且**非自主演示**:不收口,把当前转写"已读"指针跟到最新(等它说完再算新轮)。
+        // 自主演示则**不**走这条短路——否则演示全程都在丢对方发言。
+        if !autonomousPresenting, state.hasActiveModelCall || voice.isSpeakingOrQueued {
             phase = .responding
             let len = LingShuMeetingASR.shared.transcript.count
             submittedLength = max(submittedLength, len)
@@ -104,7 +109,13 @@ final class LingShuMeetingConversationController: ObservableObject {
             submittedLength = len
             if utterance.count >= 2 {   // 太短(语气词/噪音误转)不打扰
                 phase = .responding
-                _ = state.submitTextInput(utterance, source: .meeting)
+                if autonomousPresenting {
+                    // 自主演示中:作为现场提问注入当前自主循环(步骤边界采纳)→ 答完接着讲,同一个大脑。
+                    state.injectMeetingQuestion(utterance)
+                } else {
+                    // 非演示态:照旧起一轮新的主会话应答。
+                    _ = state.submitTextInput(utterance, source: .meeting)
+                }
             }
         } else if phase != .capturing {
             phase = .listening

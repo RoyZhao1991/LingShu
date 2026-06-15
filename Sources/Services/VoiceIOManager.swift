@@ -84,6 +84,9 @@ final class VoiceIOManager: ObservableObject {
     /// 真流式 PCM 播放器（数据网关 /stream 边收边播时使用）；打断时一并 stop。
     var activeStreamingPlayer: LingShuStreamingPCMPlayer?
     var activeSpeechTask: Task<Void, Never>?
+    /// 发声「代次」:每次 `speak(_:)` 递增。任何更晚的发声(或降级)都会让先前在飞的云端/本机音频「过期」——
+    /// 过期音频一律不再起播、也不再翻转 `isSpeaking`,根治云端 TTS 与降级本机语音叠在一起(双声线)。
+    var speechGeneration: Int = 0
     /// 分句早读队列：流式回复的整句按到达顺序排队播报；
     /// 排队/排空逻辑在 VoiceIOManager+SpeechQueue.swift。
     var speechQueue: [String] = []

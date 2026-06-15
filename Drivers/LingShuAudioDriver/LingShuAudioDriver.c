@@ -9,11 +9,22 @@
 // 构建:Drivers/LingShuAudioDriver/build-driver.sh(clang);随 app 包发布 + 灵枢自安装(一次授权)。
 
 #include <CoreAudio/AudioServerPlugIn.h>
+#include <CoreAudio/AudioHardware.h>  // kAudioDevicePropertyStreamConfiguration('slay')仅在此声明,AudioServerPlugIn.h 不传递包含
 #include <CoreFoundation/CoreFoundation.h>
 #include <mach/mach_time.h>
 #include <pthread.h>
 #include <string.h>
 #include <stdint.h>
+#include <stddef.h>   // offsetof —— StreamConfiguration 的 AudioBufferList 变长尺寸
+#include <os/log.h>   // 加载诊断:coreaudiod 内部日志(sudo log show --predicate 'subsystem=="com.zhaoroy.lingshu.audiodriver"')
+
+// 诊断日志(coreaudiod 进程内)。设备不出现时用 `sudo log show` 看 coreaudiod 走到哪一步。
+#define LS_LOG_SUBSYSTEM "com.zhaoroy.lingshu.audiodriver"
+static os_log_t LS_Log(void) {
+    static os_log_t log = NULL;
+    if (!log) log = os_log_create(LS_LOG_SUBSYSTEM, "driver");
+    return log;
+}
 
 #pragma mark - 常量与对象 ID
 
@@ -104,7 +115,9 @@ static UInt32 gRefCount = 1;
 void* LingShuAudioDriver_Create(CFAllocatorRef allocator, CFUUIDRef typeID);
 void* LingShuAudioDriver_Create(CFAllocatorRef allocator, CFUUIDRef typeID) {
     (void)allocator;
-    if (CFEqual(typeID, kAudioServerPlugInTypeUUID)) return gDriverRef;
+    Boolean match = CFEqual(typeID, kAudioServerPlugInTypeUUID);
+    os_log(LS_Log(), "LingShu factory invoked, type match=%{public}d", match);
+    if (match) return gDriverRef;
     return NULL;
 }
 
@@ -135,6 +148,7 @@ static OSStatus LS_Initialize(AudioServerPlugInDriverRef inDriver, AudioServerPl
     memset(gRing, 0, sizeof(gRing));
     gIOCount = 0;
     gNumberTimeStamps = 0;
+    os_log(LS_Log(), "LingShu Initialize ok (device should now enumerate)");
     return 0;
 }
 
@@ -211,6 +225,16 @@ static OSStatus LS_GetPropertyDataSize(AudioServerPlugInDriverRef inDriver, Audi
                     *outSize = n * sizeof(AudioObjectID);
                     break;
                 }
+                // 通道布局(关键):没有它,HAL/会议 App 认为设备 0 通道 → 设备被丢弃/不出现。
+                // input scope 1 个流、output scope 1 个流、global 两个流,各 1 个 AudioBuffer。
+                case kAudioDevicePropertyStreamConfiguration: {
+                    UInt32 n = (a->mScope == kAudioObjectPropertyScopeGlobal) ? 2 : 1;
+                    *outSize = (UInt32)(offsetof(AudioBufferList, mBuffers) + n * sizeof(AudioBuffer));
+                    break;
+                }
+                case kAudioDevicePropertyPreferredChannelsForStereo: *outSize = 2 * sizeof(UInt32); break;
+                case kAudioDevicePropertyPreferredChannelLayout: *outSize = (UInt32)offsetof(AudioChannelLayout, mChannelDescriptions); break;
+                case kAudioDevicePropertyRelatedDevices: *outSize = sizeof(AudioObjectID); break;
                 default: s = kAudioHardwareUnknownPropertyError; break;
             }
             break;
@@ -297,6 +321,34 @@ static OSStatus LS_GetPropertyData(AudioServerPlugInDriverRef inDriver, AudioObj
                     *outSize = idx*sizeof(AudioObjectID);
                     break;
                 }
+                // 通道布局:每个 scope 对应的流各 1 个 buffer,mNumberChannels=2;mDataByteSize=0(配置查询,无数据)。
+                case kAudioDevicePropertyStreamConfiguration: {
+                    AudioBufferList* bl = (AudioBufferList*)outData;
+                    UInt32 cap = (dataSize >= offsetof(AudioBufferList, mBuffers))
+                                 ? (UInt32)((dataSize - offsetof(AudioBufferList, mBuffers)) / sizeof(AudioBuffer)) : 0;
+                    Boolean wantIn  = (a->mScope==kAudioObjectPropertyScopeInput  || a->mScope==kAudioObjectPropertyScopeGlobal);
+                    Boolean wantOut = (a->mScope==kAudioObjectPropertyScopeOutput || a->mScope==kAudioObjectPropertyScopeGlobal);
+                    UInt32 n = 0;
+                    if (wantIn  && n<cap) { bl->mBuffers[n].mNumberChannels=kChannelsPerFrame; bl->mBuffers[n].mDataByteSize=0; bl->mBuffers[n].mData=NULL; n++; }
+                    if (wantOut && n<cap) { bl->mBuffers[n].mNumberChannels=kChannelsPerFrame; bl->mBuffers[n].mDataByteSize=0; bl->mBuffers[n].mData=NULL; n++; }
+                    bl->mNumberBuffers = n;
+                    *outSize = (UInt32)(offsetof(AudioBufferList, mBuffers) + n*sizeof(AudioBuffer));
+                    break;
+                }
+                case kAudioDevicePropertyPreferredChannelsForStereo: {
+                    UInt32* ch=(UInt32*)outData; ch[0]=1; ch[1]=2; *outSize=2*sizeof(UInt32); break;
+                }
+                case kAudioDevicePropertyPreferredChannelLayout: {
+                    AudioChannelLayout* layout=(AudioChannelLayout*)outData;
+                    memset(layout, 0, offsetof(AudioChannelLayout, mChannelDescriptions));
+                    layout->mChannelLayoutTag = kAudioChannelLayoutTag_Stereo;
+                    *outSize = (UInt32)offsetof(AudioChannelLayout, mChannelDescriptions);
+                    break;
+                }
+                case kAudioDevicePropertyRelatedDevices:
+                    if (dataSize >= sizeof(AudioObjectID)) { *((AudioObjectID*)outData)=kObjectID_Device; *outSize=sizeof(AudioObjectID); }
+                    else *outSize=0;
+                    break;
                 default: s = kAudioHardwareUnknownPropertyError; break;
             }
             break;

@@ -17,17 +17,24 @@ final class LingShuStreamingPCMPlayer: @unchecked Sendable {
     private var inputEnded = false
     private var drainContinuation: CheckedContinuation<Void, Never>?
     private var leftover = Data()
-    private var started = false
+    private var started = false        // 引擎已启动
+    private var nodePlaying = false    // 播放节点已起播(过了起播预缓冲门槛)
+    private var primedFrames: AVAudioFrameCount = 0   // 起播前已排入、累计的预缓冲帧数
+    private let primeThresholdFrames: AVAudioFrameCount
     private var stopped = false
 
     init?(sampleRate: Double) {
+        let rate = sampleRate > 0 ? sampleRate : 16000
         guard let fmt = AVAudioFormat(
             commonFormat: .pcmFormatFloat32,
-            sampleRate: sampleRate > 0 ? sampleRate : 16000,
+            sampleRate: rate,
             channels: 1,
             interleaved: false
         ) else { return nil }
         self.format = fmt
+        // 起播预缓冲门槛 ≈ 0.4s:先攒够这么多 PCM 再出声,给网络/合成抖动留余量。
+        // 根治"前面一字一卡、后半段才顺"——首块即播时队列见底就饿出逐字静音间隔。
+        self.primeThresholdFrames = AVAudioFrameCount(rate * 0.4)
         engine.attach(node)
         engine.connect(node, to: engine.mainMixerNode, format: fmt)
     }
@@ -37,8 +44,9 @@ final class LingShuStreamingPCMPlayer: @unchecked Sendable {
         applyPreferredOutputDevice()   // 会议模式:把 TTS 定向到灵枢虚拟麦克风(否则走系统默认输出)
         engine.prepare()
         try engine.start()
-        node.play()
         started = true
+        // 注意:这里**不** node.play()——等预缓冲攒够(或输入结束)再起播。
+        // scheduleBuffer 在节点未播放时也能正常入队,play() 一调即无缝按序播出。
     }
 
     /// 若设置了首选输出设备(如虚拟麦),把引擎输出单元定向到它;否则用系统默认。
@@ -77,10 +85,30 @@ final class LingShuStreamingPCMPlayer: @unchecked Sendable {
         node.scheduleBuffer(buffer, completionHandler: { [weak self] in
             self?.bufferCompleted()
         })
+
+        // 起播预缓冲:未起播时累计帧数,够门槛才真正 play();之后保持播放,后续块无缝续上。
+        var startNow = false
+        lock.lock()
+        if started, !nodePlaying, !stopped {
+            primedFrames += buffer.frameLength
+            if primedFrames >= primeThresholdFrames { nodePlaying = true; startNow = true }
+        }
+        lock.unlock()
+        if startNow { node.play() }
     }
 
     /// 输入流结束后，等所有已排队 buffer 真正播完（被 stop 打断时也会立即返回）。
+    /// 还没起播就强制起播(同步,锁不跨 await)。输入结束/短句总时长 < 预缓冲门槛时用,避免卡在预缓冲里永不出声。
+    private func forceStartPlaybackIfNeeded() {
+        var startNow = false
+        lock.lock()
+        if started, !nodePlaying, !stopped, outstanding > 0 { nodePlaying = true; startNow = true }
+        lock.unlock()
+        if startNow { node.play() }
+    }
+
     func finishAndDrain() async {
+        forceStartPlaybackIfNeeded()
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
             lock.lock()
             inputEnded = true

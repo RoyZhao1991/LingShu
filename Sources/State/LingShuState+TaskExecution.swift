@@ -228,4 +228,53 @@ extension LingShuState {
         let remainder = seconds % 60
         return String(format: "%02d:%02d", minutes, remainder)
     }
+
+    /// 任务窗口「Git 工具」侧栏的提交动作:把**本任务自己**改动的文件提交到其所在仓。
+    /// 只暂存 codeChanges 里列出的(本任务)文件,生成带任务标题的提交信息;成功后刷新 codeChanges(已提交的不再列出)。
+    /// 用户点击触发、只动本任务文件、可 `git reset` 还原——本地可逆动作,不预先弹确认。
+    func commitTaskCodeChanges(recordID: String) {
+        guard let idx = taskExecutionRecords.firstIndex(where: { $0.id == recordID }),
+              let code = taskExecutionRecords[idx].codeChanges, !code.files.isEmpty else { return }
+        let workingDir = codexWorkingDirectory
+        let relPaths = code.files.map(\.path)
+        let title = taskExecutionRecords[idx].title.trimmingCharacters(in: .whitespacesAndNewlines)
+        let message = "灵枢:\(title.isEmpty ? "任务改动" : title)"
+        appendTaskRecordMessage(recordID, actor: "Git", role: "提交", kind: .router, text: "正在提交本任务的 \(relPaths.count) 个改动…")
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            let ok = await Self.gitCommit(workingDir: workingDir, files: relPaths, message: message)
+            self.appendTaskRecordMessage(
+                recordID, actor: "Git", role: "提交", kind: ok ? .result : .warning,
+                text: ok ? "已提交 \(relPaths.count) 个改动:\(message)" : "提交失败——可在终端手动 `git commit`(见控制台日志)。"
+            )
+            if ok { self.captureCodeChanges(recordID: recordID) }   // 重扫:已提交的从 porcelain 消失 → 面板更新
+        }
+    }
+
+    /// 在 `workingDir` 所在仓暂存并提交指定(仓库相对路径)文件。成功返回 true。
+    nonisolated static func gitCommit(workingDir: String, files: [String], message: String) async -> Bool {
+        guard !files.isEmpty, let git = await resolveGit(workingDir: workingDir) else { return false }
+        let topLevel = await runCapturing(git, ["-C", workingDir, "rev-parse", "--show-toplevel"])
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !topLevel.isEmpty else { return false }
+        _ = await runCapturing(git, ["-C", topLevel, "add", "--"] + files)
+        let commitOut = await runCapturing(git, ["-C", topLevel, "commit", "-m", message])
+        if commitOut.contains("nothing to commit") { return false }
+        // 验证:这些文件应已从未提交清单消失。
+        let after = parseGitPorcelain(await runCapturing(git, ["-C", topLevel, "status", "--porcelain"])).map(\.path)
+        let committed = !files.contains { after.contains($0) }
+        lingShuControlLog("gitCommit: \(committed ? "已提交" : "未生效") \(files.count) 文件 @\(topLevel)")
+        return committed
+    }
+
+    /// 在候选 git 里找出能判定 `workingDir` 是工作树的那个(绕过失效的 /usr/bin/git shim);非仓返回 nil。
+    nonisolated static func resolveGit(workingDir: String) async -> String? {
+        for candidate in gitCandidatePaths() {
+            let inside = await runCapturing(candidate, ["-C", workingDir, "rev-parse", "--is-inside-work-tree"])
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if inside == "true" { return candidate }
+            if inside == "false" { return nil }
+        }
+        return nil
+    }
 }

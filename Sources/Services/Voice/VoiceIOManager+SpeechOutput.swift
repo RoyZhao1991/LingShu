@@ -49,6 +49,10 @@ extension VoiceIOManager {
         let cleanedText = Self.strippedForSpeech(text)
         guard !cleanedText.isEmpty else { return }
 
+        // 递增发声代次:本次之后再有新发声/降级都会让先前在飞的音频「过期」(下方各处按 gen 守卫,不再出声/不翻转状态)。
+        speechGeneration &+= 1
+        let gen = speechGeneration
+
         activeSpeechTask?.cancel()
         speechAudioPlayer?.stop()
         activeStreamingPlayer?.stop()
@@ -58,7 +62,7 @@ extension VoiceIOManager {
         }
 
         if speechOutputProvider.kind == .appleSpeech {
-            speakWithAppleSpeech(cleanedText)
+            speakWithAppleSpeech(cleanedText, generation: gen)
             return
         }
 
@@ -80,7 +84,7 @@ extension VoiceIOManager {
             let reason = "云端男声缺凭据（未读到 datanet token），已降级本机语音"
             cloudVoiceDegradedReason = reason
             setOutputStatus(reason)
-            speakWithAppleSpeech(cleanedText, statusAlreadySet: true)
+            speakWithAppleSpeech(cleanedText, statusAlreadySet: true, generation: gen)
             return
         }
 
@@ -99,7 +103,8 @@ extension VoiceIOManager {
                         provider: provider,
                         endpoint: endpoint,
                         apiKey: apiKey,
-                        persona: persona
+                        persona: persona,
+                        generation: gen
                     )
                 } else if segments.count > 1 {
                     // 非流式 provider:逐段拉全量音频(AVAudioPlayer)再顺序播。
@@ -120,18 +125,22 @@ extension VoiceIOManager {
                     )
                 }
             } catch is CancellationError {
+                // 被更新的发声取代才会取消:本任务已过期则不翻转状态(否则会把新发声的 isSpeaking 误清成 false)。
+                guard self.speechGeneration == gen else { return }
                 self.isSpeaking = false
                 self.setOutputStatus(self.outputStandbyStatus(for: provider))
             } catch {
                 // 云端男声请求失败（网关异常/超时/鉴权失败）：降级本机语音兜底。
-                // **先停掉可能还在放的云端流式播放器**——否则本机声线会和云端声线叠在一起(双声线)。
+                // 先确认本任务仍是当前代次——已被更新发声接管就直接放弃,**绝不在新发声上再叠一层本机降级音**(双声线根因)。
+                guard self.speechGeneration == gen else { return }
+                // 再停掉可能还在放的云端流式播放器,然后才起降级本机语音。
                 self.activeStreamingPlayer?.stop()
                 self.activeStreamingPlayer = nil
                 self.speechAudioPlayer?.stop()
                 let reason = "云端男声请求失败（\(Self.shortFailureReason(error))），已降级本机语音"
                 self.cloudVoiceDegradedReason = reason
                 self.setOutputStatus(reason)
-                self.speakWithAppleSpeech(cleanedText, statusAlreadySet: true)
+                self.speakWithAppleSpeech(cleanedText, statusAlreadySet: true, generation: gen)
             }
         }
     }
@@ -144,15 +153,19 @@ extension VoiceIOManager {
         provider: LingShuSpeechOutputProviderDescriptor,
         endpoint: String,
         apiKey: String,
-        persona: LingShuSpeechPersona
+        persona: LingShuSpeechPersona,
+        generation: Int
     ) async throws {
         let parts = segments.filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
         guard !parts.isEmpty else { return }
         isSpeaking = true
         setOutputStatus("正在发声（流式）")
         defer {
-            isSpeaking = false
-            setOutputStatus(outputStandbyStatus(for: provider))
+            // 仅当仍是当前代次才收口:被更新发声取消时别把新发声的 isSpeaking 误清成 false。
+            if speechGeneration == generation {
+                isSpeaking = false
+                setOutputStatus(outputStandbyStatus(for: provider))
+            }
         }
         // 单段:真流式,首包即播(最低延迟)。多段:连续播放器 + 管线预取,段间背靠背不排空到静音——
         // 根治"带格式/长回复分成很多小段、每段都等下一段首包"的卡顿。
@@ -428,7 +441,9 @@ extension VoiceIOManager {
         }
     }
 
-    private func speakWithAppleSpeech(_ cleanedText: String, statusAlreadySet: Bool = false) {
+    private func speakWithAppleSpeech(_ cleanedText: String, statusAlreadySet: Bool = false, generation: Int) {
+        // 过期发声(已被更新发声/取消取代)不再发出本机音——防止与新发声或云端 TTS 重叠(双声线)。
+        guard generation == speechGeneration else { return }
         let utterance = AVSpeechUtterance(string: cleanedText)
         let voice = preferredChineseVoice()
         utterance.voice = voice
@@ -446,7 +461,8 @@ extension VoiceIOManager {
         let estimatedSeconds = min(max(Double(cleanedText.count) * 0.16, 1.2), 28.0)
         Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: UInt64(estimatedSeconds * 1_000_000_000))
-            guard let self, !self.speechSynthesizer.isSpeaking else { return }
+            // 仅当仍是当前代次、且系统语音确已停,才收口——否则别误把更新发声的 isSpeaking 清成 false。
+            guard let self, self.speechGeneration == generation, !self.speechSynthesizer.isSpeaking else { return }
             self.isSpeaking = false
             self.setOutputStatus(self.outputStandbyStatus(for: self.speechOutputProvider))
         }
