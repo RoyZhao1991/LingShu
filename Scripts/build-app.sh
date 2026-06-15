@@ -108,11 +108,12 @@ if security find-identity -v -p codesigning 2>/dev/null | grep -q "$SIGN_IDENTIT
     # 提供凭据才执行(否则跳过并提示):LINGSHU_NOTARY_PROFILE(notarytool keychain profile),
     # 或 LINGSHU_APPLE_ID + LINGSHU_APPLE_TEAM_ID + LINGSHU_APPLE_APP_PW(app 专用密码)。
     # 顺序:先签驱动→公证+staple 驱动→**最后**再签 app(让 app seal 已 staple 的驱动,不破坏其票)。
+    # 用 ${VAR:-} 默认空,避免 `set -u`(nounset)下未设这些环境变量就中断构建。
     NOTARY_ARGS=""
-    if [ -n "$LINGSHU_NOTARY_PROFILE" ]; then
-      NOTARY_ARGS="--keychain-profile $LINGSHU_NOTARY_PROFILE"
-    elif [ -n "$LINGSHU_APPLE_ID" ] && [ -n "$LINGSHU_APPLE_APP_PW" ] && [ -n "$LINGSHU_APPLE_TEAM_ID" ]; then
-      NOTARY_ARGS="--apple-id $LINGSHU_APPLE_ID --password $LINGSHU_APPLE_APP_PW --team-id $LINGSHU_APPLE_TEAM_ID"
+    if [ -n "${LINGSHU_NOTARY_PROFILE:-}" ]; then
+      NOTARY_ARGS="--keychain-profile ${LINGSHU_NOTARY_PROFILE}"
+    elif [ -n "${LINGSHU_APPLE_ID:-}" ] && [ -n "${LINGSHU_APPLE_APP_PW:-}" ] && [ -n "${LINGSHU_APPLE_TEAM_ID:-}" ]; then
+      NOTARY_ARGS="--apple-id ${LINGSHU_APPLE_ID} --password ${LINGSHU_APPLE_APP_PW} --team-id ${LINGSHU_APPLE_TEAM_ID}"
     fi
     if [ -d "$DRIVER_BUNDLE" ] && [ -n "$NOTARY_ARGS" ] && [[ "$SIGN_IDENTITY" == Developer\ ID* ]]; then
       echo "   ==> notarizing HAL driver (notarytool submit --wait)"
