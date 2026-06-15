@@ -5,59 +5,13 @@ struct LingShuDialogueSurface: View {
     @ObservedObject var voice: VoiceIOManager
     @ObservedObject var vision: VisionIOManager
     @ObservedObject var perceptionGateway: LingShuRealtimePerceptionGateway
-    @State private var lastChatBottomSignature = ""
 
     var body: some View {
         VStack(spacing: 12) {
-                ScrollViewReader { proxy in
-                    ScrollView {
-                        LazyVStack(spacing: 12) {
-                            if state.hasMoreColdChatHistory {
-                                Color.clear
-                                    .frame(height: 1)
-                                    .id("lingshu-chat-top")
-                                    .onAppear {
-                                        state.loadOlderChatHistoryIfNeeded()
-                                    }
-                            }
-
-                            ForEach(state.chatMessages) { message in
-                                ChatBubbleView(message: message, state: state)
-                            }
-
-                            Color.clear
-                                .frame(height: 1)
-                                .id("lingshu-chat-bottom")
-                        }
-                        .padding(.vertical, 6)
-                        .padding(.horizontal, 2)
-                    }
-                    // 初始就锚在底部：让 LazyVStack 在出现时就 realize 底部内容、直接显示最近消息——
-                    // 否则切到对话 Tab 是空白、要手动滚一下才"长出"历史记录（LazyVStack 懒加载坑）。
-                    .defaultScrollAnchor(.bottom)
-                    .onAppear {
-                        lastChatBottomSignature = chatBottomSignature(state.chatMessages)
-                        // 滚到最后一条**真实消息**（而非 1px 占位 spacer）：强制 realize 懒加载行。
-                        DispatchQueue.main.async {
-                            if let lastID = state.chatMessages.last?.id {
-                                proxy.scrollTo(lastID, anchor: .bottom)
-                            } else {
-                                proxy.scrollTo("lingshu-chat-bottom", anchor: .bottom)
-                            }
-                        }
-                    }
-                    .onReceive(state.$chatMessages) { messages in
-                        let signature = chatBottomSignature(messages)
-                        guard signature != lastChatBottomSignature else { return }
-                        lastChatBottomSignature = signature
-
-                        DispatchQueue.main.async {
-                            withAnimation(.easeOut(duration: 0.18)) {
-                                proxy.scrollTo("lingshu-chat-bottom", anchor: .bottom)
-                            }
-                        }
-                    }
-                }
+            // 聊天列表抽成只订阅 state 的子视图：voice 的电平 @Published 在收音/播放时 ~20Hz 刷新,
+            // 若聊天列表随父视图(订阅 voice)一起重渲,markdown 气泡每秒重算 20 次→主线程过载→
+            // 滚动条上下抽搐 + TTS 卡顿。隔离后 voice 跳动不再触发聊天列表重渲(SwiftUI 见 state 未变即跳过)。
+            LingShuChatScroll(state: state)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
 
             LingShuPulseStrip(state: state)
@@ -78,11 +32,89 @@ struct LingShuDialogueSurface: View {
         }
     }
 
+}
+
+/// 聊天滚动列表——**只订阅 `state`**(不碰 voice/vision),把高频电平刷新与聊天重渲解耦。
+/// 自动滚到底:仅在最后一条消息真的变化(id/字数/loading)时才动画滚动,避免与内容增高竞争抽搐。
+private struct LingShuChatScroll: View {
+    @ObservedObject var state: LingShuState
+    @State private var lastChatBottomSignature = ""
+    /// 只渲染最近 N 条的**滑动窗口**:VStack 一次性 realize 全部 → 窗口必须有界,否则消息一多就卡。
+    /// 既避开 LazyVStack"行没滚进视野不渲染→空白"的坑,又把渲染量压住→滚动顺滑。"加载更早"按需扩窗。
+    @State private var windowSize = 40
+    private static let windowStep = 40
+
+    /// 当前窗口内的消息(最近 windowSize 条)。
+    private var windowed: ArraySlice<ChatMessage> { state.chatMessages.suffix(windowSize) }
+    private var hasOlder: Bool { state.chatMessages.count > windowSize || state.hasMoreColdChatHistory }
+
+    var body: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                VStack(spacing: 12) {
+                    if hasOlder {
+                        Button {
+                            windowSize += Self.windowStep
+                            if windowSize >= state.chatMessages.count { state.loadOlderChatHistoryIfNeeded() }
+                        } label: {
+                            Text("加载更早的对话")
+                                .font(.system(size: 11, weight: .medium))
+                                .foregroundStyle(.white.opacity(0.45))
+                                .padding(.vertical, 4)
+                        }
+                        .buttonStyle(.plain)
+                        .id("lingshu-chat-top")
+                    }
+
+                    ForEach(windowed) { message in
+                        ChatBubbleView(message: message, state: state)
+                    }
+
+                    Color.clear
+                        .frame(height: 1)
+                        .id("lingshu-chat-bottom")
+                }
+                .padding(.vertical, 6)
+                .padding(.horizontal, 2)
+            }
+            .defaultScrollAnchor(.bottom)
+            .onAppear {
+                lastChatBottomSignature = chatBottomSignature(state.chatMessages)
+                DispatchQueue.main.async {
+                    if let lastID = state.chatMessages.last?.id {
+                        proxy.scrollTo(lastID, anchor: .bottom)
+                    } else {
+                        proxy.scrollTo("lingshu-chat-bottom", anchor: .bottom)
+                    }
+                }
+            }
+            .onReceive(state.$chatMessages) { messages in
+                let signature = chatBottomSignature(messages)
+                guard signature != lastChatBottomSignature else { return }
+                lastChatBottomSignature = signature
+                // **不加动画**:对正在增长的(思考中/流式)最后一条做动画 scrollTo 会过冲再回弹=用户看到的"抽一下";
+                // 直接定位到最后一条真实消息底部,跟随增长平滑、不回弹。
+                DispatchQueue.main.async {
+                    if let lastID = messages.last?.id {
+                        proxy.scrollTo(lastID, anchor: .bottom)
+                    } else {
+                        proxy.scrollTo("lingshu-chat-bottom", anchor: .bottom)
+                    }
+                }
+            }
+            // 思考中:每次执行阶段(missionTitle)变化会让"思考中"气泡变高,但 chatMessages 没变→不会触发上面的
+            // 跟随。这里补一刀:最后一条是 loading 时,阶段一变就把它重新顶到底,保证"灵枢思考中"始终可见。
+            .onChange(of: state.missionTitle) { _ in
+                guard state.chatMessages.last?.isLoading == true, let lastID = state.chatMessages.last?.id else { return }
+                DispatchQueue.main.async { proxy.scrollTo(lastID, anchor: .bottom) }
+            }
+        }
+    }
+
     private func chatBottomSignature(_ messages: [ChatMessage]) -> String {
         guard let message = messages.last else { return "empty" }
         return "\(message.id.uuidString):\(message.text.count):\(message.isLoading)"
     }
-
 }
 
 /// 对话表面的运行脉搏条：状态速览的唯一入口，点击进入运行态。

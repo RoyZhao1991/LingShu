@@ -22,6 +22,7 @@ extension LingShuState {
         }
         let display = trimmed.isEmpty ? "[上传了 \(pendingAttachments.count) 个文件]" : trimmed
         appendTaskRecordMessage(recordID, actor: "你", role: "追问", kind: .user, text: display)
+        captureDesignFeedbackForDreaming(trimmed, recordID: recordID)   // 设计任务的追问/改进→dreaming 固化
         clearAttachments()
         runMainAgentTurn(prompt: combined, taskRecordID: recordID)
     }
@@ -38,6 +39,7 @@ extension LingShuState {
         let display = trimmed.isEmpty ? "[随纠正上传了 \(pendingAttachments.count) 个文件]" : trimmed
         appendTaskRecordMessage(recordID, actor: "你", role: "纠正", kind: .user, text: display)
         appendTrace(kind: .warning, actor: "干预", title: "用户中途纠正", detail: display)
+        captureDesignFeedbackForDreaming(trimmed, recordID: recordID)   // 设计任务的纠正→dreaming 固化
         missionStatus = "收到纠正,正在调整方向…"
         clearAttachments()
         let main = mainAgentSessionHolder

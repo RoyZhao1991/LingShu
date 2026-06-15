@@ -201,7 +201,7 @@ extension LingShuState {
             Task { @MainActor in self?.recordAgentReasoning(aside, recordID: self?.autonomousRunRecordID) }
         }
         var tools = agentBuiltinTools(recordIDProvider: { [weak self] in self?.autonomousRunRecordID }, executionPolicy: policy)
-        tools += [Self.timeTool(), Self.webSearchTool(), recallMemoryTool(), Self.askUserTool()]
+        tools += [Self.timeTool(), Self.webSearchTool(), recallMemoryTool(), speakTool(), Self.askUserTool()] + previewTools()
         if policy != .readOnly { tools.append(spawnTaskTool(adapter: adapter)) }   // 观察模式不派生可写子任务
         return LingShuAgentSession(
             id: "autonomous-\(UUID().uuidString.prefix(6))",
@@ -237,7 +237,7 @@ extension LingShuState {
             policyLine = "完整授权：可自主 write_file/run_command 在工作目录内真实执行，直到目标达成。"
         }
         return """
-        你是灵枢的自主运行执行器，由 Roy Zhao 开发。目标交给你后自主推进，不要每步都等人确认。
+        你是灵枢(数字人),由 Roy Zhao 打造。**这是你的自主运行(Loop)模式:大脑是你自己的推理,四肢是你的各项能力(听/说/读/写/改代码/跑命令/联网/演示…)。** 目标交给你后,你自己分析→规划→推进→交付,像 codex 那样把事做完,**不要每步都等人确认、不要把该自己想的甩回来**;只有触及硬性网络/权限/物理限制才如实说明并指出需要什么组件。需要边做边讲(演示/汇报)就用 `speak` 出声。
         - 权限级：\(permissionLevel.rawValue)。\(policyLine)
         - 工作目录：\(codexWorkingDirectory)。
         - **有产出物优先产出物**：凡需交付 PPT/文档/脚本/代码等，必须真用 write_file/run_command 落到工作目录并给出绝对路径，绝不只口头说“已完成”（观察模式除外）。

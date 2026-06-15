@@ -99,4 +99,34 @@ final class LingShuResourceRegistry: @unchecked Sendable {
         default:               return query
         }
     }
+
+    // MARK: - 内置开源兜底直链(联网搜索被限流 / 无直链时用)
+
+    /// 一条经核实的开源资源直链(GitHub raw 等):许可明确、可直接下载、魔数对得上。
+    struct CuratedSource: Sendable, Equatable {
+        let url: String
+        let name: String
+        let license: String
+        let tags: [String]
+    }
+
+    /// 内置一小套**已核实开源许可**的资源直链兜底——`acquire_resource` 联网搜不到/拿不到直链时用。
+    /// 现实:模板站多是 JS 页面/非直链、DuckDuckGo HTML 常被限流(实测返回 202);只有 GitHub raw 这类
+    /// 稳定可下。这里只放许可明确(MIT/CC0/Apache…)、实测可下且魔数校验通过的源。
+    /// 注:这是**兜底地板**(保证至少有个可用主题底),不是"找最美模板"——后者仍走 web_search/用户自带品牌模板。
+    static func curatedFallbackSources(forKind kind: String) -> [CuratedSource] {
+        switch kind {
+        case "pptx-template":
+            // python-pptx 自带的标准模板(MIT)。携带经典 Office 浅色主题(蓝 #4F81BD / Calibri),
+            // 经 generator 模板主题提取后,可把深色默认观感切成干净的浅色商务风(与内置 6 套配色互补)。
+            return [
+                .init(url: "https://raw.githubusercontent.com/scanny/python-pptx/master/src/pptx/templates/default.pptx",
+                      name: "office-neutral",
+                      license: "MIT (python-pptx)",
+                      tags: ["business", "report", "neutral", "office", "light"])
+            ]
+        default:
+            return []
+        }
+    }
 }

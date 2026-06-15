@@ -122,6 +122,31 @@ struct LingShuTaskExecutionArtifact: Identifiable, Codable, Equatable, Sendable 
     }
 }
 
+/// 代码交付任务的代码改动概览(右侧面板展示)——分支 + **未提交**改动文件;已提交的不统计(porcelain 本就只列未提交)。
+struct LingShuCodeChangeSummary: Codable, Equatable, Sendable {
+    var repoName: String
+    var branch: String
+    var files: [Change]
+
+    struct Change: Codable, Equatable, Sendable, Identifiable {
+        var id: String { path }
+        var status: String   // git porcelain 码:M=改 / A=增 / D=删 / ??=未跟踪 …
+        var path: String
+
+        /// 友好中文标签。
+        var label: String {
+            switch status.trimmingCharacters(in: .whitespaces).uppercased() {
+            case "M", "MM", "RM": return "修改"
+            case "A", "AM": return "新增"
+            case "D": return "删除"
+            case "R": return "重命名"
+            case "??": return "未跟踪"
+            default: return status
+            }
+        }
+    }
+}
+
 struct LingShuTaskExecutionRecord: Identifiable, Codable, Equatable, Sendable {
     var id: String
     var title: String
@@ -140,6 +165,8 @@ struct LingShuTaskExecutionRecord: Identifiable, Codable, Equatable, Sendable {
     var designScore: Double?
     /// 设计审计抓到的**失败点/待改进项**(低分页问题)。供 dreaming 从"失败"里学经验。
     var designIssues: [String]
+    /// 代码交付任务的代码改动概览(分支 + 未提交文件)。nil=非代码任务/工作目录非 git 仓/无未提交改动。
+    var codeChanges: LingShuCodeChangeSummary?
 
     enum CodingKeys: String, CodingKey {
         case id
@@ -156,6 +183,7 @@ struct LingShuTaskExecutionRecord: Identifiable, Codable, Equatable, Sendable {
         case plan
         case designScore
         case designIssues
+        case codeChanges
     }
 
     init(
@@ -172,7 +200,8 @@ struct LingShuTaskExecutionRecord: Identifiable, Codable, Equatable, Sendable {
         artifacts: [LingShuTaskExecutionArtifact] = [],
         plan: [LingShuPlanStep] = [],
         designScore: Double? = nil,
-        designIssues: [String] = []
+        designIssues: [String] = [],
+        codeChanges: LingShuCodeChangeSummary? = nil
     ) {
         self.id = id
         self.title = title
@@ -188,6 +217,7 @@ struct LingShuTaskExecutionRecord: Identifiable, Codable, Equatable, Sendable {
         self.plan = plan
         self.designScore = designScore
         self.designIssues = designIssues
+        self.codeChanges = codeChanges
     }
 
     init(from decoder: Decoder) throws {
@@ -206,6 +236,7 @@ struct LingShuTaskExecutionRecord: Identifiable, Codable, Equatable, Sendable {
         plan = try container.decodeIfPresent([LingShuPlanStep].self, forKey: .plan) ?? []
         designScore = try container.decodeIfPresent(Double.self, forKey: .designScore)
         designIssues = try container.decodeIfPresent([String].self, forKey: .designIssues) ?? []
+        codeChanges = try container.decodeIfPresent(LingShuCodeChangeSummary.self, forKey: .codeChanges)
     }
 
     static func create(prompt: String, now: Date = Date()) -> LingShuTaskExecutionRecord {

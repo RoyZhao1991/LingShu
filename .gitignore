@@ -27,3 +27,4 @@ ValidationArtifacts/document-local-*
 Resources/RuntimeConfig/*.token
 Resources/RuntimeConfig/*.secret
 Resources/RuntimeConfig/*secrets*.plist
+Drivers/LingShuAudioDriver/build/

@@ -41,25 +41,17 @@ struct LingShuAutonomousRunPanel: View {
     }
 
     private var idleBody: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 14) {
             Text("把当前输入框内容作为目标，先做环境检测、自检和动态规划；授权后再开始自主推进。")
                 .font(.system(size: 12.5, weight: .medium))
                 .foregroundStyle(.white.opacity(0.62))
                 .fixedSize(horizontal: false, vertical: true)
 
-            HStack(spacing: 12) {
-                permissionPicker
-                Button {
-                    state.prepareAutonomousRun()
-                } label: {
-                    Label("准备独立运行", systemImage: "sparkles")
-                        .font(.system(size: 12.5, weight: .bold))
-                        .foregroundStyle(Color.lingVoid)
-                        .frame(height: 32)
-                        .padding(.horizontal, 14)
-                        .background(Color.lingHolo, in: RoundedRectangle(cornerRadius: 8))
-                }
-                .buttonStyle(.plain)
+            permissionPicker
+
+            // 贾维斯式启动按钮:大、居中、充满科技感(旋转弧环 + 呼吸辉光,TimelineView 自驱不拖累状态)。
+            JarvisLaunchButton(title: "启动独立运行", subtitle: "AUTONOMOUS · 自主推进") {
+                state.prepareAutonomousRun()
             }
         }
     }
@@ -240,5 +232,100 @@ struct LingShuAutonomousRunPanel: View {
         case .completed: .green
         case .blocked: .red
         }
+    }
+}
+
+/// 贾维斯式独立运行启动按钮——大、居中、充满科技感:旋转弧环 + 呼吸辉光 + 扫光,全由 TimelineView 自驱
+/// (GPU 动画,不订阅状态对象、不触发列表重渲)。点按触发独立运行准备。
+struct JarvisLaunchButton: View {
+    let title: String
+    let subtitle: String
+    let action: () -> Void
+
+    @State private var hovering = false
+    @State private var pressed = false
+
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { timeline in
+            let t = timeline.date.timeIntervalSinceReferenceDate
+            let breathe = 0.5 + 0.5 * sin(t * 1.6)            // 0..1 呼吸
+            let spin = Angle(degrees: (t * 60).truncatingRemainder(dividingBy: 360))
+
+            Button(action: action) {
+                HStack(spacing: 14) {
+                    reactor(spin: spin, breathe: breathe)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(title)
+                            .font(.system(size: 16, weight: .heavy))
+                            .foregroundStyle(Color.lingVoid)
+                        Text(subtitle)
+                            .font(.system(size: 9.5, weight: .bold, design: .monospaced))
+                            .foregroundStyle(Color.lingVoid.opacity(0.6))
+                            .tracking(2)
+                    }
+                    Spacer(minLength: 8)
+                    Image(systemName: "chevron.right.2")
+                        .font(.system(size: 14, weight: .black))
+                        .foregroundStyle(Color.lingVoid.opacity(0.75))
+                }
+                .padding(.horizontal, 20)
+                .frame(maxWidth: .infinity)
+                .frame(height: 64)
+                .background(
+                    LinearGradient(colors: [Color.lingHolo, Color.lingHoloAlt],
+                                   startPoint: .leading, endPoint: .trailing),
+                    in: RoundedRectangle(cornerRadius: 16, style: .continuous)
+                )
+                .overlay {  // 扫光:一道竖向高光横扫
+                    GeometryReader { geo in
+                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                            .fill(LinearGradient(colors: [.clear, .white.opacity(0.28), .clear],
+                                                 startPoint: .leading, endPoint: .trailing))
+                            .frame(width: geo.size.width * 0.35)
+                            .offset(x: -geo.size.width * 0.6 + geo.size.width * 1.2 * breathe)
+                            .blendMode(.screen)
+                    }
+                    .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                    .allowsHitTesting(false)
+                }
+                .overlay {
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .stroke(Color.white.opacity(0.35 + 0.25 * breathe), lineWidth: 1)
+                }
+                .shadow(color: Color.lingHolo.opacity(0.45 + 0.35 * breathe),
+                        radius: hovering ? 26 : 18, y: 4)
+                .scaleEffect(pressed ? 0.97 : (hovering ? 1.015 : 1.0))
+            }
+            .buttonStyle(.plain)
+            .onHover { hovering = $0 }
+            .animation(.easeOut(duration: 0.18), value: hovering)
+            .animation(.easeOut(duration: 0.12), value: pressed)
+            .simultaneousGesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { _ in pressed = true }
+                    .onEnded { _ in pressed = false }
+            )
+        }
+        .frame(height: 64)
+    }
+
+    /// 左侧"弧反应堆":同心旋转弧 + 中心电源图标(贾维斯启动键意象)。
+    private func reactor(spin: Angle, breathe: Double) -> some View {
+        ZStack {
+            Circle().stroke(Color.lingVoid.opacity(0.30), lineWidth: 2).frame(width: 38, height: 38)
+            Circle().trim(from: 0, to: 0.28)
+                .stroke(Color.lingVoid.opacity(0.85), style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
+                .frame(width: 38, height: 38)
+                .rotationEffect(spin)
+            Circle().trim(from: 0.5, to: 0.7)
+                .stroke(Color.lingVoid.opacity(0.6), style: StrokeStyle(lineWidth: 2, lineCap: .round))
+                .frame(width: 28, height: 28)
+                .rotationEffect(-spin * 1.4)
+            Image(systemName: "power")
+                .font(.system(size: 15, weight: .black))
+                .foregroundStyle(Color.lingVoid)
+                .opacity(0.75 + 0.25 * breathe)
+        }
+        .frame(width: 40, height: 40)
     }
 }

@@ -7,6 +7,55 @@ import Foundation
 @MainActor
 extension LingShuState {
 
+    // MARK: - 从用户反馈学(子线程纠正 → dreaming 设计经验,真正有意义的进化)
+    //
+    // 用户在任务窗口给的纠正/追问是**最高信号的改进点**(他亲眼看了产出物)。把它收进该设计任务记录,
+    // 并**立即**(不等空闲)走 dreaming 蒸馏进 DesignKB 设计经验 overlay,下次做 PPT 即遵守——
+    // 让"用户说过一次的问题不再犯"。只对设计/PPT 任务捕获;红线仍由 consolidator 的 sanitizePromptOnly 守。
+
+    /// 捕获用户对某条**设计任务**的纠正,记进记录的 designIssues(标注「用户反馈:」),并立即固化进设计经验。
+    func captureDesignFeedbackForDreaming(_ feedback: String, recordID: String?) {
+        let text = feedback.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty, let recordID,
+              let idx = taskExecutionRecords.firstIndex(where: { $0.id == recordID }) else { return }
+        let record = taskExecutionRecords[idx]
+        let isDesign = record.designScore != nil
+            || LingShuDreamingConsolidator.domain(for: record.prompt)?.domain == "presentation"
+        guard isDesign else { return }   // 非设计任务的纠正不进设计经验
+        taskExecutionRecords[idx].designIssues.append("用户反馈: " + String(text.prefix(140)))
+        persistTaskExecutionRecords()
+        appendTrace(kind: .model, actor: "固化", title: "收录用户设计反馈", detail: "据此 dreaming 提炼设计铁律,下次 PPT 生效:\(text.prefix(40))")
+        Task { @MainActor [weak self] in await self?.learnDesignFeedbackNow() }   // 立即固化,用户要它真生效
+    }
+
+    /// 立即把已收集的设计反馈/评分蒸馏进 DesignKB 设计经验(绕过空闲节流;用户反馈是高信号,1 条即可固化)。
+    func learnDesignFeedbackNow() async {
+        let designSamples: [LingShuDreamingConsolidator.DesignSample] = taskExecutionRecordLookup.compactMap { record in
+            let isDesign = record.designScore != nil
+                || LingShuDreamingConsolidator.domain(for: record.prompt)?.domain == "presentation"
+            guard isDesign, !(record.designIssues.isEmpty && record.designScore == nil) else { return nil }
+            return .init(prompt: record.prompt, score: record.designScore ?? 0.7,
+                         liked: taskRecordFeedback[record.id], issues: record.designIssues)
+        }
+        guard !designSamples.isEmpty else { return }
+        let adapter = makeAgentModelAdapter()
+        let distill: @Sendable (String) async -> String = { prompt in
+            let session = LingShuAgentSession(
+                id: "dream-fb-\(UUID().uuidString.prefix(6))",
+                system: "你是经验固化器,只输出提炼后的要点,不写任何可执行代码/脚本。",
+                tools: [], model: adapter, maxTurns: 1
+            )
+            if case .completed(let text) = await session.send(prompt) { return LingShuReasoningText.stripThinkTags(text) }
+            return ""
+        }
+        // 用户反馈是高信号 → minSamples=1 即可固化(不必凑够 3 条)。
+        if let insights = await LingShuDreamingConsolidator.consolidateDesignInsights(samples: designSamples, minSamples: 1, distill: distill) {
+            LingShuDesignKB.writeDesignInsights(insights)
+            appendTrace(kind: .result, actor: "固化", title: "用户反馈已固化进 DesignKB",
+                        detail: "据用户设计反馈更新设计经验 overlay,下次做 PPT 即遵守(apply_skill 注入)。")
+        }
+    }
+
     /// 任务收尾后调用:满足空闲 + 节流则在后台静默触发一次离线固化(不阻塞当前流程)。
     func scheduleDreamingConsolidationIfIdle() {
         guard !hasActiveModelCall else { return }                  // 正在作答/执行 → 不打扰

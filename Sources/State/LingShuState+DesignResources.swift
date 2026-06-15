@@ -92,28 +92,41 @@ extension LingShuState {
         }
     }
 
-    /// 查本地 → 联网取 → 校验入库。返回给模型的说明(含本地路径)。
+    /// 查本地 → 联网取 → 内置开源兜底 → 校验入库。返回给模型的说明(含本地路径)。
     nonisolated static func acquireResource(kind: String, query: String) async -> String {
         let registry = LingShuResourceRegistry.shared
         if let hit = registry.lookup(kind: kind, query: query).first {
             return "本地资源库已有「\(kind)」:\(hit.localPath)(\(hit.name))。直接拿它做底/参考,别再联网。"
         }
         let exts = LingShuResourceRegistry.allowedExtensions(forKind: kind)
-        let links = await webSearchLinks(LingShuResourceRegistry.onlineQuery(kind: kind, query: query))
-        guard !links.isEmpty else {
-            return "联网没搜到「\(kind)」候选(\(query))。本次先用内置方式产出(如 PPT 走 DesignKB 版式库),别空等。"
-        }
         let destDir = registry.resourceDir(forKind: kind)
         let slug = String(query.replacingOccurrences(of: " ", with: "-").prefix(24))
+        let baseName = slug.isEmpty ? kind : slug
+        let tags = query.lowercased().split(whereSeparator: { " ,，、/".contains($0) }).map(String.init)
+
+        // ① 联网搜候选(DuckDuckGo HTML 常被限流 → 可能空,不致命)。
+        let links = await webSearchLinks(LingShuResourceRegistry.onlineQuery(kind: kind, query: query))
         for link in links.prefix(6) {
-            if let path = await downloadResourceCandidate(link, allowedExts: exts, into: destDir, name: "\(slug.isEmpty ? kind : slug)-\(UUID().uuidString.prefix(4))") {
-                registry.register(kind: kind, name: slug.isEmpty ? kind : slug,
-                                  tags: query.lowercased().split(whereSeparator: { " ,，、/".contains($0) }).map(String.init),
+            if let path = await downloadResourceCandidate(link, allowedExts: exts, into: destDir, name: "\(baseName)-\(UUID().uuidString.prefix(4))") {
+                registry.register(kind: kind, name: baseName, tags: tags,
                                   localPath: path, source: link.absoluteString, license: "web(未核实许可,注意版权)")
                 return "已联网获取「\(kind)」并入库:\(path)(来源 \(link.host ?? "web"))。下次同类直接复用——请拿它做底/参考再产出。"
             }
         }
-        return "联网找到了页面但没拿到可直接下载的「\(kind)」文件。本次先用内置方式产出,别空等。"
+
+        // ② 兜底:内置一小套已核实许可的开源直链(GitHub raw 等)。搜索被限流/无直链时保证至少拿到可用底。
+        for src in LingShuResourceRegistry.curatedFallbackSources(forKind: kind) {
+            guard let url = URL(string: src.url) else { continue }
+            if let path = await downloadAndValidate(url, allowedExts: exts, into: destDir, name: "\(baseName)-\(src.name)") {
+                registry.register(kind: kind, name: src.name, tags: tags + src.tags,
+                                  localPath: path, source: src.url, license: src.license)
+                return "已用内置开源兜底源获取「\(kind)」并入库:\(path)(\(src.name),\(src.license))。拿它做底/参考再产出。"
+            }
+        }
+
+        return links.isEmpty
+            ? "联网与内置兜底都没拿到「\(kind)」(\(query))。本次先用内置方式产出(如 PPT 走 DesignKB 版式库/配色),别空等。"
+            : "联网找到了页面但没拿到可下载的「\(kind)」文件,内置兜底也未命中。本次先用内置方式产出,别空等。"
     }
 
     /// 下载候选:链接本身是目标文件就下;否则抓页面找第一个目标扩展名的直链再下。校验类型/体积/魔数(只收数据/素材)。

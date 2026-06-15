@@ -30,7 +30,31 @@ final class DesignReviewTests: XCTestCase {
         XCTAssertTrue(LingShuState.parseDesignIssue("score=0.9 OK").contains("OK"))
     }
 
+    func testImageJudgedIrrelevant() {
+        XCTAssertTrue(LingShuState.imageJudgedIrrelevant("score=0.8\nissue=OK\nrelevant=no"))
+        XCTAssertTrue(LingShuState.imageJudgedIrrelevant("这页配图不相关,是一张风景照"))
+        XCTAssertFalse(LingShuState.imageJudgedIrrelevant("score=0.8\nissue=OK\nrelevant=yes"), "相关不应判跑题")
+        XCTAssertFalse(LingShuState.imageJudgedIrrelevant("score=0.8\nissue=OK\nrelevant=na"), "无配图(na)不算跑题")
+        XCTAssertFalse(LingShuState.imageJudgedIrrelevant("排版整洁,配图切题"), "正常描述不应误判")
+    }
+
     // MARK: Phase C — 设计经验自进化(从评分提炼,红线净化)
+
+    func testUserFeedbackConsolidatesWithSingleSample() async {
+        // 用户反馈是高信号:minSamples=1 即可固化;反馈点必须进蒸馏提示(下次 PPT 遵守)。
+        let samples = [
+            Dream.DesignSample(prompt: "做电池科普 ppt", score: 0.8, liked: nil,
+                               issues: ["用户反馈: 深色底上黑色图标看不清", "用户反馈: 配图是无关的笔记本电脑"])
+        ]
+        // 蒸馏闭包回显收到的提示,据此断言用户反馈点确实进了提示(再返回固化要点)。
+        let insights = await Dream.consolidateDesignInsights(samples: samples, minSamples: 1) { prompt in
+            XCTAssertTrue(prompt.contains("用户反馈"), "蒸馏提示应纳入用户反馈点")
+            XCTAssertTrue(prompt.contains("黑色图标看不清") || prompt.contains("无关的笔记本"), "具体反馈应在提示里")
+            return "- 深色主题图标一律用亮色,禁用近黑色\n- 配图必须切题,抽象主题宁用图标不配照片"
+        }
+        XCTAssertNotNil(insights, "单条用户反馈也应能固化")
+        XCTAssertTrue(insights!.contains("亮色"))
+    }
 
     func testConsolidateDesignInsightsNeedsEnoughSamples() async {
         let few = [Dream.DesignSample(prompt: "做ppt", score: 0.8, liked: nil, issues: [])]

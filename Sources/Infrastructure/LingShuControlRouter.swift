@@ -224,6 +224,16 @@ final class LingShuControlRouter {
             "inputSchema": ["type": "object", "properties": [:] as [String: Any]]
         ],
         [
+            "name": "meeting_converse_start",
+            "description": "开始会议端到端对话:听会议(系统音频→ASR)→ 灵枢自动应答(经 agent 全能力,可对话/可演示 PPT)→ TTS 播出(配虚拟麦回到会议)。需屏幕录制权限。",
+            "inputSchema": ["type": "object", "properties": [:] as [String: Any]]
+        ],
+        [
+            "name": "meeting_converse_stop",
+            "description": "结束会议端到端对话(停止听+应答)。",
+            "inputSchema": ["type": "object", "properties": [:] as [String: Any]]
+        ],
+        [
             "name": "agent_demo_start",
             "description": "演示 agent 编排骨干:并发派生两条隔离子会话(A 直接完成、B 中途卡住提问),返回统一账本 + 主动推送 + 在跑/排队数。展示真并行/隔离/卡住汇报。",
             "inputSchema": ["type": "object", "properties": [:] as [String: Any]]
@@ -383,6 +393,12 @@ final class LingShuControlRouter {
             return (jsonText(LingShuSystemAudioCapture.shared.statusSnapshot), false)
         case "meeting_get_transcript":
             return (jsonText(LingShuMeetingASR.shared.statusSnapshot), false)
+        case "meeting_converse_start":
+            let msg = await state.startMeetingConversation()
+            return (jsonText(["started": await state.isMeetingConversationActive, "message": msg]), false)
+        case "meeting_converse_stop":
+            let msg = await state.stopMeetingConversation()
+            return (jsonText(["stopped": !(await state.isMeetingConversationActive), "message": msg]), false)
         case "agent_demo_start":
             return (jsonText(await runAgentDemo()), false)
         case "agent_resume":
@@ -507,6 +523,10 @@ final class LingShuControlRouter {
             "feedback": state.taskRecordFeedback[record.id].map { $0 ? "up" : "down" } ?? "none",
             "plan": record.plan.map { ["title": $0.title, "status": $0.status.rawValue] },
             "designScore": record.designScore as Any,
+            "codeChanges": record.codeChanges.map { cc in
+                ["repoName": cc.repoName, "branch": cc.branch,
+                 "files": cc.files.map { ["status": $0.status, "label": $0.label, "path": $0.path] }]
+            } as Any,
             "artifacts": record.artifacts.map { ["title": $0.title, "location": $0.location, "operation": ($0.operation ?? .created).rawValue] },
             "messages": record.messages.map { message -> [String: Any] in
                 var object: [String: Any] = ["id": message.id, "actor": message.actor, "role": message.role, "kind": message.kind.rawValue, "text": message.text]

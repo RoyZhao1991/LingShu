@@ -9,7 +9,7 @@
 图片走 PIL 等比裁切填充(不拉伸);图标取 DesignKB/icons;图表用 python-pptx 原生 chart。
 设计是数据驱动的:换 palette / 调 layout 都不动这段代码 —— 这是自进化的基础。
 """
-import sys, json, os, tempfile
+import sys, json, os, tempfile, zipfile, re
 
 from pptx import Presentation
 from pptx.util import Inches, Pt, Emu
@@ -30,6 +30,72 @@ def load_json(path, default):
     except Exception:
         return default
 
+# ---------- 模板主题提取(让"以模板为底"真正改变观感) ----------
+# 给了 template 时,不再只继承母版——从模板 theme1.xml 提取配色 + 字体,推导成生成器用的
+# palette,让全篇采用模板自身的品牌色/字体(这才是"参考模板"的意义)。提取失败回退 DesignKB 配色。
+_CJK_FONTS = ('pingfang', 'yahei', 'source han', 'noto sans cjk', 'noto serif cjk',
+              'simhei', 'simsun', 'songti', 'heiti', 'jhenghei', 'hiragino', 'kai', 'fangsong')
+
+def _lum(hexc):
+    c = hexc.lstrip('#')
+    r, g, b = int(c[0:2], 16), int(c[2:4], 16), int(c[4:6], 16)
+    return (0.299 * r + 0.587 * g + 0.114 * b) / 255.0
+
+def _mix(a, b, t):
+    """按 t∈[0,1] 在两个 #RRGGBB 间线性插值。"""
+    a, b = a.lstrip('#'), b.lstrip('#')
+    return '#' + ''.join('%02X' % round(int(a[i:i+2], 16) * (1 - t) + int(b[i:i+2], 16) * t) for i in (0, 2, 4))
+
+def extract_template_theme(path):
+    """从模板 .pptx 的 theme1.xml 抽 clrScheme + fontScheme,推导 {palette, fonts}。失败/无主题返回 None。"""
+    try:
+        with zipfile.ZipFile(path) as z:
+            name = next((n for n in z.namelist() if re.match(r'ppt/theme/theme\d+\.xml$', n)), None)
+            if not name:
+                return None
+            xml = z.read(name).decode('utf-8', 'ignore')
+    except Exception:
+        return None
+
+    def clr(tag):
+        m = re.search(r'<a:%s>\s*<a:(?:srgbClr val="([0-9A-Fa-f]{6})"|sysClr val="\w+" lastClr="([0-9A-Fa-f]{6})")' % tag, xml)
+        return ('#' + (m.group(1) or m.group(2)).upper()) if m else None
+
+    dk1, lt1 = clr('dk1') or '#000000', clr('lt1') or '#FFFFFF'
+    dk2, lt2 = clr('dk2'), clr('lt2')
+    a1, a2 = clr('accent1'), clr('accent2')
+    if not a1:
+        return None  # 没有主强调色 → 主题信息不足,回退 DesignKB
+    # 标准 office 约定:lt1↔背景、dk1↔正文。按背景亮度判明暗主题。
+    bg, ink = lt1, dk1
+    if _lum(bg) < 0.5:
+        mode = 'dark'; surface = _mix(bg, '#FFFFFF', 0.08); muted = _mix(ink, bg, 0.45)
+    else:
+        mode = 'light'; surface = _mix(bg, a1, 0.05); muted = _mix(ink, bg, 0.5)
+    pal = {'bg': bg, 'surface': surface, 'ink': ink, 'muted': muted,
+           'accent': a1, 'accent2': a2 or dk2 or a1, 'mode': mode}
+
+    # 字体:仅当能渲染中文(ea 或本身是 CJK 字体)才采用,否则保留 CJK 安全默认(避免中文掉字)。
+    def pick_font(block_tag):
+        blk = re.search(r'<a:%sFont>(.*?)</a:%sFont>' % (block_tag, block_tag), xml, re.S)
+        if not blk:
+            return None
+        body = blk.group(1)
+        ea = (re.search(r'<a:ea typeface="([^"]*)"', body) or [None, ''])[1]
+        latin = (re.search(r'<a:latin typeface="([^"]*)"', body) or [None, ''])[1]
+        for cand in (ea, latin):
+            if cand and any(k in cand.lower() for k in _CJK_FONTS):
+                return cand
+        return None
+
+    fonts = {}
+    tf, bf = pick_font('major'), pick_font('minor')
+    if tf:
+        fonts['title'] = tf
+    if bf:
+        fonts['body'] = bf
+    return {'palette': pal, 'fonts': fonts}
+
 # ---------- DesignKB ----------
 SRC = sys.argv[1] if len(sys.argv) > 1 else 'slides.json'
 OUT = sys.argv[2] if len(sys.argv) > 2 else '演示.pptx'
@@ -48,23 +114,44 @@ theme = data.get('theme', 'midnight')
 pal_id = theme.get('palette') if isinstance(theme, dict) else theme
 PAL = palettes.get(pal_id) or (list(palettes.values())[0] if palettes else {
     "bg": "#0B1220", "surface": "#131C2E", "ink": "#F2FFFD", "muted": "#9FB8B4", "accent": "#25F4E4", "accent2": "#7C5CFF", "mode": "dark"})
+TITLE_FONT = (typo.get('pairings', [{}])[0]).get('title_font', 'PingFang SC')
+BODY_FONT = (typo.get('pairings', [{}])[0]).get('body_font', 'PingFang SC')
+
+# 模板主题接管=**显式 opt-in**(默认尊重 DesignKB 配色——它本身就是打磨好的专业主题,通常比联网套来的
+# 通用 .pptx 好看;实测自动套用通用 Office 模板会把深色专业风变成寡淡白底,反而更差)。
+# 只有显式要求(theme=="template" 或 {"palette_source":"template"})才用模板自身配色/字体,通常用于
+# "以用户自带品牌模板为准"。普通 theme(如 midnight)一律按 DesignKB 配色,不被模板覆盖。
+_tmpl_path = data.get('template')
+_want_tmpl_theme = (isinstance(theme, str) and theme.strip().lower() == 'template') \
+    or (isinstance(theme, dict) and theme.get('palette_source') == 'template')
+_tmpl_theme = extract_template_theme(_tmpl_path) if (_want_tmpl_theme and _tmpl_path and os.path.exists(_tmpl_path)) else None
+THEME_SOURCE = pal_id or 'default'
+if _tmpl_theme:
+    PAL = _tmpl_theme['palette']
+    TITLE_FONT = _tmpl_theme['fonts'].get('title', TITLE_FONT)
+    BODY_FONT = _tmpl_theme['fonts'].get('body', BODY_FONT)
+    THEME_SOURCE = 'template'
+
 BG, SURFACE, INK, MUTED = _hex(PAL['bg']), _hex(PAL['surface']), _hex(PAL['ink']), _hex(PAL['muted'])
 ACCENT, ACCENT2 = _hex(PAL['accent']), _hex(PAL.get('accent2', PAL['accent']))
 DARK_MODE = PAL.get('mode', 'dark') == 'dark'
-TITLE_FONT = (typo.get('pairings', [{}])[0]).get('title_font', 'PingFang SC')
-BODY_FONT = (typo.get('pairings', [{}])[0]).get('body_font', 'PingFang SC')
 
 SW = GRID.get('slide_w_in', 13.333); SH = GRID.get('slide_h_in', 7.5)
 M = GRID.get('margin_in', 0.9)
 
-# 模板底模式:slides.json 给了 "template" 且文件存在 → 以它为底(继承母版/主题/默认字体),清掉它自带的样例页;
-# 否则从空白起手。这样 acquire_resource 找来的专业模板能真正被"参考/做底"。
-_tmpl = data.get('template')
-if _tmpl and os.path.exists(_tmpl):
+# 模板底模式:给了 template 且文件存在 → 以它为底(继承母版,主题配色/字体已在上面提取并接管),
+# 清掉它自带的样例页;否则从空白起手。这样 acquire_resource 找来的专业模板能真正被"参考/做底"。
+if _tmpl_path and os.path.exists(_tmpl_path):
     try:
-        prs = Presentation(_tmpl)
+        prs = Presentation(_tmpl_path)
         _ids = prs.slides._sldIdLst
+        _RID = '{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id'
         for _s in list(_ids):
+            # 既要从 sldIdLst 摘掉,也要 drop 关系——否则样例页 part 残留,保存时与新页 slide1.xml 撞名(损坏文件)。
+            _rid = _s.get(_RID)
+            if _rid:
+                try: prs.part.drop_rel(_rid)
+                except Exception: pass
             _ids.remove(_s)   # 清掉模板自带样例页,只留母版/主题
     except Exception:
         prs = Presentation()
@@ -110,6 +197,16 @@ def title_pt(t):
     n = len(t or '')
     return sz('title', 32) if n <= 16 else (Pt(28) if n <= 26 else Pt(24))
 
+def _est_lines(text, width_in, font_pt):
+    """粗估文本在给定宽度(英寸)/字号(pt)下换行行数(CJK≈字号宽,ASCII≈0.55×)。用于动态排版防重叠。"""
+    if not text:
+        return 1
+    width_pt = max(1.0, width_in * 72.0)
+    w = 0.0
+    for ch in str(text):
+        w += font_pt * (0.55 if ord(ch) < 0x2E80 else 1.0)
+    return max(1, int((w + width_pt - 0.001) // width_pt))
+
 def place_image(s, path, l, t, w, h):
     """等比裁切填充目标区域(cover),不拉伸变形。失败→返回 False。"""
     if not path or not os.path.exists(path):
@@ -134,17 +231,18 @@ def place_image(s, path, l, t, w, h):
             return False
 
 def place_icon(s, name, l, t, size=0.42):
+    """放图标:**只用与背景对比的变体**(深色主题→白,浅色主题→深)。对比变体缺失就返回 False
+    交给调用方画亮色圆点兜底——绝不退用同色调图标(那会在深色底变成看不见的黑图标,曾被用户指出)。"""
     if not name:
         return False
     variant = 'white' if DARK_MODE else 'dark'
-    for cand in (f"{name}-{variant}.png", f"{name}.png"):
-        p = os.path.join(ICON_DIR, cand)
-        if os.path.exists(p):
-            try:
-                s.shapes.add_picture(p, Inches(l), Inches(t), Inches(size), Inches(size)); return True
-            except Exception:
-                return False
-    return False
+    p = os.path.join(ICON_DIR, f"{name}-{variant}.png")
+    if os.path.exists(p):
+        try:
+            s.shapes.add_picture(p, Inches(l), Inches(t), Inches(size), Inches(size)); return True
+        except Exception:
+            return False
+    return False   # 无对比变体 → 不硬塞同色图标,让调用方用 ACCENT 圆点(始终可见)
 
 def kicker(s, txt, l=M, t=0.62):
     rect(s, l, t + 0.07, 0.32, 0.06, fill=ACCENT)
@@ -170,10 +268,16 @@ def L_cover(s, d, **k):
     title = str(d.get('title', '标题'))
     base = SCALE.get('cover_title', 54)
     tsize = base if len(title) <= 8 else (44 if len(title) <= 13 else (36 if len(title) <= 19 else 30))
-    text(s, M, SH * 0.34, text_w, 2.4, [(title, Pt(tsize), INK, True, TITLE_FONT)], anchor=MSO_ANCHOR.TOP)
-    y = SH * 0.34 + 1.9
+    # 标题占高随字号/行数估算,副标题紧随其后(动态推进 y,杜绝长副标题换行压住 tagline)。
+    title_lines = max(1, _est_lines(title, text_w, tsize))
+    text(s, M, SH * 0.34, text_w, 0.46 * tsize / 32 * title_lines + 0.4, [(title, Pt(tsize), INK, True, TITLE_FONT)], anchor=MSO_ANCHOR.TOP)
+    y = SH * 0.34 + 0.5 * (tsize / 32.0) * title_lines + 0.5
     if d.get('subtitle'):
-        text(s, M, y, text_w, 0.8, [(d['subtitle'], sz('cover_subtitle', 22), ACCENT, True, BODY_FONT)]); y += 0.7
+        sub = str(d['subtitle'])
+        ssize = 22 if len(sub) <= 14 else (18 if len(sub) <= 26 else 16)
+        slines = max(1, _est_lines(sub, text_w, ssize))
+        text(s, M, y, text_w, 0.34 * slines + 0.2, [(sub, Pt(ssize), ACCENT, True, BODY_FONT)])
+        y += 0.32 * slines + 0.28
     if d.get('tagline'):
         text(s, M, y, text_w, 1.2, [(d['tagline'], Pt(15), MUTED, False, BODY_FONT)])
 
@@ -263,13 +367,18 @@ def L_quote(s, d, **k):
     if d.get('attrib'):
         text(s, M, SH * 0.78, SW - 2 * M, 0.6, [("— " + d['attrib'], Pt(16), ACCENT, True, BODY_FONT)])
 
+def _strip_lead_num(t):
+    """去掉条目开头已有的序号前缀(01 / 1. / 1、 / 1) 等),避免与版式自带编号重复(曾"01 01 定位")。"""
+    s = str(t)
+    return re.sub(r'^\s*\d{1,2}(?:[.,、)\]：:．-]\s*|\s+)', '', s).strip() or s
+
 def L_agenda(s, d, **k):
     kicker(s, '目录')
     text(s, M, 1.15, SW - 2 * M, 1.2, [(d.get('title', '目录'), title_pt(d.get('title') or '目录'), INK, True, TITLE_FONT)])
     items = d.get('items', []); y = 2.6
     for i, it in enumerate(items[:6]):
         text(s, M, y, 1.0, 0.6, [(f"{i+1:02d}", Pt(22), ACCENT, True, TITLE_FONT)])
-        text(s, M + 1.0, y + 0.03, SW - 2 * M - 1.0, 0.6, [(str(it), Pt(19), INK, False, BODY_FONT)], anchor=MSO_ANCHOR.MIDDLE)
+        text(s, M + 1.0, y + 0.03, SW - 2 * M - 1.0, 0.6, [(_strip_lead_num(it), Pt(19), INK, False, BODY_FONT)], anchor=MSO_ANCHOR.MIDDLE)
         y += 0.72
 
 def L_chart(s, d, **k):
@@ -302,8 +411,19 @@ def L_closing(s, d, **k):
     if d.get('bullets'):
         text(s, M, SH * 0.32 + 1.5, SW - 2 * M, 1.6,
              [(("→ " + str(b)), Pt(18), MUTED, False, BODY_FONT) for b in d['bullets']], space=6)
-    if d.get('contact'):
-        text(s, M, SH - 1.15, SW - 2 * M, 0.8, [(d['contact'], Pt(16), BG, True, BODY_FONT)])
+    contact = _clean_contact(d.get('contact'))
+    if contact:
+        text(s, M, SH - 1.15, SW - 2 * M, 0.8, [(contact, Pt(16), BG, True, BODY_FONT)])
+
+def _clean_contact(c):
+    """收尾页联系信息防泄露:绝不渲染绝对文件路径/工作目录(曾把 /Users/example/app 当 contact 印上去)。"""
+    c = str(c or '').strip()
+    if not c:
+        return ''
+    if '/Users/' in c or c.startswith('/') or '\\' in c or '\\\\' in c:
+        kept = [p for p in re.split(r'\s+', c) if not (p.startswith('/') or '/Users/' in p or '\\' in p)]
+        return ' '.join(kept).strip()
+    return c
 
 LAYOUTS = {
     'cover': L_cover, 'section': L_section, 'bullets': L_bullets, 'bignumber': L_bignumber,
@@ -328,4 +448,4 @@ for i, d in enumerate(slides, 1):
         footer(s, i, total, deck_title)
 
 prs.save(OUT)
-print(f"OK pages={total} palette={pal_id} layouts={','.join(used)}")
+print(f"OK pages={total} theme={THEME_SOURCE} palette={pal_id} layouts={','.join(used)}")

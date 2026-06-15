@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleDevelopmentRegion</key>
+    <string>en</string>
+    <key>CFBundleExecutable</key>
+    <string>LingShuAudioDriver</string>
+    <key>CFBundleIdentifier</key>
+    <string>com.zhaoroy.lingshu.audiodriver</string>
+    <key>CFBundleName</key>
+    <string>LingShuAudioDriver</string>
+    <key>CFBundlePackageType</key>
+    <string>BNDL</string>
+    <key>CFBundleShortVersionString</key>
+    <string>1.0</string>
+    <key>CFBundleVersion</key>
+    <string>1</string>
+    <!-- AudioServerPlugIn 类型 UUID(固定)→ 灵枢工厂 UUID -->
+    <key>CFPlugInFactories</key>
+    <dict>
+        <key>D1F3A7C2-9B4E-4E2A-8C71-6F2B1A0E5C90</key>
+        <string>LingShuAudioDriver_Create</string>
+    </dict>
+    <key>CFPlugInTypes</key>
+    <dict>
+        <key>443ABAB8-E7B3-491A-B985-BEB9187030DB</key>
+        <array>
+            <string>D1F3A7C2-9B4E-4E2A-8C71-6F2B1A0E5C90</string>
+        </array>
+    </dict>
+</dict>
+</plist>

@@ -187,6 +187,10 @@ struct TaskArtifactFilesPanel: View {
     let record: LingShuTaskExecutionRecord
     let lineageRecords: [LingShuTaskExecutionRecord]
 
+    /// 两个独立模块:产出物(文件) / 代码改动(git)。代码改动 tab 仅在有代码改动时出现。
+    private enum Tab { case artifacts, code }
+    @State private var tab: Tab = .artifacts
+
     private var allArtifacts: [(artifact: LingShuTaskExecutionArtifact, fromHistory: Bool)] {
         let current = record.artifacts.map { (artifact: $0, fromHistory: false) }
         let historical = lineageRecords
@@ -196,46 +200,106 @@ struct TaskArtifactFilesPanel: View {
         return (current + historical).sorted { $0.artifact.createdAt > $1.artifact.createdAt }
     }
 
+    private var hasCode: Bool { record.codeChanges != nil }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 8) {
-                Image(systemName: "folder.fill")
-                    .font(.system(size: 12, weight: .bold))
-                    .foregroundStyle(Color.lingHolo)
-                Text("任务产出文件")
-                    .font(.system(size: 12.5, weight: .bold))
-                    .foregroundStyle(.white.opacity(0.92))
+            // 顶部 tab 栏:有代码改动才显示"代码改动"页;否则只有"产出物"(非代码需求连这页都不需要)。
+            HStack(spacing: 4) {
+                tabButton("产出物", systemImage: "folder.fill", count: allArtifacts.count, active: tab == .artifacts) { tab = .artifacts }
+                if hasCode {
+                    tabButton("代码改动", systemImage: "arrow.triangle.branch", count: record.codeChanges?.files.count ?? 0, active: tab == .code) { tab = .code }
+                }
                 Spacer()
-                Text("\(allArtifacts.count)")
-                    .font(.system(size: 11, weight: .bold, design: .monospaced))
-                    .foregroundStyle(.white.opacity(0.42))
             }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 12)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 9)
             .background(Color.black.opacity(0.5))
 
-            if allArtifacts.isEmpty {
-                VStack(spacing: 10) {
-                    Image(systemName: "tray")
-                        .font(.system(size: 24, weight: .medium))
-                        .foregroundStyle(.white.opacity(0.22))
-                    Text("本任务还没有登记产出文件")
-                        .font(.system(size: 11.5, weight: .medium))
-                        .foregroundStyle(.white.opacity(0.38))
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 14) {
-                        // 按文件操作类型分组(对齐 codex):新增 / 修改。
-                        fileSection("新增", color: .lingHolo, entries: allArtifacts.filter { ($0.artifact.operation ?? .created) == .created })
-                        fileSection("修改", color: .lingHoloAlt, entries: allArtifacts.filter { $0.artifact.operation == .modified })
+            Group {
+                if tab == .code, let code = record.codeChanges {
+                    ScrollView { codeChangesBlock(code).padding(10) }
+                } else if allArtifacts.isEmpty {
+                    VStack(spacing: 10) {
+                        Image(systemName: "tray")
+                            .font(.system(size: 24, weight: .medium))
+                            .foregroundStyle(.white.opacity(0.22))
+                        Text("本任务还没有登记产出文件")
+                            .font(.system(size: 11.5, weight: .medium))
+                            .foregroundStyle(.white.opacity(0.38))
                     }
-                    .padding(10)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else {
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 14) {
+                            fileSection("新增", color: .lingHolo, entries: allArtifacts.filter { ($0.artifact.operation ?? .created) == .created })
+                            fileSection("修改", color: .lingHoloAlt, entries: allArtifacts.filter { $0.artifact.operation == .modified })
+                        }
+                        .padding(10)
+                    }
                 }
             }
         }
         .background(Color.black.opacity(0.28))
+        .onChange(of: hasCode) { _, has in if !has, tab == .code { tab = .artifacts } }
+    }
+
+    @ViewBuilder
+    private func tabButton(_ title: String, systemImage: String, count: Int, active: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 5) {
+                Image(systemName: systemImage).font(.system(size: 11, weight: .bold))
+                Text(title).font(.system(size: 12, weight: .bold))
+                Text("\(count)").font(.system(size: 10, weight: .bold, design: .monospaced)).opacity(0.6)
+            }
+            .foregroundStyle(active ? Color.lingHolo : .white.opacity(0.5))
+            .padding(.horizontal, 11).padding(.vertical, 6)
+            .background(active ? Color.lingHolo.opacity(0.12) : Color.clear, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+        }
+        .buttonStyle(.plain)
+    }
+
+    /// 代码改动块:当前分支 + 未提交改动文件(已提交的不在 porcelain 里 → 自然不统计)。
+    @ViewBuilder
+    private func codeChangesBlock(_ code: LingShuCodeChangeSummary) -> some View {
+        VStack(alignment: .leading, spacing: 7) {
+            HStack(spacing: 6) {
+                Image(systemName: "arrow.triangle.branch")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(Color.lingHoloAlt)
+                Text("代码改动")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(.white.opacity(0.6))
+                Spacer()
+                Text(code.branch)
+                    .font(.system(size: 10.5, weight: .bold, design: .monospaced))
+                    .foregroundStyle(Color.lingHoloAlt)
+                    .lineLimit(1).truncationMode(.middle)
+            }
+            Text("\(code.repoName) · \(code.files.count) 个未提交改动(已提交的不计)")
+                .font(.system(size: 10, weight: .medium))
+                .foregroundStyle(.white.opacity(0.4))
+            ForEach(code.files) { f in
+                HStack(spacing: 7) {
+                    Text(f.label)
+                        .font(.system(size: 9.5, weight: .bold, design: .monospaced))
+                        .foregroundStyle(f.label == "删除" ? .red.opacity(0.85) : (f.label == "新增" || f.label == "未跟踪" ? Color.lingHolo : Color.lingHoloAlt))
+                        .frame(width: 34, alignment: .leading)
+                    Text(f.path)
+                        .font(.system(size: 11, weight: .regular, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.82))
+                        .lineLimit(1).truncationMode(.middle)
+                        .textSelection(.enabled)
+                }
+            }
+        }
+        .padding(11)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.lingHoloAlt.opacity(0.06), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 9, style: .continuous)
+                .stroke(Color.lingHoloAlt.opacity(0.22), lineWidth: 0.8)
+        }
     }
 
     @ViewBuilder

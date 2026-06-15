@@ -27,6 +27,34 @@ final class TaskPlanTests: XCTestCase {
         XCTAssertTrue(LingShuState.parsePlanSteps("{\"steps\":[{\"title\":\"  \"}]}").isEmpty)
     }
 
+    /// 回归:不同模型对数组参数序列化形状不一,曾全部解析失败→"计划为空"→模型放弃计划(LOOP 失效)。
+    func testParsePlanStepsRobustToModelShapes() {
+        // ① steps 为纯字符串数组(只给标题)
+        let strArr = LingShuState.parsePlanSteps("{\"steps\":[\"找模板\",\"写 slides.json\",\"跑生成器\"]}")
+        XCTAssertEqual(strArr.count, 3)
+        XCTAssertEqual(strArr[0].title, "找模板")
+        XCTAssertEqual(strArr[0].status, .pending)
+
+        // ② steps 是被当成字符串又编码了一遍的数组
+        let nested = LingShuState.parsePlanSteps("{\"steps\":\"[{\\\"title\\\":\\\"步骤一\\\",\\\"status\\\":\\\"in_progress\\\"}]\"}")
+        XCTAssertEqual(nested.count, 1)
+        XCTAssertEqual(nested[0].status, .inProgress)
+
+        // ③ 顶层直接是对象数组(没有 steps 外壳)
+        let topArr = LingShuState.parsePlanSteps("[{\"title\":\"A\"},{\"title\":\"B\",\"status\":\"done\"}]")
+        XCTAssertEqual(topArr.count, 2)
+        XCTAssertEqual(topArr[1].status, .completed)
+
+        // ④ 换了键名(plan + step)
+        let altKeys = LingShuState.parsePlanSteps("{\"plan\":[{\"step\":\"准备\",\"status\":\"pending\"}]}")
+        XCTAssertEqual(altKeys.count, 1)
+        XCTAssertEqual(altKeys[0].title, "准备")
+
+        // ⑤ 顶层纯字符串数组
+        let topStr = LingShuState.parsePlanSteps("[\"一\",\"二\"]")
+        XCTAssertEqual(topStr.count, 2)
+    }
+
     func testFormatElapsed() {
         XCTAssertEqual(LingShuState.formatElapsed(8), "8秒")
         XCTAssertEqual(LingShuState.formatElapsed(59.4), "59秒")

@@ -1,4 +1,6 @@
 @preconcurrency import AVFoundation
+import AudioToolbox
+import CoreAudio
 import Foundation
 
 /// 流式 PCM 播放器：边收边播，首块音频一到就出声——豆包式超低延迟语音流的播放端。
@@ -32,10 +34,20 @@ final class LingShuStreamingPCMPlayer: @unchecked Sendable {
 
     func start() throws {
         guard !started else { return }
+        applyPreferredOutputDevice()   // 会议模式:把 TTS 定向到灵枢虚拟麦克风(否则走系统默认输出)
         engine.prepare()
         try engine.start()
         node.play()
         started = true
+    }
+
+    /// 若设置了首选输出设备(如虚拟麦),把引擎输出单元定向到它;否则用系统默认。
+    private func applyPreferredOutputDevice() {
+        guard var deviceID = LingShuAudioRouting.preferredOutputDeviceID,
+              let unit = engine.outputNode.audioUnit else { return }
+        _ = AudioUnitSetProperty(unit, kAudioOutputUnitProperty_CurrentDevice,
+                                 kAudioUnitScope_Global, 0, &deviceID,
+                                 UInt32(MemoryLayout<AudioDeviceID>.size))
     }
 
     var isPlaying: Bool {

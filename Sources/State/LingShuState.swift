@@ -18,6 +18,7 @@ private enum LingShuPreferenceDefaults {
 enum LingShuDialogueInputSource: Equatable {
     case typed
     case voice
+    case meeting   // 会议对方发言(系统音频→ASR)→ 灵枢应答经虚拟麦回到会议
     case plugin(String)
 
     var displayName: String {
@@ -26,6 +27,8 @@ enum LingShuDialogueInputSource: Equatable {
             return "文字输入"
         case .voice:
             return "语音转写"
+        case .meeting:
+            return "会议发言"
         case .plugin(let name):
             return name
         }
@@ -212,9 +215,18 @@ final class LingShuState: ObservableObject {
     @Published var pendingShellApproval: LingShuPendingShellApproval?
     /// 用户在本次会话里选了「完全授权」后置真：后续 run_command 不再逐条弹窗。
     var sessionShellAlwaysAllowed = false
+    /// 自发现高风险 skill 脚本的隔离表(运行期):materialize 时按 skillID 隔离清单填入,
+    /// key=脚本绝对路径、value=skillID + 风险点;命令引用它时强制弹审批(即便已"完全授权")。
+    var quarantinedScriptPaths: [String: (skillID: String, notes: [String])] = [:]
     var isRestoringChatHistory = false
     var chatHistoryPersistTask: Task<Void, Never>?
     var persistedConversationDigest = ""
+    /// 由根视图注入的语音管理器(供会议对话控制器经 MCP/UI 驱动 TTS / 读播放状态)。
+    weak var voiceManager: VoiceIOManager?
+    /// 会议端到端对话控制器:系统音频→ASR→agent→TTS→虚拟麦。`@Published` 供 UI 显示是否在会中。
+    @Published var meetingConversation = LingShuMeetingConversationController()
+    /// 文件预览中枢(灵枢的"眼睛+手"):大脑用四肢工具打开 PPT/PDF/Word/Excel 并翻页/滚动(演示/阅读)。
+    let previewController = LingShuPreviewController()
     /// 由根视图注入：返回当前实时态势感知上下文（无有效信号时返回空串）。
     var livePerceptionContextProvider: (() -> String)?
     /// 对话发生时按需刷新云端场景理解（根视图注册到感知网关）。

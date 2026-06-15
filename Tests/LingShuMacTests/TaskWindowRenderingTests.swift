@@ -59,3 +59,36 @@ final class TaskWindowRenderingTests: XCTestCase {
         XCTAssertTrue(pretty.contains("灵枢"))
     }
 }
+
+/// 代码交付任务的 git porcelain 解析:源码进代码块、交付物/素材排除、标签映射、重命名取新名、引号清理。
+final class CodeChangeSummaryTests: XCTestCase {
+    func testParsePorcelainKeepsSourceDropsDeliverables() {
+        let porcelain = """
+         M Sources/State/LingShuState.swift
+        A  Sources/New.swift
+        ?? 演示.pptx
+        ?? assets/cover.jpg
+         M report.pdf
+        ?? notes.md
+        """
+        let changes = LingShuState.parseGitPorcelain(porcelain)
+        let paths = changes.map(\.path)
+        XCTAssertTrue(paths.contains("Sources/State/LingShuState.swift"))
+        XCTAssertTrue(paths.contains("Sources/New.swift"))
+        XCTAssertTrue(paths.contains("notes.md"))
+        XCTAssertFalse(paths.contains("演示.pptx"), "交付物 pptx 不进代码块")
+        XCTAssertFalse(paths.contains("assets/cover.jpg"), "assets 素材不进代码块")
+        XCTAssertFalse(paths.contains("report.pdf"), "pdf 不进代码块")
+    }
+
+    func testParsePorcelainLabelsAndRename() {
+        let changes = LingShuState.parseGitPorcelain("R  old.swift -> Sources/new.swift\n D gone.swift")
+        XCTAssertEqual(changes.first(where: { $0.path == "Sources/new.swift" })?.label, "重命名")
+        XCTAssertEqual(changes.first(where: { $0.path == "gone.swift" })?.label, "删除")
+    }
+
+    func testParsePorcelainEmptyWhenCleanOrOnlyDeliverables() {
+        XCTAssertTrue(LingShuState.parseGitPorcelain("").isEmpty)
+        XCTAssertTrue(LingShuState.parseGitPorcelain("?? out.pptx\n?? assets/x.png").isEmpty, "只有交付物→代码块为空")
+    }
+}

@@ -53,6 +53,17 @@ if [ -d "$ROOT_DIR/Resources/DesignKB" ]; then
   ditto "$ROOT_DIR/Resources/DesignKB" "$RES_DIR/DesignKB"
 fi
 
+# 灵枢虚拟麦克风 HAL 驱动:随包交付,运行时由灵枢自安装(一次授权),不需用户手动操作。
+if [ -d "$ROOT_DIR/Drivers/LingShuAudioDriver" ]; then
+  echo "==> building + bundling 灵枢虚拟麦克风驱动"
+  if bash "$ROOT_DIR/Drivers/LingShuAudioDriver/build-driver.sh" >/dev/null 2>&1 \
+     && [ -d "$ROOT_DIR/Drivers/LingShuAudioDriver/build/LingShuAudioDriver.driver" ]; then
+    ditto "$ROOT_DIR/Drivers/LingShuAudioDriver/build/LingShuAudioDriver.driver" "$RES_DIR/LingShuAudioDriver.driver"
+  else
+    echo "   (驱动编译跳过/失败——虚拟麦后续在本机完善;不阻塞 app 构建)"
+  fi
+fi
+
 cat > "$CONTENTS/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

@@ -82,6 +82,20 @@ enum LingShuSkillLoader {
         return .init(profile: profile, triggers: triggers)
     }
 
+    /// 暴露候选 skill markdown 里**原始**(未过安全门)的自带脚本——供自发现(`LingShuSkillAcquisition`)
+    /// 在装之前先跑静态门 + LLM 风险审。无脚本小节返回 nil。注:`parse` 只在过门后才挂 bundledScript,
+    /// 所以判断"带不带脚本"必须看原始内容,不能看解析结果。
+    static func rawBundledScript(in markdown: String) -> String? {
+        var body = markdown
+        if markdown.hasPrefix("---") {
+            let parts = markdown.components(separatedBy: "---")
+            if parts.count >= 3 { body = parts[2...].joined(separator: "---") }
+        }
+        let sections = splitSections(body)
+        let raw = extractCodeBlock(sections["生成脚本"] ?? sections["script"] ?? "")
+        return raw.isEmpty ? nil : raw
+    }
+
     private static func splitSections(_ body: String) -> [String: String] {
         var sections: [String: String] = [:]
         var currentTitle: String?

@@ -72,12 +72,105 @@ extension LingShuState {
         persistTaskExecutionRecords()
         if status == .answered || status == .completed || status == .blocked {
             markTaskSegmentFinished(recordID: recordID, blocked: status == .blocked)
+            captureCodeChanges(recordID: recordID)   // 代码任务:抓分支+未提交改动文件,落进记录供右侧面板展示
             DispatchQueue.main.async { [weak self] in
                 self?.startNextQueuedTaskIfAvailable()
             }
             // 任务收尾 → 触发 dreaming 离线固化(内部有空闲守卫 + 1h 节流,不打扰当前流程)。
             scheduleDreamingConsolidationIfIdle()
         }
+    }
+
+    /// 抓**本任务自己改动**的代码文件(分支 + 未提交文件),落进记录——代码交付的右侧信息块。
+    /// 关键:只看本任务 `artifacts` 里的源码文件,**不扫整库**(否则问个时间也列出仓库里一堆历史脏文件)。
+    /// 非代码任务(无源码产出物)/ 工作目录非 git 仓 / 本任务文件都已提交 → nil,面板不显示该模块。
+    func captureCodeChanges(recordID: String) {
+        guard let idx = taskExecutionRecords.firstIndex(where: { $0.id == recordID }) else { return }
+        let workingDir = codexWorkingDirectory
+        // 本任务真正产出/改动的**源码/配置/文档**文件(交付物/素材归"产出物"面板,不算代码改动)。
+        let taskCodePaths = taskExecutionRecords[idx].artifacts
+            .map(\.location)
+            .filter { Self.isCodeLikePath($0) }
+        guard !taskCodePaths.isEmpty else { return }   // 非代码任务 → 不抓、不显示(治"问时间也有代码改动")
+        Task { @MainActor [weak self] in
+            guard let summary = await Self.gitChangeSummary(workingDir: workingDir, limitTo: taskCodePaths) else { return }
+            guard let self, let i = self.taskExecutionRecords.firstIndex(where: { $0.id == recordID }) else { return }
+            self.taskExecutionRecords[i].codeChanges = summary
+            self.persistTaskExecutionRecords()
+        }
+    }
+
+    /// 是否源码/配置/文档类路径(用于把交付物/素材排除在"代码改动"之外)。
+    nonisolated static func isCodeLikePath(_ path: String) -> Bool {
+        let excludedExts: Set<String> = ["pptx", "potx", "ppt", "jpg", "jpeg", "png", "gif", "webp", "bmp", "tiff",
+                                         "pdf", "wav", "mp3", "m4a", "mp4", "mov", "zip", "tar", "gz", "key", "numbers"]
+        let ext = (path as NSString).pathExtension.lowercased()
+        if excludedExts.contains(ext) { return false }
+        if path.contains("/assets/") { return false }
+        return true
+    }
+
+    /// 候选 git 路径(GUI 应用经 launchd 启动,PATH 极简;/usr/bin/git 是依赖 xcode-select 的 shim,
+    /// 在精简环境下可能解析不到真 git → 命令行工具 / Homebrew 真二进制兜底)。
+    nonisolated static func gitCandidatePaths() -> [String] {
+        ["/usr/bin/git", "/Library/Developer/CommandLineTools/usr/bin/git",
+         "/opt/homebrew/bin/git", "/usr/local/bin/git"]
+            .filter { FileManager.default.isExecutableFile(atPath: $0) }
+    }
+
+    /// 跑 git 取分支 + porcelain,**只保留本任务 `limitTo` 的文件**中仍未提交的(已提交的不在 porcelain 里→不计)。
+    /// 逐个候选 git 探测,直到某个真的回出仓库判定(绕过失效的 /usr/bin/git shim)。非仓/本任务文件全已提交 → nil。
+    nonisolated static func gitChangeSummary(workingDir: String, limitTo taskPaths: [String]) async -> LingShuCodeChangeSummary? {
+        var git: String?
+        for candidate in gitCandidatePaths() {
+            let inside = await runCapturing(candidate, ["-C", workingDir, "rev-parse", "--is-inside-work-tree"])
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if inside == "true" { git = candidate; break }
+            if inside == "false" { return nil }   // 非 git 仓
+            // 空输出=该 git 没跑成(shim 失效),试下一个候选
+        }
+        guard let git else { lingShuControlLog("codeChanges: 所有 git 候选都没跑成"); return nil }
+        let topLevel = await runCapturing(git, ["-C", workingDir, "rev-parse", "--show-toplevel"])
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !topLevel.isEmpty else { return nil }
+        let porcelain = await runCapturing(git, ["-C", workingDir, "status", "--porcelain"])
+        let allDirty = parseGitPorcelain(porcelain)
+        // 只留本任务自己的文件(把 porcelain 的仓库相对路径还原成绝对路径,与 taskPaths 求交)。
+        let taskAbs = Set(taskPaths.map { ($0 as NSString).standardizingPath })
+        let mine = allDirty.filter { change in
+            let abs = (topLevel as NSString).appendingPathComponent(change.path)
+            return taskAbs.contains((abs as NSString).standardizingPath)
+        }
+        guard !mine.isEmpty else { return nil }   // 本任务文件都已提交/干净 → 不显示
+        let branch = await runCapturing(git, ["-C", workingDir, "branch", "--show-current"])
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let repoName = (topLevel as NSString).lastPathComponent
+        lingShuControlLog("codeChanges: 本任务 \(mine.count) 个未提交改动 @\(repoName)/\(branch)")
+        return .init(repoName: repoName.isEmpty ? "repo" : repoName,
+                     branch: branch.isEmpty ? "(detached HEAD)" : branch,
+                     files: Array(mine.prefix(60)))
+    }
+
+    /// 解析 `git status --porcelain` 为代码改动文件(纯函数,可测)。
+    /// 只留**源码/配置/文档**;交付物/二进制素材(pptx/图片/pdf/音频/压缩包 及 assets 目录)归产出文件面板,不进代码块。
+    nonisolated static func parseGitPorcelain(_ porcelain: String) -> [LingShuCodeChangeSummary.Change] {
+        let excludedExts: Set<String> = ["pptx", "potx", "ppt", "jpg", "jpeg", "png", "gif", "webp", "bmp", "tiff",
+                                         "pdf", "wav", "mp3", "m4a", "mp4", "mov", "zip", "tar", "gz", "key", "numbers"]
+        return porcelain
+            .split(separator: "\n", omittingEmptySubsequences: true)
+            .compactMap { line in
+                let s = String(line)
+                guard s.count > 3 else { return nil }
+                let code = String(s.prefix(2)).trimmingCharacters(in: .whitespaces)
+                var path = String(s.dropFirst(3)).trimmingCharacters(in: .whitespaces)
+                path = path.trimmingCharacters(in: CharacterSet(charactersIn: "\""))   // git 给含特殊字符的路径加引号
+                if let arrow = path.range(of: " -> ") { path = String(path[arrow.upperBound...]) }   // 重命名取新名
+                guard !path.isEmpty else { return nil }
+                let ext = (path as NSString).pathExtension.lowercased()
+                if excludedExts.contains(ext) { return nil }
+                if path.hasPrefix("assets/") || path.contains("/assets/") { return nil }
+                return .init(status: code, path: path)
+            }
     }
 
     func markTaskSegmentFinished(recordID: String?, blocked: Bool = false) {

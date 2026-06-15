@@ -13,12 +13,33 @@ struct LingShuPermissionApprovalView: View {
                     .font(.system(size: 22, weight: .bold))
                     .foregroundStyle(Color.lingHolo)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("灵枢 请求执行系统命令")
+                    Text(pending.riskNotes.isEmpty ? "灵枢 请求执行系统命令" : "⚠️ 灵枢 请求执行高风险来源脚本")
                         .font(.system(size: 15.5, weight: .bold))
-                        .foregroundStyle(.white)
-                    Text("需要你授权才会在本机运行")
+                        .foregroundStyle(pending.riskNotes.isEmpty ? .white : Color.orange)
+                    Text(pending.riskNotes.isEmpty ? "需要你授权才会在本机运行" : "自发现 skill 的脚本经风险审被标记,首次运行需你裁决")
                         .font(.system(size: 11.5, weight: .medium))
                         .foregroundStyle(.white.opacity(0.55))
+                }
+            }
+
+            if !pending.riskNotes.isEmpty {
+                VStack(alignment: .leading, spacing: 5) {
+                    Text("风险审提示")
+                        .font(.system(size: 10, weight: .bold, design: .monospaced))
+                        .foregroundStyle(Color.orange.opacity(0.9))
+                    ForEach(Array(pending.riskNotes.enumerated()), id: \.offset) { _, note in
+                        Label(note, systemImage: "exclamationmark.triangle.fill")
+                            .font(.system(size: 11.5, weight: .medium))
+                            .foregroundStyle(.white.opacity(0.85))
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(11)
+                .background(Color.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .stroke(Color.orange.opacity(0.35), lineWidth: 0.8)
                 }
             }
 

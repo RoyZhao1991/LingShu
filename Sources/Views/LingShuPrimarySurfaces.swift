@@ -24,6 +24,7 @@ struct LingShuRootView: View {
             }
         }
         .preferredColorScheme(.dark)
+        .background(LingShuPreviewHost(controller: state.previewController))   // 大脑 open_preview → 弹出预览
         .sheet(item: $state.pendingShellApproval) { pending in
             LingShuPermissionApprovalView(pending: pending) { decision in
                 state.resolveShellApproval(decision)
@@ -52,6 +53,8 @@ struct LingShuRootView: View {
             }
             // 新一轮开始时掐掉上一条朗读(防音频/文字 desync)。
             state.interruptSpeechOutput = { [weak voice] in voice?.stopSpeaking() }
+            state.voiceManager = voice   // 供会议对话控制器经 MCP/UI 驱动
+
             perceptionGateway.registerCloudPerceptionRoute(client: state.cloudPerceptionClient)
             [0.1, 0.8, 1.6].forEach { delay in
                 DispatchQueue.main.asyncAfter(deadline: .now() + delay) {

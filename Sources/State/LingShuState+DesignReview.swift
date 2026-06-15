@@ -53,15 +53,19 @@ extension LingShuState {
         for idx in 0..<min(doc.pageCount, maxPages) {
             guard let page = doc.page(at: idx), let b64 = Self.pdfPageBase64PNG(page) else { continue }
             let topicLine = topic.isEmpty ? "" : "本页属于一份关于「\(topic.prefix(40))」的 PPT。"
-            let prompt = "你是资深 PPT 设计评审。\(topicLine)按这份清单评这一页的**设计质量(不是内容对错)**:\n\(rubric)\n**重点逐项查并指出**:① 标题/正文是否触边、压到图片、被截断或溢出 ② 配图是否切题(与主题无关的通用照片/会议照/水印图必须指出「配图不相关」) ③ 是否纯文字无视觉、留白失衡、文字重叠。\n**第一行必须是** `score=<0到1之间的两位小数>`,第二行 `issue=<一句话最该改的问题;没问题写 OK>`。"
+            let prompt = "你是资深 PPT 设计评审。\(topicLine)按这份清单评这一页的**设计质量(不是内容对错)**:\n\(rubric)\n**重点逐项查并指出**:① 标题/正文是否触边、压到图片、被截断或溢出 ② 配图是否切题(与主题无关的通用照片/风景/会议照/水印图/有划痕噪点的劣质图都算不切题) ③ 是否纯文字无视觉、留白失衡、文字重叠。\n**严格按三行输出**:第一行 `score=<0到1两位小数>`;第二行 `issue=<一句话最该改的问题;没问题写 OK>`;第三行 `relevant=<yes/no/na>`(配图与「\(topic.isEmpty ? "主题" : String(topic.prefix(20)))」是否相关;本页没有照片配图就写 na)。"
             guard let result = try? await vl.analyzeImage(imageBase64: b64, prompt: prompt, includeGrounding: false), result.success else { continue }
             // 优先用 VL 给的数字分;此网关 VL 多返回**描述性评估**,故退而从描述里的"版式问题关键词"推分。
-            let resolved: (score: Double, issue: String)
+            var resolved: (score: Double, issue: String)
             if let s = Self.parseDesignScore(result.semanticSuggestions) {
                 resolved = (s, Self.parseDesignIssue(result.semanticSuggestions))
             } else if let derived = Self.deriveDesignScoreFromDescription(result.semanticSuggestions) {
                 resolved = derived
             } else { continue }
+            // 配图明确判不相关 → 强制压到低分(描述型 VL 常只"描述"图、不主动判相关性,靠这条显式裁决兜住跑题配图)。
+            if Self.imageJudgedIrrelevant(result.semanticSuggestions) {
+                resolved = (min(resolved.score, 0.45), "配图与主题不相关(删掉该页 image、改用 icons/chart/色块)")
+            }
             let note = "P\(idx + 1): \(String(format: "%.2f", resolved.score)) \(resolved.issue)"
             scores.append(resolved.score)
             perPage.append(note)
@@ -159,6 +163,16 @@ extension LingShuState {
         let hits = problems.filter { lower.contains($0.lowercased()) }
         if hits.isEmpty { return (0.8, "未见明显版式问题") }
         return (0.5, "VL 指出:" + hits.prefix(3).joined(separator: "/") + " — " + clean.prefix(50))
+    }
+
+    /// VL 是否**明确判定**配图与主题不相关(`relevant=no`,或描述里直说不相关/无关/不切题)。
+    /// 仅认"明确否定",避免误伤(`na`/没提=不算不相关)。
+    nonisolated static func imageJudgedIrrelevant(_ text: String) -> Bool {
+        let lower = text.lowercased()
+        if lower.contains("relevant=no") || lower.contains("relevant = no") || lower.contains("relevant:no") { return true }
+        // 中文描述里明确说不相关(且不是在说"相关")。
+        let negatives = ["配图不相关", "图片不相关", "配图无关", "图片无关", "配图不切题", "与主题无关", "与主题不符"]
+        return negatives.contains { lower.contains($0.lowercased()) }
     }
 
     /// 抽问题描述(取 `|` 后面的话,缺省整段截断)。
