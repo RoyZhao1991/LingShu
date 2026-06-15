@@ -18,6 +18,27 @@ enum LingShuAudioDriverInstaller {
     /// 是否已装(系统目录里有驱动)。
     static func isInstalled() -> Bool { FileManager.default.fileExists(atPath: installedPath) }
 
+    /// 驱动 bundle 的主执行文件路径(读 Info.plist 的 CFBundleExecutable,回退 bundle 名去 .driver)。
+    static func executablePath(forBundle bundlePath: String) -> String? {
+        let info = bundlePath + "/Contents/Info.plist"
+        let exe = (NSDictionary(contentsOfFile: info)?["CFBundleExecutable"] as? String)
+            ?? (bundlePath as NSString).lastPathComponent.replacingOccurrences(of: ".driver", with: "")
+        let path = bundlePath + "/Contents/MacOS/" + exe
+        return FileManager.default.fileExists(atPath: path) ? path : nil
+    }
+
+    /// 已装驱动是否与随包驱动**不一致**(比对主执行文件字节——签名嵌在 Mach-O 里,换签名=字节变,
+    /// 所以这能侦测"旧 ad-hoc/Apple Development 签名 → 新 Developer ID 签名"的升级,触发重装)。
+    static func installedDiffers(fromBundle src: String) -> Bool {
+        guard let installedExe = executablePath(forBundle: installedPath),
+              let bundledExe = executablePath(forBundle: src),
+              let a = FileManager.default.contents(atPath: installedExe),
+              let b = FileManager.default.contents(atPath: bundledExe) else {
+            return true   // 取不到任一执行文件 → 保守判为需要重装
+        }
+        return a != b
+    }
+
     /// 随包驱动路径(build-app.sh 把编译好的 .driver 拷进 app Resources)。
     static func bundledDriverPath() -> String? {
         if let res = Bundle.main.resourceURL?.appendingPathComponent(driverBundleName).path,
@@ -27,10 +48,11 @@ enum LingShuAudioDriverInstaller {
         return FileManager.default.fileExists(atPath: dev) ? dev : nil
     }
 
-    /// 没装就装(一次管理员授权)。已装直接返回。**主线程外调用**(会弹系统授权框、可能阻塞)。
+    /// 没装(或已装但与随包驱动不一致,如签名升级)就装(一次管理员授权);**主线程外调用**(会弹系统授权框、可能阻塞)。
+    /// osascript 的 shell 已 `rm -rf` 旧驱动再 cp,故重装=覆盖。
     static func installIfNeeded() -> InstallResult {
-        if isInstalled() { return .alreadyInstalled }
         guard let src = bundledDriverPath() else { return .missingBundle }
+        if isInstalled(), !installedDiffers(fromBundle: src) { return .alreadyInstalled }
         // osascript 一次性管理员授权:拷贝 + 重启 coreaudiod。路径转义防注入。
         let escSrc = src.replacingOccurrences(of: "\"", with: "\\\"")
         let shell = "mkdir -p \\\"\(halDir)\\\" && rm -rf \\\"\(installedPath)\\\" && cp -R \\\"\(escSrc)\\\" \\\"\(halDir)/\\\" && killall coreaudiod"
