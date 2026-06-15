@@ -50,8 +50,19 @@ extension LingShuState {
                 return (path, mtime)
             }, uniquingKeysWith: { a, _ in a })
             : [:]
+        // 凭据注入(计划 §5):把 command/url 里的 {{cred:KEY}} 占位符在**执行层**换成加密库真值。
+        // 记录里(上面已用 raw arguments 录了 toolCall)保留占位符;执行用 execArgs(含明文);
+        // secrets 供执行后给输出打码,明文绝不进任务记录/模型上下文。
+        var execArgs = arguments
+        var injectedSecrets: [String] = []
+        for field in ["command", "url"] {
+            guard let raw = execArgs[field], raw.contains("{{cred:") else { continue }
+            let (resolved, secrets) = resolveCredentialPlaceholders(in: raw)
+            execArgs[field] = resolved
+            injectedSecrets.append(contentsOf: secrets)
+        }
         let mcpName = tool.hasPrefix("mcp:") ? String(tool.dropFirst(4)) : tool
-        let result: LingShuToolResult
+        var result: LingShuToolResult
         if mcpToolNames.contains(mcpName), let client = connectorRegistry.client(forTool: mcpName) {
             // 外部 MCP 工具：原生 function-calling 用 arguments_json 信封承载真实参数
             // （描述符无 inputSchema）——在此唯一处解包成真实参数 dict 再透传，新旧路径共用。
@@ -60,19 +71,32 @@ extension LingShuState {
             // 高风险动作（run_command）在需人工确认模式下：弹中文授权框等用户裁决，
             // 用户点「本次允许 / 完全授权」才放行——不再直接拒绝、逼模型降级成"给你段脚本自己跑"。
             var effectiveAllowShell = baseAllowShell || sessionShellAlwaysAllowed
-            if tool == "run_command", !effectiveAllowShell {
-                let decision = await requestShellApproval(
-                    command: arguments["command"] ?? "",
-                    workingDirectory: workingDirectory,
-                    taskRecordID: taskRecordID
-                )
-                effectiveAllowShell = (decision != .deny)
+            if tool == "run_command" {
+                let command = arguments["command"] ?? ""
+                let systemSensitive = LingShuShellCommandPolicy.touchesSystemSensitivePath(command)
+                if LingShuShellCommandPolicy.isReadOnly(command), !systemSensitive {
+                    // 只读命令(grep/find/ls/cat…/git status)免审批直接放行——大脑定位不再每次弹框打断(计划 §3)。
+                    effectiveAllowShell = true
+                } else if !effectiveAllowShell || systemSensitive {
+                    // 未授权 → 照常弹审批;已「完整授权」但命中**删/改系统级敏感文件** → 仍强制弹一次(计划 §1 红线)。
+                    let decision = await requestShellApproval(
+                        command: command,
+                        workingDirectory: workingDirectory,
+                        taskRecordID: taskRecordID,
+                        forceConfirm: systemSensitive
+                    )
+                    effectiveAllowShell = (decision != .deny)
+                }
             }
             result = await toolExecutor.execute(
-                .init(tool: tool, arguments: arguments),
+                .init(tool: tool, arguments: execArgs),
                 workingDirectory: workingDirectory,
                 allowShell: effectiveAllowShell
             )
+        }
+        // 注入过凭据 → 给输出打码,防命令回显的 token 进任务记录/模型上下文(明文零留存)。
+        if !injectedSecrets.isEmpty {
+            result = LingShuToolResult(tool: result.tool, success: result.success, output: Self.redactSecrets(result.output, secrets: injectedSecrets))
         }
         recordModelHeartbeat(source: "工具", detail: "\(result.tool) 执行完成。")
         if (result.tool == "write_file" || result.tool == "edit_file"), result.success, let path = arguments["path"] {

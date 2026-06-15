@@ -19,6 +19,17 @@ extension LingShuState {
     func prepareAutonomousRun(objective rawObjective: String? = nil) -> LingShuAutonomousRunSnapshot {
         let now = Date()
         let objective = normalizedAutonomousObjective(from: rawObjective)
+        // 空目标硬约束:有目标才允许启动(计划 §1 逻辑硬伤)。按钮已禁用,这里是防御性兜底。
+        guard !objective.isEmpty else {
+            missionTitle = "待机中"
+            missionStatus = "请先在独立运行输入框填写目标(可上传文件 + 写指令),有目标才能启动。"
+            appendTrace(kind: .warning, actor: "独立运行", title: "缺少目标", detail: "空目标已拒绝启动。")
+            return autonomousRun
+        }
+        // 捕获本次上传附件的抽取上下文(随后清空附件托盘),启动后折入 kickoff 让大脑看到素材。
+        autonomousAttachmentContext = attachmentContextBlock()
+        clearAttachments()
+        autonomousObjectiveDraft = ""
         let environment = autonomousEnvironmentProbe.run(input: autonomousEnvironmentInput(), now: now)
         let memoryStatus = [
             mainMemoryStatus,
@@ -201,7 +212,7 @@ extension LingShuState {
             Task { @MainActor in self?.recordAgentReasoning(aside, recordID: self?.autonomousRunRecordID) }
         }
         var tools = agentBuiltinTools(recordIDProvider: { [weak self] in self?.autonomousRunRecordID }, executionPolicy: policy)
-        tools += [Self.timeTool(), Self.webSearchTool(), recallMemoryTool(), speakTool(), Self.askUserTool()] + previewTools()
+        tools += [Self.timeTool(), Self.webSearchTool(), recallMemoryTool(), rememberCredentialTool(), listCredentialsTool(), speakTool(), Self.askUserTool()] + previewTools()
         if policy != .readOnly { tools.append(spawnTaskTool(adapter: adapter)) }   // 观察模式不派生可写子任务
         return LingShuAgentSession(
             id: "autonomous-\(UUID().uuidString.prefix(6))",
@@ -234,7 +245,7 @@ extension LingShuState {
         case .delegated:
             policyLine = "代理模式：可在工作目录内 write_file 生成产出物；run_command 等高风险动作在无人值守下会被安全拒绝，优先用文件类方式达成目标。"
         case .full:
-            policyLine = "完整授权：可自主 write_file/run_command 在工作目录内真实执行，直到目标达成。"
+            policyLine = "完整授权(完整电脑控制)：可自主 write_file/edit_file/run_command 真实执行，全程不必再请求授权，直到目标达成；只读命令(grep/find/ls…)我已为你免审批直放。**唯一例外**:删除或修改系统级敏感文件(/System、/usr、/etc、内核扩展等)仍会请你确认——别绕开它。"
         }
         return """
         你是灵枢(数字人),由 Roy Zhao 打造。**这是你的自主运行(Loop)模式:大脑是你自己的推理,四肢是你的各项能力(听/说/读/写/改代码/跑命令/联网/演示…)。** 目标交给你后,你自己分析→规划→推进→交付,像 codex 那样把事做完,**不要每步都等人确认、不要把该自己想的甩回来**;只有触及硬性网络/权限/物理限制才如实说明并指出需要什么组件。需要边做边讲(演示/汇报)就用 `speak` 出声。
@@ -251,6 +262,7 @@ extension LingShuState {
     /// 首轮启动语：把目标 + runbook 降为「建议性上下文」喂给模型，由模型自行规划执行（不再当硬流程）。
     private func autonomousKickoffPrompt(objective: String, runbook: LingShuAutonomousRunbook?) -> String {
         var lines = ["独立运行目标：\(objective)"]
+        if !autonomousAttachmentContext.isEmpty { lines.append(autonomousAttachmentContext) }   // 上传的文件素材
         if let runbook {
             if !runbook.assumptions.isEmpty { lines.append("已知假设：" + runbook.assumptions.joined(separator: "；")) }
             if !runbook.expectedArtifacts.isEmpty { lines.append("期望产出物：" + runbook.expectedArtifacts.joined(separator: "、")) }
@@ -385,9 +397,12 @@ extension LingShuState {
     }
 
     private func normalizedAutonomousObjective(from rawObjective: String?) -> String {
+        // 优先用传入目标(独立运行专门输入框 / 命令解析);为空再退到对话主输入框。
+        // **不再填占位串**——空就返回空,由 prepareAutonomousRun 拒绝启动(计划 §1)。
         let raw = rawObjective?.trimmingCharacters(in: .whitespacesAndNewlines)
         let fallback = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
-        let text = (raw?.isEmpty == false ? raw : nil) ?? (fallback.isEmpty ? "等待用户提供独立运行目标" : fallback)
+        let text = (raw?.isEmpty == false ? raw : nil) ?? fallback
+        guard !text.isEmpty else { return "" }
         let separators = ["目标是", "目标：", "目标:", "任务是", "任务：", "任务:"]
         for separator in separators where text.contains(separator) {
             let parts = text.components(separatedBy: separator)

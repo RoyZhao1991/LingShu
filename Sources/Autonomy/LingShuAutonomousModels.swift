@@ -36,7 +36,7 @@ enum LingShuAutonomousPermissionLevel: String, Codable, CaseIterable, Identifiab
         case .delegated:
             return "可在授权目录内生成产出物和调用工具，高风险动作仍需确认。"
         case .full:
-            return "在干净设备或明确授权边界内自主推进，保留一键接管。"
+            return "授予完整电脑控制权：自主推进全程不再要授权，唯删除/修改系统级敏感文件仍需你确认。保留一键接管。"
         }
     }
 }

@@ -22,6 +22,18 @@ extension LingShuState {
             ? "真实落盘文件:(无——盘上没有任何本回合产出文件)"
             : "真实落盘文件(盘上确实存在,已逐一核实):\n" + realFiles.map { "- \($0)" }.joined(separator: "\n")
 
+        // 代码任务测试门(计划 §4):产出真实源码文件 → 必须"有测试且跑通(全绿)"才达标,否则**确定性**判未达标。
+        let codeFiles = realFiles.filter { Self.isTestableCodePath($0) }
+        let testGate = codeTaskTestEvidence(taskRecordID: taskRecordID, codeFiles: codeFiles)
+        let testGateBlock: String
+        if codeFiles.isEmpty {
+            testGateBlock = "测试门:本次非代码交付,跳过。"
+        } else if testGate.passed {
+            testGateBlock = "测试门:✅ 已检测到测试并跑通(全绿)。\(testGate.detail)"
+        } else {
+            testGateBlock = "测试门:❌ 未通过——\(testGate.detail) 代码交付必须写测试用例(随复杂度增多)并运行至全部通过,且把测试文件登记为产出物。"
+        }
+
         // 看 + 核:抽产出物正文(事实核查)+ 渲染图像交云端 VL 审版式(重叠/截断/空白)。只看一个主产出物以控成本。
         var contentBlock = ""
         var visualBlock = "版式视觉评审:未启用(无渲染器或视觉通道)"
@@ -40,12 +52,14 @@ extension LingShuState {
         \(filesBlock)
         \(contentBlock)
         \(visualBlock)
+        \(testGateBlock)
         **重要:上面【真实落盘文件】是宿主已用文件系统逐一核实存在的清单,作为权威事实——不要因"你无法独立验证"而怀疑其存在性。** 你只负责判内容与版式。
-        逐条核对这四个维度(每条写达标/未达标+理由):
+        逐条核对这五个维度(每条写达标/未达标+理由):
         1. 真实性:用户要的产出物在上面【真实落盘文件】清单里就算达标;只有"声称生成了某文件、但它不在清单里"才 ❌(假完成)。清单里有对应文件 = 真实性达标,**不要再以"无法独立验证/存疑"为由打回**。
         2. 事实准确性:用你的知识逐条审查正文里的关键数据/年份/事件/数字/人名,**发现明确错误或与公认事实不符才 ❌ 并写出正确值**;不要把"我没法 100% 确认"当作不达标。**但忽略"自指/易变"事实**——产出物描述它自己的文件体积/字节数/页数/生成时间戳这类(每次重生成都会变、且与用户关心的内容无关),以及 KB 四舍五入这种琐碎数值差(如 41KB vs 40KB),**一律不算事实错误、不得据此打回**,以免陷入自指返工死循环。
         3. 完整性:是否覆盖用户要求的主题、结构与数量。
         4. 版式:若有视觉评审,凡文字重叠/被截断/溢出/错位空白 → ❌ 并指出第几页;无视觉评审则此项默认达标。
+        5. 测试门:以上【测试门】结论为准——标 ❌ 则本维度未达标(代码任务必须有测试且全绿);标 ✅ 或"非代码交付跳过"则达标。
         输出格式(严格遵守):
         1. 先逐条核对并写明达标/未达标及理由(未达标写清缺什么、怎么改)。
         2. 另起一行:核对统计 PASS=<达标条数> FAIL=<未达标条数>
@@ -62,7 +76,73 @@ extension LingShuState {
         let critique: String
         if case .completed(let value) = result { critique = value } else { critique = "" }
         let verdict = LingShuChecklistVerdict.parse(critique)
+        // 测试门是**确定性硬门**:代码任务未"有测试且全绿"→ 即使 LLM 评审放行也判未达标,并把原因回灌给 maker。
+        if !codeFiles.isEmpty, !testGate.passed {
+            let appended = critique.isEmpty
+                ? "测试门未通过:\(testGate.detail) 请补测试用例并跑通(全绿)。"
+                : critique + "\n\n[测试门] ❌ \(testGate.detail) 请补测试用例并跑到全绿后再交付。"
+            return (false, appended)
+        }
         return (verdict.allPassed, critique)
+    }
+
+    /// 是否**需要测试门**的编程源码文件(真程序文件,排除 .md/.txt/.csv/.json/媒体——`isCodeLikePath` 太宽,这里收窄)。
+    nonisolated static func isTestableCodePath(_ path: String) -> Bool {
+        let exts: Set<String> = ["swift", "py", "js", "jsx", "ts", "tsx", "go", "rs", "java", "kt",
+                                 "c", "cc", "cpp", "cxx", "m", "mm", "rb", "php", "scala", "cs"]
+        return exts.contains((path as NSString).pathExtension.lowercased())
+    }
+
+    /// 文件名是否像测试文件(test_x / x_test / x.spec / FooTests / 在 tests 目录下)。
+    nonisolated static func looksLikeTestFile(_ path: String) -> Bool {
+        let lower = (path as NSString).lastPathComponent.lowercased()
+        if lower.hasPrefix("test_") || lower.hasPrefix("test-") { return true }
+        if lower.contains("_test.") || lower.contains("-test.") || lower.contains(".test.") || lower.contains(".spec.") { return true }
+        if lower.hasSuffix("tests.swift") || lower.hasSuffix("test.swift") { return true }
+        let full = path.lowercased()
+        return full.contains("/tests/") || full.contains("/test/") || full.contains("/__tests__/")
+    }
+
+    /// 命令是否在运行测试(各语言常见测试运行器)。
+    nonisolated static func looksLikeTestCommand(_ command: String) -> Bool {
+        let needles = ["swift test", "pytest", "py.test", "-m pytest", "-m unittest", "unittest",
+                       "npm test", "npm run test", "yarn test", "pnpm test", "jest", "vitest", "mocha",
+                       "go test", "cargo test", "rspec", "phpunit", "gradle test", "mvn test",
+                       "ctest", "make test", "tox", "dotnet test"]
+        return needles.contains { command.contains($0) }
+    }
+
+    /// 扫任务记录,判断代码任务是否"有测试且跑通(全绿)"。配对 toolCall→toolResult:命中测试运行器或
+    /// 执行了测试文件、且该次 run_command 成功(exit 0)= 全绿。返回 passed + 给 maker 的说明。
+    func codeTaskTestEvidence(taskRecordID: String?, codeFiles: [String]) -> (passed: Bool, detail: String) {
+        guard let record = taskExecutionRecords.first(where: { $0.id == taskRecordID }) else {
+            return (false, "未找到本任务执行记录,无法确认测试。")
+        }
+        let testFileArtifacts = record.artifacts.map(\.location).filter { Self.looksLikeTestFile($0) }
+        var sawTest = !testFileArtifacts.isEmpty
+        var green = false
+        var lastCmd: String?
+        for message in record.messages {
+            switch message.detail {
+            case let .toolCall(tool, summary, args):
+                if tool == "run_command" { lastCmd = (summary + " " + args).lowercased() }
+            case let .toolResult(tool, success, _):
+                if tool == "run_command", let cmd = lastCmd {
+                    let isRunner = Self.looksLikeTestCommand(cmd)
+                    let runsTestFile = testFileArtifacts.contains { cmd.contains(($0 as NSString).lastPathComponent.lowercased()) }
+                    if isRunner || runsTestFile {
+                        sawTest = true
+                        if success { green = true }
+                    }
+                }
+                lastCmd = nil
+            default:
+                break
+            }
+        }
+        if !sawTest { return (false, "未检测到任何测试用例(没有测试文件,也没有运行测试的命令)。") }
+        if !green { return (false, "检测到测试,但没有一次测试运行成功(全绿)——请运行测试并修到全部通过。") }
+        return (true, "检测到测试文件 \(testFileArtifacts.count) 个,且有成功的测试运行。")
     }
 
     /// 交付话术与返工文本解耦:验收经返工后才通过时,maker 最后一轮文本是"逐条修正"的内部 QA 记录

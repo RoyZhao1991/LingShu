@@ -23,21 +23,30 @@ struct LingShuPendingShellApproval: Identifiable {
 extension LingShuState {
     /// 请求执行系统命令的授权：弹中文授权框并挂起等待用户点选。
     ///
-    /// - 已选「完全授权」→ 直接放行，不再弹。
+    /// - 已选「完全授权」→ 直接放行，不再弹（`forceConfirm` / 隔离脚本除外）。
+    /// - `forceConfirm`(删/改系统级敏感文件)→ 即使「完整授权」也强制弹一次,把风险摆给用户裁决(计划 §1 红线)。
     /// - 非交互场景（自主 / 无头 / 定时）→ 不打扰用户，按安全默认「拒绝」，保持无人值守不卡死。
     /// - 否则弹窗并 `await` 用户决定。
-    func requestShellApproval(command: String, workingDirectory: String, taskRecordID: String?) async -> LingShuShellApprovalDecision {
+    func requestShellApproval(
+        command: String,
+        workingDirectory: String,
+        taskRecordID: String?,
+        forceConfirm: Bool = false
+    ) async -> LingShuShellApprovalDecision {
         // 自发现高风险脚本首次运行:即使会话已"完全授权"也强制弹一次,把风险点摆给用户裁决(供应链红线)。
         let quarantine = quarantinedScriptHit(in: command)
-        if quarantine == nil, sessionShellAlwaysAllowed { return .allowAlways }
-        if clarificationCenter.isNonInteractive() { return .deny }   // 无人值守:风险脚本同样安全拒绝
+        if quarantine == nil, !forceConfirm, sessionShellAlwaysAllowed { return .allowAlways }
+        if clarificationCenter.isNonInteractive() { return .deny }   // 无人值守:风险脚本/系统敏感操作同样安全拒绝
+
+        var notes = quarantine?.notes ?? []
+        if forceConfirm { notes.insert("此命令会删除或修改系统级敏感文件(/System、/usr、/etc、内核扩展等),即使完整授权也需你确认。", at: 0) }
 
         return await withCheckedContinuation { (continuation: CheckedContinuation<LingShuShellApprovalDecision, Never>) in
             pendingShellApproval = LingShuPendingShellApproval(
                 command: command,
                 workingDirectory: workingDirectory,
                 taskRecordID: taskRecordID,
-                riskNotes: quarantine?.notes ?? [],
+                riskNotes: notes,
                 resume: { decision in continuation.resume(returning: decision) }
             )
         }

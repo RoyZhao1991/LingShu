@@ -72,4 +72,69 @@ extension LingShuState {
     var modelHeartbeatIdleText: String {
         formatElapsed(modelHeartbeatIdleSeconds)
     }
+
+    // MARK: - 本轮真实进展（侧栏绑真实进展,替代静态聚合遥测,计划 §2）
+
+    /// 当前这轮正在写入的任务记录:独立运行时取其记录,否则模型在跑时取最近更新的记录。无活动 → nil。
+    var currentTaskRecord: LingShuTaskExecutionRecord? {
+        if autonomousRun.isActive, let id = autonomousRunRecordID {
+            return taskExecutionRecords.first { $0.id == id }
+        }
+        guard hasActiveModelCall else { return nil }
+        return taskExecutionRecords
+            .filter { $0.status == .running || $0.status == .queued }
+            .max(by: { $0.updatedAt < $1.updatedAt })
+            ?? taskExecutionRecords.max(by: { $0.updatedAt < $1.updatedAt })
+    }
+
+    /// 本轮是否真有活在跑(决定侧栏显示进展还是有意义的空态)。
+    var hasLiveProgress: Bool {
+        autonomousRun.isActive || hasActiveModelCall || currentTaskRecord != nil
+    }
+
+    /// 正在调用的工具(从当前记录尾部的 toolCall 取),返回「显示名 · 一句话摘要」。无则 nil。
+    var currentToolDisplay: String? {
+        guard let record = currentTaskRecord else { return nil }
+        for message in record.messages.reversed() {
+            if case let .toolCall(tool, summary, _) = message.detail {
+                let name = Self.toolDisplayName(tool)
+                let brief = summary.trimmingCharacters(in: .whitespacesAndNewlines)
+                return brief.isEmpty ? name : "\(name) · \(brief.prefix(40))"
+            }
+        }
+        return nil
+    }
+
+    /// 独立运行当前正在执行的 runbook 步(序号 / 总数 / 步)。非运行中或无 runbook → nil。
+    var autonomousRunningStep: (index: Int, total: Int, step: LingShuAutonomousRunbookStep)? {
+        guard autonomousRun.isActive, let runbook = autonomousRun.runbook else { return nil }
+        guard let idx = runbook.steps.firstIndex(where: { $0.status == .running })
+            ?? runbook.steps.firstIndex(where: { $0.status == .waiting }) else { return nil }
+        return (idx + 1, runbook.steps.count, runbook.steps[idx])
+    }
+
+    /// 本轮已用时:独立运行从其 startedAt 起算,否则用中枢思考/执行计时。无活动 → nil。
+    var currentRoundElapsed: String? {
+        if autonomousRun.isActive, let startedAt = autonomousRun.startedAt {
+            return formatElapsed(Int(Date().timeIntervalSince(startedAt)))
+        }
+        guard hasActiveModelCall else { return nil }
+        switch coreState {
+        case .executing, .abnormal: return executionElapsedText
+        case .thinking: return thinkingElapsedText
+        case .standby: return nil
+        }
+    }
+
+    /// 当前任务记录的计划完成度(已完成 / 总步数)。无计划 → nil。
+    var currentPlanProgress: (done: Int, total: Int)? {
+        guard let plan = currentTaskRecord?.plan, !plan.isEmpty else { return nil }
+        return (plan.filter { $0.status == .completed }.count, plan.count)
+    }
+
+    /// 执行轨迹尾部:当前记录最近的工具/文件/结果消息(最新在后),供侧栏渲染"它在干嘛"。
+    var recentExecutionMessages: [LingShuTaskExecutionMessage] {
+        guard let record = currentTaskRecord else { return [] }
+        return Array(record.messages.suffix(6))
+    }
 }

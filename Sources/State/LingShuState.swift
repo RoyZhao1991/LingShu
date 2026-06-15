@@ -125,7 +125,12 @@ final class LingShuState: ObservableObject {
     @Published var archivedTaskExecutionRecords: [LingShuTaskExecutionRecord] = []
     @Published var isExecutionConsoleExpanded = true
     @Published var autonomousRun: LingShuAutonomousRunSnapshot = .idle
-    @Published var autonomousPermissionLevel: LingShuAutonomousPermissionLevel = .delegated
+    // 独立运行默认「完整授权」:独立运行=授予完整电脑控制权,推进中不再要授权(唯删/改系统级敏感文件除外)。
+    @Published var autonomousPermissionLevel: LingShuAutonomousPermissionLevel = .full
+    // 独立运行专门输入框草稿(目标指令);与对话主输入框 `prompt` 解耦,空目标禁止启动(计划 §1)。
+    @Published var autonomousObjectiveDraft: String = ""
+    // 独立运行启动时从上传附件抽取的上下文(prepare 时捕获、kickoff 时折入);非 @Published,仅供执行流读取。
+    var autonomousAttachmentContext: String = ""
     @Published var eventLog: [String] = [
         "09:42  灵枢主线程在线，等待指令。",
         "09:42  通用 agent 能力池已注册：在线 13 / 运行 0 / 待启动 13。",

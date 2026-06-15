@@ -61,6 +61,13 @@ final class LingShuCredentialStore: @unchecked Sendable {
         persist()
     }
 
+    /// 已存的 provider id 列表(**只返回 key 名,绝不返回明文值**)。供凭据四肢 list_credentials 用。
+    func providerIDs() -> [String] {
+        lock.lock()
+        defer { lock.unlock() }
+        return cache.filter { !$0.value.isEmpty }.keys.sorted()
+    }
+
     static func environmentKey(forProvider providerID: String) -> String {
         "LINGSHU_TOKEN_" + providerID.uppercased().replacingOccurrences(of: "-", with: "_")
     }

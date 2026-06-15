@@ -1,12 +1,14 @@
 import SwiftUI
 
+/// 右侧栏:**绑当前这轮的真实进展**(正在执行的 runbook 步 / 正在调的工具 / 执行轨迹尾部 / 已用时),
+/// 不再堆静态聚合遥测(在线 agent/监工线程/巡检轮次等伪指标已删,计划 §2)。真空闲给有意义的空态。
 struct LingShuCallChainPanel: View {
     @ObservedObject var state: LingShuState
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 15) {
-                SectionHeader(icon: "point.3.connected.trianglepath.dotted", title: "调用链", subtitle: state.callChainSubtitle)
+                SectionHeader(icon: "point.3.connected.trianglepath.dotted", title: "本轮进展", subtitle: state.hasLiveProgress ? "实时执行中" : "空闲待命")
 
                 VStack(alignment: .leading, spacing: 8) {
                     Text(state.missionTitle)
@@ -21,83 +23,11 @@ struct LingShuCallChainPanel: View {
                 LingShuDivider()
 
                 if !state.isModelConnected {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Label("主通道未接入", systemImage: "link.badge.plus")
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundStyle(Color.orange.opacity(0.92))
-                        Text("主通道就绪后，我会按任务需要动态唤起相关能力节点；未接入时不会展示虚假的调用链。")
-                            .font(.system(size: 11.5, weight: .medium))
-                            .foregroundStyle(.white.opacity(0.56))
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
+                    notConnectedNotice
+                } else if state.hasLiveProgress {
+                    liveProgressBody
                 } else {
-	                    VStack(alignment: .leading, spacing: 9) {
-	                        HoloMetricRow(label: "中枢状态", value: state.coreStateDisplay, icon: state.coreState.icon, color: state.coreState.color)
-	                        HoloMetricRow(label: "主线程", value: state.mainThreadHeartbeatText, icon: "bolt.horizontal.circle", color: .cyan)
-                        HoloMetricRow(label: "主线程状态", value: state.mainRemoteConnectionStatus, icon: "circle.fill", color: state.mainRemoteConnectionIndicatorColor)
-                        HoloMetricRow(label: "在线 agent", value: "\(state.agentRuntimeCounts.online)", icon: "antenna.radiowaves.left.and.right", color: .green)
-                        HoloMetricRow(label: "运行 agent", value: "\(state.agentRuntimeCounts.running)", icon: "play.circle", color: .lingHolo)
-                        HoloMetricRow(label: "待启动", value: "\(state.agentRuntimeCounts.pendingStart)", icon: "pause.circle", color: .white.opacity(0.72))
-                        HoloMetricRow(label: "外部 agent", value: "\(state.externalAgentRegistrySnapshot.enabled)/\(state.externalAgentRegistrySnapshot.registered)", icon: "network", color: .cyan)
-                        HoloMetricRow(label: "思考耗时", value: state.thinkingElapsedText, icon: "brain.head.profile", color: .cyan)
-	                        HoloMetricRow(label: "执行耗时", value: state.executionElapsedText, icon: "timer", color: .lingHolo)
-                        HoloMetricRow(label: "心跳空闲", value: state.modelHeartbeatIdleText, icon: "waveform.path.ecg", color: state.hasActiveModelCall ? .green : .lingFaint)
-                        HoloMetricRow(label: "运行期", value: state.runtimePhase.rawValue, icon: state.runtimePhase.icon, color: state.runtimePhase.color)
-                        HoloMetricRow(label: "任务线程", value: state.taskQueueSummary, icon: "square.stack.3d.up", color: .purple)
-                        HoloMetricRow(label: "主记忆", value: state.mainMemoryStatus, icon: "memorychip", color: .cyan)
-                        HoloMetricRow(label: "冷备库", value: state.coldMemoryStatus, icon: "externaldrive", color: .orange)
-                        HoloMetricRow(label: "执行线程", value: "\(state.activeWorkerCount)", icon: "cpu")
-                        HoloMetricRow(label: "监工线程", value: "\(state.activeSupervisorCount)", icon: "eye")
-	                        HoloMetricRow(label: "巡检轮次", value: "\(state.supervisionTick)", icon: "timer")
-	                    }
-
-	                    LingShuDivider()
-
-                    if state.shouldShowTaskRuntime {
-                        TaskRuntimePanelView(runtime: state.taskRuntime)
-
-                        LingShuDivider()
-                    }
-
-                    if !state.visibleTaskThreads.isEmpty {
-                        TaskThreadQueuePanelView(threads: state.visibleTaskThreads)
-
-                        LingShuDivider()
-                    }
-
-                    VStack(alignment: .leading, spacing: 10) {
-                        Text("本次调用")
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundStyle(.white)
-
-                        if state.callChainAgents.isEmpty {
-                            Text(state.coreState == .thinking ? "灵枢正在思考，尚未分派能力节点。" : "暂无 agent 参与。本轮可能由灵枢直接处理。")
-                                .font(.system(size: 11.5, weight: .medium))
-                                .foregroundStyle(.white.opacity(0.50))
-                        } else {
-                            ForEach(Array(state.callChainAgents.enumerated()), id: \.element.id) { index, agent in
-                                LingShuAgentStatusRow(index: index, agent: agent)
-                            }
-                        }
-                    }
-                }
-
-                LingShuDivider()
-
-                VStack(alignment: .leading, spacing: 10) {
-                    Text("最近巡检")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(.white)
-
-                    if state.supervisorEvents.isEmpty {
-                        Text("暂无巡检事件，等待灵枢发令。")
-                            .font(.system(size: 11.5, weight: .medium))
-                            .foregroundStyle(.white.opacity(0.50))
-                    } else {
-                        ForEach(state.supervisorEvents.prefix(4)) { event in
-                            SupervisorChainEventRow(event: event)
-                        }
-                    }
+                    idleNotice
                 }
             }
             .padding(18)
@@ -109,194 +39,138 @@ struct LingShuCallChainPanel: View {
                 .stroke(Color.lingHolo.opacity(0.16))
         }
     }
-}
 
-struct TaskThreadQueuePanelView: View {
-    let threads: [LingShuTaskThread]
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 8) {
-                Image(systemName: "list.bullet.rectangle")
-                    .font(.system(size: 12, weight: .bold))
-                    .foregroundStyle(Color.lingHolo)
-                    .frame(width: 24, height: 24)
-                    .background(Color.lingHolo.opacity(0.12), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
-
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("任务队列")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(.white)
-                    Text("同线程串行，异线程隔离并行")
-                        .font(.system(size: 10.5, weight: .bold))
-                        .foregroundStyle(Color.lingHolo.opacity(0.82))
-                }
-            }
-
-            ForEach(threads) { thread in
-                HStack(alignment: .top, spacing: 10) {
-                    Circle()
-                        .fill(thread.hasRunningSegment ? Color.lingHolo : Color.white.opacity(0.38))
-                        .frame(width: 8, height: 8)
-                        .padding(.top, 5)
-
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(thread.displayTitle)
-                            .font(.system(size: 12, weight: .semibold))
-                            .foregroundStyle(.white.opacity(0.88))
-                            .lineLimit(1)
-                        Text("运行 \(thread.runningSegmentCount) / 排队 \(thread.queuedSegmentCount)")
-                            .font(.system(size: 10.5, weight: .medium, design: .monospaced))
-                            .foregroundStyle(.white.opacity(0.52))
-                    }
-
-                    Spacer()
-
-                    Text(thread.status.rawValue)
-                        .font(.system(size: 10.5, weight: .bold))
-                        .foregroundStyle(thread.hasRunningSegment ? Color.lingHolo : .white.opacity(0.50))
-                }
-                .padding(.vertical, 5)
-            }
-        }
-        .padding(12)
-        .background(Color.white.opacity(0.045), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .stroke(Color.lingHolo.opacity(0.12))
-        }
-    }
-}
-
-struct TaskRuntimePanelView: View {
-    let runtime: TaskRuntimeSnapshot
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 8) {
-                Image(systemName: runtime.stage.icon)
-                    .font(.system(size: 12, weight: .bold))
-                    .foregroundStyle(runtime.stage.color)
-                    .frame(width: 24, height: 24)
-                    .background(runtime.stage.color.opacity(0.12), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
-
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("任务运行时")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(.white)
-                    Text(runtime.stage.rawValue)
-                        .font(.system(size: 10.5, weight: .bold, design: .monospaced))
-                        .foregroundStyle(runtime.stage.color.opacity(0.88))
-                }
-
-                Spacer()
-
-                Text(runtime.taskID)
-                    .font(.system(size: 10, weight: .bold, design: .monospaced))
-                    .foregroundStyle(.white.opacity(0.38))
-                    .lineLimit(1)
-            }
-
-            Text(runtime.summary)
+    private var notConnectedNotice: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Label("主通道未接入", systemImage: "link.badge.plus")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(Color.orange.opacity(0.92))
+            Text("主通道就绪后这里会实时显示灵枢正在做什么；未接入时不展示任何虚假进展。")
                 .font(.system(size: 11.5, weight: .medium))
-                .foregroundStyle(.white.opacity(0.58))
+                .foregroundStyle(.white.opacity(0.56))
                 .fixedSize(horizontal: false, vertical: true)
+        }
+    }
 
-            VStack(alignment: .leading, spacing: 7) {
-                HoloMetricRow(label: "当前动作", value: runtime.currentAction, icon: "cursorarrow.motionlines", color: runtime.stage.color)
-                HoloMetricRow(label: "执行器", value: runtime.executionEngine, icon: "cpu", color: .cyan)
-                HoloMetricRow(label: "权限边界", value: runtime.permissionBoundary, icon: "lock.shield", color: .orange)
-                HoloMetricRow(label: "记忆", value: runtime.memoryStatus, icon: "brain", color: .purple)
-                HoloMetricRow(label: "Review", value: runtime.reviewGate, icon: "checkmark.seal", color: .green)
+    /// 真有活在跑:中枢状态 + 已用时 + 当前动作 + 独立运行 runbook 步 + 计划进度 + 执行轨迹尾部(全真实)。
+    private var liveProgressBody: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            VStack(alignment: .leading, spacing: 9) {
+                HoloMetricRow(label: "中枢状态", value: state.coreStateDisplay, icon: state.coreState.icon, color: state.coreState.color)
+                if let elapsed = state.currentRoundElapsed {
+                    HoloMetricRow(label: "已用时", value: elapsed, icon: "timer", color: .lingHolo)
+                }
+                if let tool = state.currentToolDisplay {
+                    HoloMetricRow(label: "当前动作", value: tool, icon: "cursorarrow.motionlines", color: .cyan)
+                }
+                if state.autonomousRun.isActive {
+                    HoloMetricRow(label: "权限", value: state.autonomousRun.permissionLevel.rawValue, icon: "lock.shield", color: .orange)
+                }
+                if let progress = state.currentPlanProgress {
+                    HoloMetricRow(label: "计划", value: "\(progress.done)/\(progress.total) 步完成", icon: "checklist", color: .green)
+                }
             }
 
-            VStack(alignment: .leading, spacing: 7) {
-                ForEach(runtime.checks) { check in
-                    TaskRuntimeCheckRow(check: check)
+            if let running = state.autonomousRunningStep {
+                LingShuDivider()
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("当前 Runbook 步")
+                        .font(.system(size: 12.5, weight: .bold))
+                        .foregroundStyle(.white)
+                    HStack(alignment: .top, spacing: 10) {
+                        Text(String(format: "%02d/%02d", running.index, running.total))
+                            .font(.system(size: 11, weight: .bold, design: .monospaced))
+                            .foregroundStyle(.orange)
+                            .frame(width: 48, height: 24)
+                            .background(Color.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 6))
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(running.step.title)
+                                .font(.system(size: 12, weight: .bold))
+                                .foregroundStyle(.white.opacity(0.88))
+                            Text(running.step.detail)
+                                .font(.system(size: 10.8, weight: .medium))
+                                .foregroundStyle(.white.opacity(0.5))
+                                .lineLimit(2)
+                        }
+                    }
+                }
+            }
+
+            LingShuDivider()
+
+            VStack(alignment: .leading, spacing: 9) {
+                Text("执行轨迹")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(.white)
+                let messages = state.recentExecutionMessages
+                if messages.isEmpty {
+                    Text(state.coreState == .thinking ? "灵枢正在思考，尚未发起动作。" : "本轮刚开始，等待第一步动作。")
+                        .font(.system(size: 11.5, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.5))
+                } else {
+                    ForEach(messages) { message in
+                        LiveExecutionStepRow(message: message)
+                    }
                 }
             }
         }
     }
+
+    /// 真空闲:有意义的空态(不是一排 0/待命),引导给目标。
+    private var idleNotice: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Image(systemName: "moon.zzz")
+                    .font(.system(size: 13, weight: .bold))
+                    .foregroundStyle(Color.lingHolo.opacity(0.8))
+                Text("空闲中 · 随时待命")
+                    .font(.system(size: 13.5, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.85))
+            }
+            Text("当前没有进行中的任务。在对话里发指令，或到左侧「独立运行」给一个目标并启动——这里会实时显示它正在执行的步骤、调用的工具与执行轨迹。")
+                .font(.system(size: 11.5, weight: .medium))
+                .foregroundStyle(.white.opacity(0.55))
+                .fixedSize(horizontal: false, vertical: true)
+            HoloMetricRow(label: "主记忆", value: state.mainMemoryStatus, icon: "memorychip", color: .cyan)
+            HoloMetricRow(label: "冷备库", value: state.coldMemoryStatus, icon: "externaldrive", color: .orange)
+        }
+    }
 }
 
-struct TaskRuntimeCheckRow: View {
-    let check: TaskRuntimeCheck
+/// 执行轨迹一行:按结构化 detail 取图标/着色,渲染当前记录尾部的工具调用/结果/文件改动(真实活动)。
+struct LiveExecutionStepRow: View {
+    let message: LingShuTaskExecutionMessage
 
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
-            Image(systemName: check.state.icon)
-                .font(.system(size: 10, weight: .bold))
-                .foregroundStyle(check.state.color)
+            Image(systemName: icon)
+                .font(.system(size: 10.5, weight: .bold))
+                .foregroundStyle(tint)
                 .frame(width: 18, height: 18)
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text(check.title)
-                    .font(.system(size: 11.5, weight: .bold))
-                    .foregroundStyle(.white.opacity(0.82))
-                Text(check.detail)
-                    .font(.system(size: 10.5, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.48))
-                    .lineLimit(2)
-            }
+            Text(message.text)
+                .font(.system(size: 11.5, weight: .medium))
+                .foregroundStyle(.white.opacity(0.8))
+                .lineLimit(2)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
         }
     }
-}
 
-struct LingShuAgentStatusRow: View {
-    let index: Int
-    let agent: LingShuAgent
-
-    var body: some View {
-        HStack(alignment: .top, spacing: 10) {
-            Text(String(format: "%02d", index + 1))
-                .font(.system(size: 10, weight: .bold, design: .monospaced))
-                .foregroundStyle(agent.state.color)
-                .frame(width: 28, height: 24)
-                .background(agent.state.color.opacity(0.12), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
-
-            VStack(alignment: .leading, spacing: 6) {
-                HStack(spacing: 8) {
-                    Text(agent.shortName)
-                        .font(.system(size: 12.5, weight: .bold))
-                        .foregroundStyle(.white.opacity(0.90))
-                    Text(agent.mode.rawValue)
-                        .font(.system(size: 10.5, weight: .bold))
-                        .foregroundStyle(agent.mode.color)
-                    Spacer()
-                    Text(agent.cadence)
-                        .font(.system(size: 10.5, weight: .bold, design: .monospaced))
-                        .foregroundStyle(.white.opacity(0.46))
-                }
-
-                Text(agent.focus)
-                    .font(.system(size: 11.5, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.64))
-                    .lineLimit(2)
-
-                if agent.lastFinding != "尚未巡检" {
-                    Text(agent.lastFinding)
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(.white.opacity(0.46))
-                        .lineLimit(2)
-                }
-
-                GeometryReader { proxy in
-                    ZStack(alignment: .leading) {
-                        Capsule()
-                            .fill(Color.white.opacity(0.08))
-                        Capsule()
-                            .fill(agent.color.opacity(0.78))
-                            .frame(width: max(8, proxy.size.width * agent.load))
-                    }
-                }
-                .frame(height: 4)
-            }
+    private var icon: String {
+        switch message.detail {
+        case .toolCall: return "cursorarrow.motionlines"
+        case .toolResult(_, let success, _): return success ? "checkmark.circle" : "exclamationmark.triangle"
+        case .fileEdit: return "doc.badge.gearshape"
+        case .none: return "circlebadge"
         }
-        .padding(.vertical, 6)
-        .overlay(alignment: .bottom) {
-            Rectangle()
-                .fill(Color.white.opacity(0.06))
-                .frame(height: 1)
+    }
+
+    private var tint: Color {
+        switch message.detail {
+        case .toolCall: return .cyan
+        case .toolResult(_, let success, _): return success ? .green : .orange
+        case .fileEdit: return .lingHolo
+        case .none: return .white.opacity(0.5)
         }
     }
 }
