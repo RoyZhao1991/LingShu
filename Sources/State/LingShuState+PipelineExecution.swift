@@ -50,6 +50,10 @@ extension LingShuState {
                 return (path, mtime)
             }, uniquingKeysWith: { a, _ in a })
             : [:]
+        // 命令开始时刻:事后只把**执行期间真被写出/改动**的文件登记成产出物。
+        // 根治污染:`pwd && ls`/`cat` 等会把工作目录里**别的任务的旧文件**(如「灵枢自我介绍.pptx」)列进输出,
+        // 旧逻辑从输出抽路径、又因这些路径不在「命令快照」里而当「新增」登记 → 串入本任务产出物。
+        let commandStartedAt = Date()
         // 凭据注入(计划 §5):把 command/url 里的 {{cred:KEY}} 占位符在**执行层**换成加密库真值。
         // 记录里(上面已用 raw arguments 录了 toolCall)保留占位符;执行用 execArgs(含明文);
         // secrets 供执行后给输出打码,明文绝不进任务记录/模型上下文。
@@ -136,6 +140,9 @@ extension LingShuState {
                     guard let nowMtime, nowMtime > oldMtime else { continue }   // 未改动 → 跳过
                     appendTaskRecordArtifact(taskRecordID, title: (path as NSString).lastPathComponent, location: path, producer: "命令产出", operation: .modified)
                 } else {
+                    // 不在命令快照里(多半来自 ls/cat 输出):**只有执行期间真被写出**(mtime ≥ 命令开始)才算本任务产出;
+                    // 否则是工作目录里别的任务的旧文件被列出来了 → **不登记**(根治产出物串台)。
+                    guard let nowMtime, nowMtime >= commandStartedAt.addingTimeInterval(-1) else { continue }
                     appendTaskRecordArtifact(taskRecordID, title: (path as NSString).lastPathComponent, location: path, producer: "命令产出", operation: .created)
                 }
             }
