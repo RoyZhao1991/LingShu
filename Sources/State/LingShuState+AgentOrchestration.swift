@@ -23,30 +23,43 @@ extension LingShuState {
     func handleOrchestratorEvent(_ event: LingShuOrchestratorEvent) {
         switch event {
         case .spawned(let id, let objective):
-            // 每条并行子任务 = 一条独立任务执行记录(列表里有自己的任务号)。
-            let recordID = createTaskExecutionRecord(for: objective)
+            // 主线程分诊派发的任务已**预映射**到自己的记录(dispatchIsolatedTask),复用之;否则(模型 spawn_task)新建一条。
+            let recordID = agentSubTaskRecords[id] ?? createTaskExecutionRecord(for: objective)
             agentSubTaskRecords[id] = recordID
-            appendTaskRecordMessage(recordID, actor: "Agent循环", role: "派生子任务", kind: .router, text: "主会话派生并行子任务:\(objective)")
+            appendTaskRecordMessage(recordID, actor: "Agent循环", role: "派生子任务", kind: .router, text: "派生并行子任务:\(objective)")
         case .completed(let id, let objective, let summary):
-            if let recordID = agentSubTaskRecords[id] {
+            let recordID = agentSubTaskRecords[id]
+            if let recordID {
                 appendTaskRecordMessage(recordID, actor: "子任务", role: "结果", kind: .result, text: summary)
                 finishTaskRecord(recordID, status: .completed, summary: summary)
             }
-            chatMessages.append(.init(speaker: "灵枢", text: "✅ 子任务「\(objective)」完成:\(summary)", isUser: false, taskRecordID: agentSubTaskRecords[id]))
+            postOrchestratorChat(recordID: recordID, dispatched: "✅ \(summary)", spawned: "✅ 子任务「\(objective)」完成:\(summary)")
             briefMainThread("子任务「\(objective)」已完成:\(summary.prefix(200))")
         case .blocked(let id, let objective, let question):
-            if let recordID = agentSubTaskRecords[id] {
+            let recordID = agentSubTaskRecords[id]
+            if let recordID {
                 appendTaskRecordMessage(recordID, actor: "子任务", role: "卡住", kind: .warning, text: question)
             }
-            chatMessages.append(.init(speaker: "灵枢", text: "⏸ 子任务「\(objective)」卡住,需要你定:\(question)", isUser: false, taskRecordID: agentSubTaskRecords[id]))
+            postOrchestratorChat(recordID: recordID, dispatched: "⏸ 卡住,需要你定:\(question)", spawned: "⏸ 子任务「\(objective)」卡住,需要你定:\(question)")
             briefMainThread("子任务「\(objective)」卡住,等待用户补充:\(question.prefix(160))")
         case .failed(let id, let objective, let summary):
-            if let recordID = agentSubTaskRecords[id] {
+            let recordID = agentSubTaskRecords[id]
+            if let recordID {
                 appendTaskRecordMessage(recordID, actor: "子任务", role: "失败", kind: .warning, text: summary)
                 finishTaskRecord(recordID, status: .blocked, summary: summary)
             }
-            chatMessages.append(.init(speaker: "灵枢", text: "⚠️ 子任务「\(objective)」未能自行收尾:\(summary)", isUser: false, taskRecordID: agentSubTaskRecords[id]))
+            postOrchestratorChat(recordID: recordID, dispatched: "⚠️ 未能自行收尾:\(summary)", spawned: "⚠️ 子任务「\(objective)」未能自行收尾:\(summary)")
             briefMainThread("子任务「\(objective)」未能自行收尾:\(summary.prefix(160))")
+        }
+    }
+
+    /// 编排器结果回灌对话:**主线程分诊派发**的任务回填它自己的加载气泡(不另起一条);
+    /// **模型 spawn_task** 的子任务则追加一条新气泡(它本就没有预建气泡)。
+    private func postOrchestratorChat(recordID: String?, dispatched: String, spawned: String) {
+        if let recordID, dispatchedTaskBubbles[recordID] != nil {
+            fillDispatchedBubble(recordID, text: dispatched)
+        } else {
+            chatMessages.append(.init(speaker: "灵枢", text: spawned, isUser: false, taskRecordID: recordID))
         }
     }
 

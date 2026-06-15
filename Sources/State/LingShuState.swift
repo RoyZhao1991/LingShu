@@ -172,6 +172,9 @@ final class LingShuState: ObservableObject {
     var mainAgentSessionHolder: LingShuAgentSession?
     /// 编排器子会话 id → 任务执行记录 id(让每条并行子任务成为列表里独立任务号)。
     var agentSubTaskRecords: [String: String] = [:]
+    /// 主线程分诊「派发」的任务:记录 id → 它在对话里的加载气泡 id(完成时回填这条气泡而非另起一条)。
+    /// Stage 2 多任务真隔离:每条派发任务有自己的气泡 + 独立 session,互不串。
+    var dispatchedTaskBubbles: [String: UUID] = [:]
     /// 主会话当前回合的任务记录 id;工具桥据此把产出文件登记到正确记录。
     var currentAgentTurnRecordID: String?
     /// 当前 agent 主回合的 Task(供语音通话"真指令打断"取消在飞模型调用)。
@@ -823,9 +826,25 @@ final class LingShuState: ObservableObject {
             return autonomousResponse
         }
 
-        // 唯一出口:统一 agent 循环(模型即编排者 + 真工具 + 隔离子会话 + 验收门)。
-        // 路由/直答/澄清/任务续接/并发都由模型在循环里决策,不再有 Swift 启发式前置门。
-        return runMainAgentTurn(prompt: trimmedPrompt, taskRecordID: taskRecordID)
+        // 续接/追问(已有记录)→ 直接主回合,不分诊(继续这件事,不重新派发)。
+        if existingTaskRecordID != nil {
+            return runMainAgentTurn(prompt: trimmedPrompt, taskRecordID: taskRecordID)
+        }
+
+        // 新顶层输入:主线程**先分诊**(Stage 2 多任务真隔离)——
+        //   直答(对话/问答)→ 留主 session(runMainAgentTurn,对话连续);
+        //   任务(要执行/落盘/多步)→ 派发**独立隔离 session 并行跑**(dispatchIsolatedTask,不串主上下文)。
+        // 分诊是一次轻量模型判定(保守:失败/对话一律留主线程,不误派)。异步,故即时无文案,真回复经气泡给出。
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            let triage = await self.classifyDispatch(trimmedPrompt)
+            if triage.dispatch {
+                self.dispatchIsolatedTask(prompt: trimmedPrompt, taskRecordID: taskRecordID, goal: triage.goal)
+            } else {
+                _ = self.runMainAgentTurn(prompt: trimmedPrompt, taskRecordID: taskRecordID)
+            }
+        }
+        return ""
     }
 
     func refreshCodexAuthStatusIfNeeded() {
