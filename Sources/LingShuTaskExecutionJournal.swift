@@ -168,6 +168,11 @@ struct LingShuTaskExecutionRecord: Identifiable, Codable, Equatable, Sendable {
     /// 代码交付任务的代码改动概览(分支 + 未提交文件)。nil=非代码任务/工作目录非 git 仓/无未提交改动。
     var codeChanges: LingShuCodeChangeSummary?
 
+    /// 一句话**总目标**(模型经 `update_plan` 蒸馏的高度概括,如"构建一个清分结算系统";**不是复述需求**)。
+    /// 三级信息架构第 1 级(右侧规划):总目标 → 分步计划(`plan`,抽象里程碑)→ 具体实现(左侧执行对话)。
+    /// 空=模型未给(回退用 title)。
+    var goal: String = ""
+
     /// 开发任务判定 → 仅决定任务窗口右侧是否显示「Git 工具」段。
     /// **严格成立条件:已捕获的 git 改动里含真·源码文件**(收尾后 `captureCodeChanges` 扫描)。
     /// 关键:`.md`/文档/`.pptx` 等**非源码**即便在 git 仓里被改、被 `captureCodeChanges` 收进 codeChanges,
@@ -205,6 +210,7 @@ struct LingShuTaskExecutionRecord: Identifiable, Codable, Equatable, Sendable {
         case designScore
         case designIssues
         case codeChanges
+        case goal
     }
 
     init(
@@ -222,9 +228,11 @@ struct LingShuTaskExecutionRecord: Identifiable, Codable, Equatable, Sendable {
         plan: [LingShuPlanStep] = [],
         designScore: Double? = nil,
         designIssues: [String] = [],
-        codeChanges: LingShuCodeChangeSummary? = nil
+        codeChanges: LingShuCodeChangeSummary? = nil,
+        goal: String = ""
     ) {
         self.id = id
+        self.goal = goal
         self.title = title
         self.prompt = prompt
         self.status = status
@@ -258,6 +266,7 @@ struct LingShuTaskExecutionRecord: Identifiable, Codable, Equatable, Sendable {
         designScore = try container.decodeIfPresent(Double.self, forKey: .designScore)
         designIssues = try container.decodeIfPresent([String].self, forKey: .designIssues) ?? []
         codeChanges = try container.decodeIfPresent(LingShuCodeChangeSummary.self, forKey: .codeChanges)
+        goal = try container.decodeIfPresent(String.self, forKey: .goal) ?? ""
     }
 
     static func create(prompt: String, now: Date = Date()) -> LingShuTaskExecutionRecord {

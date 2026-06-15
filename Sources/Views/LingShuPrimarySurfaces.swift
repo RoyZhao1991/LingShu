@@ -227,6 +227,8 @@ struct LingShuStableTopBar: View {
                                 }
                             }
                             .font(.system(size: compact ? 15 : 12.5, weight: .semibold))
+                            .lineLimit(1)
+                            .fixedSize(horizontal: true, vertical: false)   // 标签(如"线程")不换行:按自然宽度排,别被宽图标挤成两行
                             .foregroundStyle(isSelected ? Color.lingHolo : .white.opacity(0.6))
                             Rectangle()
                                 .fill(isSelected ? Color.lingHolo : .clear)

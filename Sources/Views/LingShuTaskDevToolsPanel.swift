@@ -39,15 +39,14 @@ struct TaskDevToolsPanel: View {
         return remainder == 0 ? "\(minutes)m" : "\(minutes)m\(remainder)s"
     }
 
-    // 目标=这件事要落地交付什么(用户原始诉求),**始终显示**;不显示"测试全绿"这类过程性结论(那归「任务摘要」)。
+    // 目标=**一句话总目标**(模型经 update_plan 蒸馏的 record.goal,如"构建一个清分结算系统")。
+    // 模型没给(旧记录/简单任务)则回退 title(短),都没有才用 prompt。
     private var goalText: String {
-        let prompt = record.prompt.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !prompt.isEmpty { return prompt }
-        return record.title.trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    private var hasSummary: Bool {
-        !record.summary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let goal = record.goal.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !goal.isEmpty { return goal }
+        let title = record.title.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !title.isEmpty { return title }
+        return record.prompt.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     // 本轮 + 续接历史的产出物(去重,最新在前)。
@@ -63,10 +62,6 @@ struct TaskDevToolsPanel: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 goalSection
-                if hasSummary {
-                    Divider().overlay(Color.white.opacity(0.08))
-                    summarySection
-                }
                 if !record.plan.isEmpty {
                     Divider().overlay(Color.white.opacity(0.08))
                     progressSection
@@ -250,23 +245,11 @@ struct TaskDevToolsPanel: View {
         .foregroundStyle(.white.opacity(0.5))
     }
 
-    // MARK: - 任务摘要(做完后的结论,与「目标」分开:目标=要交付什么,摘要=做完了什么)
-
-    private var summarySection: some View {
-        VStack(alignment: .leading, spacing: 7) {
-            sectionHeader("任务摘要", systemImage: "text.alignleft", tint: .lingHolo)
-            Text(record.summary)
-                .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(.white.opacity(0.66))
-                .fixedSize(horizontal: false, vertical: true)
-        }
-    }
-
-    // MARK: - 进度(复用执行计划卡)
+    // MARK: - 分步计划(抽象里程碑 + 完成打钩;复用执行计划卡。结果摘要不在右侧——具体执行/结论在左侧对话)
 
     private var progressSection: some View {
         VStack(alignment: .leading, spacing: 9) {
-            sectionHeader("进度", systemImage: "list.bullet.clipboard", tint: .lingHolo)
+            sectionHeader("分步计划", systemImage: "list.bullet.clipboard", tint: .lingHolo)
             TaskPlanCard(steps: record.plan)
         }
     }

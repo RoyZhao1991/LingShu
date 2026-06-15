@@ -9,25 +9,29 @@ extension LingShuState {
     func updateTaskPlanTool(recordIDProvider: @escaping @MainActor @Sendable () -> String?) -> LingShuAgentTool {
         LingShuAgentTool(
             name: "update_plan",
-            description: "列出/更新本任务的执行计划清单(LOOP 标准:先 plan 再逐步执行)。开始任何多步任务**先调用**列出 3–7 步;之后每推进一步再调用更新对应 step 的 status(pending/in_progress/completed)。简单一问一答/纯对话不需要。",
-            parametersJSON: "{\"type\":\"object\",\"properties\":{\"steps\":{\"type\":\"array\",\"description\":\"计划步骤,每项 {title, status}\",\"items\":{\"type\":\"object\",\"properties\":{\"title\":{\"type\":\"string\"},\"status\":{\"type\":\"string\",\"description\":\"pending / in_progress / completed\"}}}}},\"required\":[\"steps\"]}"
+            description: "列出/更新本任务的执行计划(LOOP 标准:先 plan 再逐步执行)。**首次调用给出**:① `goal`=一句话**总目标**(高度抽象概括,如「构建一个清分结算系统」,**不是复述需求原文**);② `steps`=3–7 步**抽象计划**(每步是阶段性里程碑/分步目标,**不绑定具体实现路径**——具体怎么做你在推进中自己摸索、可随时换法)。之后每推进一步再调用更新对应 step 的 status(pending/in_progress/completed)。简单一问一答/纯对话不需要。",
+            parametersJSON: "{\"type\":\"object\",\"properties\":{\"goal\":{\"type\":\"string\",\"description\":\"一句话总目标(高度抽象概括,不复述需求原文)\"},\"steps\":{\"type\":\"array\",\"description\":\"抽象分步计划(里程碑/分步目标,不绑定具体实现),每项 {title, status}\",\"items\":{\"type\":\"object\",\"properties\":{\"title\":{\"type\":\"string\"},\"status\":{\"type\":\"string\",\"description\":\"pending / in_progress / completed\"}}}}},\"required\":[\"steps\"]}"
         ) { [weak self] argsJSON in
             let steps = Self.parsePlanSteps(argsJSON)
+            let goal = Self.parsePlanGoal(argsJSON)
             guard !steps.isEmpty else {
                 lingShuControlLog("update_plan parse EMPTY; raw args=\(argsJSON.prefix(500))")
                 // 计划是可选脚手架,不是任务本身。解析失败别让模型死磕格式——直接steer它跳过、去做真正的事。
-                return "计划没解析到步骤(格式可参考 {\"steps\":[{\"title\":\"第一步\"}]})。但**计划是可选的,别卡在这里**——如果再传一次还不行,就直接用 write_file/run_command 等开始做任务本身,完成后给结果。"
+                return "计划没解析到步骤(格式可参考 {\"goal\":\"一句话总目标\",\"steps\":[{\"title\":\"第一步\"}]})。但**计划是可选的,别卡在这里**——如果再传一次还不行,就直接用 write_file/run_command 等开始做任务本身,完成后给结果。"
             }
-            await MainActor.run { [weak self] in self?.applyTaskPlan(steps, recordID: recordIDProvider()) }
+            await MainActor.run { [weak self] in self?.applyTaskPlan(steps, goal: goal, recordID: recordIDProvider()) }
             let body = steps.enumerated().map { "\($0.offset + 1). [\($0.element.status.rawValue)] \($0.element.title)" }.joined(separator: "\n")
             return "已更新执行计划(\(steps.count) 步):\n\(body)\n按计划逐步执行,每完成一步再 update_plan 标记状态。"
         }
     }
 
-    /// 把计划写进当前任务记录并持久化(窗口顶部据此渲染 todo)。
-    func applyTaskPlan(_ steps: [LingShuPlanStep], recordID: String?) {
+    /// 把计划(+ 可选一句话总目标)写进当前任务记录并持久化(右侧据此渲染 目标 + 分步计划)。
+    func applyTaskPlan(_ steps: [LingShuPlanStep], goal: String? = nil, recordID: String?) {
         guard let recordID, let index = taskExecutionRecords.firstIndex(where: { $0.id == recordID }) else { return }
         taskExecutionRecords[index].plan = steps
+        if let goal = goal?.trimmingCharacters(in: .whitespacesAndNewlines), !goal.isEmpty {
+            taskExecutionRecords[index].goal = goal   // 一句话总目标(模型蒸馏);空则不覆盖已有
+        }
         taskExecutionRecords[index].updatedAt = Date()
         persistTaskExecutionRecords()
         // 计划一更新就把加载气泡刷成"当前在做的步骤"(进行中→待办),让进度显示活动而非"思考中"。
@@ -53,6 +57,19 @@ extension LingShuState {
             return []
         }
         return stepsFromAny(root)   // 顶层直接是数组
+    }
+
+    /// 从 update_plan 参数里抽出「一句话总目标」(纯函数,可测)。兼容 goal/objective/目标 键名。
+    nonisolated static func parsePlanGoal(_ json: String) -> String? {
+        guard let data = json.data(using: .utf8),
+              let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return nil }
+        for key in ["goal", "objective", "目标", "总目标"] {
+            if let s = obj[key] as? String {
+                let t = s.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !t.isEmpty { return t }
+            }
+        }
+        return nil
     }
 
     /// 把任意形状的"步骤值"归一成计划步骤:对象数组 / 纯字符串数组 / 混合数组 / 内嵌 JSON 字符串。

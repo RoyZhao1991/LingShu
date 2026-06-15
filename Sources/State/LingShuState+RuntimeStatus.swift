@@ -120,6 +120,19 @@ extension LingShuState {
         return "推进中"
     }
 
+    /// **per-task** 活动标签(给加载气泡用,**不串全局**):只看**该条记录自己**的计划进行中步/待办步;
+    /// 没有计划则按该记录状态给通用活动。多任务并行时每个气泡显示各自进度,不再借用全局 missionTitle 而串台。
+    func activityLabel(for recordID: String?) -> String {
+        guard let recordID, let rec = taskExecutionRecords.first(where: { $0.id == recordID }) else { return "理解需求" }
+        if let s = rec.plan.first(where: { $0.status == .inProgress }) { return String(s.title.prefix(22)) }
+        if let s = rec.plan.first(where: { $0.status == .pending }) { return String(s.title.prefix(22)) }
+        switch rec.status {
+        case .running: return "推进中"
+        case .queued: return "排队中"
+        default: return "理解需求"
+        }
+    }
+
     // MARK: - 本轮真实进展（侧栏绑真实进展,替代静态聚合遥测,计划 §2）
 
     /// 当前这轮正在写入的任务记录:独立运行时取其记录,否则模型在跑时取最近更新的记录。无活动 → nil。

@@ -68,7 +68,8 @@ struct ChatBubbleView: View {
                     if message.taskRecordID != nil {
                         // 任务执行：主线程只显示「当前步骤 + 耗时」的紧凑状态（语音友好、不刷屏）；
                         // 点一下进任务子线程窗口看实时的多段执行过程——对齐 codex/claude 的状态行做法。
-                        LingShuTaskProgressIndicator(stage: state.missionTitle, startedAt: message.createdAt) {
+                        // per-task 活动:显示**这条消息自己任务**的进度,不读全局 missionTitle(根治多任务并行时串台)。
+                        LingShuTaskProgressIndicator(stage: state.activityLabel(for: message.taskRecordID), startedAt: message.createdAt) {
                             state.openTaskRecord(message.taskRecordID)
                         }
                     } else {
