@@ -49,9 +49,10 @@ struct LingShuTaskPoolView: View {
 
     private var header: some View {
         HStack(spacing: 14) {
-            Label("归档", systemImage: "archivebox")
+            Label("线程", systemImage: "bubble.left.and.bubble.right")
                 .font(.system(size: 16, weight: .bold))
                 .foregroundStyle(Color.lingHolo)
+                .help("主线程是全能中枢;每个任务是一条线程,派生的子线程像专项工作室——其上下文对该任务更聚焦、价值更高。")
             Text("进行中 \(ongoing.count) · 已完成 \(done.count)")
                 .font(.system(size: 12))
                 .foregroundStyle(.white.opacity(0.5))
@@ -63,7 +64,7 @@ struct LingShuTaskPoolView: View {
                 }
                 .toggleStyle(.button)
                 .tint(Color.lingHolo)
-                .help("纳入一个月前的冷备任务(更早的归档记录)")
+                .help("纳入一个月前的冷备任务(更早的线程记录)")
             }
         }
         .padding(.horizontal, 20)
