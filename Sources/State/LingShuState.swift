@@ -751,21 +751,28 @@ final class LingShuState: ObservableObject {
 
     @discardableResult
     func sendPrompt() -> String {
-        let attachmentContext = attachmentContextBlock()
-        guard !attachmentContext.isEmpty else {
-            return submitTextInput(prompt, source: .typed)
-        }
+        let text = prompt
+        prompt = ""
+        return submitTextWithAttachments(text, source: .typed)
+    }
 
+    /// 提交一条指令并**带上待发附件**(把附件正文折入提示 + 清空托盘)。
+    /// UI sendPrompt 与 MCP `lingshu_send_prompt` 共用——修"MCP 发送时附件没一并带出"的 bug。
+    @discardableResult
+    func submitTextWithAttachments(_ text: String, source: LingShuDialogueInputSource) -> String {
+        let attachmentContext = attachmentContextBlock()
+        let userText = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !attachmentContext.isEmpty else {
+            return submitTextInput(userText, source: source)
+        }
         // 有附件时：用户消息原文照常入库展示，但发给模型的提示前置附件正文上下文。
-        let userText = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
         let combined = userText.isEmpty
             ? "\(attachmentContext)\n\n请按上述文件落地交付。"
             : "\(attachmentContext)\n\n用户指令：\n\(userText)"
         let displayText = userText.isEmpty ? "[上传了 \(pendingAttachments.count) 个文件]" : userText
         chatMessages.append(.init(speaker: "你", text: displayText, isUser: true))
-        prompt = ""
         clearAttachments()
-        return submitTextInput(combined, source: .typed, appendUserMessage: false)
+        return submitTextInput(combined, source: source, appendUserMessage: false)
     }
 
     @discardableResult

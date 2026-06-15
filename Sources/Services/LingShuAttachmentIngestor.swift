@@ -1,4 +1,5 @@
 import Foundation
+import PDFKit
 
 /// 用户上传给灵枢处理的附件（图片 / PPT / PDF / 文本等）。
 struct LingShuAttachment: Identifiable, Equatable, Sendable {
@@ -77,6 +78,8 @@ struct LingShuAttachmentIngestor {
             return .image
         case "ppt", "pptx", "key":
             return .presentation
+        case "xlsx", "xls":
+            return .document
         case "pdf", "doc", "docx":
             return .document
         case "txt", "md", "markdown", "csv", "json", "swift", "py", "js", "ts", "html", "xml", "yaml", "yml":
@@ -111,15 +114,90 @@ struct LingShuAttachmentIngestor {
                 status: text.isEmpty ? "无法以文本解码" : nil
             )
         case .document, .other:
-            // PDF/Word 暂不在本机解析二进制，登记为待模型按需处理。
+            // 本机解析常见办公文档正文(不上传原文件):PDF→PDFKit,xlsx/docx→解压读 OOXML。
+            let ext = fileURL.pathExtension.lowercased()
+            let text: String
+            switch ext {
+            case "pdf":  text = Self.extractPDFText(fileURL: fileURL)
+            case "xlsx": text = Self.extractXLSXText(fileURL: fileURL)
+            case "docx": text = Self.extractDOCXText(fileURL: fileURL)
+            default:     text = ""
+            }
+            if !text.isEmpty {
+                return .init(filename: filename, kind: kind, extractedContext: Self.clip(text), byteCount: byteCount)
+            }
             return .init(
-                filename: filename,
-                kind: kind,
-                extractedContext: "",
-                byteCount: byteCount,
-                status: "已登记，正文抽取暂不支持该格式"
+                filename: filename, kind: kind, extractedContext: "", byteCount: byteCount,
+                status: ["pdf", "xlsx", "docx"].contains(ext) ? "未能从该文件抽取文本" : "已登记，正文抽取暂不支持该格式(\(ext))"
             )
         }
+    }
+
+    /// PDF 正文(PDFKit,本机解析,不出网)。
+    static func extractPDFText(fileURL: URL) -> String {
+        guard let doc = PDFDocument(url: fileURL) else { return "" }
+        var parts: [String] = []
+        for i in 0..<doc.pageCount {
+            if let s = doc.page(at: i)?.string, !s.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                parts.append(s)
+            }
+        }
+        return parts.joined(separator: "\n")
+    }
+
+    /// xlsx 正文:解压 xl/sharedStrings.xml(单元格共享字符串)抽 <t> 文本。
+    static func extractXLSXText(fileURL: URL) -> String {
+        let xml = unzipMember(fileURL: fileURL, member: "xl/sharedStrings.xml")
+        return extractTags(xml, tag: "t").joined(separator: " ")
+    }
+
+    /// docx 正文:解压 word/document.xml 抽 <w:t> 文本。
+    static func extractDOCXText(fileURL: URL) -> String {
+        let xml = unzipMember(fileURL: fileURL, member: "word/document.xml")
+        return extractTags(xml, tag: "w:t").joined(separator: "")
+    }
+
+    /// 解压 zip 容器里某成员的 XML 文本(unzip -p,本机)。
+    static func unzipMember(fileURL: URL, member: String) -> String {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/unzip")
+        process.arguments = ["-p", fileURL.path, member]
+        let pipe = Pipe(); process.standardOutput = pipe; process.standardError = FileHandle.nullDevice
+        do { try process.run() } catch { return "" }
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        return String(data: data, encoding: .utf8) ?? ""
+    }
+
+    /// 从 XML 抽 `<tag ...>内容</tag>` 的文本(容忍带属性的开标签;以词边界避免误匹配如 w:tab)。
+    static func extractTags(_ xml: String, tag: String) -> [String] {
+        guard !xml.isEmpty else { return [] }
+        var out: [String] = []
+        var rem = Substring(xml)
+        let openPrefix = "<\(tag)"
+        let closeTag = "</\(tag)>"
+        while let op = rem.range(of: openPrefix) {
+            // 开标签后必须紧跟 '>' 或空白(否则是别的标签,如 <w:tab>)。
+            let after = op.upperBound
+            guard after < rem.endIndex else { break }
+            let ch = rem[after]
+            guard ch == ">" || ch == " " || ch == "\t" || ch == "\n" || ch == "/" else {
+                rem = rem[after...]; continue
+            }
+            guard let gt = rem.range(of: ">", range: after..<rem.endIndex),
+                  let cl = rem.range(of: closeTag, range: gt.upperBound..<rem.endIndex) else { break }
+            let frag = rem[gt.upperBound..<cl.lowerBound]
+            let decoded = frag
+                .replacingOccurrences(of: "&amp;", with: "&")
+                .replacingOccurrences(of: "&lt;", with: "<")
+                .replacingOccurrences(of: "&gt;", with: ">")
+                .replacingOccurrences(of: "&quot;", with: "\"")
+                .replacingOccurrences(of: "&#10;", with: " ")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if !decoded.isEmpty { out.append(decoded) }
+            rem = rem[cl.upperBound...]
+        }
+        return out
     }
 
     private func ingestImage(filename: String, data: Data, byteCount: Int) async -> LingShuAttachment {

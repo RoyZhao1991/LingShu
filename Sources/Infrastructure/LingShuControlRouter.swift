@@ -277,7 +277,8 @@ final class LingShuControlRouter {
                 return ("缺少参数 text", true)
             }
             let source: LingShuDialogueInputSource = (arguments["source"] as? String) == "voice" ? .voice : .typed
-            let reply = state.submitTextInput(text, source: source)
+            // 带上待发附件(与 UI sendPrompt 同口径)——修"MCP 发送时附件没一并带出"的 bug。
+            let reply = state.submitTextWithAttachments(text, source: source)
             return (jsonText(["submitted": text, "immediateReply": reply]), false)
         case "lingshu_interject":
             // 流程纠正(干预):把纠正注入正在跑的会话,看到 agent 跑偏时即时纠偏(回合边界采纳)。

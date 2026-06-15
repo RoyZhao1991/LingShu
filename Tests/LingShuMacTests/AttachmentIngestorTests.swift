@@ -25,7 +25,34 @@ final class AttachmentIngestorTests: XCTestCase {
         XCTAssertEqual(LingShuAttachmentIngestor.kind(forExtension: "pptx"), .presentation)
         XCTAssertEqual(LingShuAttachmentIngestor.kind(forExtension: "pdf"), .document)
         XCTAssertEqual(LingShuAttachmentIngestor.kind(forExtension: "md"), .text)
+        XCTAssertEqual(LingShuAttachmentIngestor.kind(forExtension: "xlsx"), .document)
         XCTAssertEqual(LingShuAttachmentIngestor.kind(forExtension: "zip"), .other)
+    }
+
+    // MARK: - OOXML 正文抽取(xlsx/docx 解压后从 XML 抽文本)
+
+    func testExtractPlainTags() {
+        let xml = "<sst><si><t>北航</t></si><si><t>MEM</t></si></sst>"
+        XCTAssertEqual(LingShuAttachmentIngestor.extractTags(xml, tag: "t"), ["北航", "MEM"])
+    }
+
+    func testExtractTagsWithAttributes() {
+        let xml = "<w:p><w:r><w:t xml:space=\"preserve\">考核记录表</w:t></w:r></w:p>"
+        XCTAssertEqual(LingShuAttachmentIngestor.extractTags(xml, tag: "w:t"), ["考核记录表"])
+    }
+
+    func testExtractTagsAvoidsFalseMatch() {
+        // <w:tab/> 不应被当成 <w:t> 内容吞掉。
+        let xml = "<w:t>第一周</w:t><w:tab/><w:t>第二周</w:t>"
+        XCTAssertEqual(LingShuAttachmentIngestor.extractTags(xml, tag: "w:t"), ["第一周", "第二周"])
+    }
+
+    func testExtractDecodesEntities() {
+        XCTAssertEqual(LingShuAttachmentIngestor.extractTags("<t>A &amp; B &lt;x&gt;</t>", tag: "t"), ["A & B <x>"])
+    }
+
+    func testExtractEmptyXML() {
+        XCTAssertEqual(LingShuAttachmentIngestor.extractTags("", tag: "t"), [])
     }
 
     func testIngestTextFileExtractsContent() async throws {
