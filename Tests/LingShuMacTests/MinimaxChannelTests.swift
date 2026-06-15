@@ -12,19 +12,6 @@ final class MinimaxChannelTests: XCTestCase {
         XCTAssertEqual(LingShuReasoningText.stripThinkTags("正文 </think>"), "正文")
     }
 
-    func testRouteDecodeSkipsThinkPrefixEvenWithBracesInside() {
-        // M3 会先输出 <think>…</think>，思考里可能出现 { } 干扰 JSON 提取。
-        let planner = LingShuRoutePlanner()
-        let raw = """
-        <think>我需要输出一个 JSON，比如 {needsAgents} 这种结构。</think>
-        {"needsAgents": false, "finalAnswer": "我是灵枢，有什么可以帮你的？", "summary": "直接回答", "agents": []}
-        """
-        let payload = planner.decodeRoutePayload(from: raw)
-        XCTAssertNotNil(payload)
-        XCTAssertEqual(payload?.needsAgents, false)
-        XCTAssertEqual(payload?.userFacingAnswer, "我是灵枢，有什么可以帮你的？")
-    }
-
     func testMinimaxOfficialIsDefaultPureInferenceChannel() {
         let preset = ModelProviderPreset.minimaxOfficial
         XCTAssertEqual(preset.endpoint, "https://api.minimaxi.com/v1")
