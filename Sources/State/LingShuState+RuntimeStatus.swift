@@ -73,6 +73,27 @@ extension LingShuState {
         formatElapsed(modelHeartbeatIdleSeconds)
     }
 
+    /// 工具中文显示名(用于加载气泡"执行中：…"的实时进展)。
+    nonisolated static func toolDisplayName(_ tool: String) -> String {
+        switch tool {
+        case "write_file": return "写文件"
+        case "edit_file": return "改文件"
+        case "read_file": return "读文件"
+        case "list_directory": return "列目录"
+        case "fetch_url": return "抓网页"
+        case "run_command": return "跑命令"
+        case "web_search": return "联网搜索"
+        case "apply_skill": return "调取技能"
+        case "recall_memory": return "召回记忆"
+        case "remember_credential": return "存凭据"
+        case "list_credentials": return "列凭据"
+        case "get_current_time": return "查时间"
+        default:
+            if let computer = computerToolDisplayName(tool) { return computer }
+            return tool.hasPrefix("mcp:") ? String(tool.dropFirst(4)) : tool
+        }
+    }
+
     // MARK: - 本轮真实进展（侧栏绑真实进展,替代静态聚合遥测,计划 §2）
 
     /// 当前这轮正在写入的任务记录:独立运行时取其记录,否则模型在跑时取最近更新的记录。无活动 → nil。

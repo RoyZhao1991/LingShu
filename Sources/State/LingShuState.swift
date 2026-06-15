@@ -103,6 +103,11 @@ final class LingShuState: ObservableObject {
     @Published var localStreamingDialogueEnabled = true
     @Published var enableLocalAudit = true
     @Published var requireHumanApproval = true
+    // 计算机直接操作四肢(截屏/点击/键入)总开关:默认关,授权语义=用户显式开启 + 系统辅助功能授权(计划 §9)。
+    // 独立运行「完整授权」档自动视为开启(完整电脑控制)。
+    @Published var computerControlEnabled = UserDefaults.standard.bool(forKey: "lingshu.computerControlEnabled") {
+        didSet { UserDefaults.standard.set(computerControlEnabled, forKey: "lingshu.computerControlEnabled") }
+    }
     @Published var chatMessages: [ChatMessage] = [
         .init(speaker: "灵枢", text: "我在。你只管说目标，剩下的判断、分派和推进交给我。", isUser: false)
     ] {

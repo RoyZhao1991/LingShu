@@ -213,7 +213,10 @@ extension LingShuState {
         }
         var tools = agentBuiltinTools(recordIDProvider: { [weak self] in self?.autonomousRunRecordID }, executionPolicy: policy)
         tools += [Self.timeTool(), Self.webSearchTool(), recallMemoryTool(), rememberCredentialTool(), listCredentialsTool(), speakTool(), Self.askUserTool()] + previewTools()
-        if policy != .readOnly { tools.append(spawnTaskTool(adapter: adapter)) }   // 观察模式不派生可写子任务
+        if policy != .readOnly {
+            tools.append(spawnTaskTool(adapter: adapter))   // 观察模式不派生可写子任务
+            tools += computerControlTools()                  // 计算机直接操作四肢(完整授权档自动放行,计划 §9)
+        }
         return LingShuAgentSession(
             id: "autonomous-\(UUID().uuidString.prefix(6))",
             system: autonomousSystemPrompt(objective: objective, permissionLevel: permissionLevel, runbook: runbook),

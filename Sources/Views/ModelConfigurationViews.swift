@@ -209,6 +209,13 @@ struct ModelConfigurationView: View {
                             .foregroundStyle(Color.lingMuted)
                             .fixedSize(horizontal: false, vertical: true)
 
+                        Toggle("计算机直接操作(截屏/点击/键入)", isOn: $state.computerControlEnabled)
+                            .toggleStyle(.switch)
+                        Text("开启后灵枢可直接操作本机界面(看屏、列界面元素、点击、键入、滚动),首次使用需在『系统设置 > 隐私与安全性 > 辅助功能』授权。完整授权的独立运行会自动启用。")
+                            .font(.system(size: 11.5, weight: .medium))
+                            .foregroundStyle(Color.lingMuted)
+                            .fixedSize(horizontal: false, vertical: true)
+
                         VStack(alignment: .leading, spacing: 8) {
                             Text("随机性：\(String(format: "%.1f", state.temperature))")
                                 .font(.system(size: 12.5, weight: .semibold))

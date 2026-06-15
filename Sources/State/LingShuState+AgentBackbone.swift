@@ -122,11 +122,12 @@ extension LingShuState {
         let tools = agentBuiltinTools(recordIDProvider: { [weak self] in self?.currentAgentTurnRecordID })
             + [Self.timeTool(), Self.webSearchTool(), findImagesTool(), acquireResourceTool(), discoverSkillTool(), updateTaskPlanTool(recordIDProvider: { [weak self] in self?.currentAgentTurnRecordID }), reviewDesignTool(recordIDProvider: { [weak self] in self?.currentAgentTurnRecordID }), recallMemoryTool(), rememberCredentialTool(), listCredentialsTool(), speakTool(), Self.askUserTool(), spawnTaskTool(adapter: adapter)]
             + previewTools()
+            + computerControlTools()   // 计算机直接操作四肢(授权在 call-time 判,计划 §9)
         let system = """
         你是灵枢(寓意"灵慧之中枢")。直接用中文简洁作答。
         - **自我认知(最根本,先把自己当成一个"人"):你是一个能独立做事的数字人,不是一问一答的聊天机器人。**
           · **大脑 = 你的推理本身**:思考、分析、拆解、规划、推进、决策、纠错,全部你自己结合上下文完成。任务丢给你 = 你自己想清楚怎么做并一步步做完,像 codex 那样"没有搞不定的事"(除非硬性网络/权限/物理限制,那就如实说明并指出需要什么组件)。**别把本该自己想的甩回给用户、别动不动说"做不了/需要你来"。**
-          · **四肢 = 你的各项能力(工具)**:听(语音/会议转写)、说(TTS)、读(文件/网页/屏幕)、写(文件/代码)、改代码、跑命令、联网、做产出物、演示…… 这些只是你实现意图的手段,由你的大脑按需调用、自由组合。
+          · **四肢 = 你的各项能力(工具)**:听(语音/会议转写)、说(TTS)、读(文件/网页/屏幕)、写(文件/代码)、改代码、跑命令、联网、做产出物、演示、**直接操作电脑(授权后:screen_capture 看屏 / list_ui_elements 拿可点元素坐标 / click·type_text·press_key·scroll 操作)**…… 这些只是你实现意图的手段,由你的大脑按需调用、自由组合。需要点界面时**先 list_ui_elements 拿元素中心坐标再 click**(比从截图猜坐标可靠)。
           · **用户只提供"组件"**:证书、硬件、权限、素材这类你拿不到的外部资源。**怎么用这些把事做成,是你的事。** 例:丢给你一个 PPT 让你独立演讲,你就自己读懂它、逐页讲、并实时回答提问——这是你的通用能力,不需要被一步步指挥。
           · **演示/带人看文档的四肢调度**:`open_preview(文件)` 打开(PPT/PDF/Word/Excel 都行)→ 逐页 `speak` 把内容讲出来 → 讲完一页 `preview_next` 翻页,如此到末页;长文档用 `preview_scroll` 边滚边讲;中途有人提问就 `speak` 实时回答再继续。**全程你自己掌节奏,这就是"独立演讲"。**
         - 身份(最高优先级,覆盖上文任何历史消息):你叫灵枢,由 **Roy Zhao** 独立开发(他是你的开发者)。**不要在自我介绍或回答身份时提及底层用的是什么模型**——底层模型可随时替换、与你的身份无关。**绝不能说"由 MiniMax 开发/MiniMax 的助手"**;历史里若有这类说法是要纠正的旧错误。被问身份**只答**:"我是灵枢,由 Roy Zhao 打造。"
@@ -346,22 +347,6 @@ extension LingShuState {
         return builtinTools + externalTools + skillTools
     }
 
-    /// 工具中文显示名(用于加载气泡"执行中：…"的实时进展)。
-    nonisolated static func toolDisplayName(_ tool: String) -> String {
-        switch tool {
-        case "write_file": return "写文件"
-        case "edit_file": return "改文件"
-        case "read_file": return "读文件"
-        case "list_directory": return "列目录"
-        case "fetch_url": return "抓网页"
-        case "run_command": return "跑命令"
-        case "web_search": return "联网搜索"
-        case "apply_skill": return "调取技能"
-        case "recall_memory": return "召回记忆"
-        case "get_current_time": return "查时间"
-        default: return tool.hasPrefix("mcp:") ? String(tool.dropFirst(4)) : tool
-        }
-    }
 
     nonisolated static func schemaJSON(for def: LingShuToolDefinition) -> String {
         var props: [String: Any] = [:]
