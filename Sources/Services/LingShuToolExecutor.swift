@@ -76,11 +76,22 @@ struct LingShuLocalToolExecutor: LingShuToolExecuting {
     func execute(_ request: LingShuToolRequest, workingDirectory: String, allowShell: Bool) async -> LingShuToolResult {
         switch request.tool {
         case "read_file":
-            return readFile(path: request.arguments["path"] ?? "")
+            return readFile(
+                path: request.arguments["path"] ?? "",
+                offset: request.arguments["offset"].flatMap { Int($0) },
+                limit: request.arguments["limit"].flatMap { Int($0) }
+            )
         case "write_file":
             return writeFile(
                 path: request.arguments["path"] ?? "",
                 content: request.arguments["content"] ?? "",
+                workingDirectory: workingDirectory
+            )
+        case "edit_file":
+            return editFile(
+                path: request.arguments["path"] ?? "",
+                oldString: request.arguments["old_string"] ?? "",
+                newString: request.arguments["new_string"] ?? "",
                 workingDirectory: workingDirectory
             )
         case "list_directory":
@@ -94,7 +105,7 @@ struct LingShuLocalToolExecutor: LingShuToolExecuting {
                 allowShell: allowShell
             )
         default:
-            return .init(tool: request.tool, success: false, output: "未知工具。可用：read_file / write_file / list_directory / fetch_url / run_command")
+            return .init(tool: request.tool, success: false, output: "未知工具。可用：read_file / write_file / edit_file / list_directory / fetch_url / run_command")
         }
     }
 
@@ -103,7 +114,9 @@ struct LingShuLocalToolExecutor: LingShuToolExecuting {
     /// 读保护：身份档案、钥匙串、SSH 等敏感位置一律拒绝。
     static let deniedReadComponents = [".ssh", ".gnupg", "Keychains", "owner-profile.json", ".aws", "credentials"]
 
-    private func readFile(path: String) -> LingShuToolResult {
+    /// 读文件:**按行范围读、带行号、不再 8KB 截断**(编码所必须——大源码文件要能整文件分段看、行号供 edit_file 定位)。
+    /// offset=起始行(1 起,默认 1);limit=读多少行(默认 1200,单次封顶防爆上下文);超出范围给提示让模型续读。
+    private func readFile(path: String, offset: Int?, limit: Int?) -> LingShuToolResult {
         guard path.hasPrefix("/") else {
             return .init(tool: "read_file", success: false, output: "path 必须是绝对路径。")
         }
@@ -113,8 +126,62 @@ struct LingShuLocalToolExecutor: LingShuToolExecuting {
         guard let data = FileManager.default.contents(atPath: path) else {
             return .init(tool: "read_file", success: false, output: "文件不存在或不可读：\(path)")
         }
-        let text = String(data: data.prefix(8192), encoding: .utf8) ?? "（非文本文件，\(data.count) 字节）"
-        return .init(tool: "read_file", success: true, output: text)
+        guard let full = String(data: data, encoding: .utf8) else {
+            return .init(tool: "read_file", success: true, output: "（非文本文件，\(data.count) 字节）")
+        }
+        let lines = full.components(separatedBy: "\n")
+        let total = lines.count
+        let start = max(0, (offset ?? 1) - 1)
+        let count = max(1, min(limit ?? 1200, 2000))
+        guard start < total else {
+            return .init(tool: "read_file", success: true, output: "（文件共 \(total) 行,offset \(start + 1) 已超出末行)")
+        }
+        let slice = Array(lines.dropFirst(start).prefix(count))
+        // cat -n 风格行号(供 edit_file 精确定位);单次输出再按字节封顶 ~80KB。
+        var out = ""
+        var shown = 0
+        for (i, line) in slice.enumerated() {
+            let entry = "\(start + i + 1)\t\(line)\n"
+            if out.utf8.count + entry.utf8.count > 80_000 { break }
+            out += entry
+            shown += 1
+        }
+        let end = start + shown
+        let header = (start > 0 || end < total)
+            ? "（文件共 \(total) 行,本次显示 \(start + 1)–\(end);要看其余用 offset/limit 续读）\n"
+            : ""
+        return .init(tool: "read_file", success: true, output: header + out)
+    }
+
+    /// 精确编辑:把文件里**唯一匹配**的 old_string 换成 new_string(不重写整文件)——改大代码的核心四肢。
+    /// old_string 需与文件内容逐字符一致(含缩进);不唯一/找不到则拒绝并说明,逼模型带足上下文或分次改。
+    private func editFile(path: String, oldString: String, newString: String, workingDirectory: String) -> LingShuToolResult {
+        let normalizedRoot = (workingDirectory as NSString).standardizingPath
+        let normalizedPath = (path as NSString).standardizingPath
+        guard normalizedPath.hasPrefix(normalizedRoot + "/") || normalizedPath == normalizedRoot else {
+            return .init(tool: "edit_file", success: false, output: "编辑位置必须在工作目录 \(normalizedRoot) 内。")
+        }
+        guard !oldString.isEmpty else {
+            return .init(tool: "edit_file", success: false, output: "old_string 不能为空(新建文件请用 write_file)。")
+        }
+        guard let data = FileManager.default.contents(atPath: normalizedPath),
+              let content = String(data: data, encoding: .utf8) else {
+            return .init(tool: "edit_file", success: false, output: "文件不存在或非文本：\(normalizedPath)")
+        }
+        let occurrences = content.components(separatedBy: oldString).count - 1
+        guard occurrences > 0 else {
+            return .init(tool: "edit_file", success: false, output: "没找到 old_string(需与文件内容逐字符一致,含缩进/换行)。先 read_file 看准再改。")
+        }
+        guard occurrences == 1 else {
+            return .init(tool: "edit_file", success: false, output: "old_string 在文件里出现 \(occurrences) 次,不唯一。请带上更多上下文让它唯一,或分多次编辑。")
+        }
+        let updated = content.replacingOccurrences(of: oldString, with: newString)
+        do {
+            try updated.write(toFile: normalizedPath, atomically: true, encoding: .utf8)
+            return .init(tool: "edit_file", success: true, output: "已编辑 \(normalizedPath)(替换 1 处,现 \(updated.utf8.count) 字节)")
+        } catch {
+            return .init(tool: "edit_file", success: false, output: "写入失败：\(error.localizedDescription)")
+        }
     }
 
     private func writeFile(path: String, content: String, workingDirectory: String) -> LingShuToolResult {

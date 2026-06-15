@@ -67,18 +67,32 @@ enum LingShuFunctionCallingCatalog {
     static let builtin: [LingShuToolDefinition] = [
         .init(
             name: "read_file",
-            description: "读取文本文件的前 8KB。",
-            properties: [.init(name: "path", type: "string", description: "要读取文件的绝对路径")],
+            description: "读文本文件,带行号返回(供精确编辑定位)。大文件用 offset/limit 分段读全。",
+            properties: [
+                .init(name: "path", type: "string", description: "要读取文件的绝对路径"),
+                .init(name: "offset", type: "string", description: "(可选)起始行号,1 起,默认 1"),
+                .init(name: "limit", type: "string", description: "(可选)读多少行,默认 1200")
+            ],
             required: ["path"]
         ),
         .init(
             name: "write_file",
-            description: "把内容写入文件（只能写在工作目录内）。",
+            description: "把完整内容写入文件(只能写工作目录内)。**新建文件或整体重写用它;改已有大文件的局部用 edit_file。**",
             properties: [
                 .init(name: "path", type: "string", description: "目标文件绝对路径，必须在工作目录内"),
                 .init(name: "content", type: "string", description: "要写入的完整文本内容")
             ],
             required: ["path", "content"]
+        ),
+        .init(
+            name: "edit_file",
+            description: "精确编辑已有文件:把**唯一匹配**的 old_string 替换成 new_string,不重写整文件(改大代码首选)。old_string 要与文件逐字符一致(含缩进);不唯一就多带上下文或分次改。先 read_file 看准再编辑。",
+            properties: [
+                .init(name: "path", type: "string", description: "要编辑文件绝对路径,必须在工作目录内"),
+                .init(name: "old_string", type: "string", description: "被替换的原文(需在文件中唯一、逐字符一致)"),
+                .init(name: "new_string", type: "string", description: "替换后的新文本")
+            ],
+            required: ["path", "old_string", "new_string"]
         ),
         .init(
             name: "list_directory",

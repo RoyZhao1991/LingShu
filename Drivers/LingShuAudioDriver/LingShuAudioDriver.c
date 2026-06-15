@@ -1,105 +1,407 @@
 // 灵枢虚拟麦克风 —— AudioServerPlugIn(HAL plug-in)loopback 虚拟音频设备。
 //
-// 架构:一个虚拟设备,output 端收到的音频经环形缓冲镜像到 input 端。
-//   灵枢把 TTS 播到本设备 output → 会议 App 把麦克风选成本设备 → 听到灵枢。
+// 架构:一个虚拟设备,同时有 output 流(灵枢把 TTS 播进来)与 input 流(会议 App 当麦克风读)。
+//   output 写入的音频经环形缓冲镜像到 input → 会议对方听见灵枢。平台无关(任何能选麦的会议 App)。
 //
-// ⚠️ 这是系统级 C 驱动:必须本机 clang 编译(build-driver.sh)+ 你的证书签名 + 装到
-//    /Library/Audio/Plug-Ins/HAL/ + 重启 coreaudiod 才能验证。SwiftPM/单测覆盖不到它。
-//    本文件是**结构就位的 v1**:COM 工厂 + 插件接口骨架 + loopback 环形缓冲已写;
-//    设备/流的完整属性模型(GetPropertyDataSize/GetPropertyData 全集)与 DoIOOperation
-//    的逐字段实现,需在本机一轮 compile→install→『音频 MIDI 设置』里出现设备→会议里听到声音 中收敛。
-//    参考 Apple `NullAudio` 范式 + BlackHole 的 loopback。绝不在未跑通前声称"已可用"(假 demo 红线)。
+// 实现参照 Apple `NullAudio` 范式(标准 AudioServerPlugIn 属性模型 + IO),改成 loopback。
+// 省略音量/静音控制(设备无控件仍合法),减小出错面。对象:PlugIn=1 / Device=2 / 输入流=3 / 输出流=4。
+//
+// 构建:Drivers/LingShuAudioDriver/build-driver.sh(clang);随 app 包发布 + 灵枢自安装(一次授权)。
 
 #include <CoreAudio/AudioServerPlugIn.h>
 #include <CoreFoundation/CoreFoundation.h>
+#include <mach/mach_time.h>
 #include <pthread.h>
 #include <string.h>
+#include <stdint.h>
 
-// ---------- loopback 环形缓冲(output→input 镜像)----------
-#define LS_RING_FRAMES 16384
-#define LS_CHANNELS 2
-static float gRing[LS_RING_FRAMES * LS_CHANNELS];
-static volatile UInt64 gRingWrite = 0;   // output 写入帧位
-static pthread_mutex_t gRingLock = PTHREAD_MUTEX_INITIALIZER;
+#pragma mark - 常量与对象 ID
 
-// output 端把本次播放写进环;input 端按相同采样位读出 → 实现镜像。
-static void ls_ring_write(const float* src, UInt32 frames) {
-    pthread_mutex_lock(&gRingLock);
-    for (UInt32 i = 0; i < frames; i++) {
-        UInt64 slot = (gRingWrite + i) % LS_RING_FRAMES;
-        for (int c = 0; c < LS_CHANNELS; c++) gRing[slot * LS_CHANNELS + c] = src[i * LS_CHANNELS + c];
-    }
-    gRingWrite += frames;
-    pthread_mutex_unlock(&gRingLock);
-}
-static void ls_ring_read(float* dst, UInt32 frames, UInt64 readStartFrame) {
-    pthread_mutex_lock(&gRingLock);
-    for (UInt32 i = 0; i < frames; i++) {
-        UInt64 slot = (readStartFrame + i) % LS_RING_FRAMES;
-        for (int c = 0; c < LS_CHANNELS; c++) dst[i * LS_CHANNELS + c] = gRing[slot * LS_CHANNELS + c];
-    }
-    pthread_mutex_unlock(&gRingLock);
-}
+enum {
+    kObjectID_PlugIn        = kAudioObjectPlugInObject, // 1
+    kObjectID_Device        = 2,
+    kObjectID_Stream_Input  = 3,
+    kObjectID_Stream_Output = 4,
+};
 
-// ---------- AudioServerPlugIn COM 接口 ----------
-// HAL 通过 CFPlugIn 工厂拿到 AudioServerPlugInDriverInterface 的实例。下面是接口表骨架。
+#define kDeviceUID          "LingShuVirtualMic_UID"
+#define kDeviceName         "灵枢虚拟麦克风"
+#define kManufacturerName   "LingShu"
+#define kSampleRate         48000.0
+#define kChannelsPerFrame   2u
+#define kBytesPerFrame      (kChannelsPerFrame * sizeof(Float32))
+#define kRingFrames         88200u   // ~1.8s @48k,且作为 ZeroTimeStampPeriod
 
-static AudioServerPlugInDriverInterface gInterface;          // 函数表(vtable)
-static AudioServerPlugInDriverInterface* gInterfacePtr = &gInterface;
+#pragma mark - 全局状态
+
 static AudioServerPlugInHostRef gHost = NULL;
-static ULONG gRefCount = 1;
+static pthread_mutex_t          gStateMutex = PTHREAD_MUTEX_INITIALIZER;
+static UInt64                   gIOCount = 0;          // StartIO 引用计数
+static Float64                  gSampleRate = kSampleRate;
 
-static HRESULT LS_QueryInterface(void* self, REFIID iid, LPVOID* out) {
-    (void)self; (void)iid;
-    if (out) { *out = &gInterfacePtr; }
-    gRefCount++;
-    return 0; // S_OK
-}
-static ULONG LS_AddRef(void* self) { (void)self; return ++gRefCount; }
-static ULONG LS_Release(void* self) { (void)self; return --gRefCount; }
+// loopback 环形缓冲(output 写、input 读)。
+static Float32                  gRing[kRingFrames * kChannelsPerFrame];
+static pthread_mutex_t          gRingMutex = PTHREAD_MUTEX_INITIALIZER;
 
-static OSStatus LS_Initialize(AudioServerPlugInDriverRef driver, AudioServerPlugInHostRef host) {
-    (void)driver;
-    gHost = host;
-    memset(gRing, 0, sizeof(gRing));
-    gRingWrite = 0;
-    return 0; // noErr
-}
+// 零时戳推进
+static mach_timebase_info_data_t gTimebase = {0, 0};
+static Float64                  gHostTicksPerFrame = 0.0;
+static UInt64                   gAnchorHostTime = 0;
+static volatile UInt64          gNumberTimeStamps = 0;
 
-// TODO(on-device,逐个补齐并在本机跑通):
-//  - CreateDevice / DestroyDevice(本 loopback 用静态单设备可返回 kAudioHardwareUnsupportedOperationError)
-//  - HasProperty / IsPropertySettable / GetPropertyDataSize / GetPropertyData / SetPropertyData
-//      为 kAudioObjectPlugInScope 下的:Device(UID="LingShuVirtualMic"、Name="灵枢虚拟麦克风"、
-//      采样率 48k、双声道、同时具备 Input+Output Stream)、Stream(物理/虚拟格式)、Control。
-//  - StartIO / StopIO / GetZeroTimeStamp(基于 mach_absolute_time 推进零时戳)
-//  - WillDoIOOperation / BeginIOOperation / DoIOOperation / EndIOOperation:
-//      kAudioServerPlugInIOOperationWriteMix  → ls_ring_write(本次 output buffer)
-//      kAudioServerPlugInIOOperationReadInput → ls_ring_read(对齐采样位,镜像到 input)
-// 这些属性表是 AudioServerPlugIn 最繁的部分,必须在『音频 MIDI 设置』能看到设备 + 会议能选麦 中逐步验证。
+static const AudioStreamBasicDescription kFormat = {
+    .mSampleRate       = kSampleRate,
+    .mFormatID         = kAudioFormatLinearPCM,
+    .mFormatFlags      = kAudioFormatFlagIsFloat | kAudioFormatFlagsNativeEndian | kAudioFormatFlagIsPacked,
+    .mBytesPerPacket   = kBytesPerFrame,
+    .mFramesPerPacket  = 1,
+    .mBytesPerFrame    = kBytesPerFrame,
+    .mChannelsPerFrame = kChannelsPerFrame,
+    .mBitsPerChannel   = 32,
+};
 
-// IO 镜像核心(StartIO 后由 HAL 高优先级线程回调):output 写环、input 读环。
-static OSStatus LS_DoIOOperation(AudioServerPlugInDriverRef driver, AudioObjectID device, AudioObjectID stream,
-                                 UInt32 clientID, UInt32 op, UInt32 ioBufferFrameSize,
-                                 const AudioServerPlugInIOCycleInfo* cycle, void* mainBuffer, void* secondaryBuffer) {
-    (void)driver; (void)device; (void)stream; (void)clientID; (void)secondaryBuffer;
-    if (op == kAudioServerPlugInIOOperationWriteMix && mainBuffer) {
-        ls_ring_write((const float*)mainBuffer, ioBufferFrameSize);
-    } else if (op == kAudioServerPlugInIOOperationReadInput && mainBuffer) {
-        UInt64 start = (UInt64)(cycle ? cycle->mInputTime.mSampleTime : 0);
-        ls_ring_read((float*)mainBuffer, ioBufferFrameSize, start);
-    }
-    return 0; // noErr
-}
+#pragma mark - COM 接口前向声明
 
-// 工厂:Info.plist 的 CFPlugInFactories 指向这里。HAL 调它拿接口实例。
+static HRESULT  LS_QueryInterface(void* inDriver, REFIID inUUID, LPVOID* outInterface);
+static ULONG    LS_AddRef(void* inDriver);
+static ULONG    LS_Release(void* inDriver);
+static OSStatus LS_Initialize(AudioServerPlugInDriverRef inDriver, AudioServerPlugInHostRef inHost);
+static OSStatus LS_CreateDevice(AudioServerPlugInDriverRef, CFDictionaryRef, const AudioServerPlugInClientInfo*, AudioObjectID*);
+static OSStatus LS_DestroyDevice(AudioServerPlugInDriverRef, AudioObjectID);
+static OSStatus LS_AddDeviceClient(AudioServerPlugInDriverRef, AudioObjectID, const AudioServerPlugInClientInfo*);
+static OSStatus LS_RemoveDeviceClient(AudioServerPlugInDriverRef, AudioObjectID, const AudioServerPlugInClientInfo*);
+static OSStatus LS_PerformDeviceConfigurationChange(AudioServerPlugInDriverRef, AudioObjectID, UInt64, void*);
+static OSStatus LS_AbortDeviceConfigurationChange(AudioServerPlugInDriverRef, AudioObjectID, UInt64, void*);
+static Boolean  LS_HasProperty(AudioServerPlugInDriverRef, AudioObjectID, pid_t, const AudioObjectPropertyAddress*);
+static OSStatus LS_IsPropertySettable(AudioServerPlugInDriverRef, AudioObjectID, pid_t, const AudioObjectPropertyAddress*, Boolean*);
+static OSStatus LS_GetPropertyDataSize(AudioServerPlugInDriverRef, AudioObjectID, pid_t, const AudioObjectPropertyAddress*, UInt32, const void*, UInt32*);
+static OSStatus LS_GetPropertyData(AudioServerPlugInDriverRef, AudioObjectID, pid_t, const AudioObjectPropertyAddress*, UInt32, const void*, UInt32, UInt32*, void*);
+static OSStatus LS_SetPropertyData(AudioServerPlugInDriverRef, AudioObjectID, pid_t, const AudioObjectPropertyAddress*, UInt32, const void*, UInt32, const void*);
+static OSStatus LS_StartIO(AudioServerPlugInDriverRef, AudioObjectID, UInt32);
+static OSStatus LS_StopIO(AudioServerPlugInDriverRef, AudioObjectID, UInt32);
+static OSStatus LS_GetZeroTimeStamp(AudioServerPlugInDriverRef, AudioObjectID, UInt32, Float64*, UInt64*, UInt64*);
+static OSStatus LS_WillDoIOOperation(AudioServerPlugInDriverRef, AudioObjectID, UInt32, UInt32, Boolean*, Boolean*);
+static OSStatus LS_BeginIOOperation(AudioServerPlugInDriverRef, AudioObjectID, UInt32, UInt32, UInt32, const AudioServerPlugInIOCycleInfo*);
+static OSStatus LS_DoIOOperation(AudioServerPlugInDriverRef, AudioObjectID, AudioObjectID, UInt32, UInt32, UInt32, const AudioServerPlugInIOCycleInfo*, void*, void*);
+static OSStatus LS_EndIOOperation(AudioServerPlugInDriverRef, AudioObjectID, UInt32, UInt32, UInt32, const AudioServerPlugInIOCycleInfo*);
+
+static AudioServerPlugInDriverInterface gInterface = {
+    NULL,
+    LS_QueryInterface, LS_AddRef, LS_Release,
+    LS_Initialize, LS_CreateDevice, LS_DestroyDevice,
+    LS_AddDeviceClient, LS_RemoveDeviceClient,
+    LS_PerformDeviceConfigurationChange, LS_AbortDeviceConfigurationChange,
+    LS_HasProperty, LS_IsPropertySettable, LS_GetPropertyDataSize, LS_GetPropertyData, LS_SetPropertyData,
+    LS_StartIO, LS_StopIO, LS_GetZeroTimeStamp,
+    LS_WillDoIOOperation, LS_BeginIOOperation, LS_DoIOOperation, LS_EndIOOperation
+};
+static AudioServerPlugInDriverInterface* gInterfacePtr = &gInterface;
+static AudioServerPlugInDriverRef gDriverRef = &gInterfacePtr;
+static UInt32 gRefCount = 1;
+
+#pragma mark - 工厂
+
 void* LingShuAudioDriver_Create(CFAllocatorRef allocator, CFUUIDRef typeID);
 void* LingShuAudioDriver_Create(CFAllocatorRef allocator, CFUUIDRef typeID) {
-    (void)allocator; (void)typeID;
-    gInterface.QueryInterface = LS_QueryInterface;
-    gInterface.AddRef = LS_AddRef;
-    gInterface.Release = LS_Release;
-    gInterface.Initialize = LS_Initialize;
-    gInterface.DoIOOperation = LS_DoIOOperation;
-    // 其余函数指针(CreateDevice/HasProperty/GetPropertyData/StartIO/...)在 on-device 阶段逐个赋值。
-    return &gInterfacePtr;
+    (void)allocator;
+    if (CFEqual(typeID, kAudioServerPlugInTypeUUID)) return gDriverRef;
+    return NULL;
+}
+
+#pragma mark - COM
+
+static HRESULT LS_QueryInterface(void* inDriver, REFIID inUUID, LPVOID* outInterface) {
+    if (!inDriver || !outInterface) return kAudioHardwareIllegalOperationError;
+    CFUUIDRef req = CFUUIDCreateFromUUIDBytes(NULL, inUUID);
+    HRESULT result = E_NOINTERFACE;
+    if (CFEqual(req, IUnknownUUID) || CFEqual(req, kAudioServerPlugInDriverInterfaceUUID)) {
+        gRefCount++;
+        *outInterface = gDriverRef;
+        result = S_OK;
+    }
+    if (req) CFRelease(req);
+    return result;
+}
+static ULONG LS_AddRef(void* inDriver)  { (void)inDriver; return ++gRefCount; }
+static ULONG LS_Release(void* inDriver) { (void)inDriver; if (gRefCount > 1) gRefCount--; return gRefCount; }
+
+static OSStatus LS_Initialize(AudioServerPlugInDriverRef inDriver, AudioServerPlugInHostRef inHost) {
+    (void)inDriver;
+    gHost = inHost;
+    mach_timebase_info(&gTimebase);
+    // host ticks/秒 = 1e9 * denom/numer;每帧 host ticks = (ticks/秒)/采样率。
+    Float64 hostTicksPerSecond = 1.0e9 * (Float64)gTimebase.denom / (Float64)gTimebase.numer;
+    gHostTicksPerFrame = hostTicksPerSecond / kSampleRate;
+    memset(gRing, 0, sizeof(gRing));
+    gIOCount = 0;
+    gNumberTimeStamps = 0;
+    return 0;
+}
+
+// 静态单设备:不支持运行时增删。
+static OSStatus LS_CreateDevice(AudioServerPlugInDriverRef d, CFDictionaryRef desc, const AudioServerPlugInClientInfo* c, AudioObjectID* o) {
+    (void)d;(void)desc;(void)c;(void)o; return kAudioHardwareUnsupportedOperationError;
+}
+static OSStatus LS_DestroyDevice(AudioServerPlugInDriverRef d, AudioObjectID o) { (void)d;(void)o; return kAudioHardwareUnsupportedOperationError; }
+static OSStatus LS_AddDeviceClient(AudioServerPlugInDriverRef d, AudioObjectID o, const AudioServerPlugInClientInfo* c) { (void)d;(void)o;(void)c; return 0; }
+static OSStatus LS_RemoveDeviceClient(AudioServerPlugInDriverRef d, AudioObjectID o, const AudioServerPlugInClientInfo* c) { (void)d;(void)o;(void)c; return 0; }
+static OSStatus LS_PerformDeviceConfigurationChange(AudioServerPlugInDriverRef d, AudioObjectID o, UInt64 a, void* i) { (void)d;(void)o;(void)a;(void)i; return 0; }
+static OSStatus LS_AbortDeviceConfigurationChange(AudioServerPlugInDriverRef d, AudioObjectID o, UInt64 a, void* i) { (void)d;(void)o;(void)a;(void)i; return 0; }
+
+#pragma mark - 属性:HasProperty / IsSettable
+
+static Boolean LS_HasProperty(AudioServerPlugInDriverRef inDriver, AudioObjectID o, pid_t pid, const AudioObjectPropertyAddress* a) {
+    (void)inDriver;(void)pid;
+    UInt32 size = 0;
+    return LS_GetPropertyDataSize(inDriver, o, pid, a, 0, NULL, &size) == 0;
+}
+static OSStatus LS_IsPropertySettable(AudioServerPlugInDriverRef d, AudioObjectID o, pid_t pid, const AudioObjectPropertyAddress* a, Boolean* outSettable) {
+    (void)d;(void)o;(void)pid;
+    // 本设备所有暴露属性均只读(无可设格式/采样率切换)。
+    if (a->mSelector == kAudioDevicePropertyNominalSampleRate) { *outSettable = false; return 0; }
+    *outSettable = false;
+    return 0;
+}
+
+#pragma mark - 属性:GetPropertyDataSize
+
+static OSStatus LS_GetPropertyDataSize(AudioServerPlugInDriverRef inDriver, AudioObjectID o, pid_t pid, const AudioObjectPropertyAddress* a, UInt32 qds, const void* qd, UInt32* outSize) {
+    (void)inDriver;(void)pid;(void)qds;(void)qd;
+    OSStatus s = 0;
+    switch (o) {
+        case kObjectID_PlugIn:
+            switch (a->mSelector) {
+                case kAudioObjectPropertyBaseClass: *outSize = sizeof(AudioClassID); break;
+                case kAudioObjectPropertyClass: *outSize = sizeof(AudioClassID); break;
+                case kAudioObjectPropertyOwner: *outSize = sizeof(AudioObjectID); break;
+                case kAudioObjectPropertyManufacturer: *outSize = sizeof(CFStringRef); break;
+                case kAudioObjectPropertyOwnedObjects:
+                case kAudioPlugInPropertyDeviceList: *outSize = sizeof(AudioObjectID); break;
+                case kAudioPlugInPropertyTranslateUIDToDevice: *outSize = sizeof(AudioObjectID); break;
+                case kAudioPlugInPropertyResourceBundle: *outSize = sizeof(CFStringRef); break;
+                case kAudioObjectPropertyCustomPropertyInfoList: *outSize = 0; break;
+                default: s = kAudioHardwareUnknownPropertyError; break;
+            }
+            break;
+        case kObjectID_Device:
+            switch (a->mSelector) {
+                case kAudioObjectPropertyBaseClass:
+                case kAudioObjectPropertyClass: *outSize = sizeof(AudioClassID); break;
+                case kAudioObjectPropertyOwner: *outSize = sizeof(AudioObjectID); break;
+                case kAudioObjectPropertyName:
+                case kAudioObjectPropertyManufacturer:
+                case kAudioDevicePropertyDeviceUID:
+                case kAudioDevicePropertyModelUID: *outSize = sizeof(CFStringRef); break;
+                case kAudioDevicePropertyTransportType:
+                case kAudioDevicePropertyClockDomain:
+                case kAudioDevicePropertyDeviceIsAlive:
+                case kAudioDevicePropertyDeviceIsRunning:
+                case kAudioObjectPropertyControlList: *outSize = (a->mSelector==kAudioObjectPropertyControlList)?0:sizeof(UInt32); break;
+                case kAudioDevicePropertyDeviceCanBeDefaultDevice:
+                case kAudioDevicePropertyDeviceCanBeDefaultSystemDevice:
+                case kAudioDevicePropertyLatency:
+                case kAudioDevicePropertySafetyOffset:
+                case kAudioDevicePropertyZeroTimeStampPeriod: *outSize = sizeof(UInt32); break;
+                case kAudioDevicePropertyNominalSampleRate: *outSize = sizeof(Float64); break;
+                case kAudioDevicePropertyAvailableNominalSampleRates: *outSize = sizeof(AudioValueRange); break;
+                case kAudioObjectPropertyOwnedObjects:
+                case kAudioDevicePropertyStreams: {
+                    UInt32 n = 2;
+                    if (a->mScope == kAudioObjectPropertyScopeInput || a->mScope == kAudioObjectPropertyScopeOutput) n = 1;
+                    *outSize = n * sizeof(AudioObjectID);
+                    break;
+                }
+                default: s = kAudioHardwareUnknownPropertyError; break;
+            }
+            break;
+        case kObjectID_Stream_Input:
+        case kObjectID_Stream_Output:
+            switch (a->mSelector) {
+                case kAudioObjectPropertyBaseClass:
+                case kAudioObjectPropertyClass: *outSize = sizeof(AudioClassID); break;
+                case kAudioObjectPropertyOwner: *outSize = sizeof(AudioObjectID); break;
+                case kAudioStreamPropertyIsActive:
+                case kAudioStreamPropertyDirection:
+                case kAudioStreamPropertyTerminalType:
+                case kAudioStreamPropertyStartingChannel:
+                case kAudioStreamPropertyLatency: *outSize = sizeof(UInt32); break;
+                case kAudioStreamPropertyVirtualFormat:
+                case kAudioStreamPropertyPhysicalFormat: *outSize = sizeof(AudioStreamBasicDescription); break;
+                case kAudioStreamPropertyAvailableVirtualFormats:
+                case kAudioStreamPropertyAvailablePhysicalFormats: *outSize = sizeof(AudioStreamRangedDescription); break;
+                default: s = kAudioHardwareUnknownPropertyError; break;
+            }
+            break;
+        default: s = kAudioHardwareBadObjectError; break;
+    }
+    return s;
+}
+
+#pragma mark - 属性:GetPropertyData
+
+static OSStatus LS_GetPropertyData(AudioServerPlugInDriverRef inDriver, AudioObjectID o, pid_t pid, const AudioObjectPropertyAddress* a, UInt32 qds, const void* qd, UInt32 dataSize, UInt32* outSize, void* outData) {
+    (void)inDriver;(void)pid;(void)qds;(void)qd;
+    OSStatus s = 0;
+    switch (o) {
+        case kObjectID_PlugIn:
+            switch (a->mSelector) {
+                case kAudioObjectPropertyBaseClass: *((AudioClassID*)outData)=kAudioObjectClassID; *outSize=sizeof(AudioClassID); break;
+                case kAudioObjectPropertyClass: *((AudioClassID*)outData)=kAudioPlugInClassID; *outSize=sizeof(AudioClassID); break;
+                case kAudioObjectPropertyOwner: *((AudioObjectID*)outData)=kAudioObjectUnknown; *outSize=sizeof(AudioObjectID); break;
+                case kAudioObjectPropertyManufacturer: *((CFStringRef*)outData)=CFSTR(kManufacturerName); *outSize=sizeof(CFStringRef); break;
+                case kAudioObjectPropertyOwnedObjects:
+                case kAudioPlugInPropertyDeviceList:
+                    if (dataSize >= sizeof(AudioObjectID)) { *((AudioObjectID*)outData)=kObjectID_Device; *outSize=sizeof(AudioObjectID); }
+                    else *outSize = 0;
+                    break;
+                case kAudioPlugInPropertyTranslateUIDToDevice: {
+                    CFStringRef uid = qd ? *((CFStringRef*)qd) : NULL;
+                    *((AudioObjectID*)outData) = (uid && CFEqual(uid, CFSTR(kDeviceUID))) ? kObjectID_Device : kAudioObjectUnknown;
+                    *outSize = sizeof(AudioObjectID);
+                    break;
+                }
+                case kAudioPlugInPropertyResourceBundle: *((CFStringRef*)outData)=CFSTR(""); *outSize=sizeof(CFStringRef); break;
+                default: s = kAudioHardwareUnknownPropertyError; break;
+            }
+            break;
+        case kObjectID_Device:
+            switch (a->mSelector) {
+                case kAudioObjectPropertyBaseClass: *((AudioClassID*)outData)=kAudioObjectClassID; *outSize=sizeof(AudioClassID); break;
+                case kAudioObjectPropertyClass: *((AudioClassID*)outData)=kAudioDeviceClassID; *outSize=sizeof(AudioClassID); break;
+                case kAudioObjectPropertyOwner: *((AudioObjectID*)outData)=kObjectID_PlugIn; *outSize=sizeof(AudioObjectID); break;
+                case kAudioObjectPropertyName: *((CFStringRef*)outData)=CFSTR(kDeviceName); *outSize=sizeof(CFStringRef); break;
+                case kAudioObjectPropertyManufacturer: *((CFStringRef*)outData)=CFSTR(kManufacturerName); *outSize=sizeof(CFStringRef); break;
+                case kAudioDevicePropertyDeviceUID: *((CFStringRef*)outData)=CFSTR(kDeviceUID); *outSize=sizeof(CFStringRef); break;
+                case kAudioDevicePropertyModelUID: *((CFStringRef*)outData)=CFSTR(kDeviceUID); *outSize=sizeof(CFStringRef); break;
+                case kAudioDevicePropertyTransportType: *((UInt32*)outData)=kAudioDeviceTransportTypeVirtual; *outSize=sizeof(UInt32); break;
+                case kAudioDevicePropertyClockDomain: *((UInt32*)outData)=0; *outSize=sizeof(UInt32); break;
+                case kAudioDevicePropertyDeviceIsAlive: *((UInt32*)outData)=1; *outSize=sizeof(UInt32); break;
+                case kAudioDevicePropertyDeviceIsRunning: { pthread_mutex_lock(&gStateMutex); *((UInt32*)outData)=(gIOCount>0)?1:0; pthread_mutex_unlock(&gStateMutex); *outSize=sizeof(UInt32); break; }
+                case kAudioDevicePropertyDeviceCanBeDefaultDevice: *((UInt32*)outData)=1; *outSize=sizeof(UInt32); break;
+                case kAudioDevicePropertyDeviceCanBeDefaultSystemDevice: *((UInt32*)outData)=1; *outSize=sizeof(UInt32); break;
+                case kAudioDevicePropertyLatency: *((UInt32*)outData)=0; *outSize=sizeof(UInt32); break;
+                case kAudioDevicePropertySafetyOffset: *((UInt32*)outData)=0; *outSize=sizeof(UInt32); break;
+                case kAudioDevicePropertyZeroTimeStampPeriod: *((UInt32*)outData)=kRingFrames; *outSize=sizeof(UInt32); break;
+                case kAudioDevicePropertyNominalSampleRate: { pthread_mutex_lock(&gStateMutex); *((Float64*)outData)=gSampleRate; pthread_mutex_unlock(&gStateMutex); *outSize=sizeof(Float64); break; }
+                case kAudioDevicePropertyAvailableNominalSampleRates:
+                    if (dataSize >= sizeof(AudioValueRange)) { AudioValueRange r={kSampleRate,kSampleRate}; *((AudioValueRange*)outData)=r; *outSize=sizeof(AudioValueRange); }
+                    else *outSize=0;
+                    break;
+                case kAudioObjectPropertyControlList: *outSize=0; break;
+                case kAudioObjectPropertyOwnedObjects:
+                case kAudioDevicePropertyStreams: {
+                    AudioObjectID* list=(AudioObjectID*)outData; UInt32 idx=0;
+                    UInt32 cap = dataSize / sizeof(AudioObjectID);
+                    if ((a->mScope==kAudioObjectPropertyScopeGlobal || a->mScope==kAudioObjectPropertyScopeInput)  && idx<cap) list[idx++]=kObjectID_Stream_Input;
+                    if ((a->mScope==kAudioObjectPropertyScopeGlobal || a->mScope==kAudioObjectPropertyScopeOutput) && idx<cap) list[idx++]=kObjectID_Stream_Output;
+                    *outSize = idx*sizeof(AudioObjectID);
+                    break;
+                }
+                default: s = kAudioHardwareUnknownPropertyError; break;
+            }
+            break;
+        case kObjectID_Stream_Input:
+        case kObjectID_Stream_Output: {
+            Boolean isInput = (o==kObjectID_Stream_Input);
+            switch (a->mSelector) {
+                case kAudioObjectPropertyBaseClass: *((AudioClassID*)outData)=kAudioObjectClassID; *outSize=sizeof(AudioClassID); break;
+                case kAudioObjectPropertyClass: *((AudioClassID*)outData)=kAudioStreamClassID; *outSize=sizeof(AudioClassID); break;
+                case kAudioObjectPropertyOwner: *((AudioObjectID*)outData)=kObjectID_Device; *outSize=sizeof(AudioObjectID); break;
+                case kAudioStreamPropertyIsActive: *((UInt32*)outData)=1; *outSize=sizeof(UInt32); break;
+                case kAudioStreamPropertyDirection: *((UInt32*)outData)= isInput?1:0; *outSize=sizeof(UInt32); break;
+                case kAudioStreamPropertyTerminalType: *((UInt32*)outData)= isInput?kAudioStreamTerminalTypeMicrophone:kAudioStreamTerminalTypeSpeaker; *outSize=sizeof(UInt32); break;
+                case kAudioStreamPropertyStartingChannel: *((UInt32*)outData)=1; *outSize=sizeof(UInt32); break;
+                case kAudioStreamPropertyLatency: *((UInt32*)outData)=0; *outSize=sizeof(UInt32); break;
+                case kAudioStreamPropertyVirtualFormat:
+                case kAudioStreamPropertyPhysicalFormat: *((AudioStreamBasicDescription*)outData)=kFormat; *outSize=sizeof(AudioStreamBasicDescription); break;
+                case kAudioStreamPropertyAvailableVirtualFormats:
+                case kAudioStreamPropertyAvailablePhysicalFormats:
+                    if (dataSize >= sizeof(AudioStreamRangedDescription)) {
+                        AudioStreamRangedDescription rd; memset(&rd,0,sizeof(rd)); rd.mFormat=kFormat; rd.mSampleRateRange.mMinimum=kSampleRate; rd.mSampleRateRange.mMaximum=kSampleRate;
+                        *((AudioStreamRangedDescription*)outData)=rd; *outSize=sizeof(AudioStreamRangedDescription);
+                    } else *outSize=0;
+                    break;
+                default: s = kAudioHardwareUnknownPropertyError; break;
+            }
+            break;
+        }
+        default: s = kAudioHardwareBadObjectError; break;
+    }
+    return s;
+}
+
+static OSStatus LS_SetPropertyData(AudioServerPlugInDriverRef d, AudioObjectID o, pid_t pid, const AudioObjectPropertyAddress* a, UInt32 qds, const void* qd, UInt32 dataSize, const void* data) {
+    (void)d;(void)o;(void)pid;(void)a;(void)qds;(void)qd;(void)dataSize;(void)data;
+    return kAudioHardwareUnknownPropertyError; // 无可设属性(固定 48k/格式)
+}
+
+#pragma mark - IO
+
+static OSStatus LS_StartIO(AudioServerPlugInDriverRef d, AudioObjectID o, UInt32 c) {
+    (void)d;(void)o;(void)c;
+    pthread_mutex_lock(&gStateMutex);
+    if (gIOCount == 0) { gAnchorHostTime = mach_absolute_time(); gNumberTimeStamps = 0; }
+    gIOCount++;
+    pthread_mutex_unlock(&gStateMutex);
+    return 0;
+}
+static OSStatus LS_StopIO(AudioServerPlugInDriverRef d, AudioObjectID o, UInt32 c) {
+    (void)d;(void)o;(void)c;
+    pthread_mutex_lock(&gStateMutex);
+    if (gIOCount > 0) gIOCount--;
+    pthread_mutex_unlock(&gStateMutex);
+    return 0;
+}
+
+static OSStatus LS_GetZeroTimeStamp(AudioServerPlugInDriverRef d, AudioObjectID o, UInt32 c, Float64* outSampleTime, UInt64* outHostTime, UInt64* outSeed) {
+    (void)d;(void)o;(void)c;
+    pthread_mutex_lock(&gStateMutex);
+    UInt64 now = mach_absolute_time();
+    UInt64 ringPeriodTicks = (UInt64)(kRingFrames * gHostTicksPerFrame);
+    if (ringPeriodTicks == 0) ringPeriodTicks = 1;
+    UInt64 elapsed = now - gAnchorHostTime;
+    UInt64 wraps = elapsed / ringPeriodTicks;
+    gNumberTimeStamps = wraps;
+    *outSampleTime = (Float64)(wraps * kRingFrames);
+    *outHostTime   = gAnchorHostTime + (wraps * ringPeriodTicks);
+    *outSeed       = 1;
+    pthread_mutex_unlock(&gStateMutex);
+    return 0;
+}
+
+static OSStatus LS_WillDoIOOperation(AudioServerPlugInDriverRef d, AudioObjectID o, UInt32 c, UInt32 op, Boolean* outWill, Boolean* outWillInPlace) {
+    (void)d;(void)o;(void)c;
+    Boolean will = (op==kAudioServerPlugInIOOperationWriteMix || op==kAudioServerPlugInIOOperationReadInput);
+    if (outWill) *outWill = will;
+    if (outWillInPlace) *outWillInPlace = true;
+    return 0;
+}
+static OSStatus LS_BeginIOOperation(AudioServerPlugInDriverRef d, AudioObjectID o, UInt32 c, UInt32 op, UInt32 n, const AudioServerPlugInIOCycleInfo* i) { (void)d;(void)o;(void)c;(void)op;(void)n;(void)i; return 0; }
+static OSStatus LS_EndIOOperation(AudioServerPlugInDriverRef d, AudioObjectID o, UInt32 c, UInt32 op, UInt32 n, const AudioServerPlugInIOCycleInfo* i) { (void)d;(void)o;(void)c;(void)op;(void)n;(void)i; return 0; }
+
+static OSStatus LS_DoIOOperation(AudioServerPlugInDriverRef d, AudioObjectID device, AudioObjectID stream, UInt32 clientID, UInt32 op, UInt32 frames, const AudioServerPlugInIOCycleInfo* cycle, void* main, void* secondary) {
+    (void)d;(void)device;(void)stream;(void)clientID;(void)secondary;
+    if (frames == 0 || main == NULL) return 0;
+    if (op == kAudioServerPlugInIOOperationWriteMix) {
+        // 灵枢/output → 写入环(按输出采样位)。
+        UInt64 startFrame = (UInt64)(cycle ? cycle->mOutputTime.mSampleTime : 0);
+        const Float32* src = (const Float32*)main;
+        pthread_mutex_lock(&gRingMutex);
+        for (UInt32 f=0; f<frames; f++) {
+            UInt64 slot = (startFrame + f) % kRingFrames;
+            for (UInt32 ch=0; ch<kChannelsPerFrame; ch++) gRing[slot*kChannelsPerFrame+ch] = src[f*kChannelsPerFrame+ch];
+        }
+        pthread_mutex_unlock(&gRingMutex);
+    } else if (op == kAudioServerPlugInIOOperationReadInput) {
+        // 会议 App/input ← 从环读(同采样位)→ 镜像 output。
+        UInt64 startFrame = (UInt64)(cycle ? cycle->mInputTime.mSampleTime : 0);
+        Float32* dst = (Float32*)main;
+        pthread_mutex_lock(&gRingMutex);
+        for (UInt32 f=0; f<frames; f++) {
+            UInt64 slot = (startFrame + f) % kRingFrames;
+            for (UInt32 ch=0; ch<kChannelsPerFrame; ch++) dst[f*kChannelsPerFrame+ch] = gRing[slot*kChannelsPerFrame+ch];
+        }
+        pthread_mutex_unlock(&gRingMutex);
+    }
+    return 0;
 }

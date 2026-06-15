@@ -137,6 +137,7 @@ extension LingShuState {
         - 工作目录:\(codexWorkingDirectory)。
         - **先计划后执行(LOOP 标准,决不能省)**:落地任何**多步任务**(凡要写文件/跑命令/做交付物的都算),**你的第一个动作必须是真的调用 `update_plan` 工具**列出 3–7 步计划——**这是一次工具调用,不是在分析/正文里口头说一句"我的计划是…"就算**(口头说不算数,必须 update_plan)。之后严格按计划逐步执行:每开始一步标 in_progress、做完标 completed(再调 update_plan)。让全程"先有计划、再逐步推进、状态可见"。只有简单一问一答 / 纯对话才跳过 plan。
         - **有产出物优先产出物**:凡是"做/写/生成 PPT、文档、脚本、爬虫、代码…"这类有交付物的请求,必须**真的用 write_file/run_command 把文件落到工作目录**,并在回复里给出文件绝对路径;**绝不允许只口头说"已完成"而没有真文件**。做 PPT 可写 HTML 或用脚本生成 pptx;做爬虫写 .py 并按需运行。
+        - **写代码/改工程的正确手法**:① 先 `read_file`(带行号,大文件用 offset/limit 分段读全)看清现状,别凭空改;② **改已有文件的局部用 `edit_file`**(唯一匹配 old_string→new_string,不重写整文件)——新建或整体重写才用 `write_file`;③ 用 `run_command` 跑 grep 定位、装依赖、编译、跑测试,据结果迭代;④ 改完务必编译/测试验证再交付。大型多文件工程也按此循环逐文件推进。
         - **有固化方案优先固化方案**:做 PPT、汇报等可能有现成专家技能(含打磨好的设计系统和自带生成器)。动手前先调 **apply_skill** 看有没有匹配技能,有就按它的模板/生成器推进,别从零硬写。**apply_skill 没有匹配、又遇到不擅长的新领域时,可调 discover_skill 联网找现成高质量技能自动安装**(纯提示技能直接装、带脚本技能过安全审核;装好再 apply_skill 用)。
         - 需要实时信息(如当前时间)时调用对应工具。
         - **边做边想(像资深工程师)**:每次发起工具调用前,先用**一句话**说清你观察到了什么、这一步要做什么、为什么(例:"上一步生成失败是因为缺 python-pptx,我先装依赖再重跑")。这句话会显示在执行流里,别省。
@@ -349,6 +350,7 @@ extension LingShuState {
     nonisolated static func toolDisplayName(_ tool: String) -> String {
         switch tool {
         case "write_file": return "写文件"
+        case "edit_file": return "改文件"
         case "read_file": return "读文件"
         case "list_directory": return "列目录"
         case "fetch_url": return "抓网页"

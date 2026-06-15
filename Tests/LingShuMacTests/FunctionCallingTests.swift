@@ -25,11 +25,12 @@ final class FunctionCallingTests: XCTestCase {
     func testToolsEncodedIntoChatCompletionsBody() throws {
         let object = try body(forTools: LingShuFunctionCallingCatalog.builtin)
         let tools = try XCTUnwrap(object["tools"] as? [[String: Any]])
-        XCTAssertEqual(tools.count, 5)
+        XCTAssertEqual(tools.count, 6)   // read/write/edit/list/fetch/run
 
         let functions = tools.compactMap { ($0["function"] as? [String: Any])?["name"] as? String }
         XCTAssertTrue(functions.contains("run_command"))
         XCTAssertTrue(functions.contains("write_file"))
+        XCTAssertTrue(functions.contains("edit_file"))   // 精确编辑四肢(改大代码)
 
         let runCommand = try XCTUnwrap(tools.first {
             (($0["function"] as? [String: Any])?["name"] as? String) == "run_command"

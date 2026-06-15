@@ -57,6 +57,42 @@ final class LocalToolExecutorTests: XCTestCase {
         XCTAssertFalse(outside.success, "工作目录之外的写入必须拒绝")
     }
 
+    func testReadFileLineRangeAndLineNumbers() async {
+        let path = "\(workDir!)/big.txt"
+        let content = (1...300).map { "line\($0)" }.joined(separator: "\n")
+        try? content.write(toFile: path, atomically: true, encoding: .utf8)
+        // 默认读:带行号、能看到首行(不再 8KB 截断)。
+        let head = await executor.execute(.init(tool: "read_file", arguments: ["path": path]), workingDirectory: workDir, allowShell: false)
+        XCTAssertTrue(head.success)
+        XCTAssertTrue(head.output.contains("1\tline1"), "应带 cat -n 行号")
+        XCTAssertTrue(head.output.contains("300\tline300"), "300 行应能整文件读到(无 8KB 截断)")
+        // 行范围读:offset/limit。
+        let mid = await executor.execute(.init(tool: "read_file", arguments: ["path": path, "offset": "100", "limit": "3"]), workingDirectory: workDir, allowShell: false)
+        XCTAssertTrue(mid.output.contains("100\tline100"))
+        XCTAssertTrue(mid.output.contains("102\tline102"))
+        XCTAssertFalse(mid.output.contains("\tline104"), "limit 之外不应返回")
+    }
+
+    func testEditFileUniqueReplace() async {
+        let path = "\(workDir!)/code.swift"
+        try? "let a = 1\nlet b = 2\nlet c = 3\n".write(toFile: path, atomically: true, encoding: .utf8)
+        // 唯一匹配替换成功。
+        let ok = await executor.execute(.init(tool: "edit_file", arguments: ["path": path, "old_string": "let b = 2", "new_string": "let b = 20"]), workingDirectory: workDir, allowShell: false)
+        XCTAssertTrue(ok.success)
+        XCTAssertEqual(try? String(contentsOfFile: path, encoding: .utf8), "let a = 1\nlet b = 20\nlet c = 3\n")
+        // 找不到 → 拒绝。
+        let miss = await executor.execute(.init(tool: "edit_file", arguments: ["path": path, "old_string": "不存在的串", "new_string": "x"]), workingDirectory: workDir, allowShell: false)
+        XCTAssertFalse(miss.success)
+        // 不唯一 → 拒绝(保护性,逼带上下文)。
+        try? "x\nx\n".write(toFile: path, atomically: true, encoding: .utf8)
+        let dup = await executor.execute(.init(tool: "edit_file", arguments: ["path": path, "old_string": "x", "new_string": "y"]), workingDirectory: workDir, allowShell: false)
+        XCTAssertFalse(dup.success)
+        XCTAssertTrue(dup.output.contains("不唯一"))
+        // 工作目录外 → 拒绝。
+        let outside = await executor.execute(.init(tool: "edit_file", arguments: ["path": "/tmp/lingshu-edit-escape.swift", "old_string": "a", "new_string": "b"]), workingDirectory: workDir, allowShell: false)
+        XCTAssertFalse(outside.success)
+    }
+
     func testReadDeniesSensitiveLocations() async {
         let denied = await executor.execute(
             .init(tool: "read_file", arguments: ["path": "\(NSHomeDirectory())/.ssh/id_rsa"]),

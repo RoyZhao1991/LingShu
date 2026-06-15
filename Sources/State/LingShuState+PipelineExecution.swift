@@ -37,9 +37,10 @@ extension LingShuState {
         defer { heartbeatKeepalive.cancel() }
         // 执行前快照「目标文件是否已存在」——据此把产出物标为「新增」还是「修改」(对齐 codex 的文件操作区分)。
         let fileManager = FileManager.default
-        let writeTargetExisted = (tool == "write_file") && fileManager.fileExists(atPath: arguments["path"] ?? "")
-        // 执行前抓改前内容(write_file)——供 diff 卡片做彩色 diff + 撤销(可逆)。
-        let writeOldContent: String? = (tool == "write_file" && writeTargetExisted)
+        let fileMutator = (tool == "write_file" || tool == "edit_file")   // 两种文件改动工具同等对待(diff 卡 + 产出物登记)
+        let writeTargetExisted = fileMutator && fileManager.fileExists(atPath: arguments["path"] ?? "")
+        // 执行前抓改前内容(write_file/edit_file)——供 diff 卡片做彩色 diff + 撤销(可逆)。
+        let writeOldContent: String? = (fileMutator && writeTargetExisted)
             ? (try? String(contentsOfFile: arguments["path"] ?? "", encoding: .utf8))
             : nil
         // 命令执行前:快照"命令里提到、且已存在"的交付型文件的修改时间——事后据此区分"真改了" vs "只是读/列了"。
@@ -74,9 +75,12 @@ extension LingShuState {
             )
         }
         recordModelHeartbeat(source: "工具", detail: "\(result.tool) 执行完成。")
-        if result.tool == "write_file", result.success, let path = arguments["path"] {
+        if (result.tool == "write_file" || result.tool == "edit_file"), result.success, let path = arguments["path"] {
             // 文件改动 → diff 卡片(改前 vs 改后逐行 diff + 增删行数),不再只是一句"已写入"。
-            let newContent = arguments["content"] ?? ""
+            // write_file 改后内容即入参 content;edit_file 是局部替换→读改后文件取新内容算 diff。
+            let newContent = result.tool == "write_file"
+                ? (arguments["content"] ?? "")
+                : ((try? String(contentsOfFile: path, encoding: .utf8)) ?? "")
             let diff = LingShuLineDiff.compute(old: writeOldContent ?? "", new: newContent)
             let op: LingShuArtifactOperation = writeTargetExisted ? .modified : .created
             appendTaskRecordMessage(

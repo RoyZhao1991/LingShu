@@ -26,6 +26,20 @@
 coreaudiod。装好后永久生效。会议对话 `meeting_converse_start` 时自动触发(没装才弹授权)。
 **用户不跑任何脚本/sudo。** `build-driver.sh`/`install-driver.sh` 仅供本仓库开发期单独编译/调试驱动用。
 
+## ⚠️ 上机验证结论(2026-06-15):驱动已完成,卡在签名证书(=你提供的"组件")
+**驱动属性模型已补全**(PlugIn/Device/输入流/输出流 + loopback IO + 零时戳),clang 编译干净、签名有效
+(`codesign --verify` 通过 "satisfies its Designated Requirement")、自安装跑通(已落 `/Library/Audio/Plug-Ins/HAL/` + 重启 coreaudiod)。
+**但 coreaudiod 拒不加载**——实测:
+- 用 **Apple Development** 证书签名(本机现有)→ 设备不出现,coreaudiod 连 bundle 都不打开,日志无任何记录;去掉 hardened runtime 重签也一样 → **排除库校验/格式问题**。
+- 对比能用的 **BlackHole**:它是 **Developer ID Application + 公证**(TeamID Q5C99V536K)。
+
+**结论:coreaudiod 只加载 Developer ID Application 签名(分发还需公证)的 HAL 插件;Apple Development 证书被静默拒绝。**
+这正是"灵枢能力 + 用户提供组件"模型里你要给的**组件**:到 Apple 开发者后台生成一张 **Developer ID Application** 证书(你账号已开此能力)下载到本机。
+
+**拿到证书后(一步到位)**:`LINGSHU_SIGN_IDENTITY="Developer ID Application: <你> (TEAMID)" bash Scripts/build-app.sh debug`
+→ app 连同随包驱动一起用 Developer ID 签名 → 灵枢自安装 → 『音频 MIDI 设置』出现"灵枢虚拟麦克风" →
+`meeting_converse_start` 时 TTS 自动路由到它 → 会议 App 选它当麦 → 对方听见灵枢。(分发到别人机器再加 `notarytool` 公证。)
+
 ## 仍需在本机收敛的(让设备真正可用)
 自安装机制已就位;但驱动**本体**要真出现为可选麦克风,需补全 `LingShuAudioDriver.c` 的属性模型 + IO
 (见文件内 TODO),并在 build→自安装→『音频 MIDI 设置』出现设备→会议听见 一轮迭代。
