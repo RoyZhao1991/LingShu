@@ -161,26 +161,29 @@ struct LingShuLocalToolExecutor: LingShuToolExecuting {
         guard normalizedPath.hasPrefix(normalizedRoot + "/") || normalizedPath == normalizedRoot else {
             return .init(tool: "edit_file", success: false, output: "编辑位置必须在工作目录 \(normalizedRoot) 内。")
         }
-        guard !oldString.isEmpty else {
-            return .init(tool: "edit_file", success: false, output: "old_string 不能为空(新建文件请用 write_file)。")
-        }
         guard let data = FileManager.default.contents(atPath: normalizedPath),
               let content = String(data: data, encoding: .utf8) else {
             return .init(tool: "edit_file", success: false, output: "文件不存在或非文本：\(normalizedPath)")
         }
-        let occurrences = content.components(separatedBy: oldString).count - 1
-        guard occurrences > 0 else {
-            return .init(tool: "edit_file", success: false, output: "没找到 old_string(需与文件内容逐字符一致,含缩进/换行)。先 read_file 看准再改。")
-        }
-        guard occurrences == 1 else {
-            return .init(tool: "edit_file", success: false, output: "old_string 在文件里出现 \(occurrences) 次,不唯一。请带上更多上下文让它唯一,或分多次编辑。")
-        }
-        let updated = content.replacingOccurrences(of: oldString, with: newString)
-        do {
-            try updated.write(toFile: normalizedPath, atomically: true, encoding: .utf8)
-            return .init(tool: "edit_file", success: true, output: "已编辑 \(normalizedPath)(替换 1 处,现 \(updated.utf8.count) 字节)")
-        } catch {
-            return .init(tool: "edit_file", success: false, output: "写入失败：\(error.localizedDescription)")
+        // 多策略匹配级联(精确→去空白→块锚点→空白归一→缩进灵活):容忍模型缩进/空白小出入,大幅降低"找不到 old_string"误打回。
+        switch LingShuEditReplacer.replace(content: content, oldString: oldString, newString: newString) {
+        case .replaced(let updated):
+            do {
+                try updated.write(toFile: normalizedPath, atomically: true, encoding: .utf8)
+                return .init(tool: "edit_file", success: true, output: "已编辑 \(normalizedPath)(替换 1 处,现 \(updated.utf8.count) 字节)")
+            } catch {
+                return .init(tool: "edit_file", success: false, output: "写入失败：\(error.localizedDescription)")
+            }
+        case .identical:
+            return .init(tool: "edit_file", success: false, output: "old_string 与 new_string 相同,无需替换。")
+        case .emptyOld:
+            return .init(tool: "edit_file", success: false, output: "old_string 不能为空(新建文件请用 write_file)。")
+        case .notFound:
+            return .init(tool: "edit_file", success: false, output: "没找到 old_string(已尝试精确/去空白/缩进/块锚点等多种匹配仍未命中)。先 read_file 看准再改。")
+        case .multiple:
+            return .init(tool: "edit_file", success: false, output: "old_string 匹配到多处,不唯一。请带上更多上下文让它唯一,或分多次编辑。")
+        case .disproportionate:
+            return .init(tool: "edit_file", success: false, output: "匹配到的片段比 old_string 大很多,已拒绝以防误改。请 read_file 看准、给出完整准确的 old_string。")
         }
     }
 
