@@ -245,8 +245,8 @@ def place_icon(s, name, l, t, size=0.42):
     return False   # 无对比变体 → 不硬塞同色图标,让调用方用 ACCENT 圆点(始终可见)
 
 def kicker(s, txt, l=M, t=0.62):
-    rect(s, l, t + 0.07, 0.32, 0.06, fill=ACCENT)
-    text(s, l + 0.42, t, 6, 0.4, [(txt, Pt(13), ACCENT, True, BODY_FONT)])
+    # 去掉 AI 味强调色条,只留彩色小标签(设计规范:不用 accent 色条/标题下划线)。
+    text(s, l, t, 6, 0.4, [(txt, Pt(13), ACCENT, True, BODY_FONT)])
 
 def footer(s, idx, total, deck):
     text(s, M, SH - 0.5, 6, 0.3, [(deck or '', Pt(10), MUTED, False, BODY_FONT)])
@@ -260,10 +260,9 @@ def L_cover(s, d, **k):
         rect(s, SW * 0.52, 0, SW * 0.04, SH, fill=BG)  # 接缝过渡
         text_w = SW * 0.52 - M - 0.35   # 文字严格限制在左栏,绝不压到右侧图
     else:
-        rect(s, SW - 3.2, 0, 3.2, SH, fill=SURFACE)
-        rect(s, SW - 3.2, 0, 0.12, SH, fill=ACCENT)
+        rect(s, SW - 3.2, 0, 3.2, SH, fill=SURFACE)   # 右侧表面色块(背景色块,非 AI 味色条)
         text_w = SW - 3.2 - M - 0.4
-    rect(s, M, SH * 0.3, 0.55, 0.1, fill=ACCENT)
+    rect(s, M, SH * 0.3, 0.16, 0.16, fill=ACCENT, shape=MSO_SHAPE.OVAL)   # 小圆点 motif,替代色条
     # 标题字号按长度自适应,确保在左栏宽度内一两行放下、不溢出不触边。
     title = str(d.get('title', '标题'))
     base = SCALE.get('cover_title', 54)
@@ -283,7 +282,7 @@ def L_cover(s, d, **k):
 
 def L_section(s, d, **k):
     rect(s, 0, 0, SW, SH, fill=SURFACE)
-    rect(s, 0, 0, 0.18, SH, fill=ACCENT)
+    # 去左侧 AI 味边条;用大号 index 数字本身作视觉锚点。
     text(s, M, SH * 0.28, 4, 1.6, [(str(d.get('index', '')), Pt(96), ACCENT, True, TITLE_FONT)])
     text(s, M, SH * 0.55, SW - 2 * M, 1.6, [(d.get('title', ''), sz('section_title', 40), INK, True, TITLE_FONT)])
     if d.get('subtitle'):
@@ -317,7 +316,7 @@ def _image_text(s, d, image_left):
     tx = iw + 0.7 if image_left else M
     ok = place_image(s, d.get('image'), ix, 0, iw, SH)
     if not ok:
-        rect(s, ix, 0, iw, SH, fill=SURFACE); rect(s, ix, 0, iw, 0.12, fill=ACCENT)
+        rect(s, ix, 0, iw, SH, fill=SURFACE)   # 仅表面色块,不加 AI 味色条
     kicker(s, d.get('kicker', '要点'), l=tx)
     text(s, tx, 1.15, SW - iw - M - 0.7, 1.4, [(d.get('title', ''), title_pt(d.get('title')), INK, True, TITLE_FONT)])
     _bullet_block(s, d.get('bullets', []), d.get('icons'), tx, 2.6, SW - iw - M - 0.7, SH - 3.3)
@@ -406,14 +405,50 @@ def L_chart(s, d, **k):
 
 def L_closing(s, d, **k):
     rect(s, 0, 0, SW, SH, fill=BG)
-    rect(s, 0, SH - 1.4, SW, 1.4, fill=ACCENT)
+    rect(s, M, SH * 0.26, 0.16, 0.16, fill=ACCENT, shape=MSO_SHAPE.OVAL)   # 小圆点 motif,替代整条 AI 味色条
     text(s, M, SH * 0.32, SW - 2 * M, 1.8, [(d.get('title', '谢谢'), Pt(46), INK, True, TITLE_FONT)])
     if d.get('bullets'):
         text(s, M, SH * 0.32 + 1.5, SW - 2 * M, 1.6,
              [(("→ " + str(b)), Pt(18), MUTED, False, BODY_FONT) for b in d['bullets']], space=6)
     contact = _clean_contact(d.get('contact'))
     if contact:
-        text(s, M, SH - 1.15, SW - 2 * M, 0.8, [(contact, Pt(16), BG, True, BODY_FONT)])
+        text(s, M, SH - 1.15, SW - 2 * M, 0.8, [(contact, Pt(16), ACCENT, True, BODY_FONT)])
+
+def L_compare(s, d, **k):
+    """对比表:差异化/多方案对比的内容驱动版式(content→layout)。columns=表头(第1列=维度,其后各对象;
+    第2列默认高亮=本方案),rows=[[维度,值1,值2,…],…]。这是 bullet 堆砌做不出的呈现。"""
+    kicker(s, d.get('kicker', '对比'))
+    text(s, M, 1.15, SW - 2 * M, 1.0, [(d.get('title', ''), title_pt(d.get('title')), INK, True, TITLE_FONT)])
+    cols = d.get('columns', []); rows = d.get('rows', [])
+    if not cols or not rows:
+        text(s, M, 2.6, SW - 2 * M, 1, [("(对比数据缺失:需要 columns + rows)", Pt(14), MUTED, False, BODY_FONT)]); return
+    ncol = len(cols); nrow = len(rows) + 1
+    gw = SW - 2 * M; gh = min(SH - 3.0, 0.62 * nrow)
+    tshape = s.shapes.add_table(nrow, ncol, Inches(M), Inches(2.2), Inches(gw), Inches(gh))
+    tb = tshape.table; tb.first_row = False; tb.horz_banding = False
+    for _c in list(tb._tbl.tblPr):           # 去默认表样式,用纯色
+        if _c.tag.endswith('}tableStyleId'): tb._tbl.tblPr.remove(_c)
+    dimw = gw * 0.20; restw = (gw - dimw) / max(1, ncol - 1)
+    tb.columns[0].width = Inches(dimw)
+    for j in range(1, ncol): tb.columns[j].width = Inches(restw)
+    for i in range(nrow): tb.rows[i].height = Inches(gh / nrow)
+    for j, c in enumerate(cols):             # 表头:accent 底 + 深色字
+        cell = tb.cell(0, j); cell.text = str(c)
+        cell.fill.solid(); cell.fill.fore_color.rgb = ACCENT; cell.vertical_anchor = MSO_ANCHOR.MIDDLE
+        p = cell.text_frame.paragraphs[0]; p.alignment = PP_ALIGN.LEFT if j == 0 else PP_ALIGN.CENTER
+        r = p.runs[0]; r.font.size = Pt(12.5); r.font.bold = True; r.font.color.rgb = BG; r.font.name = BODY_FONT
+        cell.margin_left = cell.margin_right = Inches(0.08)
+    for i, row in enumerate(rows, start=1):  # 数据:第2列(本方案)高亮=accent 粗体,维度列=ink 粗体,其余=muted
+        for j in range(ncol):
+            cell = tb.cell(i, j); cell.text = str(row[j]) if j < len(row) else ''
+            cell.fill.solid(); cell.fill.fore_color.rgb = SURFACE; cell.vertical_anchor = MSO_ANCHOR.MIDDLE
+            p = cell.text_frame.paragraphs[0]; p.alignment = PP_ALIGN.LEFT
+            r = p.runs[0]; r.font.size = Pt(11)
+            r.font.bold = (j == 0 or j == 1)
+            r.font.color.rgb = (ACCENT if j == 1 else (INK if j == 0 else MUTED))
+            r.font.name = BODY_FONT
+            cell.margin_left = cell.margin_right = Inches(0.08)
+            cell.margin_top = cell.margin_bottom = Inches(0.02)
 
 def _clean_contact(c):
     """收尾页联系信息防泄露:绝不渲染绝对文件路径/工作目录(曾把 /Users/example/app 当 contact 印上去)。"""
@@ -429,7 +464,7 @@ LAYOUTS = {
     'cover': L_cover, 'section': L_section, 'bullets': L_bullets, 'bignumber': L_bignumber,
     'image-right': L_image_right, 'image-left': L_image_left, 'image-full': L_image_full,
     'twocol': L_twocol, 'timeline': L_timeline, 'quote': L_quote, 'agenda': L_agenda,
-    'chart': L_chart, 'closing': L_closing,
+    'chart': L_chart, 'compare': L_compare, 'closing': L_closing,
 }
 
 deck_title = data.get('title', '')

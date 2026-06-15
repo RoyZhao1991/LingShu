@@ -45,7 +45,9 @@ enum LingShuCuratedSkillRegistry {
 
         ## 专业要点
         - 先定受众 + 一句话核心讯息，排叙事弧：封面 → 目录 → 章节/定位 → 核心能力 → 数据/案例 → 对比/路线 → 价值愿景 → 收尾行动点。
-        - **每页选一个最合适的版式**(layout 字段),让全篇有节奏、不是一个模子:cover/agenda/section/bullets/bignumber/image-right/image-left/image-full/twocol/timeline/quote/chart/closing。
+        - **每页选一个最合适的版式**(layout 字段),让全篇有节奏、不是一个模子:cover/agenda/section/bullets/bignumber/image-right/image-left/image-full/twocol/timeline/quote/chart/**compare**/closing。
+        - **内容↔版式映射(别什么都堆 bullets——这是"丑"的根源)**:差异化/多方案对比 → **`compare`(对比表,columns+rows,第2列默认高亮=本方案)**;优缺点/价值与难点/前后对比 → `twocol`(左右两张卡);流程/路线/阶段 → `timeline`;有数据 → `chart`(原生图表);单个震撼指标 → `bignumber`;并列要点 → `bullets`(配 icons)。先想"这页内容最适合哪种呈现",再选 layout。
+        - **审美红线(避免 AI 味)**:DesignKB 已去掉标题前的强调色条/侧边条,你也别在内容里堆同质 bullets;每页一个清晰焦点,留白要够。
         - 每页只讲一件事；**页标题写成结论(断言式)**，不是话题词("三年降本 40%"而非"成本情况")。页数 8–14。
         - **内容是讲给受众听的"产品/主题价值",绝不是讲工具本身**:严禁把"怎么做这份 PPT"的内部机制写进幻灯——不写设计系统/配色名(如 DesignKB、midnight)、"版式库/N 套配色"、生成器、工作目录或任何文件路径。观众只关心主题本身。`bignumber` 的数字必须是有意义的业务/产品指标,不是"版式数量"这类自指数字。
         - **配图极挑剔,宁缺毋滥**:**抽象主题**(AI/软件/服务/方法论/流程)**优先用 `icons`(Lucide 名如 check/zap/target/brain)+ `chart`(柱/折/饼)+ 色块做视觉,通常别配照片**——这类主题搜到的多是无关风景/通用人物/办公摆拍,放上去显得廉价。**只有主题是具体实物/真实场景**(产品硬件、门店、活动现场…)才用 `find_images`(具体英文关键词,如 "smart thermostat device"),且**搜回来的图必须肉眼切题才用,不切题就删掉 image 字段改用图标**。带水印/风景/无关人脸一律不用。
@@ -67,6 +69,7 @@ enum LingShuCuratedSkillRegistry {
             {"layout":"bignumber","number":"40%","label":"关键指标","title":"一句说明"},
             {"layout":"image-right","title":"论点","bullets":["..."],"image":"assets/图.jpg","icons":["check"]},
             {"layout":"twocol","title":"对比","left":{"heading":"方案A","bullets":["..."]},"right":{"heading":"方案B","bullets":["..."]}},
+            {"layout":"compare","title":"差异化对比","columns":["维度","本方案","对手A","对手B"],"rows":[["部署","本地","云端","云端"],["范围","全流程","单点","单点"]]},
             {"layout":"timeline","title":"路线","steps":[{"label":"阶段1","desc":"说明"},{"label":"阶段2","desc":"说明"}]},
             {"layout":"chart","title":"数据结论","chart":{"type":"bar","categories":["Q1","Q2","Q3"],"series":[{"name":"营收","values":[10,20,35]}]}},
             {"layout":"quote","quote":"金句","attrib":"出处"},
