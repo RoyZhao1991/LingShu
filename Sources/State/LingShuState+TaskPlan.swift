@@ -30,6 +30,10 @@ extension LingShuState {
         taskExecutionRecords[index].plan = steps
         taskExecutionRecords[index].updatedAt = Date()
         persistTaskExecutionRecords()
+        // 计划一更新就把加载气泡刷成"当前在做的步骤"(进行中→待办),让进度显示活动而非"思考中"。
+        if recordID == (currentAgentTurnRecordID ?? autonomousRunRecordID), isModelReplying || isAutonomousRunActive {
+            missionTitle = currentActivityLabel
+        }
     }
 
     /// 解析 update_plan 参数为计划步骤(纯函数,可测)。

@@ -245,7 +245,7 @@ extension LingShuState {
         // 置"模型在飞"状态:驱动语音通话显示"灵枢在思考…"+暂停麦克风(否则无状态、麦克风不停会打断回复)。
         // 同步刷新 missionTitle——加载气泡显示的就是它,不刷会一直停在旧的"待机中"(看着像卡死)。
         isModelReplying = true
-        missionTitle = "思考中"
+        missionTitle = "理解需求"   // 进度显示当前活动而非笼统"思考中";有计划后随计划步走(currentActivityLabel)
         missionStatus = "正在推进这件事(按需读写文件、跑命令、联网查证)。"
         enterCoreState(.thinking)
         let pendingID = pending.id
@@ -315,7 +315,7 @@ extension LingShuState {
             let recordID = recordIDProvider()
             // 加载气泡实时显示当前在干什么(执行中:<工具>),不再是静态"思考中"——看得见进展不像卡死。
             self.missionTitle = "执行中：\(Self.toolDisplayName(tool))"
-            defer { self.missionTitle = "思考中" }
+            defer { self.missionTitle = self.currentActivityLabel }   // 工具间隙显示当前计划步,不再笼统"思考中"
             let result = await self.runAgenticTool(
                 tool: tool,
                 arguments: args,

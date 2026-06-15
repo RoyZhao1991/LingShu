@@ -91,10 +91,33 @@ extension LingShuState {
         case "list_watches": return "列守候"
         case "cancel_watch": return "撤守候"
         case "get_current_time": return "查时间"
+        case "update_plan": return "制定规划"
+        case "review_design": return "审版式"
+        case "find_images": return "找配图"
+        case "acquire_resource": return "找素材"
+        case "discover_skill": return "找技能"
+        case "spawn_task": return "派子任务"
+        case "ask_user": return "待你确认"
+        case "speak": return "讲述"
+        case "open_preview": return "打开预览"
+        case "preview_next", "preview_prev", "preview_goto": return "翻页"
+        case "preview_scroll": return "滚动浏览"
+        case "close_preview": return "关闭预览"
         default:
             if let computer = computerToolDisplayName(tool) { return computer }
             return tool.hasPrefix("mcp:") ? String(tool.dropFirst(4)) : tool
         }
+    }
+
+    /// 当前在干什么(给加载气泡用,替代笼统的"思考中"):优先显示**进行中的计划步**(模型写的步骤名正是
+    /// "生成PPT/写测试/制定规划"这种活动级标签),没有进行中就显示首个待办步,再没有则"推进中"。
+    var currentActivityLabel: String {
+        if let rid = currentAgentTurnRecordID ?? autonomousRunRecordID,
+           let rec = taskExecutionRecords.first(where: { $0.id == rid }) {
+            if let s = rec.plan.first(where: { $0.status == .inProgress }) { return String(s.title.prefix(22)) }
+            if let s = rec.plan.first(where: { $0.status == .pending }) { return String(s.title.prefix(22)) }
+        }
+        return "推进中"
     }
 
     // MARK: - 本轮真实进展（侧栏绑真实进展,替代静态聚合遥测,计划 §2）
