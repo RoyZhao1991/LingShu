@@ -136,6 +136,9 @@ final class LingShuState: ObservableObject {
     @Published var autonomousObjectiveDraft: String = ""
     // 独立运行启动时从上传附件抽取的上下文(prepare 时捕获、kickoff 时折入);非 @Published,仅供执行流读取。
     var autonomousAttachmentContext: String = ""
+    // 后台守候(条件满足即自动续跑):@Published 供 UI 展示;Task 句柄非 @Published,供取消。
+    @Published var backgroundWatches: [LingShuBackgroundWatch] = []
+    var backgroundWatchTasks: [String: Task<Void, Never>] = [:]
     @Published var eventLog: [String] = [
         "09:42  灵枢主线程在线，等待指令。",
         "09:42  通用 agent 能力池已注册：在线 13 / 运行 0 / 待启动 13。",

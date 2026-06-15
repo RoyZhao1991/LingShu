@@ -216,6 +216,7 @@ extension LingShuState {
         if policy != .readOnly {
             tools.append(spawnTaskTool(adapter: adapter))   // 观察模式不派生可写子任务
             tools += computerControlTools()                  // 计算机直接操作四肢(完整授权档自动放行,计划 §9)
+            tools += backgroundWatchTools()                  // 后台守候 + 完成即续
         }
         return LingShuAgentSession(
             id: "autonomous-\(UUID().uuidString.prefix(6))",

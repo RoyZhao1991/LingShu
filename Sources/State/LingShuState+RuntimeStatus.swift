@@ -87,6 +87,9 @@ extension LingShuState {
         case "recall_memory": return "召回记忆"
         case "remember_credential": return "存凭据"
         case "list_credentials": return "列凭据"
+        case "watch_until": return "后台守候"
+        case "list_watches": return "列守候"
+        case "cancel_watch": return "撤守候"
         case "get_current_time": return "查时间"
         default:
             if let computer = computerToolDisplayName(tool) { return computer }
