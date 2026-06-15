@@ -18,7 +18,7 @@ enum LingShuCuratedSkillRegistry {
         let qualityScore: Double
     }
 
-    static let skills: [CuratedSkill] = [presentation].compactMap { $0 }
+    static let skills: [CuratedSkill] = [presentation, engineering].compactMap { $0 }
 
     /// 给定任务文本，返回命中且**质量最高**的策展 skill（纯提示 → 可安全自动引入）。
     static func bestSkill(forTask task: String) -> LingShuSkillLoader.LoadedSkill? {
@@ -86,5 +86,43 @@ enum LingShuCuratedSkillRegistry {
         """
         guard let loaded = LingShuSkillLoader.parse(markdown, fallbackID: "curated-ppt") else { return nil }
         return CuratedSkill(loaded: loaded, domain: "presentation", qualityScore: 0.95)
+    }()
+
+    /// 自主软件开发专家:把"给我开发一个 X"做成**像资深工程师的完整闭环**——自己写代码 + 自己跑完整测试
+    /// (build + 单测 + 真 e2e 冒烟)+ 红的自己修到全绿再交付,绝不假完成。配合验收门测试门 + Scripts/smoke-e2e.sh。
+    private static let engineering: CuratedSkill? = {
+        let markdown = """
+        ---
+        id: curated-engineering
+        title: 自主软件开发专家（策展·完整测试闭环）
+        mission: 像资深工程师那样自主开发软件,并自己跑完整测试(build + 单测 + 端到端冒烟)、红的自己修到全绿再交付,绝不口头"已完成"。
+        triggers: 开发,develop,写代码,写一个程序,写个程序,做一个工具,做个工具,做一个应用,做个应用,实现一个,重构,修复bug,修bug,改bug,命令行工具,cli,sdk,后端服务,写脚本工具,工程化
+        ---
+
+        ## 专业要点（完整开发闭环,每步都做)
+        - **先看清再动手**:`read_file`(带行号,大文件 offset/limit 分段读全)+ `run_command` grep/find/ls 摸清现状与依赖,别凭空写。多步任务**第一动作是 update_plan** 列 3–7 步。
+        - **增量精确改**:改已有文件用 `edit_file`(局部替换,容忍小空白出入);新建/整重写才 `write_file`。大型多文件工程按"读→改→搜→测"逐文件推进。
+        - **写代码必须配测试并跑绿(硬步骤,非可选)**:用 write_file 写测试(用例随复杂度增多)、run_command 跑测试框架(swift test / pytest / npm test / go test…)迭代到**全部通过**。测试文件也是产出物。**代码任务验收门会确定性检查"有测试且全绿",没测试/没跑通一律打回。**
+        - **可运行的 app/服务/CLI:单测之外还要跑端到端冒烟**——真构建、真启动、真驱动它、按**真实行为/真落盘产物**断言,而不是只看单测。**本仓库的范式见 `Scripts/smoke-e2e.sh`**:构建 → 启动实例 → 经控制服务发真请求 → 按盘上真产出物断言 PASS/FAIL → 拆。开发别的可运行程序时照此搭一个最小冒烟(起进程→喂输入→断言输出/退出码→收尾)。
+        - **红的自己修、迭代到全绿再交付**:编译错、测试红、冒烟失败,都是**喂回上下文的观测**,据此改方法继续,别交一个没跑通的东西,别把"你自己跑一下"甩给用户(假完成红线)。
+        - **长耗时外部步骤(公证/下载/CI/部署)用 `watch_until` 挂后台守候**,满足即自动续跑,不阻塞、不傻等。
+        - **交付时给硬证据**:文件绝对路径 + 怎么构建/运行 + 测试与冒烟的真实结果(通过数/输出),不空说"已完成"。
+
+        ## 交付物模板
+        - 源码文件(write_file/edit_file 真落盘)
+        - 配套测试文件 + 一次**真实跑通**的测试输出(run_command,全绿)
+        - 可运行程序:一个最小端到端冒烟(脚本或步骤)+ 跑过的 PASS 证据
+        - 一句话交付说明:做了什么、文件在哪(绝对路径)、怎么跑、测试/冒烟结果
+
+        ## 评审清单
+        - 源码真实落盘(ls/file 可证),不是只在回复里贴
+        - 能编译/构建通过(run_command 真跑过,不靠声明)
+        - **有测试且全绿**(真跑过测试框架,通过数可见;没测试=不达标)
+        - 可运行程序:**端到端冒烟真跑通**(真启动+真驱动+断言,不只单测)
+        - 回复给了绝对路径 + 运行方式 + 真实测试/冒烟结果,无"你自己跑一下"式甩锅
+        - 改动聚焦本任务,没引入无关破坏(必要时 grep/跑既有测试确认没回归)
+        """
+        guard let loaded = LingShuSkillLoader.parse(markdown, fallbackID: "curated-engineering") else { return nil }
+        return CuratedSkill(loaded: loaded, domain: "engineering", qualityScore: 0.9)
     }()
 }

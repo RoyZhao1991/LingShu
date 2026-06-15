@@ -16,6 +16,15 @@ final class CuratedSkillTests: XCTestCase {
         XCTAssertNil(LingShuCuratedSkillRegistry.bestSkill(forTask: "今天天气怎么样"))
     }
 
+    func testDevelopmentTaskAutoSelectsEngineeringSkill() {
+        let loaded = LingShuCuratedSkillRegistry.bestSkill(forTask: "给我开发一个灵枢")
+        XCTAssertNotNil(loaded, "开发类任务应命中策展工程技能")
+        XCTAssertTrue(loaded!.profile.id.contains("curated-engineering"))
+        // 验收清单必须包含"有测试且全绿"这类完整测试闭环硬约束。
+        let checklist = loaded!.profile.reviewChecklist.joined()
+        XCTAssertTrue(checklist.contains("测试") && (checklist.contains("全绿") || checklist.contains("冒烟")))
+    }
+
     func testCompositeRegistryUsesCuratedWhenNoUserSkill() {
         let registry = LingShuCompositeExpertRegistry(userSkills: [])
         let profile = registry.profile(for: "做一个产品路演 PPT")
