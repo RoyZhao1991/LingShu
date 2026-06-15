@@ -365,6 +365,8 @@ struct ChatMessage: Identifiable, Codable, Equatable, Sendable {
     var resolvedChoice: String?
     /// 思考中气泡上实时滚动的推理预览（流式 <think> 增量的尾部）；定稿时清空，不进历史。
     var thinkingPreview: String?
+    /// 本条用户消息随附的附件文件名(发送时携带的)；nil/空=无附件。Optional 保证旧持久化记录向后兼容解码。
+    var attachmentNames: [String]?
 
     init(
         id: UUID = UUID(),
@@ -376,7 +378,8 @@ struct ChatMessage: Identifiable, Codable, Equatable, Sendable {
         createdAt: Date = Date(),
         choices: CodexRouteChoicePrompt? = nil,
         resolvedChoice: String? = nil,
-        thinkingPreview: String? = nil
+        thinkingPreview: String? = nil,
+        attachmentNames: [String]? = nil
     ) {
         self.id = id
         self.speaker = speaker
@@ -388,6 +391,7 @@ struct ChatMessage: Identifiable, Codable, Equatable, Sendable {
         self.choices = choices
         self.resolvedChoice = resolvedChoice
         self.thinkingPreview = thinkingPreview
+        self.attachmentNames = attachmentNames
     }
 }
 

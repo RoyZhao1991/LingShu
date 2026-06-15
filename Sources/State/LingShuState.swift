@@ -769,8 +769,10 @@ final class LingShuState: ObservableObject {
         let combined = userText.isEmpty
             ? "\(attachmentContext)\n\n请按上述文件落地交付。"
             : "\(attachmentContext)\n\n用户指令：\n\(userText)"
-        let displayText = userText.isEmpty ? "[上传了 \(pendingAttachments.count) 个文件]" : userText
-        chatMessages.append(.init(speaker: "你", text: displayText, isUser: true))
+        // 把随发的附件名挂到这条用户消息上(气泡里展示),再清空托盘。
+        let names = pendingAttachments.map(\.filename)
+        let displayText = userText.isEmpty ? "已上传 \(names.count) 个文件" : userText
+        chatMessages.append(.init(speaker: "你", text: displayText, isUser: true, attachmentNames: names))
         clearAttachments()
         return submitTextInput(combined, source: source, appendUserMessage: false)
     }

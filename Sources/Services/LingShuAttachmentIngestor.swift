@@ -82,7 +82,11 @@ struct LingShuAttachmentIngestor {
             return .document
         case "pdf", "doc", "docx":
             return .document
-        case "txt", "md", "markdown", "csv", "json", "swift", "py", "js", "ts", "html", "xml", "yaml", "yml":
+        case "txt", "md", "markdown", "csv", "tsv", "json", "jsonl", "xml", "html", "htm", "yaml", "yml",
+             "toml", "ini", "conf", "cfg", "properties", "env", "log", "rtf", "tex", "srt", "vtt",
+             "swift", "py", "js", "jsx", "ts", "tsx", "java", "kt", "kts", "c", "cc", "cpp", "cxx",
+             "h", "hpp", "m", "mm", "go", "rs", "rb", "php", "scala", "cs", "sh", "bash", "zsh",
+             "sql", "r", "lua", "pl", "gradle", "dart", "vue", "svelte":
             return .text
         default:
             return .other
@@ -126,11 +130,23 @@ struct LingShuAttachmentIngestor {
             if !text.isEmpty {
                 return .init(filename: filename, kind: kind, extractedContext: Self.clip(text), byteCount: byteCount)
             }
+            // 兜底:未知扩展名但其实是纯文本(各种 config/log/代码无后缀等)→ 试 UTF-8 解码,是文本就当文本用。
+            if let utf8 = Self.decodeAsTextIfPlausible(data) {
+                return .init(filename: filename, kind: .text, extractedContext: Self.clip(utf8), byteCount: byteCount)
+            }
             return .init(
                 filename: filename, kind: kind, extractedContext: "", byteCount: byteCount,
-                status: ["pdf", "xlsx", "docx"].contains(ext) ? "未能从该文件抽取文本" : "已登记，正文抽取暂不支持该格式(\(ext))"
+                status: ["pdf", "xlsx", "docx"].contains(ext) ? "未能从该文件抽取文本" : "已登记，正文抽取暂不支持该二进制格式(\(ext))"
             )
         }
+    }
+
+    /// 若 data 是可读纯文本(UTF-8 可解码且无 NUL 字节)就返回文本,否则 nil(判定二进制)。
+    static func decodeAsTextIfPlausible(_ data: Data) -> String? {
+        guard let s = String(data: data, encoding: .utf8) else { return nil }
+        if data.prefix(4096).contains(0) { return nil }   // 含 NUL → 二进制
+        let trimmed = s.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : s
     }
 
     /// PDF 正文(PDFKit,本机解析,不出网)。

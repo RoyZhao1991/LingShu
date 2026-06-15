@@ -109,6 +109,10 @@ struct ChatBubbleView: View {
                         .foregroundStyle(.white.opacity(0.94))
                         .fixedSize(horizontal: false, vertical: true)
                         .textSelection(.enabled)
+                    if let names = message.attachmentNames, !names.isEmpty {
+                        // 已发送的附件:在消息气泡里展示(发出去了、留痕),输入框托盘已清空。
+                        FlowChips(names: names)
+                    }
                 } else {
                     // 灵枢回复：结构化分块（代码块单独成卡片，正文走 Markdown）。
                     LingShuMessageContentView(text: message.text)
@@ -178,6 +182,45 @@ struct ChatBubbleView: View {
         .frame(maxWidth: .infinity, alignment: message.isUser ? .trailing : .leading)
         .onAppear {
             withAnimation(.easeInOut(duration: 2.6).repeatForever(autoreverses: true)) { glow = true }
+        }
+    }
+}
+
+/// 已发送附件的小芯片(在用户消息气泡里展示):文件图标 + 文件名。竖排,最多展示 6 个 + 计数。
+struct FlowChips: View {
+    let names: [String]
+    var body: some View {
+        let shown = Array(names.prefix(6))
+        VStack(alignment: .leading, spacing: 5) {
+            ForEach(Array(shown.enumerated()), id: \.offset) { _, name in
+                HStack(spacing: 6) {
+                    Image(systemName: icon(for: name))
+                        .font(.system(size: 10.5, weight: .bold))
+                        .foregroundStyle(Color.lingHolo)
+                    Text(name)
+                        .font(.system(size: 11.5, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.82))
+                        .lineLimit(1).truncationMode(.middle)
+                }
+                .padding(.horizontal, 8).padding(.vertical, 4)
+                .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 7))
+            }
+            if names.count > shown.count {
+                Text("等 \(names.count) 个文件")
+                    .font(.system(size: 10.5, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.5))
+            }
+        }
+        .padding(.top, 2)
+    }
+    private func icon(for name: String) -> String {
+        switch (name as NSString).pathExtension.lowercased() {
+        case "png", "jpg", "jpeg", "gif", "bmp", "webp", "heic", "tiff": return "photo"
+        case "pdf": return "doc.richtext"
+        case "xlsx", "xls", "csv": return "tablecells"
+        case "ppt", "pptx", "key": return "rectangle.on.rectangle.angled"
+        case "doc", "docx": return "doc.text"
+        default: return "doc"
         }
     }
 }
