@@ -10,12 +10,24 @@
     <string>com.zhaoroy.lingshu.audiodriver</string>
     <key>CFBundleName</key>
     <string>LingShuAudioDriver</string>
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
     <key>CFBundlePackageType</key>
     <string>BNDL</string>
+    <key>CFBundleSignature</key>
+    <string>????</string>
     <key>CFBundleShortVersionString</key>
     <string>1.0</string>
     <key>CFBundleVersion</key>
     <string>1</string>
+    <!-- 标准 bundle 元数据:缺这两个键时 CFBundle 加载器可能在 coreaudiod 看到它之前就跳过该 bundle
+         (对照 BlackHole 的 Info.plist——它有这些;我们手写的最初漏了,正是 coreaudiod 零日志的疑似真因)。 -->
+    <key>CFBundleSupportedPlatforms</key>
+    <array>
+        <string>MacOSX</string>
+    </array>
+    <key>LSMinimumSystemVersion</key>
+    <string>11.0</string>
     <!-- AudioServerPlugIn 类型 UUID(固定)→ 灵枢工厂 UUID -->
     <key>CFPlugInFactories</key>
     <dict>
