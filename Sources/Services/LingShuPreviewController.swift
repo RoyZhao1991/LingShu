@@ -43,7 +43,7 @@ final class LingShuPreviewController: ObservableObject {
         pageIndex = 0
         revision += 1
         isPresented = true
-        return "已打开预览「\(title)」,共 \(pageCount) 页,当前第 1 页。翻页:preview_next/preview_prev/preview_goto;长文档滚动:preview_scroll。演示时边 speak 讲、边 preview_next 翻。"
+        return "已打开预览「\(title)」,共 \(pageCount) 页,当前第 1 页。正式演讲请先 present_fullscreen 进全屏演示模式,再逐页 speak 讲、preview_next 翻;长文档用 preview_scroll。\n\(pageContentBlock(0))"
     }
 
     func next() -> String { goto(pageIndex + 1) }
@@ -54,7 +54,26 @@ final class LingShuPreviewController: ObservableObject {
         let clamped = max(0, min(index, pageCount - 1))
         pageIndex = clamped
         if let page = document.page(at: clamped) { pdfView?.go(to: page) }
-        return "已到第 \(clamped + 1)/\(pageCount) 页。"
+        return "已到第 \(clamped + 1)/\(pageCount) 页。\n\(pageContentBlock(clamped))"
+    }
+
+    /// 当前页**真实文字内容**(从 PDF 抽,演示时讲解必须照这个讲,别凭记忆——保证文字稿对得上画面)。
+    func pageText(_ index: Int) -> String {
+        guard let document, let page = document.page(at: index) else { return "" }
+        let raw = page.string ?? ""
+        let lines = raw.components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+        return String(lines.joined(separator: "\n").prefix(800))
+    }
+
+    /// 把当前页内容包成给大脑看的块:讲解时**照这页实际内容讲**(对不上画面=失职)。
+    private func pageContentBlock(_ index: Int) -> String {
+        let text = pageText(index)
+        guard !text.isEmpty else {
+            return "【本页内容】(这页可能是图为主、没抽到文字;讲解前可 screen_capture 看一眼这页画面再讲,别凭空编)"
+        }
+        return "【第\(index + 1)页 实际内容,照这个讲、别凭记忆】\n\(text)"
     }
 
     /// 滚动当前预览(长文档/Excel 拖动浏览)。lines>0 向下、<0 向上。

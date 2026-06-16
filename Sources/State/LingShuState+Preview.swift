@@ -10,7 +10,7 @@ extension LingShuState {
         [
             LingShuAgentTool(
                 name: "open_preview",
-                description: "在 app 内打开文件预览(PPT/PDF/Word/Excel 都行,office 会自动转 PDF)。做演示/讲解/带人看文档时先用它打开,再配合 speak 讲、preview_next 翻页。",
+                description: "在 app 内打开文件预览(PPT/PDF/Word/Excel 都行,office 会自动转 PDF)。做演示/讲解/带人看文档时先用它打开。**返回里带【本页实际内容】——讲解必须照这页真实内容讲,别凭记忆/编**。正式演讲流程:open_preview → present_fullscreen(true) 进全屏演示 → 逐页 speak 讲(照本页内容)+ preview_next 翻 → 讲完 present_fullscreen(false) 退出。",
                 parametersJSON: "{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\",\"description\":\"文件绝对路径\"}},\"required\":[\"path\"]}"
             ) { [weak self] args in
                 let path = Self.jsonField(args, "path") ?? args
@@ -18,7 +18,7 @@ extension LingShuState {
             },
             LingShuAgentTool(
                 name: "preview_next",
-                description: "预览翻到下一页(演示时:讲完一页 speak 后翻页)。",
+                description: "预览翻到下一页(演示时:讲完一页 speak 后翻页)。**返回里带新页的【实际内容】——照它讲。**",
                 parametersJSON: "{\"type\":\"object\",\"properties\":{}}"
             ) { [weak self] _ in await MainActor.run { self?.previewController.next() ?? "预览不可用" } },
             LingShuAgentTool(
@@ -44,7 +44,7 @@ extension LingShuState {
             },
             LingShuAgentTool(
                 name: "present_fullscreen",
-                description: "进入/退出全屏演示(WPS 演示式:单页满屏 + 翻页)。做正式演讲时进全屏,配合 speak 逐页讲、preview_next 翻页。on=true 进、false 出。",
+                description: "进入/退出**全屏演示模式**(把幻灯片放大铺满整个屏幕讲,像 PPT/Keynote 放映,不是在小预览窗里讲)。**做正式演讲/演示时必须先 present_fullscreen(true) 再开讲**,讲完 present_fullscreen(false) 退出。on=true 进、false 出。",
                 parametersJSON: "{\"type\":\"object\",\"properties\":{\"on\":{\"type\":\"string\",\"description\":\"true 进入全屏演示 / false 退出,默认 true\"}},\"required\":[]}"
             ) { [weak self] args in
                 let on = !((Self.jsonField(args, "on") ?? "true").lowercased() == "false")

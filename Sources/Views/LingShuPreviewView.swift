@@ -70,16 +70,41 @@ struct LingShuPreviewSheet: View {
 }
 
 /// 把承载窗口的全屏状态同步到 `active`(全屏演示进/出)。
+/// 坑:预览是 `.sheet`,sheet 窗口默认不带 `.fullScreenPrimary`→`toggleFullScreen` 静默无效(实测"全屏演示"没放大)。
+/// 修:进全屏前先补上 `.fullScreenPrimary`+`.resizable` 让原生全屏生效;短延时后若仍没进全屏(sheet 顽抗),
+/// **兜底把窗口 frame 撑到整屏**(`screen.frame`)——保证幻灯片一定被放大铺满,达到"演示模式放大讲解"的效果。
 private struct WindowFullscreenToggler: NSViewRepresentable {
     let active: Bool
     func makeNSView(context: Context) -> NSView { NSView() }
+
     func updateNSView(_ nsView: NSView, context: Context) {
+        let coordinator = context.coordinator
         DispatchQueue.main.async {
             guard let window = nsView.window else { return }
             let isFull = window.styleMask.contains(.fullScreen)
-            if active != isFull { window.toggleFullScreen(nil) }
+            if active, !isFull {
+                if coordinator.savedFrame == nil { coordinator.savedFrame = window.frame }
+                window.collectionBehavior.insert(.fullScreenPrimary)
+                window.styleMask.insert(.resizable)
+                window.toggleFullScreen(nil)
+                // 兜底:sheet 可能拒绝原生全屏 → 0.35s 后还没全屏就把 frame 撑满整屏。
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                    guard active, !window.styleMask.contains(.fullScreen),
+                          let screen = window.screen ?? NSScreen.main else { return }
+                    window.setFrame(screen.frame, display: true, animate: true)
+                }
+            } else if !active {
+                if isFull { window.toggleFullScreen(nil) }
+                if let saved = coordinator.savedFrame {   // 还原退出前的窗口大小
+                    window.setFrame(saved, display: true, animate: true)
+                    coordinator.savedFrame = nil
+                }
+            }
         }
     }
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+    final class Coordinator { var savedFrame: NSRect? }
 }
 
 /// PDFKit PDFView 的 SwiftUI 包装:声明式同步文档/页码,把 PDFView 弱引用回灌给 controller 供命令式滚动。
