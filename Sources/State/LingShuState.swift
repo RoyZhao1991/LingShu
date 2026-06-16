@@ -212,6 +212,24 @@ final class LingShuState: ObservableObject {
     /// 定时压缩(checkpoint)定时器。
     var memoryCompactionTimer: Timer?
 
+    /// 能力通道校验状态(channelKey → 校验结果):中枢/视觉/视频/听/语音各通道"是否实测校验通过"。
+    /// channelKey 形如 `brain:DeepSeek` / `vision:datanet` / `tts:dataNetSpeakerTTS` / `asr:local`。
+    /// 持久化到 UserDefaults;各模态选择器 + 子线程切换只列"已配置且校验通过"的通道。见 LingShuState+ModelChannels。
+    @Published var channelValidations: [String: LingShuChannelValidation] = LingShuState.loadChannelValidations() {
+        didSet { LingShuState.saveChannelValidations(channelValidations) }
+    }
+    /// 正在校验中的 channelKey(UI 转圈)。
+    @Published var validatingChannels: Set<String> = []
+
+    static func loadChannelValidations() -> [String: LingShuChannelValidation] {
+        guard let data = UserDefaults.standard.data(forKey: "lingshu.channelValidations"),
+              let decoded = try? JSONDecoder().decode([String: LingShuChannelValidation].self, from: data) else { return [:] }
+        return decoded
+    }
+    static func saveChannelValidations(_ v: [String: LingShuChannelValidation]) {
+        if let data = try? JSONEncoder().encode(v) { UserDefaults.standard.set(data, forKey: "lingshu.channelValidations") }
+    }
+
     /// 增量记忆落盘目录(Application Support/LingShu/memory)。
     static var memoryStoreDirectory: URL {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first

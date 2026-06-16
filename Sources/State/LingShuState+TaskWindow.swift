@@ -100,7 +100,9 @@ extension LingShuState {
     }
 
     /// 模型供应商选单(窗口内模型选择器用)。
+    /// 子线程/任务窗口可切换的大脑:只列**已配置且校验通过**的文本通道(外加当前在用的),
+    /// 不再平铺全量目录——没真接上/没校验通过的模型不让切换(用户要求 2026-06-16)。
     var taskWindowModelProviders: [String] {
-        ModelProviderPreset.catalog.map(\.name)
+        switchableTextProviders().map(\.name)
     }
 }
