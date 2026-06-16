@@ -167,8 +167,6 @@ struct LingShuModelGatewaySurface: View {
                     case .perception: perceptionRows
                     }
                 }
-
-                executionPanel
             }
             .padding(22)
         }
@@ -238,7 +236,13 @@ struct LingShuModelGatewaySurface: View {
         )
     }
 
-    private var executionPanel: some View {
+}
+
+/// 执行策略=独立配置(不在模型通道里):工作目录 · 常规偏好(语音/随机性)· 高风险边界(权限模式/人工确认/计算机操作)。
+struct LingShuExecutionPolicySurface: View {
+    @ObservedObject var state: LingShuState
+
+    var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             SectionHeader(icon: "checkmark.shield", title: "执行策略", subtitle: "工作目录 · 常规偏好 · 高风险边界")
 

@@ -8,6 +8,7 @@ struct LingShuSettingsHub: View {
 
     enum Tab: String, CaseIterable, Identifiable {
         case model = "模型通道"
+        case policy = "执行策略"
         case residency = "常驻与触发"
         case skills = "技能与连接器"
         case memory = "记忆"
@@ -15,6 +16,7 @@ struct LingShuSettingsHub: View {
         var icon: String {
             switch self {
             case .model: "antenna.radiowaves.left.and.right"
+            case .policy: "checkmark.shield"
             case .residency: "clock.badge"
             case .skills: "puzzlepiece.extension"
             case .memory: "brain"
@@ -59,6 +61,10 @@ struct LingShuSettingsHub: View {
                 switch tab {
                 case .model:
                     LingShuModelGatewaySurface(state: state)
+                case .policy:
+                    ScrollView {
+                        LingShuExecutionPolicySurface(state: state).padding(22)
+                    }
                 case .residency:
                     ScrollView {
                         LingShuTriggerSettingsView(triggerService: state.scheduledTriggers)
