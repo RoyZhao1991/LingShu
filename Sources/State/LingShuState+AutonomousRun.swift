@@ -419,6 +419,7 @@ extension LingShuState {
         taskRecordID: String?
     ) -> String? {
         guard isAutonomousRunCommand(prompt) else { return nil }
+        let recordID = taskRecordID ?? createTaskExecutionRecord(for: prompt)   // 按需建(主入口不再 eager 建,避免空记录)
 
         let snapshot = prepareAutonomousRun(objective: prompt)
         let missing = snapshot.runbook?.missingInformation ?? []
@@ -431,11 +432,11 @@ extension LingShuState {
             response = "已进入独立运行模式。我先生成了动态 runbook，但还建议确认：\(missing.joined(separator: "、"))。你也可以直接授权我按当前假设推进。"
         }
 
-        appendTaskRecordMessage(taskRecordID, actor: "独立运行", role: "环境检测", kind: .core, text: snapshot.environment?.summaryLine ?? "环境检测完成")
-        appendTaskRecordMessage(taskRecordID, actor: "独立运行", role: "动态规划", kind: .router, text: snapshot.runbook?.summaryLine ?? "动态规划完成")
-        appendTaskRecordMessage(taskRecordID, actor: "灵枢", role: "中枢", kind: .result, text: response)
+        appendTaskRecordMessage(recordID, actor: "独立运行", role: "环境检测", kind: .core, text: snapshot.environment?.summaryLine ?? "环境检测完成")
+        appendTaskRecordMessage(recordID, actor: "独立运行", role: "动态规划", kind: .router, text: snapshot.runbook?.summaryLine ?? "动态规划完成")
+        appendTaskRecordMessage(recordID, actor: "灵枢", role: "中枢", kind: .result, text: response)
         applyTaskRecordRoute(
-            taskRecordID,
+            recordID,
             route: .init(
                 needsAgents: false,
                 agents: [],
@@ -444,8 +445,8 @@ extension LingShuState {
                 summary: "进入独立运行模式，已完成环境检测、自检和动态 runbook。"
             )
         )
-        finishTaskRecord(taskRecordID, status: snapshot.phase == .blocked ? .blocked : .answered, summary: response)
-        chatMessages.append(.init(speaker: "灵枢", text: response, isUser: false, taskRecordID: taskRecordID))
+        finishTaskRecord(recordID, status: snapshot.phase == .blocked ? .blocked : .answered, summary: response)
+        chatMessages.append(.init(speaker: "灵枢", text: response, isUser: false, taskRecordID: recordID))
         rememberMainThreadTurn(prompt: prompt, reply: response)
         return response
     }

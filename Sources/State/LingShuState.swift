@@ -214,6 +214,9 @@ final class LingShuState: ObservableObject {
     /// 应续跑**那条隔离会话**(带真上下文),而不是被当成全新输入重新分诊到主会话(否则答非所问,实测 bug)。
     var lastDispatchedThreadRecordID: String?
     var lastDispatchedThreadAt: Date?
+    /// 某条**派发的隔离任务**正卡在 ask_user 等用户回答(它问了主题/要信息):下一条主输入**就是答案**,
+    /// 直接续跑那条隔离会话(不重新分诊),与自主运行的 handleAutonomousAnswerIfNeeded 同理。
+    var blockedDispatchedRecordID: String?
     /// 主会话当前回合的任务记录 id;工具桥据此把产出文件登记到正确记录。
     var currentAgentTurnRecordID: String?
     /// 当前 agent 主回合的 Task(供语音通话"真指令打断"取消在飞模型调用)。
@@ -941,7 +944,8 @@ final class LingShuState: ObservableObject {
         guard !trimmedPrompt.isEmpty else { return "" }
         cancelMainRemoteHealthProbe(reason: "探活让路", detail: "收到用户指令，已停止后台探活，把主通道让给本轮任务。")
 
-        let taskRecordID = existingTaskRecordID ?? createTaskExecutionRecord(for: trimmedPrompt)
+        // 记录**按需建**(不再在最顶 eager 建):被续答/在岗/答复等早返回接管的轮次用各自的记录,
+        // 否则会在任务列表里留一条空壳记录(实测:答"做什么主题"时多出一条空的"介绍你自己的能力·执行中")。
         if appendUserMessage {
             chatMessages.append(.init(speaker: "你", text: trimmedPrompt, isUser: true))
         }
@@ -958,21 +962,28 @@ final class LingShuState: ObservableObject {
         perceptionSceneRefreshTrigger?()
 
         // 自主运行卡在 ask_user 提问上时，本轮输入即为答案：回填续跑（优先于一切常规分流）。
-        if let answerAck = handleAutonomousAnswerIfNeeded(prompt: trimmedPrompt, taskRecordID: taskRecordID) {
+        // 这些早返回的续接handler都用各自的记录(自主/在岗/被卡住的派发任务),不需要本轮新建记录。
+        if let answerAck = handleAutonomousAnswerIfNeeded(prompt: trimmedPrompt, taskRecordID: nil) {
             return answerAck
         }
 
-        if let autonomousResponse = handleAutonomousRunCommandIfNeeded(
-            prompt: trimmedPrompt,
-            taskRecordID: taskRecordID
-        ) {
+        if let autonomousResponse = handleAutonomousRunCommandIfNeeded(prompt: trimmedPrompt, taskRecordID: nil) {
             return autonomousResponse
         }
 
         // 常驻灵枢在岗时,对话/语音直接喂给在岗执行会话(带其权限级与四肢),让它真去做。
-        if let standingAck = handleStandingPersonInputIfNeeded(prompt: trimmedPrompt, taskRecordID: taskRecordID) {
+        if let standingAck = handleStandingPersonInputIfNeeded(prompt: trimmedPrompt, taskRecordID: nil) {
             return standingAck
         }
+
+        // 派发的隔离任务正卡在 ask_user 等回答(它问了"做什么主题"等)→ 本轮输入就是答案:
+        // 直接续跑那条隔离会话(带真上下文),不重新分诊(否则"做PPT→问主题→你答主题→它却跑去聊天"=答非所问)。
+        if let answerAck = handleDispatchedTaskAnswerIfNeeded(prompt: trimmedPrompt) {
+            return answerAck
+        }
+
+        // 到这里才真正需要一条本轮记录(直答/派发/续接都要)。
+        let taskRecordID = existingTaskRecordID ?? createTaskExecutionRecord(for: trimmedPrompt)
 
         // 续接/追问(已有记录)→ 直接主回合,不分诊(继续这件事,不重新派发)。
         if existingTaskRecordID != nil {

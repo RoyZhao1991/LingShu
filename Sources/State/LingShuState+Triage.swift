@@ -117,6 +117,16 @@ extension LingShuState {
         return pending.text
     }
 
+    /// 派发的隔离任务正卡在 ask_user 等用户回答 → 本轮输入即答案,直接续那条隔离会话(不重新分诊)。
+    /// 返回非 nil = 已接管本轮。与自主运行的 handleAutonomousAnswerIfNeeded 同理,但作用于派发的隔离子任务。
+    func handleDispatchedTaskAnswerIfNeeded(prompt: String) -> String? {
+        guard let rid = blockedDispatchedRecordID,
+              agentSubTaskRecords.values.contains(rid), !hasActiveModelCall else { return nil }
+        blockedDispatchedRecordID = nil
+        continueDispatchedThread(prompt: prompt, recordID: rid)
+        return ""   // 真实回复由编排器事件回填该任务气泡
+    }
+
     /// 用户这条是在**回答/延续刚才那条派发的隔离任务**(如它问"做什么主题"):续跑**那条隔离会话本身**(带真上下文),
     /// 而不是另起新会话。这样"做PPT→问主题→你答主题"能接上去真把 PPT 做出来,不再答非所问。通用,不限 PPT。
     func continueDispatchedThread(prompt: String, recordID: String) {
