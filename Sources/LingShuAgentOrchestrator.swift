@@ -135,6 +135,13 @@ actor LingShuAgentOrchestrator {
         return result
     }
 
+    /// 流程纠正注入到某条隔离子会话(它才是该派发任务真正在跑的 maker)。返回是否注入到一个**正在跑**的循环。
+    /// 根治"派发隔离 session 没法 interject 纠偏"——主/自主会话的 interject 够不到编排器里的子会话。
+    @discardableResult
+    func injectCorrection(id: String, _ text: String) async -> Bool {
+        await sessions[id]?.injectCorrection(text) ?? false
+    }
+
     /// 凭账本路由一条后续输入:恰有一个卡住子任务 → 视为在答它;多个 → 返回 nil(交主会话消歧)。
     func routeFollowup(_ text: String) -> String? {
         let blocked = blockedIDs()

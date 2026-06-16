@@ -90,10 +90,13 @@ final class LingShuControlRouter {
         ],
         [
             "name": "lingshu_interject",
-            "description": "流程纠正/干预:看到 agent 跑偏时,把纠正注入正在跑的会话,回合边界即采纳改方向(不打断在飞工具)。args: text。",
+            "description": "流程纠正/干预:看到 agent 跑偏时,把纠正注入正在跑的会话,回合边界即采纳改方向(不打断在飞工具)。args: text、recordId(可选,指定某条派发隔离任务的记录 id;不给则注入主会话当前回合)。",
             "inputSchema": [
                 "type": "object",
-                "properties": ["text": ["type": "string", "description": "纠正指令"]],
+                "properties": [
+                    "text": ["type": "string", "description": "纠正指令"],
+                    "recordId": ["type": "string", "description": "(可选)派发隔离任务的记录 id,纠正注入那条隔离会话"]
+                ],
                 "required": ["text"]
             ]
         ],
@@ -303,8 +306,10 @@ final class LingShuControlRouter {
                 return ("缺少参数 text", true)
             }
             let wasActive = state.hasActiveModelCall
-            state.interjectCorrection(text, recordID: state.currentAgentTurnRecordID)
-            return (jsonText(["interjected": text, "wasActive": wasActive]), false)
+            // recordId 给了就纠偏那条(派发隔离任务也能接到);否则注入主会话当前回合。
+            let interjectRecordID = (arguments["recordId"] as? String) ?? state.currentAgentTurnRecordID
+            state.interjectCorrection(text, recordID: interjectRecordID)
+            return (jsonText(["interjected": text, "wasActive": wasActive, "recordId": interjectRecordID ?? ""]), false)
         case "lingshu_get_chat":
             let limit = (arguments["limit"] as? Int) ?? 20
             return (jsonText(["messages": chatPayload(limit: limit)]), false)

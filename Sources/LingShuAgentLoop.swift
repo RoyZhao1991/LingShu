@@ -211,6 +211,15 @@ actor LingShuAgentSession {
     /// **可选脚手架工具**(非任务目标本身):卡在它们上绝不交还,改为纠偏让模型跳过、直接做任务。
     static let optionalScaffoldTools: Set<String> = ["update_plan"]
 
+    /// 会改动交付物的工具(产出"进展"的标志)。其余(read_file/run_command 跑测试/list_directory…)算"验证/查看"。
+    static let mutatingToolNames: Set<String> = ["write_file", "edit_file"]
+    /// **过度自测收敛**(根治"游戏早做好了却反复跑测试 35 分钟不宣布完成"):已产出过文件后,连续这么多步
+    /// **不再改动任何文件**(只在反复测试/查看)→ 工作其实已完成。`overValidationNudgeAt` 先提示收尾;
+    /// 再不收尾到 `overValidationForceAt` 就**强制收尾**(返回 .completed),交**独立验收(checker)**判定,
+    /// 而不是让 maker 无限自测空转。`stuck` 检测只抓"完全相同"调用,抓不到"每次略不同的测试空转",故另设此门。
+    static let overValidationNudgeAt = 10
+    static let overValidationForceAt = 20
+
     /// 目标驱动循环:**停止条件只有「目标达成(模型给出最终答复)/ 卡住等人(ask_user)/ 原地打转交还」**。
     /// `maxTurns` 不是目标预算,而是防失控的安全天花板(高位,正常远到不了)——不靠它来"到点收工"。
     /// 模型自己判断完成就 `.text` 收尾;撞墙就换方法继续(失败结果回灌进上下文,这就是 agent 循环)。
@@ -220,6 +229,10 @@ actor LingShuAgentSession {
         var lastText = ""
         var recentToolSignatures: [String] = []
         var step = 0
+        // 过度自测收敛:已产出过文件后,连续多少步没再改文件(只测试/查看)。sawMutation 后才计,纯探索期不算。
+        var turnsSinceMutation = 0
+        var sawMutation = false
+        var nudgedOverValidation = false
         while step < maxTurns {   // maxTurns = 安全天花板,非目标停止位
             // 用户停止:真停(任务取消)→ 诚实交还,不假装收尾。
             if Task.isCancelled {
@@ -257,18 +270,28 @@ actor LingShuAgentSession {
                 let signature = calls.map { "\($0.name)#\($0.argumentsJSON)" }.joined(separator: "|")
                 recentToolSignatures.append(signature)
                 let tail = recentToolSignatures.suffix(Self.stuckRepeatThreshold)
-                var steerAfterTools = false
+                var pendingSteer: String? = nil
                 if tail.count == Self.stuckRepeatThreshold, Set(tail).count == 1 {
                     let name = calls.first?.name ?? "同一动作"
                     if Self.optionalScaffoldTools.contains(name) {
                         // 卡在**可选脚手架工具**(如 update_plan)上:计划不是目标——绝不为它交还。
                         // 清掉签名史 + 执行完这次后注入纠偏,让模型跳过计划、直接用通用工具把任务做出来。
                         recentToolSignatures.removeAll()
-                        steerAfterTools = true
+                        pendingSteer = "【系统纠偏】update_plan 这步反复失败,但它只是**可选的计划工具、不是任务本身**。别再调用它了——直接用 write_file / run_command / web_search 等把用户真正要的事做出来,完成后给出结果。"
                     } else {
                         // 卡在**真任务动作**上才诚实交还,且给结果+原因+下一步,不是空喊"走不通"。
                         return .maxTurnsReached(lastText: "（我反复尝试「\(name)」\(Self.stuckRepeatThreshold) 次都没推进。最近结果:\(lastText.prefix(200))。我先停下,需要你确认一个关键点或给我缺的信息,我换条路继续。）")
                     }
+                }
+                // 过度自测收敛:已产出文件后,连续多步不再改任何文件 = 在反复验证/查看空转。
+                if calls.contains(where: { Self.mutatingToolNames.contains($0.name) }) {
+                    sawMutation = true; turnsSinceMutation = 0
+                } else {
+                    turnsSinceMutation += 1
+                }
+                if sawMutation, turnsSinceMutation == Self.overValidationNudgeAt, !nudgedOverValidation, pendingSteer == nil {
+                    nudgedOverValidation = true
+                    pendingSteer = "【系统纠偏】你已经连续很多步只在测试/查看、没有再改动任何文件——说明要做的东西已经做完了。**别再重复验证空转**,下一步请直接给出最终交付文本(做了什么 + 产出物绝对路径 + 怎么运行/打开),不要再调用工具。"
                 }
                 for call in calls {
                     toolInvocations.append(call.name)
@@ -281,8 +304,13 @@ actor LingShuAgentSession {
                     lastText = result
                     messages.append(.init(role: .tool, content: result, toolCallID: call.id))
                 }
-                if steerAfterTools {
-                    messages.append(.init(role: .user, content: "【系统纠偏】update_plan 这步反复失败,但它只是**可选的计划工具、不是任务本身**。别再调用它了——直接用 write_file / run_command / web_search 等把用户真正要的事做出来,完成后给出结果。"))
+                if let steer = pendingSteer {
+                    messages.append(.init(role: .user, content: steer))
+                }
+                // 强制收尾(在工具执行后判,保证 messages 良构可被验收/resume):提示过仍空转 → 工作已完成,
+                // 停止 maker 无限自测,**返回 .completed 交独立验收(checker)** 判定,而非无界空转或被撞顶误判异常。
+                if sawMutation, turnsSinceMutation >= Self.overValidationForceAt {
+                    return .completed(text: lastText.isEmpty ? "（工作已完成,产出物已落盘,停止重复验证,交付独立验收。）" : lastText)
                 }
             }
         }

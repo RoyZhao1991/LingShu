@@ -51,9 +51,14 @@ extension LingShuState {
         clearAttachments()
         let main = mainAgentSessionHolder
         let autonomous = autonomousSessionHolder
+        // 这条记录若属于**派发的隔离子任务**,纠正要注入**那条隔离会话本身**(它才是真正在跑的 maker)——
+        // 主/自主会话的 interject 够不到编排器里的子会话(否则空转的派发任务没法从外部叫停/纠偏)。
+        let subID = recordID.flatMap { rid in agentSubTaskRecords.first(where: { $0.value == rid })?.key }
+        let orchestrator = agentOrchestrator
         Task {
             await main?.injectCorrection(correction)
             await autonomous?.injectCorrection(correction)
+            if let subID { await orchestrator.injectCorrection(id: subID, correction) }
         }
     }
 
