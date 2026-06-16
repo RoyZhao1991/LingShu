@@ -23,6 +23,16 @@ enum LingShuComputerControl {
         return AXIsProcessTrustedWithOptions(["AXTrustedCheckOptionPrompt": true] as CFDictionary)
     }
 
+    /// 是否已获屏幕录制授权(截屏需要)。
+    static func isScreenCaptureTrusted() -> Bool { CGPreflightScreenCaptureAccess() }
+
+    /// 弹屏幕录制授权框(截屏需要)。已授权则无操作;首次调用触发系统授权请求。返回是否已授权。
+    @discardableResult
+    static func requestScreenCaptureAccess() -> Bool {
+        if CGPreflightScreenCaptureAccess() { return true }
+        return CGRequestScreenCaptureAccess()
+    }
+
     // MARK: - 屏幕
 
     /// 主屏逻辑尺寸(点)。模型用点坐标点击(非像素),避免 Retina 2x 偏移。

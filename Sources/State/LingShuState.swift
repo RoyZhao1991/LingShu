@@ -116,7 +116,11 @@ final class LingShuState: ObservableObject {
     // 计算机直接操作四肢(截屏/点击/键入)总开关:默认关,授权语义=用户显式开启 + 系统辅助功能授权(计划 §9)。
     // 独立运行「完整授权」档自动视为开启(完整电脑控制)。
     @Published var computerControlEnabled = UserDefaults.standard.bool(forKey: "lingshu.computerControlEnabled") {
-        didSet { UserDefaults.standard.set(computerControlEnabled, forKey: "lingshu.computerControlEnabled") }
+        didSet {
+            UserDefaults.standard.set(computerControlEnabled, forKey: "lingshu.computerControlEnabled")
+            // 打开开关即向系统申请权限(辅助功能 + 屏幕录制),立刻弹系统授权框——不等首次动作。
+            if computerControlEnabled, !oldValue { requestComputerControlPermissions() }
+        }
     }
     @Published var chatMessages: [ChatMessage] = [
         .init(speaker: "灵枢", text: "我在。你只管说目标，剩下的判断、分派和推进交给我。", isUser: false)

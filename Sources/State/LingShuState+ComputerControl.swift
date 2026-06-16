@@ -12,6 +12,23 @@ extension LingShuState {
         computerControlEnabled || (autonomousRun.isActive && autonomousRun.permissionLevel == .full)
     }
 
+    /// 打开「计算机直接操作」开关时**立即**向系统申请权限(辅助功能 + 屏幕录制),弹出系统授权框——
+    /// 不必等到首次动作才弹(用户反馈:开了开关却没弹系统授权框=根本没申请)。已授权则无弹框。
+    /// 由 `computerControlEnabled` 的 didSet 在 false→true 时调用。
+    func requestComputerControlPermissions() {
+        let ax = LingShuComputerControl.requestAccessibilityTrust()        // 弹辅助功能授权(未授权时)
+        let screen = LingShuComputerControl.requestScreenCaptureAccess()   // 弹屏幕录制授权(未授权时)
+        let needAX = !ax, needScreen = !screen
+        if needAX || needScreen {
+            var items: [String] = []
+            if needAX { items.append("辅助功能") }
+            if needScreen { items.append("屏幕录制") }
+            appendTrace(kind: .system, actor: "计算机操作", title: "申请系统权限", detail: "已弹出系统授权框申请:\(items.joined(separator: " + "))。请在框中允许,或到『系统设置 > 隐私与安全性』勾选\"灵枢\"。授权后开关即可生效。")
+        } else {
+            appendTrace(kind: .system, actor: "计算机操作", title: "权限已具备", detail: "辅助功能 + 屏幕录制均已授权,可直接看屏/点击/键入。")
+        }
+    }
+
     /// 授权检查;返回非 nil = 未授权的说明(回给模型,让它要么提示用户开启、要么换别的办法)。
     /// `requiresAccessibility` 的动作类还需系统辅助功能授权(没有则弹一次系统提示)。
     func computerControlGate(requiresAccessibility: Bool) -> String? {
