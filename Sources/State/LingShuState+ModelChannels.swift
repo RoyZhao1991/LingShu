@@ -40,9 +40,19 @@ extension LingShuState {
     }
 
     // MARK: - 语音合成 TTS 通道(口)
-    /// 模型通道里展示/可选的 TTS 通道:本机系统语音(始终可用)+ 数据网关情绪男声(云端,需 token)。
+    /// 模型通道里展示/可选的 TTS 通道:数据网关情绪语音(云端,需 token)+ 本机系统语音(始终可用)。
     var ttsChannelDescriptors: [LingShuSpeechOutputProviderDescriptor] {
         [.dataNetSpeakerTTS, .appleSpeech]
+    }
+
+    /// TTS 通道**可自定义显示名**(覆盖写死的 displayName);改名持久化。名字写死且不准(如"男声"其实是女声)→ 用户自己改。
+    func ttsDisplayName(_ descriptor: LingShuSpeechOutputProviderDescriptor) -> String {
+        let custom = ttsChannelNames[descriptor.id]?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return (custom?.isEmpty == false) ? custom! : descriptor.displayName
+    }
+    func renameTTSChannel(_ descriptorID: String, to name: String) {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty { ttsChannelNames[descriptorID] = nil } else { ttsChannelNames[descriptorID] = trimmed }
     }
 
     // MARK: - 校验(实测调用)
@@ -109,7 +119,7 @@ extension LingShuState {
             ok = true; detail = "本机语音 · 始终可用"
         default:
             let hasToken = (dataNetGatewayToken()?.isEmpty == false)
-            ok = hasToken; detail = hasToken ? "凭据已配置 · 数据网关情绪男声" : "缺数据网关 token"
+            ok = hasToken; detail = hasToken ? "凭据已配置 · 数据网关情绪语音" : "缺数据网关 token"
         }
         channelValidations[key] = .init(ok: ok, detail: detail, at: Date())
     }

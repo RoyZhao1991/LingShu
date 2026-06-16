@@ -119,7 +119,14 @@ struct LingShuModelGatewaySurface: View {
     enum SheetRoute: Identifiable {
         case add
         case edit(String)
-        var id: String { if case .edit(let p) = self { return "edit-\(p)" }; return "add" }
+        case renameTTS(id: String, current: String)
+        var id: String {
+            switch self {
+            case .add: "add"
+            case .edit(let p): "edit-\(p)"
+            case .renameTTS(let id, _): "rename-\(id)"
+            }
+        }
     }
 
     var body: some View {
@@ -166,8 +173,16 @@ struct LingShuModelGatewaySurface: View {
             .padding(22)
         }
         .sheet(item: $sheet) { route in
-            LingShuModelChannelSheet(state: state, route: route) { sheet = nil }
-                .frame(minWidth: 560, minHeight: 470)
+            if case let .renameTTS(id, current) = route {
+                LingShuTTSRenameSheet(current: current) { newName in
+                    state.renameTTSChannel(id, to: newName)
+                    sheet = nil
+                } cancel: { sheet = nil }
+                .frame(minWidth: 420, minHeight: 200)
+            } else {
+                LingShuModelChannelSheet(state: state, route: route) { sheet = nil }
+                    .frame(minWidth: 560, minHeight: 470)
+            }
         }
     }
 
@@ -196,7 +211,7 @@ struct LingShuModelGatewaySurface: View {
     @ViewBuilder private var voiceRows: some View {
         ForEach(state.ttsChannelDescriptors) { d in
             LingShuChannelRow(
-                state: state, title: d.displayName, subtitle: d.deployment,
+                state: state, title: state.ttsDisplayName(d), subtitle: d.deployment,
                 channelKey: LingShuState.ttsChannelKey(d.id),
                 isActive: state.voiceManager?.speechOutputProvider.id == d.id,
                 onValidate: { await state.validateTTSChannel(d) },
@@ -204,7 +219,8 @@ struct LingShuModelGatewaySurface: View {
                     state.voiceManager?.speechOutputProvider = d
                     if !d.defaultEndpoint.isEmpty { state.voiceManager?.speechOutputEndpoint = d.defaultEndpoint }
                 },
-                onEdit: nil
+                onEdit: { sheet = .renameTTS(id: d.id, current: state.ttsDisplayName(d)) },
+                editLabel: "改名"
             )
         }
     }
@@ -266,6 +282,7 @@ struct LingShuChannelRow: View {
     let onValidate: () async -> Void
     let onUse: (() -> Void)?
     let onEdit: (() -> Void)?
+    var editLabel: String = "修改"
 
     private var validation: LingShuChannelValidation? { state.channelValidation(channelKey) }
     private var validating: Bool { state.isChannelValidating(channelKey) }
@@ -290,7 +307,7 @@ struct LingShuChannelRow: View {
 
             chip(validating ? "校验中…" : "校验", disabled: validating) { Task { await onValidate() } }
             if let onUse { chip("使用") { onUse() } }
-            if let onEdit { chip("修改") { onEdit() } }
+            if let onEdit { chip(editLabel) { onEdit() } }
         }
         .padding(12)
         .background(isActive ? Color.lingHolo.opacity(0.10) : Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
@@ -341,16 +358,16 @@ struct LingShuModelChannelSheet: View {
 
     init(state: LingShuState, route: LingShuModelGatewaySurface.SheetRoute, dismiss: @escaping () -> Void) {
         self.state = state; self.route = route; self.dismiss = dismiss
-        switch route {
-        case .add:
-            _provider = State(initialValue: ""); _endpoint = State(initialValue: ""); _model = State(initialValue: ""); _key = State(initialValue: "")
-        case .edit(let p):
+        if case let .edit(p) = route {
             let preset = ModelProviderPreset.apiCatalog.first { $0.name == p }
             let active = (p == state.modelProvider)
             _provider = State(initialValue: p)
             _endpoint = State(initialValue: active ? state.endpoint : (preset?.endpoint ?? ""))
             _model = State(initialValue: active ? state.modelName : (preset?.defaultModels.first ?? ""))
             _key = State(initialValue: "")
+        } else {
+            // .add(及永远走不到这里的 .renameTTS,它被路由去 LingShuTTSRenameSheet)
+            _provider = State(initialValue: ""); _endpoint = State(initialValue: ""); _model = State(initialValue: ""); _key = State(initialValue: "")
         }
     }
 
@@ -415,6 +432,39 @@ struct LingShuModelChannelSheet: View {
         if !model.isEmpty { state.modelName = model }
         if !key.isEmpty { state.apiKey = key }
         dismiss()
+    }
+}
+
+/// TTS 通道改名弹窗(暗色):写死的 displayName 不准时(如"男声"实为女声)用户自己改,留空恢复默认。
+struct LingShuTTSRenameSheet: View {
+    @State private var name: String
+    let save: (String) -> Void
+    let cancel: () -> Void
+
+    init(current: String, save: @escaping (String) -> Void, cancel: @escaping () -> Void) {
+        _name = State(initialValue: current)
+        self.save = save
+        self.cancel = cancel
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("通道改名").font(.system(size: 15, weight: .bold)).foregroundStyle(.white)
+            Text("写死的名字不准时(如默认名臆断了性别)在这里改;留空恢复默认。")
+                .font(.system(size: 11.5, weight: .medium)).foregroundStyle(.white.opacity(0.5))
+                .fixedSize(horizontal: false, vertical: true)
+            TextField("通道显示名,如:数据网关情绪女声", text: $name).textFieldStyle(.roundedBorder)
+            Spacer(minLength: 0)
+            HStack {
+                Spacer()
+                Button("取消") { cancel() }.buttonStyle(.bordered)
+                Button("保存") { save(name) }.buttonStyle(.borderedProminent)
+            }
+        }
+        .padding(20)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(Color.lingVoid)
+        .preferredColorScheme(.dark)
     }
 }
 

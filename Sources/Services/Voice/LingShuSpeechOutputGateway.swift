@@ -44,7 +44,7 @@ struct LingShuSpeechOutputProviderDescriptor: Identifiable, Codable, Equatable, 
         supportsEmotion: false,
         supportsVoiceClone: false,
         isRuntimeAvailable: true,
-        note: "本机系统中文语音，**非默认通道**——默认走数据网关情绪男声（dataNetSpeakerTTS）；仅在云端不可用时作兜底。本机若没装中文男声会发出女声（这是系统能力限制，非本通道选择）。"
+        note: "本机系统中文语音，**非默认通道**——默认走数据网关情绪语音（dataNetSpeakerTTS）；仅在云端不可用时作兜底。本机声线取决于系统已装的中文嗓（可在系统设置下载偏好音色）。"
     )
 
     static let embeddedSherpaONNXTTS = LingShuSpeechOutputProviderDescriptor(
@@ -63,7 +63,7 @@ struct LingShuSpeechOutputProviderDescriptor: Identifiable, Codable, Equatable, 
     static let dataNetSpeakerTTS = LingShuSpeechOutputProviderDescriptor(
         id: "datanet-speaker-tts",
         kind: .dataNetSpeakerTTS,
-        displayName: "数据网关情绪男声",
+        displayName: "数据网关情绪语音",
         deployment: "数据网络模型网关",
         defaultEndpoint: "https://model-gateway.datanet.bj.cn/v1/perception/swds-speaker-tts/stream",
         supportsStreaming: true,

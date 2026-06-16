@@ -220,6 +220,10 @@ final class LingShuState: ObservableObject {
     }
     /// 正在校验中的 channelKey(UI 转圈)。
     @Published var validatingChannels: Set<String> = []
+    /// TTS 通道用户自定义显示名(descriptor.id → 自定义名)。写死的 displayName 不准时(如"男声"其实是女声)用户可改,持久化。
+    @Published var ttsChannelNames: [String: String] = (UserDefaults.standard.dictionary(forKey: "lingshu.ttsChannelNames") as? [String: String]) ?? [:] {
+        didSet { UserDefaults.standard.set(ttsChannelNames, forKey: "lingshu.ttsChannelNames") }
+    }
 
     static func loadChannelValidations() -> [String: LingShuChannelValidation] {
         guard let data = UserDefaults.standard.data(forKey: "lingshu.channelValidations"),
