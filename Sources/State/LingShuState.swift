@@ -210,6 +210,10 @@ final class LingShuState: ObservableObject {
     /// 主线程分诊「派发」的任务:记录 id → 它在对话里的加载气泡 id(完成时回填这条气泡而非另起一条)。
     /// Stage 2 多任务真隔离:每条派发任务有自己的气泡 + 独立 session,互不串。
     var dispatchedTaskBubbles: [String: UUID] = [:]
+    /// 最近一条**派发的隔离任务**记录 id + 时间:用户紧接着的回复若是在延续/回答它(如它问"做什么主题"),
+    /// 应续跑**那条隔离会话**(带真上下文),而不是被当成全新输入重新分诊到主会话(否则答非所问,实测 bug)。
+    var lastDispatchedThreadRecordID: String?
+    var lastDispatchedThreadAt: Date?
     /// 主会话当前回合的任务记录 id;工具桥据此把产出文件登记到正确记录。
     var currentAgentTurnRecordID: String?
     /// 当前 agent 主回合的 Task(供语音通话"真指令打断"取消在飞模型调用)。
@@ -976,15 +980,21 @@ final class LingShuState: ObservableObject {
         }
 
         // 新顶层输入:主线程**先分诊**(Stage 2 多任务真隔离)——
+        //   reply(在回答/延续刚才那条**派发的隔离任务**,如它问"做什么主题")→ 续跑**那条隔离会话**(带真上下文),
+        //     不再被当全新输入重新分诊到主会话(否则"答非所问":做PPT问主题→你答主题→它却去聊天介绍能力);
         //   直答(对话/问答)→ 留主 session(runMainAgentTurn,对话连续);
         //   任务(要执行/落盘/多步)→ 派发**独立隔离 session 并行跑**(dispatchIsolatedTask,不串主上下文)。
         // 分诊是一次轻量模型判定(保守:失败/对话一律留主线程,不误派)。异步,故即时无文案,真回复经气泡给出。
+        let continuable = continuableDispatchedThread()
         Task { @MainActor [weak self] in
             guard let self else { return }
-            let triage = await self.classifyDispatch(trimmedPrompt)
-            if triage.dispatch {
+            let triage = await self.classifyDispatch(trimmedPrompt, previousTurn: continuable?.previousTurn)
+            switch triage.kind {
+            case .reply where continuable != nil:
+                self.continueDispatchedThread(prompt: trimmedPrompt, recordID: continuable!.recordID)
+            case .task:
                 self.dispatchIsolatedTask(prompt: trimmedPrompt, taskRecordID: taskRecordID, goal: triage.goal)
-            } else {
+            case .reply, .chat:
                 _ = self.runMainAgentTurn(prompt: trimmedPrompt, taskRecordID: taskRecordID)
             }
         }

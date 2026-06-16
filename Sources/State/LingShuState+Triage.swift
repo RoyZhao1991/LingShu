@@ -6,33 +6,57 @@ import Foundation
 @MainActor
 extension LingShuState {
 
+    enum DispatchKind { case chat, task, reply }
+
     /// 一次轻量模型判定(无工具、单回合)。task 时附一句话总目标。
+    /// 若上一轮是**派发的隔离任务**对用户说话(尤其在问问题/要信息)→ 多一类 `reply`(用户在回答它,应续那条任务)。
     /// **保守**:判定失败/解析不出 → 当 chat(留主线程),绝不把普通对话误派成任务。
-    func classifyDispatch(_ prompt: String) async -> (dispatch: Bool, goal: String?) {
+    func classifyDispatch(_ prompt: String, previousTurn: String? = nil) async -> (kind: DispatchKind, goal: String?) {
         // 极简语音对话模式:一律当对话,不分诊、不派发(用户硬性要求)。
-        if isMinimalVoiceMode { return (false, nil) }
+        if isMinimalVoiceMode { return (.chat, nil) }
+
+        let replyClause = previousTurn.map { prev in
+            """
+
+            灵枢上一条对用户说的是:「\(String(prev.prefix(280)))」。如果用户这条是在【回答/回应/补充/延续/确认】灵枢上一条(尤其上一条在问主题/要信息/给选项/等确认时),归为 reply。
+            - reply:在延续上一件事(回答上一条的问题、补充信息、说"就这个/继续/可以")→ 应接着上一件事做,而不是另起。
+            """
+        } ?? ""
 
         let classifier = LingShuAgentSession(
             id: "triage-\(UUID().uuidString.prefix(6))",
             system: """
             你是分诊器。判断用户这条消息属于哪一类,**只输出一行 JSON,不要任何解释**:
             - chat:灵枢能直接对话/问答完成(闲聊、解释概念、问事实、给建议、简单查询、介绍自己),无需写文件/跑命令/多步执行。
-            - task:需要执行的任务(做 PPT/文档/代码/爬虫/系统、要落盘产出物、要跑命令、明显多步推进)。
-            输出:{"kind":"chat"} 或 {"kind":"task","goal":"一句话总目标(高度概括,如「构建一个清分结算系统」)"}
+            - task:需要执行的、**与上一条无关的全新**任务(做 PPT/文档/代码/爬虫/系统、要落盘产出物、要跑命令、明显多步推进)。\(replyClause)
+            输出:{"kind":"chat"} 或 {"kind":"task","goal":"一句话总目标(高度概括,如「构建一个清分结算系统」)"}\(previousTurn != nil ? " 或 {\"kind\":\"reply\"}" : "")
             """,
             tools: [],
             model: makeAgentModelAdapter(),
             maxTurns: 1
         )
         let result = await classifier.send(prompt)
-        guard case .completed(let raw) = result else { return (false, nil) }
+        guard case .completed(let raw) = result else { return (.chat, nil) }
         let text = LingShuReasoningText.stripThinkTags(raw)
-        // 宽松解析:命中 "task" 类即派发,否则(含解析失败)留主线程。
         let normalized = text.lowercased().replacingOccurrences(of: " ", with: "")
+        if previousTurn != nil, normalized.contains("\"kind\":\"reply\"") || normalized.contains("kind:reply") {
+            return (.reply, nil)
+        }
         let isTask = normalized.contains("\"kind\":\"task\"") || normalized.contains("kind:task")
-        guard isTask else { return (false, nil) }
+        guard isTask else { return (.chat, nil) }
         let goal = Self.jsonField(text, "goal")?.trimmingCharacters(in: .whitespacesAndNewlines)
-        return (true, (goal?.isEmpty == false) ? goal : nil)
+        return (.task, (goal?.isEmpty == false) ? goal : nil)
+    }
+
+    /// 最近的派发隔离任务若仍是「用户正在回复的那一条」(上一条非用户消息就来自它、且新鲜),返回 (记录id, 它上一条说的话)。
+    /// 用于判断:用户这条是不是在回答/延续刚才那条派发任务(如它问"做什么主题")。
+    func continuableDispatchedThread() -> (recordID: String, previousTurn: String)? {
+        guard let rid = lastDispatchedThreadRecordID,
+              let at = lastDispatchedThreadAt, Date().timeIntervalSince(at) < 1800,  // 30 分钟内才算"紧接着回复"
+              agentSubTaskRecords.values.contains(rid),                              // 隔离会话还在(可续)
+              let lastAssistant = chatMessages.last(where: { !$0.isUser }),
+              lastAssistant.taskRecordID == rid else { return nil }                  // 上一条非用户消息确实来自这条任务
+        return (rid, lastAssistant.text)
     }
 
     /// 把一个任务派发给**独立隔离 session** 并行跑(Stage 2 真隔离):本任务自己的 record + 全新 session,
@@ -44,6 +68,8 @@ extension LingShuState {
         interruptSpeechOutput?()
         let subID = "task-\(UUID().uuidString.prefix(6))"
         agentSubTaskRecords[subID] = taskRecordID   // 预映射:.spawned 据此复用这条记录,不另建
+        lastDispatchedThreadRecordID = taskRecordID  // 记最近派发线程,供用户紧接着的回复续到这条隔离会话
+        lastDispatchedThreadAt = Date()
         if let goal, !goal.isEmpty, let i = taskExecutionRecords.firstIndex(where: { $0.id == taskRecordID }) {
             taskExecutionRecords[i].goal = goal
             persistTaskExecutionRecords()
@@ -89,6 +115,17 @@ extension LingShuState {
             self.agentSubTaskRecords[subID] = nil
         }
         return pending.text
+    }
+
+    /// 用户这条是在**回答/延续刚才那条派发的隔离任务**(如它问"做什么主题"):续跑**那条隔离会话本身**(带真上下文),
+    /// 而不是另起新会话。这样"做PPT→问主题→你答主题"能接上去真把 PPT 做出来,不再答非所问。通用,不限 PPT。
+    func continueDispatchedThread(prompt: String, recordID: String) {
+        appendTrace(kind: .route, actor: "主线程分诊", title: "续答派发任务", detail: "判为对刚才派发任务的回复,续跑那条隔离会话(带真上下文,不另起)。")
+        let pending = ChatMessage(speaker: "灵枢", text: dialogueAcknowledgement.intake(for: prompt), isUser: false, isLoading: true, taskRecordID: recordID)
+        chatMessages.append(pending)
+        dispatchedTaskBubbles[recordID] = pending.id   // 完成由编排器事件回填这条气泡
+        lastDispatchedThreadAt = Date()                // 刷新新鲜度:多轮澄清都能接着续
+        submitTaskFollowup(prompt, recordID: recordID) // 隔离子任务 → orchestrator.resumeWithInput(续那条会话)
     }
 
     /// 回填某条派发任务的加载气泡(完成/失败/背压时用);找不到就追加一条。回填后清掉映射。
