@@ -84,7 +84,8 @@ final class LingShuGatewayAgentModel: LingShuAgentModel, @unchecked Sendable {
                 }
             }
         }
-        return .text("（模型调用连续 \(maxAttempts) 次未成功:\(lastError?.localizedDescription ?? "未知原因")。已重试并退避,仍未恢复——可能是主通道不可达或网络问题,请检查后让我继续。）")
+        // 基础设施中断(非任务失败):重试耗尽 → 返回 .failed,循环据此 .interrupted 并保留上下文,等重连自动续跑。
+        return .failed(reason: "模型调用连续 \(maxAttempts) 次未成功:\(lastError?.localizedDescription ?? "未知原因")。可能是主通道不可达或网络问题——已暂停,联网后自动接着跑。")
     }
 
     // MARK: - 类型互转

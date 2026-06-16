@@ -181,6 +181,33 @@ final class LingShuState: ObservableObject {
     var activeAgentTurnTask: Task<Void, Never>?
     /// 编排器事件 sink 是否已注入(幂等)。
     var agentEventSinkInstalled = false
+    /// 网络可达性监控(断网重连自动续跑);懒启动(首次有 agent 活动时),见 LingShuState+AgentOrchestration。
+    var connectivityMonitor: LingShuConnectivityMonitor?
+    /// 主会话回合因网络中断而挂起时,保存续跑所需上下文(气泡/记录/原始请求/起算时刻);重连后从中断处续跑。
+    var suspendedMainTurn: (bubbleID: UUID, recordID: String?, prompt: String, startedAt: Date)?
+    /// 独立运行因网络中断而挂起时的任务记录 id;重连后 continueLoop 续跑(会话在 autonomousSessionHolder)。
+    var suspendedAutonomousRecordID: String?
+    /// 网络重试循环(断网后主动按退避重试 + 在主对话框可见地展示重试次数/下次间隔),见 LingShuState+NetworkRetry。
+    var networkRetryTask: Task<Void, Never>?
+    /// 主对话框里那条「网络异常·重试中」状态气泡 id(原地更新次数/间隔,不刷屏)。
+    var networkRetryBubbleID: UUID?
+    /// 当前重试次数;NWPathMonitor 检测到链路恢复时置 `networkRetryKick` 让重试循环立即再试(重置退避)。
+    var networkRetryAttempt = 0
+    var networkRetryKick = false
+    /// 最近完成的可交付产出物(内存镜像,供"运行起来/继续/改一下"接得上 + 注入主线程&派发任务上下文)。
+    /// 落盘走增量持久化 `deliverableStore`(WAL+快照),跨 app 重启可恢复。见 LingShuState+Deliverables。
+    var recentDeliverables: [LingShuDeliverable] = []
+    /// 增量记忆持久化(WAL 追加写 + 阈值/定时压缩;Phase 5)。
+    let deliverableStore = LingShuIncrementalStore<LingShuDeliverable>(directory: LingShuState.memoryStoreDirectory, name: "deliverables")
+    /// 定时压缩(checkpoint)定时器。
+    var memoryCompactionTimer: Timer?
+
+    /// 增量记忆落盘目录(Application Support/LingShu/memory)。
+    static var memoryStoreDirectory: URL {
+        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? URL(fileURLWithPath: NSTemporaryDirectory())
+        return base.appendingPathComponent("LingShu/memory", isDirectory: true)
+    }
     /// 上次 dreaming 离线固化时间(节流,见 LingShuState+Dreaming);nil=本次会话还没固化过。
     var lastDreamConsolidationAt: Date?
     // 自主运行执行(统一 agent 循环驱动):在飞 Task / 本轮记录 id / 执行会话 / ask_user 待答问题。

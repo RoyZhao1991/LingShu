@@ -48,10 +48,12 @@ struct LingShuAgentTool: Sendable {
     }
 }
 
-/// 模型一轮的产出:要么要求调用工具,要么给出最终文本。
+/// 模型一轮的产出:要么要求调用工具,要么给出最终文本,要么**基础设施故障**(网关/网络不可达,重试耗尽)。
 enum LingShuAgentModelResponse: Sendable {
     case toolCalls([LingShuAgentToolCall])
     case text(String)
+    /// 基础设施中断:网关/网络不可达且重试耗尽——**非任务失败**。循环据此返回 `.interrupted`,保留上下文,等重连后续跑。
+    case failed(reason: String)
 }
 
 /// 编排循环依赖的模型接口(注入,便于真实网关与 mock 替换)。
@@ -76,6 +78,9 @@ enum LingShuAgentRunResult: Equatable, Sendable {
     /// 卡住:模型调用了"阻塞工具"(如 ask_user),需要外部(用户/主会话)给答案后才能续跑。
     case blocked(question: String)
     case maxTurnsReached(lastText: String)
+    /// **基础设施中断**(网络/网关不可达,重试耗尽):**非任务失败**。上下文已原样保留(没追加假消息),
+    /// 重连后 `continueLoop()` 即可从中断处接着跑。供「断网→暂停→重连自动续」用,绝不当成 `.completed`/`.failed`。
+    case interrupted(reason: String)
 }
 
 /// 一条隔离会话 = 一条任务线程的上下文与循环。多会话并发即多任务并行(配合有界并发管理器)。
@@ -194,6 +199,12 @@ actor LingShuAgentSession {
         return await runLoop()
     }
 
+    /// 重连后续跑(断网恢复用):**不注入任何新消息**,直接接着跑循环——上下文停在中断前的良构状态,
+    /// 重发的就是中断那一步的模型调用。`step` 重置=新的一段预算(与 send/resume 一致)。
+    func continueLoop() async -> LingShuAgentRunResult {
+        await runLoop()
+    }
+
     /// 连续多少次发起完全相同的工具调用即判"原地打转"(停滞)。
     static let stuckRepeatThreshold = 5
 
@@ -221,6 +232,11 @@ actor LingShuAgentSession {
             turnsUsed += 1
             let response = await model.respond(messages: messages, tools: tools)
             switch response {
+            case .failed(let reason):
+                // 基础设施中断(网络/网关不可达):**不收尾、不污染上下文**——绝不追加假的"调用失败"助手消息,
+                // 让 messages 原样停在中断前的良构状态(上一步若是工具循环,tool 结果已补齐)。
+                // 返回 .interrupted:上层据此把任务标"已暂停"并保留本会话,重连后 continueLoop() 重发这步模型调用即续上。
+                return .interrupted(reason: reason)
             case .text(let text):
                 messages.append(.init(role: .assistant, content: text))
                 // 模型自认收尾,但用户刚下了纠正 → 不收尾,带着纠正继续(纠正跑偏的"假收尾")。

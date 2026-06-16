@@ -8,6 +8,8 @@ enum LingShuTaskExecutionStatus: String, Codable, Equatable, Sendable {
     case completed = "已完成"
     case needsRevision = "未达标"
     case blocked = "异常"
+    /// 网络/网关中断导致暂停——**非失败**,会话上下文保留,联网后自动续跑。
+    case suspended = "已暂停"
 }
 
 enum LingShuTaskExecutionMessageKind: String, Codable, Equatable, Sendable {

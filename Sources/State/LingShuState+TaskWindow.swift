@@ -24,6 +24,13 @@ extension LingShuState {
         appendTaskRecordMessage(recordID, actor: "你", role: "追问", kind: .user, text: display)
         captureDesignFeedbackForDreaming(trimmed, recordID: recordID)   // 设计任务的追问/改进→dreaming 固化
         clearAttachments()
+        // 这条记录若属于**隔离子任务**(派发/spawn 出来的并行任务)→ 续跑**那条隔离会话本身**(它才有真上下文),
+        // 而非主会话。否则主会话不知道这条任务做过什么,「继续」就接不上(尤其网络中断暂停后续跑)。
+        if let subID = agentSubTaskRecords.first(where: { $0.value == recordID })?.key {
+            installAgentEventSinkIfNeeded()
+            Task { await agentOrchestrator.resumeWithInput(id: subID, input: combined) }
+            return
+        }
         runMainAgentTurn(prompt: combined, taskRecordID: recordID)
     }
 

@@ -42,6 +42,7 @@ extension LingShuState {
         case .completed(let value): return value
         case .blocked(let question): return "我需要你先定一下:\(question)"
         case .maxTurnsReached(let value): return value.isEmpty ? "（本轮未能收尾,请补充信息）" : value
+        case .interrupted(let reason): return reason.isEmpty ? "（网络中断,已暂停——联网后我会自动接着跑。）" : reason
         }
     }
 
@@ -60,10 +61,18 @@ extension LingShuState {
     /// "历史里的旧错误自述/假完成声明被模型模仿"这类 seed 污染。会话内当轮仍走正常 verbatim 上下文。
     func seededDistilledMemory() async -> [LingShuAgentMessage] {
         var seed: [LingShuAgentMessage] = []
+        // 跨 app 重启:确保最近产出物从增量存储恢复到内存,主会话首轮即知悉(让重启后"运行起来"也接得上)。
+        if recentDeliverables.isEmpty {
+            let restored = await deliverableStore.all()
+            if recentDeliverables.isEmpty { recentDeliverables = Array(restored.suffix(8)) }
+        }
         let distilled = await distillConversationMemory()
         if !distilled.isEmpty {
             seed.append(.init(role: .system, content: "【跨会话记忆(已蒸馏,供延续上下文,不要逐条复述、不要照搬其中措辞)】\n\(distilled)"))
         }
+        // 最近产出物上下文:主会话也知悉,"运行起来/继续"留主线程时同样接得上(跨重启从增量存储恢复)。
+        let deliverCtx = recentDeliverablesContext()
+        if !deliverCtx.isEmpty { seed.append(.init(role: .system, content: deliverCtx)) }
         seed.append(identityAnchorMessage())
         return seed
     }
@@ -140,7 +149,7 @@ extension LingShuState {
         - 工作目录:\(codexWorkingDirectory)。
         - **先计划后执行(LOOP 标准,决不能省)**:落地任何**多步任务**(凡要写文件/跑命令/做交付物的都算),**你的第一个动作必须是真的调用 `update_plan` 工具**——**这是一次工具调用,不是在分析/正文里口头说一句"我的计划是…"就算**(口头说不算数,必须 update_plan)。调用时给出:**① `goal`=一句话总目标**(高度抽象概括,如「构建一个清分结算系统」「给课程通知做一份汇报 PPT」,**不是复述需求原文**);**② `steps`=3–7 步抽象计划**(每步是**阶段性里程碑/分步目标,不绑定具体实现路径**——具体用什么方式做、走哪条路是你在推进中自己摸索的,可随时换法)。之后严格按计划逐步执行:每开始一步标 in_progress、做完标 completed(再调 update_plan)。让全程"先有计划、再逐步推进、状态可见"。只有简单一问一答 / 纯对话才跳过 plan。
         - **有产出物优先产出物**:凡是"做/写/生成 PPT、文档、脚本、爬虫、代码…"这类有交付物的请求,必须**真的用 write_file/run_command 把文件落到工作目录**,并在回复里给出文件绝对路径;**绝不允许只口头说"已完成"而没有真文件**。做 PPT 可写 HTML 或用脚本生成 pptx;做爬虫写 .py 并按需运行。
-        - **写代码/改工程的正确手法**:① 先 `read_file`(带行号,大文件用 offset/limit 分段读全)看清现状,别凭空改;② **改已有文件的局部用 `edit_file`**(唯一匹配 old_string→new_string,不重写整文件)——新建或整体重写才用 `write_file`;③ 用 `run_command` 跑 grep 定位、装依赖、编译、跑测试,据结果迭代;④ **写代码必须配测试用例并跑通(全绿)——这是硬步骤,不是可选项**:用 write_file 写测试文件(用例数随复杂度增多)、用 run_command 跑测试框架(swift test / pytest / npm test / go test…)直到全部通过,测试文件也算产出物。**代码任务的验收门会确定性检查"有测试且全绿",没测试或没跑通一律打回。** 大型多文件工程也按"读→改→搜→测→验收"循环逐文件推进。
+        - **写代码/改工程的正确手法**:① 先 `read_file`(带行号,大文件用 offset/limit 分段读全)看清现状,别凭空改;② **改已有文件的局部用 `edit_file`**(唯一匹配 old_string→new_string,不重写整文件)——新建或整体重写才用 `write_file`;③ 用 `run_command` 跑 grep 定位、装依赖、编译、跑测试,据结果迭代;④ **写代码必须配测试用例并跑通(全绿)——这是硬步骤,不是可选项**:用 write_file 写测试文件(用例数随复杂度增多)、用 run_command 跑测试框架(swift test / pytest / npm test / go test…)直到全部通过,测试文件也算产出物。**代码任务的验收门会确定性检查"有测试且全绿"+"程序真正构建/运行起来不崩",没测试、没跑通、或运行期崩溃一律打回。** ⑤ **可运行的程序(app/服务/CLI/游戏)还要真的把它跑起来验证不崩**——run_command 真构建+真运行,**跑崩了/编译错/抛异常都是要修复的观测,绝不拿异常当交付收尾**,一路修到真跑通;一段推进用满预算也别停,接着干到目标达成。大型多文件工程也按"读→改→搜→测→运行→验收"循环逐文件推进。
         - **有固化方案优先固化方案**:做 PPT、汇报等可能有现成专家技能(含打磨好的设计系统和自带生成器)。动手前先调 **apply_skill** 看有没有匹配技能,有就按它的模板/生成器推进,别从零硬写。**apply_skill 没有匹配、又遇到不擅长的新领域时,可调 discover_skill 联网找现成高质量技能自动安装**(纯提示技能直接装、带脚本技能过安全审核;装好再 apply_skill 用)。
         - **遇到长耗时的外部等待(公证/构建/下载/部署/审批…)别傻等也别甩回用户**:用 `watch_until` 挂个后台守候(给检查命令 + 满足标志 + 满足后要做的事),它不阻塞当前对话,条件一满足我会**自动把后续动作接上跑完**——这就是"自动识别需求 → 无人值守推进"。
         - 需要实时信息(如当前时间)时调用对应工具。
@@ -157,7 +166,7 @@ extension LingShuState {
             initialMessages: await seededDistilledMemory(),
             tools: tools,
             model: adapter,
-            maxTurns: 40,   // 安全天花板;模型自判完成/卡住/停滞才停,不靠轮数收工
+            maxTurns: 80,   // 安全天花板(防失控,非预算);复杂工程单段推进可超 40 步,撞顶由 verifyAndContinue 续跑恢复
             maxHistoryMessages: 80   // 常驻会话:每回合边界裁剪旧上下文,杜绝旧任务无限堆积污染新请求
         )
         mainAgentSessionHolder = session
@@ -172,58 +181,17 @@ extension LingShuState {
         return await verifyAndContinue(session: session, result: initial, userRequest: prompt, taskRecordID: taskRecordID)
     }
 
-    /// 验收门(maker≠checker):**目标(验收通过)是唯一成功停止位**。
-    /// 一直续跑直到通过;只有「maker 一轮没有任何新进展(盘上产出物没增、意见还和上轮实质相同)」=停滞才诚实交还,
-    /// 不再用固定轮数封顶。`verifyCeiling` 只是防失控的高位安全天花板,正常远到不了。
-    func verifyAndContinue(session: LingShuAgentSession, result initial: LingShuAgentRunResult, userRequest: String, taskRecordID: String?) async -> LingShuAgentRunResult {
-        var result = initial
-        // 触发验收门的可靠信号:**本回合真有产出物落盘**(write_file 自动登记)——比抠回复动词稳得多
-        // (旧的只认"已生成/已写入"会漏掉"已交付"这类措辞,导致验收形同虚设);
-        // 纯闲聊/自我介绍不写文件→无产出物→不触发,省 token 且不误触。回复显式声称产出文件也触发。
-        let producedRealArtifacts = !((taskExecutionRecords.first { $0.id == taskRecordID }?.artifacts ?? [])
-            .filter { FileManager.default.fileExists(atPath: $0.location) }.isEmpty)
-        guard case .completed = result,
-              producedRealArtifacts || Self.replyClaimsArtifact(Self.runResultText(result)) else { return result }
-        let verifyCeiling = 8   // 安全天花板,非目标位
-        var round = 0
-        var lastArtifactCount = -1
-        var lastCritique = ""
-        while round < verifyCeiling {
-            let (passed, critique) = await verifyAgentDeliverable(userRequest: userRequest, reply: Self.runResultText(result), taskRecordID: taskRecordID)
-            if passed {
-                appendTrace(kind: .result, actor: "验收", title: "通过", detail: "独立 verifier 核对产出物达标。")
-                // 经过返工(round>0)才通过:maker 最后一轮文本是"逐条修正"的内部 QA 记录,
-                // 直接抛给用户就成了"驴唇不对马嘴"。把交付话术与返工文本解耦——另生成一句干净的面向用户交付说明。
-                if round > 0 {
-                    let delivery = await composeDeliveryMessage(userRequest: userRequest, makerText: Self.runResultText(result), taskRecordID: taskRecordID)
-                    return .completed(text: delivery)
-                }
-                return result
-            }
-            // 停滞判定:这一轮 maker 没产出新文件,且验收意见与上轮实质相同 → 在原地打转,诚实交还。
-            let artifactCount = (taskExecutionRecords.first { $0.id == taskRecordID }?.artifacts ?? [])
-                .filter { FileManager.default.fileExists(atPath: $0.location) }.count
-            if round > 0, artifactCount <= lastArtifactCount, critique.prefix(120) == lastCritique.prefix(120) {
-                appendTrace(kind: .warning, actor: "验收", title: "停滞交还", detail: "连续未通过且无新进展,交还用户。")
-                return .maxTurnsReached(lastText: Self.runResultText(result) + "\n\n（验收一直没通过且我已无新进展:\(critique.prefix(160))。先停下交还——需要你的判断或补充信息。）")
-            }
-            round += 1
-            lastArtifactCount = artifactCount
-            lastCritique = critique
-            appendTrace(kind: .warning, actor: "验收", title: "未通过(第\(round)轮,继续修)", detail: String(critique.prefix(80)))
-            result = await session.resume("验收未通过,逐条意见如下:\n\(critique)\n请真正用 write_file/run_command 修正,确保你声称的产出物在硬盘真实存在,再重新交付。")
-        }
-        return result
-    }
+    // 验收门 + 执行恢复力(verifyAndContinue / 撞顶恢复 / 验收主循环)已拆至 LingShuState+AgentAcceptance.swift。
 
     /// 边做边想:把模型每步动作前的自然语言旁白落进任务记录(执行流像 codex 一样「分析→动作」可读),
     /// 并把简短版同步到主气泡状态,让主线程也瞥得见在想什么。
-    func recordAgentReasoning(_ aside: String, recordID: String?) {
+    func recordAgentReasoning(_ aside: String, recordID: String?, updateMissionStatus: Bool = true) {
         let trimmed = aside.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         appendTaskRecordMessage(recordID, actor: "灵枢", role: "分析", kind: .core, text: String(trimmed.prefix(600)))
         appendTrace(kind: .model, actor: "Agent循环", title: "分析", detail: String(trimmed.prefix(90)))
-        missionStatus = String(trimmed.prefix(48))
+        // 派发的后台子任务并行跑,别抢全局 missionStatus(那是主线程气泡的);它的进展由任务窗口的「分析」行体现。
+        if updateMissionStatus { missionStatus = String(trimmed.prefix(48)) }
     }
 
     /// 主入口:常规输入交给主 agent 会话(异步跑循环,结果回填气泡)。
@@ -268,24 +236,41 @@ extension LingShuState {
                 : self.matchedSkillHint(for: prompt)
             // 验收门(maker≠checker)与主会话/自主运行共用 driveAgentDelivery。
             let result = await self.driveAgentDelivery(session: session, prompt: prompt, guidance: guidance, taskRecordID: taskRecordID)
-            let text = Self.runResultText(result)
-            // 回复末尾加总用时(极简语音模式不加——会被 TTS 念出来,且那是纯对话)。记录/记忆仍存干净 text。
-            let elapsed = Date().timeIntervalSince(turnStartedAt)
-            let displayText = self.isMinimalVoiceMode ? text : "\(text)\n\n⏱ 总用时 \(Self.formatElapsed(elapsed))"
-
-            if let index = self.chatMessages.firstIndex(where: { $0.id == pendingID }) {
-                self.chatMessages[index].text = displayText
-                self.chatMessages[index].isLoading = false
+            // 网络中断:**不收尾**——挂起本回合(气泡显示已暂停),保存续跑上下文,联网后 resumeSuspendedMainTurnIfNeeded 从中断处续跑。
+            if case .interrupted(let reason) = result {
+                self.suspendedMainTurn = (bubbleID: pendingID, recordID: taskRecordID, prompt: prompt, startedAt: turnStartedAt)
+                if let index = self.chatMessages.firstIndex(where: { $0.id == pendingID }) {
+                    self.chatMessages[index].text = "🌐 网络中断,已暂停——联网后我会自动接着把这条跑完。\n(\(reason))"
+                    self.chatMessages[index].isLoading = false
+                }
+                self.appendTaskRecordMessage(taskRecordID, actor: "灵枢", role: "暂停", kind: .warning, text: "网络中断,已暂停,联网后自动续。")
+                self.finishTaskRecord(taskRecordID, status: .suspended, summary: "网络中断已暂停,联网后自动续跑。")
+                self.startNetworkRetryLoopIfNeeded()   // 启动主动重试(对话框可见进度)
+                return
             }
-            lingShuControlLog("agent: 回合完成 bubbleID=\(pendingID.uuidString.prefix(8)) prompt「\(prompt.prefix(20))」→ reply「\(String(text.prefix(40)))」")
-            // 把最终答复也落进任务记录时间线(codex 式:执行流末尾就是答复;窗口内追问续跑读起来才连贯)。
-            self.appendTaskRecordMessage(taskRecordID, actor: "灵枢", role: "答复", kind: .result, text: text)
-            self.appendTrace(kind: .result, actor: "Agent循环", title: "主会话答复", detail: String(text.prefix(60)))
-            self.finishTaskRecord(taskRecordID, status: .answered, summary: text)
-            self.rememberMainThreadTurn(prompt: prompt, reply: text)
+            self.finalizeMainTurn(result: result, bubbleID: pendingID, recordID: taskRecordID, prompt: prompt, startedAt: turnStartedAt)
             // 朗读由根视图的 speakLatestReplyIfNeeded(监听 chatMessages)统一负责,这里不再重复播报(否则双声线)。
         }
         return pending.text
+    }
+
+    /// 主会话回合收尾(正常完成 / 重连续跑后完成共用):填回气泡 + 落记录 + 记忆。
+    func finalizeMainTurn(result: LingShuAgentRunResult, bubbleID: UUID, recordID: String?, prompt: String, startedAt: Date) {
+        let text = Self.runResultText(result)
+        // 回复末尾加总用时(极简语音模式不加——会被 TTS 念出来,且那是纯对话)。记录/记忆仍存干净 text。
+        let elapsed = Date().timeIntervalSince(startedAt)
+        let displayText = isMinimalVoiceMode ? text : "\(text)\n\n⏱ 总用时 \(Self.formatElapsed(elapsed))"
+        if let index = chatMessages.firstIndex(where: { $0.id == bubbleID }) {
+            chatMessages[index].text = displayText
+            chatMessages[index].isLoading = false
+        }
+        lingShuControlLog("agent: 回合完成 bubbleID=\(bubbleID.uuidString.prefix(8)) prompt「\(prompt.prefix(20))」→ reply「\(String(text.prefix(40)))」")
+        // 把最终答复也落进任务记录时间线(codex 式:执行流末尾就是答复;窗口内追问续跑读起来才连贯)。
+        appendTaskRecordMessage(recordID, actor: "灵枢", role: "答复", kind: .result, text: text)
+        appendTrace(kind: .result, actor: "Agent循环", title: "主会话答复", detail: String(text.prefix(60)))
+        finishTaskRecord(recordID, status: .answered, summary: text)
+        recordDeliverable(recordID: recordID, title: prompt, summary: text)   // 主线程任务也登记产出物
+        rememberMainThreadTurn(prompt: prompt, reply: text)
     }
 
     // MARK: - 工具
@@ -419,10 +404,10 @@ extension LingShuState {
             }
             let sub = LingShuAgentSession(
                 id: subID,
-                system: "你是子任务执行者,完成给定目标。**有产出物的必须用 write_file/run_command 真把文件落到工作目录并汇报路径,不要只口头说完成**;信息确实不足才调用 ask_user。",
+                system: "你是子任务执行者,完成给定目标。**有产出物的必须用 write_file/run_command 真把文件落到工作目录并汇报路径,不要只口头说完成**;写代码必须真构建+运行不崩+测试全绿,跑崩了/报错是要修复的观测、不是交付;信息确实不足才调用 ask_user。",
                 tools: subTools,
                 model: adapter,
-                maxTurns: 25
+                maxTurns: 80   // 安全天花板(防失控,非预算);撞顶由验收续跑恢复,不当失败
             )
             let admitted = await orchestrator.spawnDetached(id: subID, objective: objective, session: sub)
             guard admitted else {

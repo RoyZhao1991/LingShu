@@ -54,18 +54,31 @@ extension LingShuState {
         appendTrace(kind: .route, actor: "主线程分诊", title: "派发隔离任务", detail: "判为执行任务,派生独立隔离 session 并行推进(不进主对话上下文)。")
 
         let adapter = makeAgentModelAdapter()
+        // 边做边想:派发的隔离子任务也要把模型每步动作前的旁白落进**这条任务自己的记录**——否则任务窗口
+        // 只见工具调用、缺"运行时思考",看不出每步为什么这么做。记录 id 用本子任务的(主会话用 currentAgentTurnRecordID,
+        // 这里不同);后台并行跑,不抢全局 missionStatus。
+        adapter.onReasoning = { [weak self] aside in
+            Task { @MainActor in self?.recordAgentReasoning(aside, recordID: self?.agentSubTaskRecords[subID], updateMissionStatus: false) }
+        }
         let recordProvider: @MainActor @Sendable () -> String? = { [weak self] in self?.agentSubTaskRecords[subID] }
         let tools = agentBuiltinTools(recordIDProvider: recordProvider)
             + [Self.timeTool(), Self.webSearchTool(), recallMemoryTool(), Self.askUserTool(),
                findImagesTool(), acquireResourceTool(),
                updateTaskPlanTool(recordIDProvider: recordProvider), reviewDesignTool(recordIDProvider: recordProvider), speakTool()]
             + previewTools()
+        // 注入"最近产出物"上下文:让"运行起来/继续/改一下"这类派发任务接得上(知道刚做了什么、在哪、怎么跑),
+        // 不再重新扫工作目录瞎猜(根治"超级玛丽做完了却问我要运行哪个项目")。
+        let deliverCtx = recentDeliverablesContext()
         let sub = LingShuAgentSession(
             id: subID,
             system: Self.dispatchedTaskSystemPrompt(workingDir: codexWorkingDirectory),
+            initialMessages: deliverCtx.isEmpty ? [] : [.init(role: .system, content: deliverCtx)],
             tools: tools,
             model: adapter,
-            maxTurns: 40
+            // 安全天花板(防失控),非目标预算——复杂工程的「读→改→构建→测试→修」单段推进
+            // 真能远超 40 步(超级玛丽暴露:40 太低,撞顶就被当失败/异常收尾)。抬到 120 让它纯做防失控用;
+            // 真停止位仍是目标达成/停滞(5 次重复)/撞顶后由 verifyAndContinue 续跑恢复(见编排器委托)。
+            maxTurns: 120
         )
         let orchestrator = agentOrchestrator
         Task { @MainActor [weak self] in
@@ -97,6 +110,7 @@ extension LingShuState {
         - **先计划后执行**:第一个动作调 `update_plan` 给出 ① goal=一句话总目标(高度概括,不复述需求)② 3–7 步抽象计划(里程碑,不绑死实现路径);之后每步标 in_progress/completed。
         - **有产出物必须真落盘**:用 write_file/run_command 把文件真写进工作目录并给绝对路径,**绝不只口头说"已完成"**;跑命令前先确认依赖/文件存在,命令失败要自查重试,别拿报错当交付。
         - 写代码配测试并 run_command 跑通(全绿)再交付;改已有文件用 edit_file,新建/整体重写才用 write_file。
+        - **代码任务=构建通过 + 程序真正运行不崩 + 测试全绿,三者缺一不可**:跑崩了/编译错/报错/抛异常都是**要修复的观测**,不是交付——别拿异常收尾甩给用户,一路修到真跑通。推进用满一段也别停,接着干到目标达成。
         - 需要实时/不确定的事实调 web_search;信息确实不足才 ask_user。
         - 完成后用一句话给结果 + 关键产出物绝对路径。不暴露内部工具名/机制词。
         """

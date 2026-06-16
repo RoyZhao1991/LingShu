@@ -457,6 +457,7 @@ final class LingShuControlRouter {
         case .completed(let text): resultText = text
         case .blocked(let q): resultText = "（卡住,等补充:\(q)）"
         case .maxTurnsReached(let t): resultText = "（达轮次上限:\(t)）"
+        case .interrupted(let r): resultText = "（网络中断,已暂停:\(r)）"
         }
         return [
             "prompt": prompt,

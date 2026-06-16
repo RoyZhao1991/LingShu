@@ -7,6 +7,8 @@ enum LingShuLedgerStatus: String, Equatable, Sendable {
     case blocked = "已卡住"
     case completed = "已完成"
     case failed = "已失败"
+    /// 基础设施中断(网络/网关)导致暂停——**非失败**,保留会话上下文,重连后自动续跑。
+    case suspended = "已暂停"
 }
 
 struct LingShuLedgerEntry: Identifiable, Equatable, Sendable {
@@ -25,6 +27,10 @@ enum LingShuOrchestratorEvent: Sendable {
     case completed(id: String, objective: String, summary: String)
     case blocked(id: String, objective: String, question: String)
     case failed(id: String, objective: String, summary: String)
+    /// 网络/网关中断导致暂停(非失败):上下文保留,重连后自动续跑。
+    case interrupted(id: String, objective: String, reason: String)
+    /// 重连后自动续跑开始(供 UI 把任务从"已暂停"翻回"执行中")。
+    case resumed(id: String, objective: String)
 }
 
 /// Agent 编排器(范式骨干的整合层)。
@@ -38,11 +44,17 @@ actor LingShuAgentOrchestrator {
     private var sessions: [String: LingShuAgentSession] = [:]
     private var entries: [String: LingShuLedgerEntry] = [:]
     private var order: [String] = []
+    /// 因网络/网关中断而暂停、等重连自动续跑的子任务 id(会话仍保留在 `sessions`)。
+    private var suspendedForReconnect: Set<String> = []
+    /// 各子任务的目标(续跑时 acceptanceHook 要用,且暂停后 entries 仍保有,这里冗余存一份保险)。
+    private var objectives: [String: String] = [:]
     private(set) var pushes: [String] = []
     /// 事件回灌 UI(MainActor 隔离闭包);由 LingShuState 注入。
     private var onEvent: (@MainActor @Sendable (LingShuOrchestratorEvent) -> Void)?
-    /// 子任务验收钩子(maker≠checker):(subID, 目标, 交付) → (是否通过, 评审意见)。由 LingShuState 注入。
-    private var verifyHook: (@MainActor @Sendable (String, String, String) async -> (passed: Bool, critique: String))?
+    /// 子任务**验收 + 恢复**钩子(maker≠checker):(subID, 目标, 子会话, 初始结果) → 驱动到验收通过/恢复后的最终结果。
+    /// 由 LingShuState 注入,内部委托主状态统一的 `verifyAndContinue`(撞顶恢复 + 多轮验收 + 测试/运行门 + 停滞交还),
+    /// 让子任务与主线程**同一套执行恢复力**,杜绝「主强子弱:复杂工程崩了直接判异常」。
+    private var acceptanceHook: (@MainActor @Sendable (String, String, LingShuAgentSession, LingShuAgentRunResult) async -> LingShuAgentRunResult)?
 
     init(maxConcurrent: Int = 3) {
         concurrency = LingShuConcurrencyManager(maxConcurrent: maxConcurrent)
@@ -52,8 +64,8 @@ actor LingShuAgentOrchestrator {
         onEvent = sink
     }
 
-    func setVerifyHook(_ hook: @escaping @MainActor @Sendable (String, String, String) async -> (passed: Bool, critique: String)) {
-        verifyHook = hook
+    func setAcceptanceHook(_ hook: @escaping @MainActor @Sendable (String, String, LingShuAgentSession, LingShuAgentRunResult) async -> LingShuAgentRunResult) {
+        acceptanceHook = hook
     }
 
     // MARK: 快照(可观测 / 主会话路由用)
@@ -93,6 +105,7 @@ actor LingShuAgentOrchestrator {
     func spawnDetached(id: String, objective: String, session: LingShuAgentSession) async -> Bool {
         guard concurrency.hasCapacity else { return false }   // 满 3 → 拒绝(背压),不排队
         sessions[id] = session
+        objectives[id] = objective
         concurrency.requestAdmission(threadID: id, summary: objective)   // 有容量,必纳入运行
         upsert(id: id, objective: objective, status: .running, summary: "已开始(后台)")
         await onEvent?(.spawned(id: id, objective: objective))
@@ -103,18 +116,10 @@ actor LingShuAgentOrchestrator {
     private func drive(id: String, objective: String) async {
         guard let session = sessions[id] else { return }
         var result = await session.send(objective)
-        // 子任务验收门:声称有产出物的,独立 verifier 核对,不过就反馈续跑(≤3 轮),根治假完成。
-        if case .completed(let text) = result, LingShuState.replyClaimsArtifact(text), let hook = verifyHook {
-            var reply = text
-            var round = 0
-            while round < 3 {
-                let (passed, critique) = await hook(id, objective, reply)
-                if passed { break }
-                round += 1
-                result = await session.resume("验收未通过:\(critique)\n请真正用 write_file/run_command 修正,确保你声称的产出物在硬盘真实存在,再交付。")
-                if case .completed(let corrected) = result { reply = corrected } else { break }
-            }
-            result = .completed(text: reply)
+        // 子任务**验收 + 恢复**:委托主状态统一的 verifyAndContinue(与主会话/自主运行同一套——撞顶当检查点续跑恢复、
+        // 多轮验收、测试/运行门、停滞才诚实交还)。不再在编排器里跑弱化的 3 轮验收 + 撞顶直接判失败。
+        if let hook = acceptanceHook {
+            result = await hook(id, objective, session, result)
         }
         record(id: id, objective: objective, result: result)
     }
@@ -155,7 +160,56 @@ actor LingShuAgentOrchestrator {
             pushes.append("子任务「\(objective)」未能自行收尾,已暂停等你介入。")
             Task { await self.onEvent?(.failed(id: id, objective: objective, summary: digest(lastText))) }
             admitNext(after: id)
+        case .interrupted(let reason):
+            // 网络/网关中断:**非失败**——标"已暂停"、保留会话上下文、登记待重连,释放并发槽位(断网时本就没法跑别的)。
+            // 重连后由 resumeInterrupted 重新接上 continueLoop,从中断处续跑。
+            upsert(id: id, objective: objective, status: .suspended, summary: "网络中断已暂停:\(digest(reason))")
+            suspendedForReconnect.insert(id)
+            pushes.append("子任务「\(objective)」因网络中断暂停,联网后自动续跑。")
+            Task { await self.onEvent?(.interrupted(id: id, objective: objective, reason: reason)) }
+            admitNext(after: id)
         }
+    }
+
+    // MARK: 断网重连续跑 / 手动续接
+
+    /// 当前因网络中断而暂停、等重连续跑的子任务 id 列表。
+    func suspendedIDs() -> [String] { order.filter { suspendedForReconnect.contains($0) } }
+
+    /// 重连后自动续跑一条暂停的子任务:申请并发槽位 → continueLoop()(从中断处接着跑,不注入新消息)→ 验收 → 落账本。
+    /// 满并发则**留在暂停集合**稍后再试(不入 waiting 队列,避免被 complete 误用 send 重驱动)。
+    func resumeInterrupted(id: String) async {
+        guard suspendedForReconnect.contains(id), let session = sessions[id] else { return }
+        guard concurrency.hasCapacity || concurrency.isRunning(id) else { return }  // 满 → 留 suspended,下次重连再试
+        let objective = objectives[id] ?? entries[id]?.objective ?? ""
+        suspendedForReconnect.remove(id)
+        concurrency.requestAdmission(threadID: id, summary: objective)
+        upsert(id: id, objective: objective, status: .running, summary: "网络恢复,自动续跑中")
+        await onEvent?(.resumed(id: id, objective: objective))
+        Task { await self.driveContinue(id: id, objective: objective, session: session) }
+    }
+
+    /// 手动续接(任务窗口/主线程「继续」):把用户输入喂给**这条隔离会话本身**(它才有真上下文)续跑。
+    /// 暂停态先消暂停;无论暂停/已完成/卡住,都用 session.resume(把输入接上)再过验收。供 Phase 4 路由。
+    @discardableResult
+    func resumeWithInput(id: String, input: String) async -> LingShuAgentRunResult? {
+        guard let session = sessions[id] else { return nil }
+        let objective = objectives[id] ?? entries[id]?.objective ?? ""
+        suspendedForReconnect.remove(id)
+        if concurrency.hasCapacity, !concurrency.isRunning(id) { concurrency.requestAdmission(threadID: id, summary: objective) }
+        upsert(id: id, objective: objective, status: .running, summary: "收到「继续」,续跑中")
+        await onEvent?(.resumed(id: id, objective: objective))
+        var result = await session.resume(input)
+        if let hook = acceptanceHook { result = await hook(id, objective, session, result) }
+        record(id: id, objective: objective, result: result)
+        return result
+    }
+
+    /// 续跑驱动:从中断处 continueLoop()(重发中断那步模型调用),再过统一验收。
+    private func driveContinue(id: String, objective: String, session: LingShuAgentSession) async {
+        var result = await session.continueLoop()
+        if let hook = acceptanceHook { result = await hook(id, objective, session, result) }
+        record(id: id, objective: objective, result: result)
     }
 
     /// 一条线程结束 → 释放 ③ 槽位,有排队的就启动下一条(后台跑)。

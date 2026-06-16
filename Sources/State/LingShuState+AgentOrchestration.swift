@@ -9,14 +9,17 @@ extension LingShuState {
     func installAgentEventSinkIfNeeded() {
         guard !agentEventSinkInstalled else { return }
         agentEventSinkInstalled = true
+        startConnectivityMonitorIfNeeded()
+        loadDeliverablesIfNeeded()   // 从增量存储恢复最近产出物(跨重启续上"运行起来/继续")+ 启定时压缩
         let orchestrator = agentOrchestrator
         Task { await orchestrator.setEventSink { @MainActor [weak self] event in
             self?.handleOrchestratorEvent(event)
         } }
-        // 子任务也接验收门:复用 verifyAgentDeliverable(独立 verifier + 真实落盘核对)。
-        Task { await orchestrator.setVerifyHook { @MainActor [weak self] subID, objective, reply in
-            guard let self else { return (true, "") }
-            return await self.verifyAgentDeliverable(userRequest: objective, reply: reply, taskRecordID: self.agentSubTaskRecords[subID])
+        // 子任务也接**验收 + 恢复**:委托主线程统一的 verifyAndContinue(撞顶恢复 + 多轮验收 + 测试/运行门 + 停滞交还),
+        // 子任务与主线程同一套执行恢复力——复杂工程撞顶/崩溃会自己续跑修到跑通,而非直接判异常。
+        Task { await orchestrator.setAcceptanceHook { @MainActor [weak self] subID, objective, session, initial in
+            guard let self else { return initial }
+            return await self.verifyAndContinue(session: session, result: initial, userRequest: objective, taskRecordID: self.agentSubTaskRecords[subID])
         } }
     }
 
@@ -32,6 +35,7 @@ extension LingShuState {
             if let recordID {
                 appendTaskRecordMessage(recordID, actor: "子任务", role: "结果", kind: .result, text: summary)
                 finishTaskRecord(recordID, status: .completed, summary: summary)
+                recordDeliverable(recordID: recordID, title: objective, summary: summary)   // 登记产出物供"运行起来/继续"接上
             }
             postOrchestratorChat(recordID: recordID, dispatched: "✅ \(summary)", spawned: "✅ 子任务「\(objective)」完成:\(summary)")
             briefMainThread("子任务「\(objective)」已完成:\(summary.prefix(200))")
@@ -50,6 +54,24 @@ extension LingShuState {
             }
             postOrchestratorChat(recordID: recordID, dispatched: "⚠️ 未能自行收尾:\(summary)", spawned: "⚠️ 子任务「\(objective)」未能自行收尾:\(summary)")
             briefMainThread("子任务「\(objective)」未能自行收尾:\(summary.prefix(160))")
+        case .interrupted(let id, let objective, let reason):
+            // 网络/网关中断:**非失败**,标"已暂停",启动主动重试循环(它在主对话框统一展示重试进度,故这里不另发对话气泡)。
+            _ = objective
+            let recordID = agentSubTaskRecords[id]
+            if let recordID {
+                appendTaskRecordMessage(recordID, actor: "子任务", role: "暂停", kind: .warning, text: "网络中断,已暂停:\(reason)")
+                finishTaskRecord(recordID, status: .suspended, summary: "网络中断已暂停,联网后自动续跑。")
+            }
+            startNetworkRetryLoopIfNeeded()
+        case .resumed(let id, let objective):
+            // 重连/手动续接:从"已暂停"翻回"执行中",执行流继续追加进该记录窗口。
+            let recordID = agentSubTaskRecords[id]
+            if let recordID, let idx = taskExecutionRecords.firstIndex(where: { $0.id == recordID }) {
+                taskExecutionRecords[idx].status = .running
+                appendTaskRecordMessage(recordID, actor: "子任务", role: "续跑", kind: .router, text: "网络恢复,自动接着跑。")
+                persistTaskExecutionRecords()
+            }
+            _ = objective
         }
     }
 
@@ -68,5 +90,45 @@ extension LingShuState {
     func briefMainThread(_ brief: String) {
         let session = mainAgentSessionHolder
         Task { await session?.injectBriefing(brief) }
+    }
+
+    // MARK: - 断网重连自动续跑
+
+    /// 懒启动网络可达性监控(首次有 agent 活动时):不可达→可达(去抖后)→ 回 MainActor 续跑所有暂停的任务。
+    func startConnectivityMonitorIfNeeded() {
+        guard connectivityMonitor == nil else { return }
+        let monitor = LingShuConnectivityMonitor(onReconnect: { [weak self] in
+            // 链路恢复:唤醒主动重试循环立即再试(重置退避),而不是直接续跑——让重试进度在对话框可见。
+            Task { @MainActor in self?.triggerImmediateNetworkRetry() }
+        })
+        connectivityMonitor = monitor
+        monitor.start()
+    }
+
+    /// 网络恢复:让编排器逐条从中断处续跑暂停的子任务,并续跑可能挂起的主会话回合。
+    func resumeSuspendedWork() async {
+        let ids = await agentOrchestrator.suspendedIDs()
+        if !ids.isEmpty {
+            appendTrace(kind: .route, actor: "网络", title: "重连", detail: "网络恢复,自动续跑 \(ids.count) 条暂停任务。")
+        }
+        for id in ids { await agentOrchestrator.resumeInterrupted(id: id) }
+        await resumeSuspendedMainTurnIfNeeded()
+        await resumeSuspendedAutonomousIfNeeded()
+    }
+
+    /// 续跑因断网挂起的**主会话**回合:从中断处 continueLoop() + 再过验收,把结果填回原气泡;
+    /// 若续跑又因网络 .interrupted,则保留挂起态等下次重连。
+    func resumeSuspendedMainTurnIfNeeded() async {
+        guard let pending = suspendedMainTurn else { return }
+        suspendedMainTurn = nil
+        appendTrace(kind: .route, actor: "网络", title: "续跑主回合", detail: "网络恢复,接着把上一条跑完。")
+        let session = await mainAgentSession()
+        var result = await session.continueLoop()
+        result = await verifyAndContinue(session: session, result: result, userRequest: pending.prompt, taskRecordID: pending.recordID)
+        if case .interrupted = result {
+            suspendedMainTurn = pending   // 还是连不上,继续挂起等下次重连
+            return
+        }
+        finalizeMainTurn(result: result, bubbleID: pending.bubbleID, recordID: pending.recordID, prompt: pending.prompt, startedAt: pending.startedAt)
     }
 }

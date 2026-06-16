@@ -224,7 +224,7 @@ extension LingShuState {
             initialMessages: await seededDistilledMemory(),
             tools: tools,
             model: adapter,
-            maxTurns: 80   // 自主运行可长程;安全天花板,非目标预算
+            maxTurns: 120   // 自主运行长程;安全天花板(防失控),非目标预算——撞顶由验收续跑恢复
         )
     }
 
@@ -314,7 +314,30 @@ extension LingShuState {
             chatMessages.append(.init(speaker: "灵枢", text: "⚠️ 独立运行到达步数上限仍未收尾：\(text)", isUser: false, taskRecordID: recordID))
             enterCoreState(.standby, resetTimer: false)
             appendTrace(kind: .warning, actor: "独立运行", title: "步数上限", detail: String(text.prefix(80)))
+        case .interrupted(let reason):
+            // 网络中断:**非失败**——独立运行挂起,登记重连后自动续跑;会话上下文保留在 autonomousSessionHolder。
+            suspendedAutonomousRecordID = recordID
+            updateAutonomousRun(phase: .paused, statusLine: "网络中断,已暂停,联网后自动续。")
+            missionTitle = "独立运行已暂停(等网络)"
+            missionStatus = String(reason.prefix(80))
+            appendTaskRecordMessage(recordID, actor: "独立运行", role: "暂停", kind: .warning, text: "网络中断,已暂停:\(reason)")
+            finishTaskRecord(recordID, status: .suspended, summary: "网络中断已暂停,联网后自动续跑。")
+            enterCoreState(.standby, resetTimer: false)
+            appendTrace(kind: .warning, actor: "独立运行", title: "网络中断暂停", detail: String(reason.prefix(80)))
+            startNetworkRetryLoopIfNeeded()   // 启动主动重试(对话框可见进度)
         }
+    }
+
+    /// 重连后续跑被网络中断挂起的独立运行(从中断处 continueLoop + 复用收尾)。
+    func resumeSuspendedAutonomousIfNeeded() async {
+        guard let recordID = suspendedAutonomousRecordID, let session = autonomousSessionHolder else { return }
+        suspendedAutonomousRecordID = nil
+        updateAutonomousRun(phase: .running, statusLine: "网络恢复,自动续跑中。")
+        if let idx = taskExecutionRecords.firstIndex(where: { $0.id == recordID }) { taskExecutionRecords[idx].status = .running }
+        var result = await session.continueLoop()
+        result = await verifyAndContinue(session: session, result: result, userRequest: autonomousRun.objective, taskRecordID: recordID)
+        if case .interrupted = result { suspendedAutonomousRecordID = recordID; return }  // 还连不上,留挂起
+        finishAutonomousRun(result: result, recordID: recordID)
     }
 
     private func updateAutonomousRun(phase: LingShuAutonomousRunPhase, statusLine: String) {

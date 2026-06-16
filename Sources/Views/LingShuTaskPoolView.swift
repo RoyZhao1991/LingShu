@@ -142,6 +142,7 @@ struct LingShuTaskPoolView: View {
         case .queued: return .white.opacity(0.4)
         case .needsRevision: return .orange
         case .blocked: return .red
+        case .suspended: return .yellow   // 网络中断暂停(会自动续),区别于红色异常
         }
     }
 }

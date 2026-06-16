@@ -22,16 +22,23 @@ extension LingShuState {
             ? "真实落盘文件:(无——盘上没有任何本回合产出文件)"
             : "真实落盘文件(盘上确实存在,已逐一核实):\n" + realFiles.map { "- \($0)" }.joined(separator: "\n")
 
-        // 代码任务测试门(计划 §4):产出真实源码文件 → 必须"有测试且跑通(全绿)"才达标,否则**确定性**判未达标。
+        // 代码任务**确定性硬门**(计划 §4 + 执行恢复力):产出真实源码文件 → 必须同时满足
+        // ① 测试门:有测试且跑通(全绿) ② 运行门:最近一次构建/运行程序本身不崩(若跑过)。任一不过即确定性判未达标。
         let codeFiles = realFiles.filter { Self.isTestableCodePath($0) }
         let testGate = codeTaskTestEvidence(taskRecordID: taskRecordID, codeFiles: codeFiles)
+        let runGate = codeTaskRunEvidence(taskRecordID: taskRecordID, codeFiles: codeFiles)
+        // 运行门只在「真尝试过构建/运行且最近一次崩了」时拦(runGate.attempted && !runGate.clean);从没跑过程序不单独拦(交测试门)。
+        let runGateBlocks = runGate.attempted && !runGate.clean
+        let codeGatePassed = codeFiles.isEmpty || (testGate.passed && !runGateBlocks)
         let testGateBlock: String
         if codeFiles.isEmpty {
-            testGateBlock = "测试门:本次非代码交付,跳过。"
-        } else if testGate.passed {
-            testGateBlock = "测试门:✅ 已检测到测试并跑通(全绿)。\(testGate.detail)"
+            testGateBlock = "代码门:本次非代码交付,跳过。"
         } else {
-            testGateBlock = "测试门:❌ 未通过——\(testGate.detail) 代码交付必须写测试用例(随复杂度增多)并运行至全部通过,且把测试文件登记为产出物。"
+            let testLine = testGate.passed ? "✅ \(testGate.detail)" : "❌ \(testGate.detail)"
+            let runLine = runGateBlocks ? "❌ \(runGate.detail)" : "✅ \(runGate.detail)"
+            testGateBlock = codeGatePassed
+                ? "代码门:✅ 通过。测试门:\(testLine) 运行门:\(runLine)"
+                : "代码门:❌ 未通过。测试门:\(testLine) 运行门:\(runLine) 代码交付必须:写测试用例并跑到全绿、且程序真正构建/运行起来不崩——跑崩了/报错是要修复的观测,不是交付。"
         }
 
         // 看 + 核:抽产出物正文(事实核查)+ 渲染图像交云端 VL 审版式(重叠/截断/空白)。只看一个主产出物以控成本。
@@ -59,7 +66,7 @@ extension LingShuState {
         2. 事实准确性:用你的知识逐条审查正文里的关键数据/年份/事件/数字/人名,**发现明确错误或与公认事实不符才 ❌ 并写出正确值**;不要把"我没法 100% 确认"当作不达标。**但忽略"自指/易变"事实**——产出物描述它自己的文件体积/字节数/页数/生成时间戳这类(每次重生成都会变、且与用户关心的内容无关),以及 KB 四舍五入这种琐碎数值差(如 41KB vs 40KB),**一律不算事实错误、不得据此打回**,以免陷入自指返工死循环。
         3. 完整性:是否覆盖用户要求的主题、结构与数量。
         4. 版式:若有视觉评审,凡文字重叠/被截断/溢出/错位空白 → ❌ 并指出第几页;无视觉评审则此项默认达标。
-        5. 测试门:以上【测试门】结论为准——标 ❌ 则本维度未达标(代码任务必须有测试且全绿);标 ✅ 或"非代码交付跳过"则达标。
+        5. 代码门:以上【代码门】结论为准——标 ❌ 则本维度未达标(代码任务必须有测试且全绿、且程序真正跑起来不崩);标 ✅ 或"非代码交付跳过"则达标。
         输出格式(严格遵守):
         1. 先逐条核对并写明达标/未达标及理由(未达标写清缺什么、怎么改)。
         2. 另起一行:核对统计 PASS=<达标条数> FAIL=<未达标条数>
@@ -76,11 +83,14 @@ extension LingShuState {
         let critique: String
         if case .completed(let value) = result { critique = value } else { critique = "" }
         let verdict = LingShuChecklistVerdict.parse(critique)
-        // 测试门是**确定性硬门**:代码任务未"有测试且全绿"→ 即使 LLM 评审放行也判未达标,并把原因回灌给 maker。
-        if !codeFiles.isEmpty, !testGate.passed {
-            let appended = critique.isEmpty
-                ? "测试门未通过:\(testGate.detail) 请补测试用例并跑通(全绿)。"
-                : critique + "\n\n[测试门] ❌ \(testGate.detail) 请补测试用例并跑到全绿后再交付。"
+        // 代码门是**确定性硬门**:代码任务未满足「有测试且全绿」或「程序构建/运行不崩」→ 即使 LLM 评审放行也判未达标,
+        // 把缺哪条 + 崩溃片段回灌给 maker,逼它修到真跑通(执行恢复力),而不是把异常当交付。
+        if !codeFiles.isEmpty, !codeGatePassed {
+            var reasons: [String] = []
+            if !testGate.passed { reasons.append("[测试门] ❌ \(testGate.detail) 请补测试用例并跑到全绿。") }
+            if runGateBlocks { reasons.append("[运行门] ❌ \(runGate.detail) 请修到程序能正常构建/运行、不再崩溃/报错。") }
+            let reasonText = reasons.joined(separator: "\n")
+            let appended = critique.isEmpty ? reasonText : critique + "\n\n" + reasonText
             return (false, appended)
         }
         return (verdict.allPassed, critique)
@@ -110,6 +120,33 @@ extension LingShuState {
                        "go test", "cargo test", "rspec", "phpunit", "gradle test", "mvn test",
                        "ctest", "make test", "tox", "dotnet test"]
         return needles.contains { command.contains($0) }
+    }
+
+    /// 命令是否在**构建或运行程序本身**(编译 / 直接执行),区别于跑测试框架。用于「能跑通/不崩」运行门:
+    /// 复杂工程「建到能跑」却在运行期崩溃时,模型常拿报错当交付收尾——这里识别出构建/运行动作,
+    /// 配合 outputLooksLikeCrash 把"最近一次运行/构建崩了"做成确定性硬门,逼它修到真跑通。
+    nonisolated static func looksLikeBuildOrRunCommand(_ command: String) -> Bool {
+        let needles = ["swift build", "swift run", "xcodebuild", "make ", "cmake --build",
+                       "cargo build", "cargo run", "go build", "go run", "gcc ", "g++ ", "clang ", "clang++",
+                       "javac", "java -jar", "mvn package", "mvn compile", "gradle build", "gradle assemble",
+                       "npm run build", "npm start", "npm run start", "yarn build", "pnpm build", "tsc ",
+                       "dotnet build", "dotnet run", "python ", "python3 ", "node ", "deno run",
+                       "ruby ", "php ", "./"]
+        return needles.contains { command.contains($0) }
+    }
+
+    /// 命令输出是否含**高置信崩溃/构建失败签名**(用于:即使退出码被包装脚本吞掉成功,看见 traceback/段错误
+    /// 也判崩)。只收高置信信号,不收宽泛的 "error:"/"killed",避免在正常输出上误判。
+    nonisolated static func outputLooksLikeCrash(_ output: String) -> Bool {
+        let lower = output.lowercased()
+        let needles = ["traceback (most recent call last)", "segmentation fault", "segfault",
+                       "core dumped", "abort trap", "panic:", "fatal error:", "fatal error",
+                       "uncaught exception", "unhandled exception", "exception in thread",
+                       "addresssanitizer", "modulenotfounderror", "importerror", "no such module",
+                       "compilation failed", "compilation terminated", "build failed", "build error",
+                       "linker command failed", "undefined reference to", "cannot find module",
+                       "command not found"]
+        return needles.contains { lower.contains($0) }
     }
 
     /// 扫任务记录,判断代码任务是否"有测试且跑通(全绿)"。配对 toolCall→toolResult:命中测试运行器或
@@ -143,6 +180,57 @@ extension LingShuState {
         if !sawTest { return (false, "未检测到任何测试用例(没有测试文件,也没有运行测试的命令)。") }
         if !green { return (false, "检测到测试,但没有一次测试运行成功(全绿)——请运行测试并修到全部通过。") }
         return (true, "检测到测试文件 \(testFileArtifacts.count) 个,且有成功的测试运行。")
+    }
+
+    /// 「能跑通/不崩」运行门(执行恢复力核心):扫任务记录里**构建/运行程序本身**的命令(非测试运行器),
+    /// 看**最近一次**构建/运行是否干净(退出码成功 **且** 输出无高置信崩溃签名)。
+    /// 复杂工程「建到能跑」却运行期崩溃时,弱模型常拿报错/异常当交付收尾;此门确定性判「最近一次跑崩=未达标」,
+    /// 把崩溃片段回灌给 maker 逼它修到真跑通,而不是把异常交还用户。
+    /// 语义:**只有真尝试过构建/运行**才把关(attempted=true);从没跑过程序则交给测试门(attempted=false, clean=true 不单独拦)。
+    func codeTaskRunEvidence(taskRecordID: String?, codeFiles: [String]) -> (attempted: Bool, clean: Bool, detail: String) {
+        guard let record = taskExecutionRecords.first(where: { $0.id == taskRecordID }) else {
+            return (false, true, "未找到本任务执行记录,运行门跳过。")
+        }
+        var attempted = false
+        var lastClean = true
+        var lastCmd = ""
+        var lastCrashSnippet = ""
+        var pendingCmd: String?
+        for message in record.messages {
+            switch message.detail {
+            case let .toolCall(tool, summary, args):
+                if tool == "run_command" { pendingCmd = (summary + " " + args).lowercased() }
+            case let .toolResult(tool, success, output):
+                if tool == "run_command", let cmd = pendingCmd {
+                    // 构建/运行程序本身(排除测试运行器,后者归测试门)。
+                    if Self.looksLikeBuildOrRunCommand(cmd), !Self.looksLikeTestCommand(cmd) {
+                        attempted = true
+                        let crashed = !success || Self.outputLooksLikeCrash(output)
+                        lastClean = !crashed
+                        lastCmd = String(cmd.prefix(80))
+                        lastCrashSnippet = crashed ? Self.crashSnippet(from: output) : ""
+                    }
+                }
+                pendingCmd = nil
+            default:
+                break
+            }
+        }
+        if !attempted { return (false, true, "未单独构建/运行程序(由测试门把关)。") }
+        if lastClean { return (true, true, "最近一次构建/运行程序通过(无崩溃/报错)。") }
+        return (false, false, "最近一次构建/运行程序仍失败(崩溃/报错):`\(lastCmd)` → \(lastCrashSnippet)")
+    }
+
+    /// 从一段命令输出里截一段最能说明问题的崩溃片段(优先含崩溃签名的那几行,否则取尾部)。
+    nonisolated static func crashSnippet(from output: String, maxChars: Int = 240) -> String {
+        let lines = output.split(separator: "\n", omittingEmptySubsequences: true).map(String.init)
+        if let hit = lines.lastIndex(where: { outputLooksLikeCrash($0) }) {
+            let start = max(0, hit - 1)
+            let end = min(lines.count, hit + 2)
+            return String(lines[start..<end].joined(separator: " ↩ ").prefix(maxChars))
+        }
+        let tail = lines.suffix(3).joined(separator: " ↩ ")
+        return String(tail.prefix(maxChars))
     }
 
     /// 交付话术与返工文本解耦:验收经返工后才通过时,maker 最后一轮文本是"逐条修正"的内部 QA 记录
