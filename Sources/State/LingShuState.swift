@@ -179,7 +179,7 @@ final class LingShuState: ObservableObject {
     @Published var pendingAttachments: [LingShuAttachment] = []
     /// 极简语音模式：全屏只显示输入/输出两条音频波形，纯语音对话。
     @Published var isMinimalVoiceMode = false
-    /// 数字人身体表现层：由大脑/工具临时下发的表现指令；为空时由实时状态自动推导。
+    /// 灵枢身体表现层：由大脑/工具临时下发的表现指令；为空时由实时状态自动推导。
     @Published var digitalHumanDirective: LingShuDigitalHumanDirective?
 
     let mainThreadKernel = LingShuMainThreadKernel()
@@ -279,7 +279,7 @@ final class LingShuState: ObservableObject {
     var autonomousRunRecordID: String?
     var autonomousSessionHolder: LingShuAgentSession?
     var autonomousPendingQuestion: String?
-    // 周期感知循环(模块2):常驻数字人在岗时定时感知屏幕+系统声音 → 注入/唤醒。详见 LingShuState+AutonomousPerception。
+    // 周期感知循环(模块2):常驻灵枢在岗时定时感知屏幕+系统声音 → 注入/唤醒。详见 LingShuState+AutonomousPerception。
     /// 自主反应「武装」开关:开 = 环境事件(如有人开始说话)可唤醒大脑自主处理;关 = 只保持感知 digest 新鲜,不擅自行动(安全默认)。
     @Published var autonomousAutoReactArmed = UserDefaults.standard.bool(forKey: "lingshu.autoReactArmed") {
         didSet { UserDefaults.standard.set(autonomousAutoReactArmed, forKey: "lingshu.autoReactArmed") }
@@ -963,7 +963,7 @@ final class LingShuState: ObservableObject {
             return autonomousResponse
         }
 
-        // 常驻数字人在岗时,对话/语音直接喂给在岗执行会话(带其权限级与四肢),让它真去做。
+        // 常驻灵枢在岗时,对话/语音直接喂给在岗执行会话(带其权限级与四肢),让它真去做。
         if let standingAck = handleStandingPersonInputIfNeeded(prompt: trimmedPrompt, taskRecordID: taskRecordID) {
             return standingAck
         }

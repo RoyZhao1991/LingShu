@@ -1,6 +1,6 @@
 import Foundation
 
-/// 周期感知循环（模块 2）的接线层：常驻数字人在岗（完全接管）时，
+/// 周期感知循环（模块 2）的接线层：常驻灵枢在岗（完全接管）时，
 /// 定时**廉价感知**屏幕 + 系统声音 → 有变化才花 VL 理解态势 → 维护一份滚动 digest，
 /// 并在「武装自主反应」时由显著事件唤醒大脑动手。
 ///
@@ -14,7 +14,7 @@ import Foundation
 @MainActor
 extension LingShuState {
 
-    /// 常驻数字人在岗且**运行中**（完全接管态）。
+    /// 常驻灵枢在岗且**运行中**（完全接管态）。
     var isStandingPersonActive: Bool {
         isStandingPersonOnDuty && autonomousRun.phase == .running
     }

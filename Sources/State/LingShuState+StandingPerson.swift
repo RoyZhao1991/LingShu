@@ -1,20 +1,20 @@
 import Foundation
 
-/// 常驻数字人（独立运行的新形态，用户定调 2026-06-16）。
+/// 常驻灵枢（独立运行的新形态，用户定调 2026-06-16）。
 /// 取向：独立运行模式启动后，灵枢就是一个**能听、能说、能思考、能动手的"人"**——
 /// 不再要求预先写一个一次性「目标」。上岗后由对话/语音自然驱动它行动；执行带其权限级与全套四肢。
 /// 与目标驱动的独立运行（prepareAutonomousRun，仍保留给"进入独立运行模式 + 一句话目标"的命令路径）解耦。
 @MainActor
 extension LingShuState {
 
-    /// 常驻数字人在岗中：无单一目标（空 objective）且执行会话仍在（可接续）。运行/暂停均算在岗。
+    /// 常驻灵枢在岗中：无单一目标（空 objective）且执行会话仍在（可接续）。运行/暂停均算在岗。
     var isStandingPersonOnDuty: Bool {
         autonomousRun.phase != .idle
             && autonomousRun.objective.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             && autonomousSessionHolder != nil
     }
 
-    /// 让灵枢「上岗」成为常驻数字人：不需要预设目标——环境自检通过即直接上岗（能听/能说/能思考/能动手），
+    /// 让灵枢「上岗」成为常驻灵枢：不需要预设目标——环境自检通过即直接上岗（能听/能说/能思考/能动手），
     /// 之后由对话/语音自然驱动。环境有阻断项则不上岗，提示先处理。
     func goLiveAsStandingPerson() {
         let now = Date()
@@ -25,23 +25,23 @@ extension LingShuState {
         let canRun = environment.canRun
         autonomousRun = .init(
             id: "auto-\(Int(now.timeIntervalSince1970))-\(UUID().uuidString.prefix(6))",
-            objective: "",                       // 空目标 = 常驻数字人（不是某个一次性任务）
+            objective: "",                       // 空目标 = 常驻灵枢（不是某个一次性任务）
             phase: canRun ? .ready : .blocked,
             permissionLevel: autonomousPermissionLevel,
             environment: environment,
             selfCheck: nil,
             runbook: nil,
-            statusLine: canRun ? "数字人准备上岗。" : "环境存在阻断项，请先处理后再上岗。",
+            statusLine: canRun ? "灵枢准备上岗。" : "环境存在阻断项，请先处理后再上岗。",
             startedAt: nil,
             updatedAt: now
         )
         guard canRun else {
-            missionTitle = "数字人上岗受阻"
+            missionTitle = "灵枢上岗受阻"
             missionStatus = environment.summaryLine
-            appendTrace(kind: .warning, actor: "数字人", title: "上岗受阻", detail: environment.summaryLine)
+            appendTrace(kind: .warning, actor: "灵枢", title: "上岗受阻", detail: environment.summaryLine)
             return
         }
-        appendTrace(kind: .system, actor: "数字人", title: "环境自检", detail: environment.summaryLine)
+        appendTrace(kind: .system, actor: "灵枢", title: "环境自检", detail: environment.summaryLine)
         authorizeAutonomousRun()
     }
 

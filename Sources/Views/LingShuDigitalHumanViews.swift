@@ -9,8 +9,8 @@ struct LingShuDigitalHumanMiniOrb: View {
         TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { timeline in
             MiniOrbStack(snapshot: snapshot, now: timeline.date.timeIntervalSinceReferenceDate, audioLevel: audioLevel)
         }
-        .help("数字人：\(snapshot.expression.displayName) · \(snapshot.displayText)")
-        .accessibilityLabel("灵枢数字人，\(snapshot.expression.displayName)")
+        .help("灵枢：\(snapshot.expression.displayName) · \(snapshot.displayText)")
+        .accessibilityLabel("灵枢，\(snapshot.expression.displayName)")
     }
 }
 

@@ -107,7 +107,7 @@ final class LingShuControlRouter {
         ],
         [
             "name": "lingshu_autonomous",
-            "description": "驱动「自主模式/常驻数字人」(等价独立运行面板按钮):go_live=让灵枢上岗成为常驻数字人(完全接管)、stop=停止并夺回控制、pause/resume=暂停/继续、arm/disarm=武装/解除自主反应(环境事件唤醒)。状态见 lingshu_status 的 standingPersonOnDuty/autoReactArmed/perceptionDigest。args: action。",
+            "description": "驱动「自主模式/常驻灵枢」(等价独立运行面板按钮):go_live=让灵枢上岗成为常驻灵枢(完全接管)、stop=停止并夺回控制、pause/resume=暂停/继续、arm/disarm=武装/解除自主反应(环境事件唤醒)。状态见 lingshu_status 的 standingPersonOnDuty/autoReactArmed/perceptionDigest。args: action。",
             "inputSchema": [
                 "type": "object",
                 "properties": ["action": ["type": "string", "description": "go_live | stop | pause | resume | arm | disarm"]],
@@ -331,7 +331,7 @@ final class LingShuControlRouter {
             state.cancelCurrentCall()
             return (jsonText(["stopped": wasActive]), false)
         case "lingshu_autonomous":
-            // 驱动自主模式/常驻数字人(等价独立运行面板按钮),供脚本化验证完全接管态。args: action。
+            // 驱动自主模式/常驻灵枢(等价独立运行面板按钮),供脚本化验证完全接管态。args: action。
             guard let action = (arguments["action"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) else {
                 return ("缺少参数 action(go_live|stop|pause|resume|arm|disarm)", true)
             }

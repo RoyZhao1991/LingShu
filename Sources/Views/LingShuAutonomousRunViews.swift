@@ -29,7 +29,7 @@ struct LingShuAutonomousRunPanel: View {
                 Text("独立运行模式")
                     .font(.system(size: 15.5, weight: .semibold))
                     .foregroundStyle(.white)
-                Text("常驻数字人 · 能听能说能思考能动手 · 人工接管")
+                Text("常驻灵枢 · 能听能说能思考能动手 · 人工接管")
                     .font(.system(size: 11.5, weight: .medium))
                     .foregroundStyle(.white.opacity(0.52))
             }
@@ -66,7 +66,7 @@ struct LingShuAutonomousRunPanel: View {
             // 贾维斯式上岗按钮:大、居中、科技感。默认完整授权,点一下即上岗。
             JarvisLaunchButton(
                 title: "让灵枢上岗",
-                subtitle: "AUTONOMOUS · 完整授权 · 数字人在岗",
+                subtitle: "AUTONOMOUS · 完整授权 · 灵枢在岗",
                 isEnabled: true
             ) {
                 state.goLiveAsStandingPerson()
@@ -80,7 +80,7 @@ struct LingShuAutonomousRunPanel: View {
             HStack(alignment: .top, spacing: 16) {
                 VStack(alignment: .leading, spacing: 8) {
                     if standing {
-                        metric(label: "形态", value: "常驻数字人 · 在岗", icon: "person.wave.2")
+                        metric(label: "形态", value: "常驻灵枢 · 在岗", icon: "person.wave.2")
                     } else {
                         metric(label: "目标", value: state.autonomousRun.objective.isEmpty ? "等待目标" : state.autonomousRun.objective, icon: "scope")
                     }
@@ -113,7 +113,7 @@ struct LingShuAutonomousRunPanel: View {
     }
 
     private var controls: some View {
-        // 常驻数字人无目标 → 重检/重建走 goLive(走 prepareAutonomousRun 会因空目标被拒)。
+        // 常驻灵枢无目标 → 重检/重建走 goLive(走 prepareAutonomousRun 会因空目标被拒)。
         let standing = state.autonomousRun.objective.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         return HStack(spacing: 8) {
             switch state.autonomousRun.phase {

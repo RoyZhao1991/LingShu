@@ -1,6 +1,6 @@
 import Foundation
 
-/// 数字人表现层：只负责“身体怎么表现”，不负责判断业务该怎么做。
+/// 灵枢表现层：只负责“身体怎么表现”，不负责判断业务该怎么做。
 /// 大脑可以通过工具临时下发表现指令；没有指令时，这里从真实运行状态推导默认表现。
 @MainActor
 extension LingShuState {
@@ -99,15 +99,15 @@ extension LingShuState {
     func digitalHumanTool() -> LingShuAgentTool {
         LingShuAgentTool(
             name: "set_digital_human",
-            description: "调度数字人身体表现层(光球动画),只改变可视表现,不改变业务状态。用于回应、聆听、思考、演示、确认、警戒等身体表达。",
+            description: "调度灵枢身体表现层(光球动画),只改变可视表现,不改变业务状态。用于回应、聆听、思考、演示、确认、警戒等身体表达。",
             parametersJSON: """
-            {"type":"object","properties":{"expression":{"type":"string","description":"表现态: standby/listening/speaking/thinking/executing/alert/greeting/confirming/presenting, 也支持中文:待机/聆听/发声/思考/执行/警戒/回应/确认/演示"},"message":{"type":"string","description":"显示在数字人旁边的短句,可留空"},"duration_seconds":{"type":"number","description":"持续秒数,1-60,默认8"},"intensity":{"type":"number","description":"动画强度0-1,可留空"}},"required":["expression"]}
+            {"type":"object","properties":{"expression":{"type":"string","description":"表现态: standby/listening/speaking/thinking/executing/alert/greeting/confirming/presenting, 也支持中文:待机/聆听/发声/思考/执行/警戒/回应/确认/演示"},"message":{"type":"string","description":"显示在灵枢旁边的短句,可留空"},"duration_seconds":{"type":"number","description":"持续秒数,1-60,默认8"},"intensity":{"type":"number","description":"动画强度0-1,可留空"}},"required":["expression"]}
             """
         ) { [weak self] argumentsJSON in
             let args = Self.parseArgs(argumentsJSON)
             let rawExpression = args["expression"] ?? ""
             guard let expression = LingShuDigitalHumanExpression.parse(rawExpression) else {
-                return "未识别的数字人表现态:\(rawExpression)。可用: \(LingShuDigitalHumanExpression.allCases.map(\.rawValue).joined(separator: ", "))"
+                return "未识别的灵枢表现态:\(rawExpression)。可用: \(LingShuDigitalHumanExpression.allCases.map(\.rawValue).joined(separator: ", "))"
             }
             let message = args["message"] ?? ""
             let duration = Double(args["duration_seconds"] ?? "") ?? 8
@@ -120,7 +120,7 @@ extension LingShuState {
                     durationSeconds: duration,
                     intensity: intensity
                 )
-                return "数字人表现层已切换为「\(expression.displayName)」。"
+                return "灵枢表现层已切换为「\(expression.displayName)」。"
             }
         }
     }

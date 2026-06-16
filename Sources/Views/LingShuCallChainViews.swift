@@ -127,7 +127,7 @@ struct LingShuCallChainPanel: View {
                     .font(.system(size: 13.5, weight: .semibold))
                     .foregroundStyle(.white.opacity(0.85))
             }
-            Text("当前没有进行中的任务。在对话里发指令，或到左侧「独立运行」让灵枢上岗成为常驻数字人——这里会实时显示它正在执行的步骤、调用的工具与执行轨迹。")
+            Text("当前没有进行中的任务。在对话里发指令，或到左侧「独立运行」让灵枢上岗成为常驻灵枢——这里会实时显示它正在执行的步骤、调用的工具与执行轨迹。")
                 .font(.system(size: 11.5, weight: .medium))
                 .foregroundStyle(.white.opacity(0.55))
                 .fixedSize(horizontal: false, vertical: true)

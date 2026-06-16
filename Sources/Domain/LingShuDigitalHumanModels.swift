@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// 数字人表现层的情绪/动作态。
+/// 灵枢表现层的情绪/动作态。
 /// 这里描述的是“身体怎么表现”，不参与业务决策；业务决策仍归大脑/agent loop。
 enum LingShuDigitalHumanExpression: String, CaseIterable, Codable, Equatable, Identifiable {
     case standby
