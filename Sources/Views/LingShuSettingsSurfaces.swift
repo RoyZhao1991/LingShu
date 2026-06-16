@@ -106,25 +106,27 @@ struct LingShuModelGatewaySurface: View {
     enum ChannelTab: String, CaseIterable, Identifiable {
         case brain = "中枢 · 脑"
         case voice = "语音 · 口"
-        case perception = "感知 · 眼/耳"
+        case vision = "视觉 · 眼"
+        case hearing = "听觉 · 耳"
         var id: String { rawValue }
         var icon: String {
             switch self {
             case .brain: "brain.head.profile"
             case .voice: "waveform"
-            case .perception: "eye"
+            case .vision: "eye"
+            case .hearing: "ear"
             }
         }
     }
     enum SheetRoute: Identifiable {
-        case add
-        case edit(String)
-        case renameTTS(id: String, current: String)
+        case add                                                                  // 中枢新增(选供应商)
+        case edit(String)                                                         // 中枢修改
+        case channel(key: String, title: String, endpoint: String, model: String) // 口/眼/耳 配置(名/端点/模型/密钥)
         var id: String {
             switch self {
             case .add: "add"
             case .edit(let p): "edit-\(p)"
-            case .renameTTS(let id, _): "rename-\(id)"
+            case .channel(let key, _, _, _): "ch-\(key)"
             }
         }
     }
@@ -149,39 +151,66 @@ struct LingShuModelGatewaySurface: View {
                         .buttonStyle(.plain)
                     }
                     Spacer()
-                    if channelTab == .brain {
-                        Button { sheet = .add } label: {
-                            Label("新增模型", systemImage: "plus.circle.fill").font(.system(size: 12, weight: .semibold))
-                        }
-                        .buttonStyle(.plain)
-                        .foregroundStyle(Color.lingVoid)
-                        .padding(.horizontal, 12).padding(.vertical, 7)
-                        .background(Color.lingHolo, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
-                    }
+                    addControl
                 }
 
                 VStack(alignment: .leading, spacing: 10) {
                     switch channelTab {
                     case .brain: brainRows
                     case .voice: voiceRows
-                    case .perception: perceptionRows
+                    case .vision: visionRows
+                    case .hearing: hearingRows
                     }
                 }
             }
             .padding(22)
         }
         .sheet(item: $sheet) { route in
-            if case let .renameTTS(id, current) = route {
-                LingShuTTSRenameSheet(current: current) { newName in
-                    state.renameTTSChannel(id, to: newName)
-                    sheet = nil
-                } cancel: { sheet = nil }
-                .frame(minWidth: 420, minHeight: 200)
+            if case let .channel(key, title, endpoint, model) = route {
+                LingShuChannelConfigSheet(state: state, channelKey: key, title: title, defaultEndpoint: endpoint, defaultModel: model) { sheet = nil }
+                    .frame(minWidth: 540, minHeight: 420)
             } else {
                 LingShuModelChannelSheet(state: state, route: route) { sheet = nil }
                     .frame(minWidth: 560, minHeight: 470)
             }
         }
+    }
+
+    /// 每个模态各自的「新增」入口(像脑一样能加模型)。
+    @ViewBuilder private var addControl: some View {
+        switch channelTab {
+        case .brain:
+            accentButton("新增模型") { sheet = .add }
+        case .voice:
+            let pending = state.unconfiguredTTSDescriptors()
+            if pending.isEmpty {
+                EmptyView()
+            } else {
+                Menu {
+                    ForEach(pending) { d in
+                        Button(d.displayName) { sheet = .channel(key: LingShuState.ttsChannelKey(d.id), title: d.displayName, endpoint: d.defaultEndpoint, model: "") }
+                    }
+                } label: {
+                    Label("新增声音", systemImage: "plus.circle.fill").font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(Color.lingVoid).padding(.horizontal, 12).padding(.vertical, 7)
+                        .background(Color.lingHolo, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+                }
+                .menuStyle(.borderlessButton).fixedSize()
+            }
+        case .vision:
+            accentButton("新增视觉") { sheet = .channel(key: LingShuState.visionCustomKey, title: "自定义视觉网关", endpoint: "", model: "") }
+        case .hearing:
+            accentButton("新增识别") { sheet = .channel(key: LingShuState.asrCustomKey, title: "自定义语音识别", endpoint: "", model: "") }
+        }
+    }
+
+    private func accentButton(_ label: String, _ action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Label(label, systemImage: "plus.circle.fill").font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(Color.lingVoid).padding(.horizontal, 12).padding(.vertical, 7)
+                .background(Color.lingHolo, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+        }
+        .buttonStyle(.plain)
     }
 
     @ViewBuilder private var brainRows: some View {
@@ -207,33 +236,60 @@ struct LingShuModelGatewaySurface: View {
     }
 
     @ViewBuilder private var voiceRows: some View {
-        ForEach(state.ttsChannelDescriptors) { d in
+        ForEach(state.configuredTTSDescriptors()) { d in
+            let key = LingShuState.ttsChannelKey(d.id)
             LingShuChannelRow(
-                state: state, title: state.ttsDisplayName(d), subtitle: d.deployment,
-                channelKey: LingShuState.ttsChannelKey(d.id),
+                state: state, title: state.ttsDisplayName(d),
+                subtitle: state.channelConfig(key).model.isEmpty ? d.deployment : state.channelConfig(key).model,
+                channelKey: key,
                 isActive: state.voiceManager?.speechOutputProvider.id == d.id,
                 onValidate: { await state.validateTTSChannel(d) },
                 onUse: {
                     state.voiceManager?.speechOutputProvider = d
-                    if !d.defaultEndpoint.isEmpty { state.voiceManager?.speechOutputEndpoint = d.defaultEndpoint }
+                    let ep = state.channelConfig(key).endpoint
+                    state.voiceManager?.speechOutputEndpoint = ep.isEmpty ? d.defaultEndpoint : ep
                 },
-                onEdit: { sheet = .renameTTS(id: d.id, current: state.ttsDisplayName(d)) },
-                editLabel: "改名"
+                onEdit: { sheet = .channel(key: key, title: state.ttsDisplayName(d), endpoint: state.channelConfig(key).endpoint.isEmpty ? d.defaultEndpoint : state.channelConfig(key).endpoint, model: state.channelConfig(key).model) }
             )
         }
     }
 
-    @ViewBuilder private var perceptionRows: some View {
+    @ViewBuilder private var visionRows: some View {
         LingShuChannelRow(
-            state: state, title: "视觉 / 视频 · 数据网关 VL", subtitle: "swds-vision-fast · Qwen2.5-VL",
+            state: state, title: state.channelDisplayName(LingShuState.visionChannelKey, default: "视觉 / 视频 · 数据网关 VL"),
+            subtitle: state.channelConfig(LingShuState.visionChannelKey).model.isEmpty ? "swds-vision-fast · Qwen2.5-VL" : state.channelConfig(LingShuState.visionChannelKey).model,
             channelKey: LingShuState.visionChannelKey, isActive: false,
-            onValidate: { await state.validateVisionChannel() }, onUse: nil, onEdit: nil
+            onValidate: { await state.validateVisionChannel() }, onUse: nil,
+            onEdit: { sheet = .channel(key: LingShuState.visionChannelKey, title: "视觉 · 数据网关 VL", endpoint: state.channelConfig(LingShuState.visionChannelKey).endpoint, model: state.channelConfig(LingShuState.visionChannelKey).model) }
         )
+        if state.hasChannelConfig(LingShuState.visionCustomKey) {
+            LingShuChannelRow(
+                state: state, title: state.channelDisplayName(LingShuState.visionCustomKey, default: "自定义视觉网关"),
+                subtitle: state.channelConfig(LingShuState.visionCustomKey).endpoint,
+                channelKey: LingShuState.visionCustomKey, isActive: false,
+                onValidate: { await state.validateVisionChannel() }, onUse: nil,
+                onEdit: { sheet = .channel(key: LingShuState.visionCustomKey, title: "自定义视觉网关", endpoint: state.channelConfig(LingShuState.visionCustomKey).endpoint, model: state.channelConfig(LingShuState.visionCustomKey).model) }
+            )
+        }
+    }
+
+    @ViewBuilder private var hearingRows: some View {
         LingShuChannelRow(
-            state: state, title: "语音识别 · 本机", subtitle: "macOS SFSpeech 本机能力,始终可用",
-            channelKey: LingShuState.asrLocalChannelKey, isActive: false,
-            onValidate: { state.validateASRLocalChannel() }, onUse: nil, onEdit: nil
+            state: state, title: state.channelDisplayName(LingShuState.asrChannelKey, default: "语音识别 · 数据网关"),
+            subtitle: state.channelConfig(LingShuState.asrChannelKey).model.isEmpty ? "数据网络模型网关" : state.channelConfig(LingShuState.asrChannelKey).model,
+            channelKey: LingShuState.asrChannelKey, isActive: false,
+            onValidate: { state.validateASRChannel(LingShuState.asrChannelKey) }, onUse: nil,
+            onEdit: { sheet = .channel(key: LingShuState.asrChannelKey, title: "语音识别 · 数据网关", endpoint: state.channelConfig(LingShuState.asrChannelKey).endpoint, model: state.channelConfig(LingShuState.asrChannelKey).model) }
         )
+        if state.hasChannelConfig(LingShuState.asrCustomKey) {
+            LingShuChannelRow(
+                state: state, title: state.channelDisplayName(LingShuState.asrCustomKey, default: "自定义语音识别"),
+                subtitle: state.channelConfig(LingShuState.asrCustomKey).endpoint,
+                channelKey: LingShuState.asrCustomKey, isActive: false,
+                onValidate: { state.validateASRChannel(LingShuState.asrCustomKey) }, onUse: nil,
+                onEdit: { sheet = .channel(key: LingShuState.asrCustomKey, title: "自定义语音识别", endpoint: state.channelConfig(LingShuState.asrCustomKey).endpoint, model: state.channelConfig(LingShuState.asrCustomKey).model) }
+            )
+        }
     }
 
 }
@@ -451,36 +507,60 @@ struct LingShuModelChannelSheet: View {
     }
 }
 
-/// TTS 通道改名弹窗(暗色):写死的 displayName 不准时(如"男声"实为女声)用户自己改,留空恢复默认。
-struct LingShuTTSRenameSheet: View {
-    @State private var name: String
-    let save: (String) -> Void
-    let cancel: () -> Void
+/// 口/眼/耳 能力通道配置弹窗(暗色):自定义显示名 + 接口地址 + 模型 + 密钥(不返显,留空不变)。
+/// 名字写死不准(如"男声"实为女声)、要改端点/模型/密钥都在这里。保存到 channelConfigs + credentialStore。
+struct LingShuChannelConfigSheet: View {
+    @ObservedObject var state: LingShuState
+    let channelKey: String
+    let title: String
+    let dismiss: () -> Void
 
-    init(current: String, save: @escaping (String) -> Void, cancel: @escaping () -> Void) {
-        _name = State(initialValue: current)
-        self.save = save
-        self.cancel = cancel
+    @State private var name: String
+    @State private var endpoint: String
+    @State private var model: String
+    @State private var secret: String = ""
+
+    init(state: LingShuState, channelKey: String, title: String, defaultEndpoint: String, defaultModel: String, dismiss: @escaping () -> Void) {
+        self.state = state; self.channelKey = channelKey; self.title = title; self.dismiss = dismiss
+        let cfg = state.channelConfig(channelKey)
+        _name = State(initialValue: cfg.name)
+        _endpoint = State(initialValue: cfg.endpoint.isEmpty ? defaultEndpoint : cfg.endpoint)
+        _model = State(initialValue: cfg.model.isEmpty ? defaultModel : cfg.model)
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text("通道改名").font(.system(size: 15, weight: .bold)).foregroundStyle(.white)
-            Text("写死的名字不准时(如默认名臆断了性别)在这里改;留空恢复默认。")
-                .font(.system(size: 11.5, weight: .medium)).foregroundStyle(.white.opacity(0.5))
-                .fixedSize(horizontal: false, vertical: true)
-            TextField("通道显示名,如:数据网关情绪女声", text: $name).textFieldStyle(.roundedBorder)
+            HStack {
+                Text("配置 · \(title)").font(.system(size: 15, weight: .bold)).foregroundStyle(.white)
+                Spacer()
+                Button { dismiss() } label: { Image(systemName: "xmark.circle.fill").font(.system(size: 17)).foregroundStyle(.white.opacity(0.5)) }.buttonStyle(.plain)
+            }
+            field("显示名(留空用默认)")
+            TextField(title, text: $name).textFieldStyle(.roundedBorder)
+            field("接口地址")
+            TextField("https://…", text: $endpoint).textFieldStyle(.roundedBorder)
+            field("模型 / 音色(可选)")
+            TextField("如 deepseek-chat / qwen2.5-vl / male_steady", text: $model).textFieldStyle(.roundedBorder)
+            field("访问密钥(不返显,留空保持不变)")
+            SecureField("API Key / Token", text: $secret).textFieldStyle(.roundedBorder)
             Spacer(minLength: 0)
             HStack {
                 Spacer()
-                Button("取消") { cancel() }.buttonStyle(.bordered)
-                Button("保存") { save(name) }.buttonStyle(.borderedProminent)
+                Button("取消") { dismiss() }.buttonStyle(.bordered)
+                Button("保存") {
+                    state.saveChannelConfig(channelKey, name: name, endpoint: endpoint, model: model, secret: secret)
+                    dismiss()
+                }.buttonStyle(.borderedProminent)
             }
         }
         .padding(20)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(Color.lingVoid)
         .preferredColorScheme(.dark)
+    }
+
+    private func field(_ t: String) -> some View {
+        Text(t).font(.system(size: 11.5, weight: .semibold)).foregroundStyle(.white.opacity(0.6))
     }
 }
 

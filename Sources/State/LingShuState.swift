@@ -224,9 +224,18 @@ final class LingShuState: ObservableObject {
     }
     /// 正在校验中的 channelKey(UI 转圈)。
     @Published var validatingChannels: Set<String> = []
-    /// TTS 通道用户自定义显示名(descriptor.id → 自定义名)。写死的 displayName 不准时(如"男声"其实是女声)用户可改,持久化。
-    @Published var ttsChannelNames: [String: String] = (UserDefaults.standard.dictionary(forKey: "lingshu.ttsChannelNames") as? [String: String]) ?? [:] {
-        didSet { UserDefaults.standard.set(ttsChannelNames, forKey: "lingshu.ttsChannelNames") }
+    /// 各能力通道(口/眼/耳,中枢走 preset)的用户配置(channelKey → 名/端点/模型),持久化。
+    /// 写死名不准(如"男声"实为女声)或要改端点/模型时用户自己配;密钥仍走 credentialStore(按 channelKey)。
+    @Published var channelConfigs: [String: ModelChannelConfig] = LingShuState.loadChannelConfigs() {
+        didSet { LingShuState.saveChannelConfigs(channelConfigs) }
+    }
+    static func loadChannelConfigs() -> [String: ModelChannelConfig] {
+        guard let data = UserDefaults.standard.data(forKey: "lingshu.channelConfigs"),
+              let decoded = try? JSONDecoder().decode([String: ModelChannelConfig].self, from: data) else { return [:] }
+        return decoded
+    }
+    static func saveChannelConfigs(_ v: [String: ModelChannelConfig]) {
+        if let data = try? JSONEncoder().encode(v) { UserDefaults.standard.set(data, forKey: "lingshu.channelConfigs") }
     }
 
     static func loadChannelValidations() -> [String: LingShuChannelValidation] {

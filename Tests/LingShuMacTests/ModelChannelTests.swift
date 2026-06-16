@@ -10,7 +10,7 @@ final class ModelChannelTests: XCTestCase {
         XCTAssertEqual(LingShuState.ttsChannelKey("datanet-speaker-tts"), "tts:datanet-speaker-tts")
         XCTAssertEqual(LingShuState.visionChannelKey, "vision:datanet")
         XCTAssertEqual(LingShuState.videoChannelKey, "video:datanet")
-        XCTAssertEqual(LingShuState.asrLocalChannelKey, "asr:local")
+        XCTAssertEqual(LingShuState.asrChannelKey, "asr:datanet")
     }
 
     func testValidationStateCodableRoundTrips() throws {

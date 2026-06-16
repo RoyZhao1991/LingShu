@@ -7,6 +7,13 @@ struct LingShuChannelValidation: Codable, Equatable, Sendable {
     var at: Date
 }
 
+/// 能力通道(口/眼/耳)的用户配置:自定义显示名 + 接口地址 + 模型名(密钥另存 credentialStore)。
+struct ModelChannelConfig: Codable, Equatable, Sendable {
+    var name: String = ""
+    var endpoint: String = ""
+    var model: String = ""
+}
+
 /// 模型通道 = 带校验的**类型化能力通道**注册表(中枢/视觉/视频/听/语音)。
 /// 取向(用户拍板 2026-06-16):TTS/音视频通道也在模型通道里配置;眼耳口鼻嘴内部只**选已配置且校验通过**的通道;
 /// 子线程切换 + 各模态选择器都**过滤掉未配置/未校验通过**的通道,不让没真接上的模型出现在可切换列表里。
@@ -16,13 +23,35 @@ extension LingShuState {
     // MARK: - 通道 key(纯字符串,nonisolated 便于 UI/测试共用)
     nonisolated static func brainChannelKey(_ provider: String) -> String { "brain:\(provider)" }
     nonisolated static let visionChannelKey = "vision:datanet"
+    nonisolated static let visionCustomKey = "vision:custom"
     nonisolated static let videoChannelKey = "video:datanet"
-    nonisolated static let asrLocalChannelKey = "asr:local"
+    nonisolated static let asrChannelKey = "asr:datanet"
+    nonisolated static let asrCustomKey = "asr:custom"
     nonisolated static func ttsChannelKey(_ id: String) -> String { "tts:\(id)" }
 
     func channelValidation(_ key: String) -> LingShuChannelValidation? { channelValidations[key] }
     func isChannelValidated(_ key: String) -> Bool { channelValidations[key]?.ok == true }
     func isChannelValidating(_ key: String) -> Bool { validatingChannels.contains(key) }
+
+    // MARK: - 通用通道配置(口/眼/耳:名/端点/模型 + 密钥)
+    func channelConfig(_ key: String) -> ModelChannelConfig { channelConfigs[key] ?? ModelChannelConfig() }
+    func hasChannelConfig(_ key: String) -> Bool { channelConfigs[key] != nil }
+    /// 该通道显示名:用户自定义优先,否则回退默认名。
+    func channelDisplayName(_ key: String, default def: String) -> String {
+        let n = channelConfigs[key]?.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        return (n?.isEmpty == false) ? n! : def
+    }
+    /// 保存通道配置(名/端点/模型 + 可选密钥)。密钥留空则不动已存的。
+    func saveChannelConfig(_ key: String, name: String, endpoint: String, model: String, secret: String?) {
+        channelConfigs[key] = ModelChannelConfig(
+            name: name.trimmingCharacters(in: .whitespacesAndNewlines),
+            endpoint: endpoint.trimmingCharacters(in: .whitespacesAndNewlines),
+            model: model.trimmingCharacters(in: .whitespacesAndNewlines)
+        )
+        if let secret, !secret.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            credentialStore.setAPIKey(secret.trimmingCharacters(in: .whitespacesAndNewlines), forProvider: key)
+        }
+    }
 
     // MARK: - 中枢/文本 通道
     /// 已配置的文本通道(有 key,或当前激活的——它就在用)。
@@ -40,19 +69,25 @@ extension LingShuState {
     }
 
     // MARK: - 语音合成 TTS 通道(口)
-    /// 模型通道里展示/可选的 TTS 通道:数据网关情绪语音(云端,需 token)+ 本机系统语音(始终可用)。
-    var ttsChannelDescriptors: [LingShuSpeechOutputProviderDescriptor] {
-        [.dataNetSpeakerTTS, .appleSpeech]
+    /// 口的**云端 TTS 目录**(本机系统语音是兜底,不在此列):数据网关情绪语音 / IndexTTS2 / CosyVoice3 / 豆包 / 自定义。
+    var ttsCloudCatalog: [LingShuSpeechOutputProviderDescriptor] {
+        [.dataNetSpeakerTTS, .indexTTS2Service, .cosyVoice3Service, .doubaoService, .customHTTPService]
     }
-
-    /// TTS 通道**可自定义显示名**(覆盖写死的 displayName);改名持久化。名字写死且不准(如"男声"其实是女声)→ 用户自己改。
+    /// 已接入的 TTS 通道:已配置过的 + 当前在用的(默认数据网关情绪语音永远在列)。「新增」从云端目录里挑没接入的。
+    func configuredTTSDescriptors() -> [LingShuSpeechOutputProviderDescriptor] {
+        ttsCloudCatalog.filter { d in
+            d.kind == .dataNetSpeakerTTS
+                || hasChannelConfig(Self.ttsChannelKey(d.id))
+                || voiceManager?.speechOutputProvider.id == d.id
+        }
+    }
+    /// 云端目录里**还没接入**的 TTS(供「新增」挑选)。
+    func unconfiguredTTSDescriptors() -> [LingShuSpeechOutputProviderDescriptor] {
+        let configured = Set(configuredTTSDescriptors().map(\.id))
+        return ttsCloudCatalog.filter { !configured.contains($0.id) }
+    }
     func ttsDisplayName(_ descriptor: LingShuSpeechOutputProviderDescriptor) -> String {
-        let custom = ttsChannelNames[descriptor.id]?.trimmingCharacters(in: .whitespacesAndNewlines)
-        return (custom?.isEmpty == false) ? custom! : descriptor.displayName
-    }
-    func renameTTSChannel(_ descriptorID: String, to name: String) {
-        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty { ttsChannelNames[descriptorID] = nil } else { ttsChannelNames[descriptorID] = trimmed }
+        channelDisplayName(Self.ttsChannelKey(descriptor.id), default: descriptor.displayName)
     }
 
     // MARK: - 校验(实测调用)
@@ -124,9 +159,18 @@ extension LingShuState {
         channelValidations[key] = .init(ok: ok, detail: detail, at: Date())
     }
 
-    /// 听(本机 ASR):SFSpeech 本机能力,始终可用。
-    func validateASRLocalChannel() {
-        channelValidations[Self.asrLocalChannelKey] = .init(ok: true, detail: "本机 SFSpeech · 始终可用", at: Date())
+    /// 听(语音识别):数据网关/自定义云端 ASR——看数据网关 token / 自定义端点是否配置。
+    func validateASRChannel(_ key: String) {
+        let custom = (key == Self.asrCustomKey)
+        let ok: Bool; let detail: String
+        if custom {
+            ok = !channelConfig(key).endpoint.isEmpty
+            detail = ok ? "自定义端点已配置" : "缺自定义端点"
+        } else {
+            ok = (dataNetGatewayToken()?.isEmpty == false)
+            detail = ok ? "凭据已配置 · 数据网关" : "缺数据网关 token"
+        }
+        channelValidations[key] = .init(ok: ok, detail: detail, at: Date())
     }
 
     /// 校验用小测试图(64×64 纯蓝 PNG base64,内嵌避免跨线程画图)。
