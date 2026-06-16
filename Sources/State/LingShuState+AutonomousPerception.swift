@@ -271,8 +271,9 @@ extension LingShuState {
             self.missionTitle = "灵枢在岗"
             self.appendTaskRecordMessage(recordID, actor: "感知", role: "提醒", kind: .core, text: action)
             self.appendTrace(kind: .runtime, actor: "灵枢", title: "感知触发提醒", detail: String(action.prefix(40)))
+            let baseline = self.currentArtifactCount(recordID)
             let initial = await session.resume("[屏幕监测·主动提醒] 你刚留意到一个可能需要主人知道的情况:\(action)\n用一句话(`speak` 出声)简短提醒主人即可,不必动手处理(除非主人接着发指令)。")
-            let result = await self.verifyAndContinue(session: session, result: initial, userRequest: action, taskRecordID: recordID)
+            let result = await self.verifyAndContinue(session: session, result: initial, userRequest: action, taskRecordID: recordID, artifactBaseline: baseline)
             guard !Task.isCancelled else { return }
             self.finishAutonomousRun(result: result, recordID: recordID)
         }

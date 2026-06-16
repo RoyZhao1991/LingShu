@@ -9,11 +9,22 @@ extension LingShuState {
     /// 验收门(maker≠checker):**目标(验收通过)是唯一成功停止位**。先做撞顶恢复(执行恢复力),再跑验收主循环。
     /// 一直续跑直到通过;只有「maker 一轮没有任何新进展(盘上产出物没增、意见还和上轮实质相同)」=停滞才诚实交还,
     /// 不再用固定轮数封顶。`verifyCeiling`/`recoverCeiling` 只是防失控的高位安全天花板,正常远到不了。
-    func verifyAndContinue(session: LingShuAgentSession, result initial: LingShuAgentRunResult, userRequest: String, taskRecordID: String?) async -> LingShuAgentRunResult {
+    /// `artifactBaseline`:本回合**开始前**该记录已存在的产出物数——只有本回合**新产出**(count > baseline)
+    /// 或回复显式声称产出文件,才触发验收门。常驻在岗会话复用同一条记录、跨回合累积产出物:不给基线的话,
+    /// 第一次做完 PPT 后,后续"演示/讲解/答疑"等纯动作/对话回合会因记录里**残留**着那个 PPT 而被误判为
+    /// "有产出物"→空转验收→停滞交还(实测:让"演示PPT"卡在验收里根本没去演示)。主会话/隔离子任务用一次性
+    /// 记录,基线 0 即原行为。
+    func verifyAndContinue(session: LingShuAgentSession, result initial: LingShuAgentRunResult, userRequest: String, taskRecordID: String?, artifactBaseline: Int = 0) async -> LingShuAgentRunResult {
         // 撞顶恢复(执行恢复力核心):一段推进用满 per-run 安全天花板却还没收尾,**不是失败**——
         // 若任务确有在制品(已落产出物 / 动过工具),把它当检查点,补一段全新预算让它接着做完 / 把崩溃修到跑通。
         let result = await recoverFromExhaustionIfNeeded(session: session, result: initial, taskRecordID: taskRecordID)
-        return await runVerificationLoop(session: session, result: result, userRequest: userRequest, taskRecordID: taskRecordID)
+        return await runVerificationLoop(session: session, result: result, userRequest: userRequest, taskRecordID: taskRecordID, artifactBaseline: artifactBaseline)
+    }
+
+    /// 某记录当前**真实存在**的产出物数(供验收门取基线 / 判增量)。
+    func currentArtifactCount(_ taskRecordID: String?) -> Int {
+        (taskExecutionRecords.first { $0.id == taskRecordID }?.artifacts ?? [])
+            .filter { FileManager.default.fileExists(atPath: $0.location) }.count
     }
 
     /// 撞顶恢复:对「推进耗尽 per-run 天花板但未收尾」的结果,有界地补预算续跑(每次 resume = 全新 maxTurns)。
@@ -46,13 +57,13 @@ extension LingShuState {
 
     /// 验收门主循环(maker≠checker):**目标(验收通过)是唯一成功停止位**,一直续跑直到通过;
     /// 只有「maker 一轮无新进展(产出物没增、意见与上轮实质相同)」=停滞才诚实交还。`verifyCeiling` 只是高位安全天花板。
-    private func runVerificationLoop(session: LingShuAgentSession, result initial: LingShuAgentRunResult, userRequest: String, taskRecordID: String?) async -> LingShuAgentRunResult {
+    private func runVerificationLoop(session: LingShuAgentSession, result initial: LingShuAgentRunResult, userRequest: String, taskRecordID: String?, artifactBaseline: Int = 0) async -> LingShuAgentRunResult {
         var result = initial
-        // 触发验收门的可靠信号:**本回合真有产出物落盘**(write_file 自动登记)——比抠回复动词稳得多
+        // 触发验收门的可靠信号:**本回合真有【新】产出物落盘**(write_file 自动登记)——比抠回复动词稳得多
         // (旧的只认"已生成/已写入"会漏掉"已交付"这类措辞,导致验收形同虚设);
-        // 纯闲聊/自我介绍不写文件→无产出物→不触发,省 token 且不误触。回复显式声称产出文件也触发。
-        let producedRealArtifacts = !((taskExecutionRecords.first { $0.id == taskRecordID }?.artifacts ?? [])
-            .filter { FileManager.default.fileExists(atPath: $0.location) }.isEmpty)
+        // 用 artifactBaseline 只看**本回合相对开始时的增量**,避免常驻会话残留旧产出物把"演示/答疑"等纯动作回合误拖进验收。
+        // 纯闲聊/自我介绍/演示不【新】写文件→不触发,省 token 且不误触。回复显式声称产出文件也触发。
+        let producedRealArtifacts = currentArtifactCount(taskRecordID) > artifactBaseline
         guard case .completed = result,
               producedRealArtifacts || Self.replyClaimsArtifact(Self.runResultText(result)) else { return result }
         let verifyCeiling = 8   // 安全天花板,非目标位

@@ -82,13 +82,15 @@ extension LingShuState {
         enterAutonomousRunningState(statusLine: "在岗处理：\(String(prompt.prefix(20)))")
         missionTitle = "灵枢在岗"
         appendTrace(kind: .runtime, actor: "灵枢", title: "在岗接令", detail: String(prompt.prefix(40)))
+        // 在岗会话跨回合复用同一记录:记下本回合开始前的产出物数,验收门只看本回合**新增**(否则"演示/答疑"会被旧PPT误拖进验收)。
+        let baseline = currentArtifactCount(recordID)
         let previous = autonomousRunTask
         autonomousRunTask?.cancel()
         autonomousRunTask = Task { @MainActor [weak self] in
             await previous?.value
             guard let self, !Task.isCancelled else { return }
             let initial = await session.resume(prompt)
-            let result = await self.verifyAndContinue(session: session, result: initial, userRequest: prompt, taskRecordID: recordID)
+            let result = await self.verifyAndContinue(session: session, result: initial, userRequest: prompt, taskRecordID: recordID, artifactBaseline: baseline)
             guard !Task.isCancelled else { return }
             self.finishAutonomousRun(result: result, recordID: recordID)
         }

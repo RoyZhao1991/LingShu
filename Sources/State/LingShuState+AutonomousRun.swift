@@ -7,12 +7,7 @@ extension LingShuState {
     }
 
     var autonomousRunDisplayStatus: String {
-        switch autonomousRun.phase {
-        case .idle:
-            return "未启用"
-        case .probing, .planning, .ready, .running, .paused, .completed, .blocked:
-            return autonomousRun.phase.rawValue
-        }
+        autonomousRun.phase == .idle ? "未启用" : autonomousRun.phase.rawValue
     }
 
     @discardableResult
@@ -193,13 +188,14 @@ extension LingShuState {
         appendTaskRecordMessage(recordID, actor: "用户", role: "答复", kind: .core, text: prompt)
         appendTrace(kind: .runtime, actor: "独立运行", title: "收到答复续跑", detail: String(prompt.prefix(40)))
 
+        let baseline = currentArtifactCount(recordID)
         let previous = autonomousRunTask
         autonomousRunTask?.cancel()
         autonomousRunTask = Task { @MainActor [weak self] in
             await previous?.value
             guard let self, !Task.isCancelled else { return }
             let initial = await session.resume(prompt)
-            let result = await self.verifyAndContinue(session: session, result: initial, userRequest: objective, taskRecordID: recordID)
+            let result = await self.verifyAndContinue(session: session, result: initial, userRequest: objective, taskRecordID: recordID, artifactBaseline: baseline)
             guard !Task.isCancelled else { return }
             self.finishAutonomousRun(result: result, recordID: recordID)
         }
@@ -383,8 +379,9 @@ extension LingShuState {
         suspendedAutonomousRecordID = nil
         updateAutonomousRun(phase: .running, statusLine: "网络恢复,自动续跑中。")
         if let idx = taskExecutionRecords.firstIndex(where: { $0.id == recordID }) { taskExecutionRecords[idx].status = .running }
+        let baseline = currentArtifactCount(recordID)
         var result = await session.continueLoop()
-        result = await verifyAndContinue(session: session, result: result, userRequest: autonomousRun.objective, taskRecordID: recordID)
+        result = await verifyAndContinue(session: session, result: result, userRequest: autonomousRun.objective, taskRecordID: recordID, artifactBaseline: baseline)
         if case .interrupted = result { suspendedAutonomousRecordID = recordID; return }  // 还连不上,留挂起
         finishAutonomousRun(result: result, recordID: recordID)
     }
