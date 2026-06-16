@@ -91,14 +91,6 @@ extension LingShuState {
         }
     }
 
-    /// 命令/语音指令喂给在岗会话前,把当前感知态势前置成上下文——
-    /// 这样大脑接令时已经"看到"当前屏幕,不必先 screen_capture 一遍(更快、连贯)。
-    func standingPromptWithPerception(_ prompt: String) -> String {
-        let digest = perceptionDigest.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !digest.isEmpty else { return prompt }
-        return "[当前态势] \(digest)\n\n\(prompt)"
-    }
-
     /// 抑制 App Nap + 启动专用感知驱动:灵枢操作别的 app 时自己必在后台,
     /// 若靠 UI 的 Timer.publish(窗口遮挡/后台会被暂停),周期感知就停了。
     /// 进入运行/在岗态时调用(幂等):① beginActivity 抑制 App Nap;② 起一个用 Task.sleep 自驱的感知 Task。
@@ -272,33 +264,34 @@ extension LingShuState {
                 self.appendTrace(kind: .system, actor: "感知", title: "已评估·无需主动处理", detail: String(observation.prefix(60)))
                 return
             }
-            // ACT:确实要做——这才用在岗会话真去做(结果正常呈现,这是合理的对话内容)。
-            let recordID = self.autonomousRunRecordID ?? self.createTaskExecutionRecord(for: "数字人在岗")
+            // ACT:确实发现了值得提醒主人的问题——简短出声提醒(不替主人做主、不啰嗦旁白)。
+            let recordID = self.autonomousRunRecordID ?? self.createTaskExecutionRecord(for: "灵枢在岗")
             self.autonomousRunRecordID = recordID
-            self.enterAutonomousRunningState(statusLine: "感知到需要处理,正在动手…")
-            self.missionTitle = "数字人在岗"
-            self.appendTaskRecordMessage(recordID, actor: "感知", role: "触发", kind: .core, text: action)
-            self.appendTrace(kind: .runtime, actor: "数字人", title: "感知触发处理", detail: String(action.prefix(40)))
-            let initial = await session.resume("你刚自主判断需要处理:\(action)\n现在用你的四肢去做,完成后简述结果。")
+            self.enterAutonomousRunningState(statusLine: "发现需要留意的情况,正在提醒…")
+            self.missionTitle = "灵枢在岗"
+            self.appendTaskRecordMessage(recordID, actor: "感知", role: "提醒", kind: .core, text: action)
+            self.appendTrace(kind: .runtime, actor: "灵枢", title: "感知触发提醒", detail: String(action.prefix(40)))
+            let initial = await session.resume("[屏幕监测·主动提醒] 你刚留意到一个可能需要主人知道的情况:\(action)\n用一句话(`speak` 出声)简短提醒主人即可,不必动手处理(除非主人接着发指令)。")
             let result = await self.verifyAndContinue(session: session, result: initial, userRequest: action, taskRecordID: recordID)
             guard !Task.isCancelled else { return }
             self.finishAutonomousRun(result: result, recordID: recordID)
         }
     }
 
-    /// 一次性评估环境观察是否需要**主动处理**(独立临时会话,不污染在岗对话)。
-    /// 返回非 nil = 要做的事(一句话);nil = 无需处理(IDLE)。多数日常界面变化都返回 nil。
+    /// 一次性评估环境观察是否值得**主动提醒主人**(独立临时会话,不污染在岗对话)。
+    /// 用户定调(2026-06-16):屏幕变化**不必念出来**,保持静默监测,**只有遇到问题/异常才提醒**。
+    /// 返回非 nil = 值得提醒的一句话;nil = 无需提醒(绝大多数日常变化都 nil)。
     private func evaluatePerceptionForAction(observation: String) async -> String? {
         let prompt = """
-        你是在岗的灵枢。你刚观察到环境变化:\(observation)
-        判断这是否需要你**主动处理**(而不是等主人开口下指令)。绝大多数日常界面/应用切换都**不需要**你插手。
-        - 需要处理:只回一行 "ACT: <用一句话说清要做什么>"
-        - 不需要:只回 "IDLE"
-        除此之外不要输出任何内容。
+        你在静默监测主人的屏幕。刚观察到:\(observation)
+        判断这**是否是一个值得主动打断主人、出声提醒的问题**。门槛要**高**——
+        - 值得提醒(回 "ACT: <一句话说清是什么问题>"):明显的报错/崩溃弹窗、构建或测试失败、危险/不可逆操作的确认框、长任务卡死或异常、安全风险提示等**真正的异常或需要主人当下决断的事**。
+        - 不值得提醒(回 "IDLE"):正常切换 app、浏览网页、写代码、看文档、播放视频、界面正常变化等**一切日常活动**。屏幕只是变了不等于有问题。
+        宁可漏报也不要打扰。除 "ACT: ..." 或 "IDLE" 外不要输出任何内容。
         """
         let evaluator = LingShuAgentSession(
             id: "perceive-eval-\(UUID().uuidString.prefix(6))",
-            system: "你是在岗数字人的'环境评估器'。只输出 'ACT: ...' 或 'IDLE',不要解释、不要别的。",
+            system: "你是在岗灵枢的'屏幕异常哨兵'。只在发现真正的问题/异常时回 'ACT: ...',其余一律 'IDLE'。不解释、不啰嗦。",
             tools: [],
             model: makeAgentModelAdapter(),
             maxTurns: 1

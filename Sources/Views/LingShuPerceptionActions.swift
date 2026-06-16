@@ -114,13 +114,16 @@ enum LingShuPerceptionActions {
             )
 
             state.isListening = true
+            // 连续态(在岗/极简通话)不要求唤醒词,别再误报"正在等待触发词灵枢"(实测误导)。
+            let continuousMode = state.isMinimalVoiceMode || state.isStandingPersonOnDuty
+            let waitingForWake = state.requiresVoiceWakeWord && !continuousMode && !state.isVoiceConversationActive
             state.appendTrace(
                 kind: .system,
                 actor: "语音",
-                title: state.requiresVoiceWakeWord ? "等待唤醒" : "实时对话",
-                detail: state.requiresVoiceWakeWord
+                title: waitingForWake ? "等待唤醒" : "实时对话",
+                detail: waitingForWake
                     ? "麦克风已接入，正在等待触发词“\(effectiveWakeWord(for: state))”。"
-                    : "麦克风已接入，实时对话已开启。"
+                    : "麦克风已接入，实时对话已开启（在岗/通话态可直接说话，无需唤醒词）。"
             )
         } catch {
             state.voiceWakeListeningEnabled = false
@@ -155,31 +158,34 @@ enum LingShuPerceptionActions {
     ) {
         perceptionGateway.ingestAudioTranscription(result)
 
-        // 被吞的语音必须可见（架构要求"被忽略的语句可审计"）：否则"麦克风开着却像没听到"无从诊断。
-        guard !voice.isSpeaking, !state.hasActiveModelCall else {
+        let cleanedText = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleanedText.isEmpty else { return }
+
+        // **连续对话态** = 极简通话模式 或 灵枢在岗(完全接管)。这两种都是用户**显式开启**的"通话"——
+        // 像打电话一样**不要求先喊唤醒词**,随时能说话;且灵枢正说话/在跑长回合时,新整句当作**中途插话**接住(LOOP 人机讨论)。
+        let continuousMode = state.isMinimalVoiceMode || state.isStandingPersonOnDuty
+
+        // 非连续态且灵枢正忙:维持原行为(等它说完),并让被吞的语音可见(可审计)。
+        if (voice.isSpeaking || state.hasActiveModelCall), !continuousMode {
             state.missionStatus = voice.isSpeaking
                 ? "我正在说话，先不接收你的语音。"
                 : "我还在处理上一件事（模型调用进行中），这句语音暂未接收。"
             return
         }
 
-        let cleanedText = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !cleanedText.isEmpty else { return }
-
-        if state.requiresVoiceWakeWord, !state.isVoiceConversationActive {
-            guard containsWakeWord(cleanedText, wakeWord: effectiveWakeWord(for: state)) else {
+        // 唤醒词闸门:仅当"要求唤醒词 + 尚未进入对话态 + 非连续模式"时才拦。匹配走宽松同音近音(实测 ASR 把"灵枢"转写不稳)。
+        if state.requiresVoiceWakeWord, !state.isVoiceConversationActive, !continuousMode {
+            guard LingShuWakeWordMatcher.contains(cleanedText, wakeWord: effectiveWakeWord(for: state)) else {
                 state.missionTitle = "等待唤醒"
                 state.missionStatus = "我正在等待触发词“\(effectiveWakeWord(for: state))”。"
                 return
             }
-
             guard identityAllowsConversation(perceptionGateway) else {
                 state.missionTitle = "身份待确认"
                 state.missionStatus = "我听到了触发词，但身份还没有通过面容和声线联合确认。"
                 state.appendTrace(kind: .warning, actor: "身份锁", title: "唤醒拦截", detail: perceptionGateway.ownerIdentitySnapshot.detailText)
                 return
             }
-
             state.isVoiceConversationActive = true
             state.missionTitle = "实时对话"
             state.missionStatus = "我在。你说完一句，我会自动进入中枢判断。"
@@ -192,39 +198,41 @@ enum LingShuPerceptionActions {
             return
         }
 
-        let command = commandText(from: cleanedText, wakeWord: effectiveWakeWord(for: state))
-        guard state.isVoiceConversationActive, !command.isEmpty else { return }
+        let command = LingShuWakeWordMatcher.stripWakeWord(from: cleanedText, wakeWord: effectiveWakeWord(for: state))
+        // 连续模式即便对话态标志没置上也照收(显式上岗/通话);非连续模式仍需进对话态。
+        guard continuousMode || state.isVoiceConversationActive, !command.isEmpty else { return }
 
-        state.prompt = command
-        lingShuControlLog("voice: 识别结果 isFinal=\(result.isFinal) callMode=\(state.isMinimalVoiceMode) command=「\(String(command.prefix(30)))」")
+        state.prompt = command   // 实时显示当前听到的指令
+        guard result.isFinal else { return }   // 只在整句收口时才提交/插话,partial 只用于显示
 
-        if result.isFinal {
-            // 声线寻址闸门：以主人声线为最高优先，多人环境未点名不插话，
-            // 屏蔽嘈杂环境对主人指令的污染。
-            let verdict = LingShuVoiceAddressingGate.decide(.init(
-                transcript: command,
-                containsWakeWord: containsWakeWord(cleanedText, wakeWord: effectiveWakeWord(for: state)),
-                lockEnabled: perceptionGateway.ownerIdentityLockEnabled,
-                ownerVoiceConfidence: perceptionGateway.ownerIdentitySnapshot.voiceConfidence,
-                multipleSpeakersDetected: perceptionGateway.multipleSpeakersSuspected,
-                secondsSinceLastExchange: state.chatMessages.last.map { Date().timeIntervalSince($0.createdAt) },
-                isExplicitCallMode: state.isMinimalVoiceMode
-            ))
+        // 声线寻址闸门：以主人声线为最高优先，多人环境未点名不插话，屏蔽嘈杂环境污染。
+        // 连续态(通话/在岗)= 显式拨给灵枢的"电话",单人环境默认都在对它说话。
+        let verdict = LingShuVoiceAddressingGate.decide(.init(
+            transcript: command,
+            containsWakeWord: LingShuWakeWordMatcher.contains(cleanedText, wakeWord: effectiveWakeWord(for: state)),
+            lockEnabled: perceptionGateway.ownerIdentityLockEnabled,
+            ownerVoiceConfidence: perceptionGateway.ownerIdentitySnapshot.voiceConfidence,
+            multipleSpeakersDetected: perceptionGateway.multipleSpeakersSuspected,
+            secondsSinceLastExchange: state.chatMessages.last.map { Date().timeIntervalSince($0.createdAt) },
+            isExplicitCallMode: continuousMode
+        ))
 
-            switch verdict {
-            case .respond:
-                lingShuControlLog("voice: 闸门=respond → 提交「\(String(command.prefix(30)))」")
-                _ = state.submitVoiceTranscript(command)
-            case .ignore(let reason):
-                lingShuControlLog("voice: 闸门=ignore(\(reason)) → 丢弃「\(String(command.prefix(30)))」")
-                state.prompt = ""
-                state.appendTrace(
-                    kind: .system,
-                    actor: "声线闸门",
-                    title: "环境音忽略",
-                    detail: "\(reason)。被忽略内容：「\(String(command.prefix(42)))」"
-                )
-            }
+        switch verdict {
+        case .respond:
+            // 连续 LOOP + 灵枢正说话/在跑:这是「中途插话」——先掐掉正在播的 TTS,再把整句交给中枢
+            // (submitTextInput→在岗会话会把它注入正在跑的那条脑回路,答完再续)。
+            if voice.isSpeaking || state.hasActiveModelCall { voice.stopSpeaking() }
+            lingShuControlLog("voice: 闸门=respond callMode=\(state.isMinimalVoiceMode) standing=\(state.isStandingPersonOnDuty) → 提交「\(String(command.prefix(30)))」")
+            _ = state.submitVoiceTranscript(command)
+        case .ignore(let reason):
+            lingShuControlLog("voice: 闸门=ignore(\(reason)) → 丢弃「\(String(command.prefix(30)))」")
+            state.prompt = ""
+            state.appendTrace(
+                kind: .system,
+                actor: "声线闸门",
+                title: "环境音忽略",
+                detail: "\(reason)。被忽略内容：「\(String(command.prefix(42)))」"
+            )
         }
     }
 
@@ -248,27 +256,7 @@ enum LingShuPerceptionActions {
         return state.requiresVoiceWakeWord ? "等待唤醒" : "实时对话"
     }
 
-    private static func containsWakeWord(_ text: String, wakeWord: String) -> Bool {
-        normalized(text).contains(normalized(wakeWord))
-    }
-
-    private static func commandText(from text: String, wakeWord: String) -> String {
-        guard containsWakeWord(text, wakeWord: wakeWord),
-              let range = text.range(of: wakeWord, options: [.caseInsensitive, .diacriticInsensitive]) else {
-            return text.trimmingCharacters(in: .whitespacesAndNewlines)
-        }
-
-        return String(text[range.upperBound...])
-            .trimmingCharacters(in: CharacterSet.whitespacesAndNewlines.union(.punctuationCharacters))
-    }
-
-    private static func normalized(_ text: String) -> String {
-        text
-            .lowercased()
-            .filter { !$0.isWhitespace && !$0.isPunctuation }
-            .map(String.init)
-            .joined()
-    }
+    // 唤醒词匹配/剥离已抽到纯函数 LingShuWakeWordMatcher（宽松同音近音 + 可单测）。
 
     static func toggleVision(state: LingShuState, vision: VisionIOManager) {
         if vision.isCameraRunning {
