@@ -239,11 +239,28 @@ struct LingShuModelGatewaySurface: View {
     }
 
     private var executionPanel: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            SectionHeader(icon: "checkmark.shield", title: "执行策略", subtitle: "工作目录 · 权限边界 · 语音/计算机操作")
+        VStack(alignment: .leading, spacing: 14) {
+            SectionHeader(icon: "checkmark.shield", title: "执行策略", subtitle: "工作目录 · 常规偏好 · 高风险边界")
 
             LingShuConfigLine(title: "目标", value: state.codexWorkingDirectory)
             TextField("目标项目目录", text: $state.codexWorkingDirectory).textFieldStyle(.roundedBorder)
+
+            // 常规偏好(非高风险)。本地流式多轮是**固定模式**(按模型类型自动决定),不再做开关。
+            HStack(spacing: 18) {
+                Toggle("语音朗读", isOn: $state.voiceOutputEnabled).toggleStyle(.switch)
+                Spacer()
+            }
+            .font(.system(size: 12, weight: .semibold)).foregroundStyle(.white.opacity(0.76))
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text("随机性 \(String(format: "%.1f", state.temperature))").font(.system(size: 12, weight: .semibold)).foregroundStyle(.white.opacity(0.7))
+                Slider(value: $state.temperature, in: 0...1, step: 0.1)
+            }
+
+            Divider().overlay(Color.white.opacity(0.08))
+
+            // 高风险边界:权限模式 + 人工确认 + 计算机直接操作 归一组。
+            Text("高风险边界").font(.system(size: 11, weight: .bold)).foregroundStyle(.white.opacity(0.5))
 
             Picker("权限模式", selection: $state.codexPermissionMode) {
                 ForEach(CodexPermissionMode.allCases) { Text($0.rawValue).tag($0) }
@@ -252,19 +269,14 @@ struct LingShuModelGatewaySurface: View {
 
             HStack(spacing: 18) {
                 Toggle("高风险需人工确认", isOn: $state.requireHumanApproval).toggleStyle(.switch)
-                Toggle("语音朗读", isOn: $state.voiceOutputEnabled).toggleStyle(.switch)
-                Toggle("本地流式多轮", isOn: $state.localStreamingDialogueEnabled).toggleStyle(.switch)
+                Toggle("计算机直接操作", isOn: $state.computerControlEnabled).toggleStyle(.switch)
                 Spacer()
             }
             .font(.system(size: 12, weight: .semibold)).foregroundStyle(.white.opacity(0.76))
 
-            Toggle("计算机直接操作(截屏/点击/键入)", isOn: $state.computerControlEnabled)
-                .toggleStyle(.switch).font(.system(size: 12, weight: .semibold)).foregroundStyle(.white.opacity(0.76))
-
-            VStack(alignment: .leading, spacing: 6) {
-                Text("随机性 \(String(format: "%.1f", state.temperature))").font(.system(size: 12, weight: .semibold)).foregroundStyle(.white.opacity(0.7))
-                Slider(value: $state.temperature, in: 0...1, step: 0.1)
-            }
+            Text("计算机直接操作:开启后灵枢可直接看屏/点击/键入,会向系统申请辅助功能 + 屏幕录制授权。")
+                .font(.system(size: 10.5, weight: .medium)).foregroundStyle(.white.opacity(0.42))
+                .fixedSize(horizontal: false, vertical: true)
         }
         .frame(maxWidth: .infinity, alignment: .topLeading)
         .padding(16)
