@@ -64,7 +64,7 @@
 
 设备层不得硬编码任何模型供应商。新增 GPT、DeepSeek、MiniMax、Claude、自托管视觉/音频模型时，必须通过 `LingShuRealtimePerceptionGateway` 或其后续拆分出来的 provider 注册，不得直接改麦克风或摄像头服务。
 
-数字人动画属于“身体表现层”，不是新的决策层，也不得占用对话主区。`LingShuDigitalHumanExpression` / `LingShuDigitalHumanDirective` 描述光球的聆听、发声、思考、执行、警戒、确认、演示等表现态；`LingShuState+DigitalHuman` 只负责把大脑指令或真实运行状态转成表现快照；`LingShuDigitalHumanViews` 只消费快照，把左上角灵枢本体头像渲染成 Jarvis 风格光球。发声特效必须由真实输出电平驱动，而不是由“正在请求 TTS / isSpeaking”这种粗状态驱动；网络卡顿、缓冲饿住或无实际音频时，嘴部/声纹表现必须同步降为静默。后续接 Live2D、VRM、MetaHuman 或 3D 形象时，只能替换/新增表现 view 和渲染 runtime，不得让动画模块判断业务流程、创建任务或调用模型。
+灵枢动画属于“身体表现层”，不是新的决策层，也不得占用对话主区。`LingShuDigitalHumanExpression` / `LingShuDigitalHumanDirective` 描述光球的聆听、发声、思考、执行、警戒、确认、演示等表现态；`LingShuState+DigitalHuman` 只负责把大脑指令或真实运行状态转成表现快照；`LingShuDigitalHumanViews` 只消费快照，把左上角灵枢本体头像渲染成 Jarvis 风格光球。发声特效必须由真实输出电平驱动，而不是由“正在请求 TTS / isSpeaking”这种粗状态驱动；网络卡顿、缓冲饿住或无实际音频时，嘴部/声纹表现必须同步降为静默。后续接 Live2D、VRM、MetaHuman 或 3D 形象时，只能替换/新增表现 view 和渲染 runtime，不得让动画模块判断业务流程、创建任务或调用模型。
 
 认主流程属于实时感知网关后的身份锁能力，而不是麦克风、摄像头或某个模型供应商的私有逻辑。开启认主后，灵枢必须同时采集面容和声线样本，形成可替换的主人身份档案；身份锁开启后，触发词命中也必须先通过面容和声线联合确认，才能进入实时对话或自动执行任务。当前本地实现只作为可演示的轻量特征锁，后续 H100、云端声纹、人脸识别或多模态模型只能替换特征提取和校验适配层，不能改动主线程对话流程。
 
