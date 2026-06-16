@@ -26,6 +26,10 @@ struct LingShuRootView: View {
             }
         }
         .overlay(alignment: .top) { LingShuTakeoverOverlay(state: state) }   // 完全接管态遮罩 + 一键夺回(模块1)
+        .overlay(alignment: .topTrailing) {   // 常驻悬浮本体(右上角)+ 进入仪式
+            LingShuFloatingOrb(state: state, voice: voice, vision: vision, perceptionGateway: perceptionGateway)
+        }
+        .overlay { LingShuAutonomousIntroOverlay(state: state) }   // 自主开启瞬间:界面融化→离子化凝成本体落右上角
         .preferredColorScheme(.dark)
         .background(LingShuPreviewHost(controller: state.previewController))   // 大脑 open_preview → 弹出预览
         .sheet(item: $state.pendingShellApproval) { pending in
