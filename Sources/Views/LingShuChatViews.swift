@@ -65,7 +65,8 @@ struct ChatBubbleView: View {
                     .foregroundStyle(message.isUser ? .white.opacity(0.72) : Color.lingHolo.opacity(0.84))
 
                 if message.isLoading && !message.isUser {
-                    if message.taskRecordID != nil {
+                    // 已有流式正文(message.text 非空)→ 逐字显示;还没正文(工具执行中/未开始)→ 紧凑进度行。
+                    if message.taskRecordID != nil && message.text.isEmpty {
                         // 任务执行：主线程只显示「当前步骤 + 耗时」的紧凑状态（语音友好、不刷屏）；
                         // 点一下进任务子线程窗口看实时的多段执行过程——对齐 codex/claude 的状态行做法。
                         // per-task 活动:显示**这条消息自己任务**的进度,不读全局 missionTitle(根治多任务并行时串台)。

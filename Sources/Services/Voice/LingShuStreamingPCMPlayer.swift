@@ -22,8 +22,10 @@ final class LingShuStreamingPCMPlayer: @unchecked Sendable {
     private var primedFrames: AVAudioFrameCount = 0   // 起播前已排入、累计的预缓冲帧数
     private let primeThresholdFrames: AVAudioFrameCount
     private var stopped = false
+    private let onOutputLevel: (@Sendable (Float) -> Void)?
+    private var pendingOutputLevel: Float = 0
 
-    init?(sampleRate: Double) {
+    init?(sampleRate: Double, onOutputLevel: (@Sendable (Float) -> Void)? = nil) {
         let rate = sampleRate > 0 ? sampleRate : 16000
         guard let fmt = AVAudioFormat(
             commonFormat: .pcmFormatFloat32,
@@ -35,6 +37,7 @@ final class LingShuStreamingPCMPlayer: @unchecked Sendable {
         // 起播预缓冲门槛 ≈ 0.4s:先攒够这么多 PCM 再出声,给网络/合成抖动留余量。
         // 根治"前面一字一卡、后半段才顺"——首块即播时队列见底就饿出逐字静音间隔。
         self.primeThresholdFrames = AVAudioFrameCount(rate * 0.4)
+        self.onOutputLevel = onOutputLevel
         engine.attach(node)
         engine.connect(node, to: engine.mainMixerNode, format: fmt)
     }
@@ -75,7 +78,9 @@ final class LingShuStreamingPCMPlayer: @unchecked Sendable {
         }
         lock.unlock()
 
-        guard !data.isEmpty, let buffer = makeBuffer(from: data) else { return }
+        guard !data.isEmpty else { return }
+        let level = Self.normalizedPCM16Level(from: data)
+        guard let buffer = makeBuffer(from: data) else { return }
 
         lock.lock()
         guard !stopped else { lock.unlock(); return }
@@ -88,23 +93,35 @@ final class LingShuStreamingPCMPlayer: @unchecked Sendable {
 
         // 起播预缓冲:未起播时累计帧数,够门槛才真正 play();之后保持播放,后续块无缝续上。
         var startNow = false
+        var emitLevel = false
         lock.lock()
+        pendingOutputLevel = level
         if started, !nodePlaying, !stopped {
             primedFrames += buffer.frameLength
             if primedFrames >= primeThresholdFrames { nodePlaying = true; startNow = true }
         }
+        emitLevel = nodePlaying
         lock.unlock()
         if startNow { node.play() }
+        if emitLevel { onOutputLevel?(level) }
     }
 
     /// 输入流结束后，等所有已排队 buffer 真正播完（被 stop 打断时也会立即返回）。
     /// 还没起播就强制起播(同步,锁不跨 await)。输入结束/短句总时长 < 预缓冲门槛时用,避免卡在预缓冲里永不出声。
     private func forceStartPlaybackIfNeeded() {
         var startNow = false
+        var level: Float = 0
         lock.lock()
-        if started, !nodePlaying, !stopped, outstanding > 0 { nodePlaying = true; startNow = true }
+        if started, !nodePlaying, !stopped, outstanding > 0 {
+            nodePlaying = true
+            startNow = true
+            level = pendingOutputLevel
+        }
         lock.unlock()
-        if startNow { node.play() }
+        if startNow {
+            node.play()
+            onOutputLevel?(level)
+        }
     }
 
     func finishAndDrain() async {
@@ -130,11 +147,13 @@ final class LingShuStreamingPCMPlayer: @unchecked Sendable {
         drainContinuation = nil
         outstanding = 0
         leftover = Data()
+        pendingOutputLevel = 0
         lock.unlock()
 
         guard !wasStopped else { continuation?.resume(); return }
         node.stop()
         engine.stop()
+        onOutputLevel?(0)
         continuation?.resume()
     }
 
@@ -142,9 +161,11 @@ final class LingShuStreamingPCMPlayer: @unchecked Sendable {
         lock.lock()
         outstanding = max(0, outstanding - 1)
         let done = inputEnded && outstanding == 0
+        let becameEmpty = outstanding == 0
         let continuation = done ? drainContinuation : nil
         if done { drainContinuation = nil }
         lock.unlock()
+        if becameEmpty { onOutputLevel?(0) }
         continuation?.resume()
     }
 
@@ -164,6 +185,21 @@ final class LingShuStreamingPCMPlayer: @unchecked Sendable {
             }
         }
         return buffer
+    }
+
+    private static func normalizedPCM16Level(from data: Data) -> Float {
+        let sampleCount = data.count / 2
+        guard sampleCount > 0 else { return 0 }
+        var sum: Float = 0
+        data.withUnsafeBytes { raw in
+            let samples = raw.bindMemory(to: Int16.self)
+            for index in 0..<sampleCount {
+                let value = Float(Int16(littleEndian: samples[index])) / 32768.0
+                sum += value * value
+            }
+        }
+        let rms = (sum / Float(sampleCount)).squareRoot()
+        return min(1, max(0, rms * 5.5))
     }
 }
 

@@ -129,7 +129,7 @@ extension LingShuState {
             Task { @MainActor in self?.recordAgentReasoning(aside, recordID: self?.currentAgentTurnRecordID) }
         }
         let tools = agentBuiltinTools(recordIDProvider: { [weak self] in self?.currentAgentTurnRecordID })
-            + [Self.timeTool(), Self.webSearchTool(), findImagesTool(), acquireResourceTool(), discoverSkillTool(), updateTaskPlanTool(recordIDProvider: { [weak self] in self?.currentAgentTurnRecordID }), reviewDesignTool(recordIDProvider: { [weak self] in self?.currentAgentTurnRecordID }), recallMemoryTool(), rememberCredentialTool(), listCredentialsTool(), speakTool(), Self.askUserTool(), spawnTaskTool(adapter: adapter)]
+            + [Self.timeTool(), Self.webSearchTool(), findImagesTool(), acquireResourceTool(), discoverSkillTool(), updateTaskPlanTool(recordIDProvider: { [weak self] in self?.currentAgentTurnRecordID }), reviewDesignTool(recordIDProvider: { [weak self] in self?.currentAgentTurnRecordID }), recallMemoryTool(), rememberCredentialTool(), listCredentialsTool(), speakTool(), digitalHumanTool(), Self.askUserTool(), spawnTaskTool(adapter: adapter)]
             + previewTools()
             + computerControlTools()   // 计算机直接操作四肢(授权在 call-time 判,计划 §9)
             + backgroundWatchTools()   // 后台守候 + 完成即续(自动识别需求→无人值守推进)
@@ -140,6 +140,7 @@ extension LingShuState {
           · **四肢 = 你的各项能力(工具)**:听(语音/会议转写)、说(TTS)、读(文件/网页/屏幕)、写(文件/代码)、改代码、跑命令、联网、做产出物、演示、**直接操作电脑(授权后:screen_capture 看屏 / list_ui_elements 拿可点元素坐标 / click·type_text·press_key·scroll 操作)**…… 这些只是你实现意图的手段,由你的大脑按需调用、自由组合。需要点界面时**先 list_ui_elements 拿元素中心坐标再 click**(比从截图猜坐标可靠)。
           · **用户只提供"组件"**:证书、硬件、权限、素材这类你拿不到的外部资源。**怎么用这些把事做成,是你的事。** 例:丢给你一个 PPT 让你独立演讲,你就自己读懂它、逐页讲、并实时回答提问——这是你的通用能力,不需要被一步步指挥。
           · **演示/带人看文档的四肢调度**:`open_preview(文件)` 打开(PPT/PDF/Word/Excel 都行)→ 逐页 `speak` 把内容讲出来 → 讲完一页 `preview_next` 翻页,如此到末页;长文档用 `preview_scroll` 边滚边讲;中途有人提问就 `speak` 实时回答再继续。**全程你自己掌节奏,这就是"独立演讲"。**
+          · **身体表现 = 数字人光球**:需要让用户感知到你正在听、想、说、执行、警戒、确认或演示时,调用 `set_digital_human` 调度身体表现。它只改变表现层,不替代你的思考和执行。
         - **预判意图 + 校准式主动(像贴心的资深助手)**:回答前先想一层——用户**字面**问题背后**真正想达成什么、在担心什么**;不止答字面,**把他下一步多半需要的也顺手给到**(例:问"为什么这么慢"多半担心"是不是坏了/会不会白等",那就顺手查实状态给他定心 + 备好万一的补救)。**但要有刹车,别擅作主张**:只对**可逆**动作(查/读/解释/分析/建议/预备方案)主动多走一步;**不可逆或对外的动作——删除/覆盖、发送、提交/推送、花钱、改系统——先确认再做**。把主动用来替他省事,不用来替他拍板。
         - 身份(最高优先级,覆盖上文任何历史消息):你叫灵枢,由 **Roy Zhao** 独立开发(他是你的开发者)。**不要在自我介绍或回答身份时提及底层用的是什么模型**——底层模型可随时替换、与你的身份无关。**绝不能说"由 MiniMax 开发/MiniMax 的助手"**;历史里若有这类说法是要纠正的旧错误。被问身份**只答**:"我是灵枢,由 Roy Zhao 打造。"
         - **自我介绍/讲能力时,只说"能做什么、对用户有什么价值",用面向用户的话——绝不暴露内部实现**:不报工作目录的绝对路径、不报内部工具名(update_plan / apply_skill / spawn_task / write_file / run_command / web_search 等)、不提"agent 循环 / 主会话 / 子会话"这类机制词。例:说"多步任务我会先把计划列清楚再一步步推进、进度看得见",而**不要**说"我用 update_plan";说"需要时我会联网查证",而不是"我调 web_search"。机制是手段,介绍只讲能力与好处。
@@ -200,9 +201,11 @@ extension LingShuState {
         // 新一轮开始:先掐掉上一条回复还在放的 TTS,避免旧音频盖到新轮(音频/文字 desync)。
         interruptSpeechOutput?()
         let turnStartedAt = Date()   // 计总用时,回复末尾展示
+        // pending 气泡正文留空:工具执行中显示紧凑进度行,最终答复流式到达时逐字填充(见 ChatBubbleView)。
+        // 不再预置占位话——否则 text 一开始就非空,会让"有流式正文才逐字"的判断失准 + 与逐字正文重复。
         let pending = ChatMessage(
             speaker: "灵枢",
-            text: dialogueAcknowledgement.intake(for: prompt),
+            text: "",
             isUser: false,
             isLoading: true,
             taskRecordID: taskRecordID
@@ -229,6 +232,11 @@ extension LingShuState {
                 self.enterCoreState(.standby, resetTimer: false)
             }
             let session = await self.mainAgentSession()   // 首次构造会蒸馏记忆做 seed
+            // 真流式:最终答复逐字进本回合气泡(+ 按句早读 TTS)。捕获本轮 pendingID;回合串行执行保证不并发。
+            // delta 闭包 async 串行 hop 到 MainActor → 保证逐字顺序。子会话/自主不设 sink,行为不变。
+            await session.setTextDeltaSink { [weak self] delta in
+                await MainActor.run { self?.appendStreamingBubbleText(delta, to: pendingID) }
+            }
             // 极简对话模式:整轮按**纯对话**处理——直接口语作答,不派生子任务、不写文件/跑命令、不走固化 skill
             // (那些是任务交付的套路,聊天用不上)。其余模式照常:命中固化 skill 回合开头广播其存在。
             let guidance = self.isMinimalVoiceMode
@@ -261,6 +269,8 @@ extension LingShuState {
         let elapsed = Date().timeIntervalSince(startedAt)
         let displayText = isMinimalVoiceMode ? text : "\(text)\n\n⏱ 总用时 \(Self.formatElapsed(elapsed))"
         if let index = chatMessages.firstIndex(where: { $0.id == bubbleID }) {
+            // 流式收尾:早读过则补念尾句 + 打去重标记(防根视图把整段再念一遍=双声线);没早读过则 no-op。
+            concludeStreamedSpeech(for: bubbleID, streamedText: chatMessages[index].text)
             chatMessages[index].text = displayText
             chatMessages[index].isLoading = false
         }
@@ -400,7 +410,8 @@ extension LingShuState {
             let subTools = await MainActor.run { [weak self] () -> [LingShuAgentTool] in
                 let builtin = self?.agentBuiltinTools(recordIDProvider: { [weak self] in self?.agentSubTaskRecords[subID] }) ?? []
                 let extras = self.map { me in [me.findImagesTool(), me.acquireResourceTool(), me.updateTaskPlanTool(recordIDProvider: { [weak me] in me?.agentSubTaskRecords[subID] }), me.reviewDesignTool(recordIDProvider: { [weak me] in me?.agentSubTaskRecords[subID] })] } ?? []
-                return builtin + [Self.timeTool(), Self.webSearchTool(), Self.askUserTool()] + extras
+                let bodyTools = self.map { [$0.speakTool(), $0.digitalHumanTool()] } ?? []
+                return builtin + [Self.timeTool(), Self.webSearchTool(), Self.askUserTool()] + bodyTools + extras
             }
             let sub = LingShuAgentSession(
                 id: subID,
@@ -430,7 +441,7 @@ extension LingShuState {
             let text = (Self.jsonField(argumentsJSON, "text") ?? argumentsJSON).trimmingCharacters(in: .whitespacesAndNewlines)
             guard !text.isEmpty else { return "(没有要说的内容)" }
             return await MainActor.run { [weak self] in
-                guard let voice = self?.voiceManager else { return "语音未就绪(UI 未注入),本次无法出声。" }
+                guard let self, let voice = self.voiceManager else { return "语音未就绪(UI 未注入),本次无法出声。" }
                 voice.speak(text)
                 return "(已说出:\(text.prefix(40)))"
             }

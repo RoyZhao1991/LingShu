@@ -48,12 +48,15 @@ struct LingShuRootView: View {
             state.streamingSentenceSpeaker = { [weak state, weak voice, weak perceptionGateway] sentence in
                 guard let state, let voice,
                       state.voiceOutputEnabled || state.isMinimalVoiceMode else { return }
-                voice.speakQueued(sentence)
+                voice.speakStreamingSentence(sentence)   // 增量无缝流式发声(并行预取+背靠背播)
                 perceptionGateway?.ingestSpeechOutput(sentence)
             }
             // 新一轮开始时掐掉上一条朗读(防音频/文字 desync)。
             state.interruptSpeechOutput = { [weak voice] in voice?.stopSpeaking() }
             state.voiceManager = voice   // 供会议对话控制器经 MCP/UI 驱动
+            // 把持久化的「本地模式」偏好应用到 voiceManager(didSet 不会为初始值触发,启动时手动应用一次)。
+            state.applyASRLocalMode()
+            state.applyTTSLocalMode()
 
             perceptionGateway.registerCloudPerceptionRoute(client: state.cloudPerceptionClient)
             [0.1, 0.8, 1.6].forEach { delay in
@@ -94,8 +97,11 @@ struct LingShuRootView: View {
     /// 灵枢新回复就播报。集中在根视图，确保普通界面和极简语音模式都会发声。
     private func speakLatestReplyIfNeeded(_ messages: [ChatMessage]) {
         let shouldSpeak = state.voiceOutputEnabled || state.isMinimalVoiceMode
+        // 只看**最后一条**消息:它还在加载(本轮流式中)或是用户消息就不念,等它定稿。
+        // 旧逻辑 last(where:!isLoading) 会在本轮气泡 loading 时落到**上一轮**回复、把它再念一遍,
+        // 还覆盖 lastSpokenMessageID 去重标记 → 本轮 finalize 设的去重失效 → 又被整段 speak()(→ 某段超时降级)。
         guard shouldSpeak,
-              let message = messages.last(where: { !$0.isUser && !$0.isLoading }),
+              let message = messages.last, !message.isUser, !message.isLoading,
               message.id != state.lastSpokenMessageID else {
             return
         }
@@ -177,16 +183,11 @@ struct LingShuStableTopBar: View {
         // 不再被压缩换行。
         let dense = headerWidth < 1300      // 隐藏感知值 / STATE·AUTO·TRUST / 副标题
         let compact = headerWidth < 1080    // 进一步：导航也只剩图标
+        let digitalHuman = state.digitalHumanSnapshot(voice: voice, vision: vision, perceptionGateway: perceptionGateway)
         HStack(spacing: 16) {
             HStack(spacing: 11) {
-                ZStack {
-                    LingShuHoloCoreView(
-                        color: state.coreState.color,
-                        intensity: state.coreState == .standby ? 0.12 : 0.8,
-                        isAbnormal: state.coreState == .abnormal
-                    )
-                    .frame(width: 34, height: 34)
-                }
+                LingShuDigitalHumanMiniOrb(snapshot: digitalHuman, audioLevel: Double(voice.outputLevel))
+                    .frame(width: 48, height: 48)
 
                 VStack(alignment: .leading, spacing: 1) {
                     Text("灵枢")
@@ -250,6 +251,7 @@ struct LingShuStableTopBar: View {
             }
             LingShuHUDReadout(label: "AUTO", value: state.autonomousRunDisplayStatus, color: state.autonomousRun.isActive ? .orange : .lingFaint)
             LingShuHUDReadout(label: "TRUST", value: "\(state.trustScore)%", color: .lingHolo)
+                .help(state.trustBreakdown)
 
             Button {
                 if !state.autonomousRun.isActive {

@@ -91,6 +91,17 @@ final class VoiceIOManager: ObservableObject {
     /// 排队/排空逻辑在 VoiceIOManager+SpeechQueue.swift。
     var speechQueue: [String] = []
     var speechQueueDrainTask: Task<Void, Never>?
+    /// 增量无缝流式发声:句子陆续到达→并行预取各句 TTS WAV→按句序背靠背灌进**一个持续 PCM 播放器**,无缝顺序播放。
+    /// 逻辑在 VoiceIOManager+StreamingSpeechQueue.swift。比逐句 speakQueued(每句等一次完整网络往返)流畅。
+    var streamingSpeechPlayer: LingShuStreamingPCMPlayer?
+    var streamingSpeechDrainTask: Task<Void, Never>?
+    var streamingSpeechTexts: [Int: String] = [:]            // 句序号→文本(drainer 按窗口预取,不一上来全发)
+    var streamingSpeechPrefetch: [Int: Task<Data, Error>] = [:]
+    var streamingSpeechNextIndex = 0     // 下一句分配的序号(feed 时递增)
+    var streamingSpeechNextToPlay = 0    // drainer 下一个要播的序号(保证按句序无缝)
+    var streamingSpeechEnded = false     // 已收到结束信号(没有更多句子)
+    var streamingSpeechFirstSampleRate: Double = 0           // 首段采样率;后续段不一致则跳过(防音高/噪音)
+    var streamingSpeechConfig: (provider: LingShuSpeechOutputProviderDescriptor, endpoint: String, apiKey: String, persona: LingShuSpeechPersona)?
     let bundledRuntimeConfig = LingShuBundledRuntimeConfig()
     let credentialStore = LingShuCredentialStore()
 
@@ -474,6 +485,7 @@ final class VoiceIOManager: ObservableObject {
 
     /// 立即停止 TTS 播报（用户打断时调用）；同时清空分句早读队列。
     func stopSpeaking() {
+        cancelStreamingSpeech()   // 同时停掉增量流式发声(打断/新回合)
         speechQueue.removeAll()
         speechQueueDrainTask?.cancel()
         speechQueueDrainTask = nil

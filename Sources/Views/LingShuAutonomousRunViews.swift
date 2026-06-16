@@ -29,7 +29,7 @@ struct LingShuAutonomousRunPanel: View {
                 Text("独立运行模式")
                     .font(.system(size: 15.5, weight: .semibold))
                     .foregroundStyle(.white)
-                Text("目标驱动 · 动态 runbook · 环境自检 · 人工接管")
+                Text("常驻数字人 · 能听能说能思考能动手 · 人工接管")
                     .font(.system(size: 11.5, weight: .medium))
                     .foregroundStyle(.white.opacity(0.52))
             }
@@ -41,15 +41,8 @@ struct LingShuAutonomousRunPanel: View {
     }
 
     private var idleBody: some View {
-        let objectiveEmpty = state.autonomousObjectiveDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        return VStack(alignment: .leading, spacing: 14) {
-            Text("给灵枢一个目标(可上传文件 + 写指令),它会先做环境检测、自检和动态规划；授权后自主推进。独立运行=授予完整电脑控制权,推进中不再要授权(删/改系统级敏感文件除外)。")
-                .font(.system(size: 12.5, weight: .medium))
-                .foregroundStyle(.white.opacity(0.62))
-                .fixedSize(horizontal: false, vertical: true)
-
-            objectiveInput
-
+        // 极简:默认完整授权(完整电脑控制),不再选权限档、不堆文字说明。一个素材入口 + 一个大按钮。
+        VStack(alignment: .leading, spacing: 14) {
             if !state.pendingAttachments.isEmpty {
                 LingShuAttachmentTray(state: state)
             }
@@ -58,7 +51,7 @@ struct LingShuAutonomousRunPanel: View {
                 Button {
                     state.presentAttachmentPicker()
                 } label: {
-                    Label("上传文件", systemImage: "paperclip")
+                    Label("带点素材(可选)", systemImage: "paperclip")
                         .font(.system(size: 11.5, weight: .bold))
                         .foregroundStyle(Color.lingHolo)
                         .frame(height: 30)
@@ -70,53 +63,39 @@ struct LingShuAutonomousRunPanel: View {
                 Spacer()
             }
 
-            permissionPicker
-
-            // 贾维斯式启动按钮:大、居中、科技感(呼吸弧环,TimelineView 自驱不拖累状态)。空目标禁用并提示。
+            // 贾维斯式上岗按钮:大、居中、科技感。默认完整授权,点一下即上岗。
             JarvisLaunchButton(
-                title: objectiveEmpty ? "请先填写目标" : "启动独立运行",
-                subtitle: objectiveEmpty ? "AUTONOMOUS · 需要目标" : "AUTONOMOUS · 自主推进",
-                isEnabled: !objectiveEmpty
+                title: "让灵枢上岗",
+                subtitle: "AUTONOMOUS · 完整授权 · 数字人在岗",
+                isEnabled: true
             ) {
-                state.prepareAutonomousRun(objective: state.autonomousObjectiveDraft)
+                state.goLiveAsStandingPerson()
             }
-        }
-    }
-
-    /// 独立运行专门目标输入框(多行,带占位提示);与对话主输入框解耦。
-    private var objectiveInput: some View {
-        ZStack(alignment: .topLeading) {
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(Color.white.opacity(0.05))
-                .overlay { RoundedRectangle(cornerRadius: 10, style: .continuous).stroke(Color.lingHolo.opacity(0.18), lineWidth: 1) }
-            if state.autonomousObjectiveDraft.isEmpty {
-                Text("例:把桌面上的季度数据整理成一份汇报 PPT 并自检到达标")
-                    .font(.system(size: 12.5, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.34))
-                    .padding(.horizontal, 13)
-                    .padding(.vertical, 12)
-                    .allowsHitTesting(false)
-            }
-            TextEditor(text: $state.autonomousObjectiveDraft)
-                .font(.system(size: 12.5, weight: .medium))
-                .foregroundStyle(.white.opacity(0.9))
-                .scrollContentBackground(.hidden)
-                .padding(.horizontal, 9)
-                .padding(.vertical, 7)
-                .frame(minHeight: 64, maxHeight: 110)
         }
     }
 
     private var activeBody: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        let standing = state.autonomousRun.objective.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        return VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .top, spacing: 16) {
                 VStack(alignment: .leading, spacing: 8) {
-                    metric(label: "目标", value: state.autonomousRun.objective.isEmpty ? "等待目标" : state.autonomousRun.objective, icon: "scope")
+                    if standing {
+                        metric(label: "形态", value: "常驻数字人 · 在岗", icon: "person.wave.2")
+                    } else {
+                        metric(label: "目标", value: state.autonomousRun.objective.isEmpty ? "等待目标" : state.autonomousRun.objective, icon: "scope")
+                    }
                     metric(label: "权限", value: state.autonomousRun.permissionLevel.rawValue, icon: "lock.shield")
                     metric(label: "状态", value: state.autonomousRun.statusLine, icon: "waveform.path.ecg")
                 }
                 Spacer(minLength: 12)
                 controls
+            }
+
+            if standing {
+                Text("在岗待命:直接在对话里说话或发指令,我就理解→思考→动手。")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.5))
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
             if let environment = state.autonomousRun.environment {
@@ -133,21 +112,10 @@ struct LingShuAutonomousRunPanel: View {
         }
     }
 
-    private var permissionPicker: some View {
-        // 左对齐到标题同一起始 x:隐藏空 label(否则段控会被 label 占位顶偏)+ 整条铺满前缘(计划 §6)。
-        Picker("", selection: $state.autonomousPermissionLevel) {
-            ForEach(LingShuAutonomousPermissionLevel.allCases) { level in
-                Text(level.rawValue).tag(level)
-            }
-        }
-        .labelsHidden()
-        .pickerStyle(.segmented)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .help(state.autonomousPermissionLevel.detail)
-    }
-
     private var controls: some View {
-        HStack(spacing: 8) {
+        // 常驻数字人无目标 → 重检/重建走 goLive(走 prepareAutonomousRun 会因空目标被拒)。
+        let standing = state.autonomousRun.objective.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        return HStack(spacing: 8) {
             switch state.autonomousRun.phase {
             case .ready:
                 compactButton("授权执行", icon: "play.fill", tint: .lingHolo) { state.authorizeAutonomousRun() }
@@ -156,9 +124,13 @@ struct LingShuAutonomousRunPanel: View {
             case .paused:
                 compactButton("继续", icon: "play.fill", tint: .lingHolo) { state.resumeAutonomousRun() }
             case .blocked:
-                compactButton("重检", icon: "arrow.clockwise", tint: .orange) { state.prepareAutonomousRun(objective: state.autonomousRun.objective) }
+                compactButton("重检", icon: "arrow.clockwise", tint: .orange) {
+                    if standing { state.goLiveAsStandingPerson() } else { state.prepareAutonomousRun(objective: state.autonomousRun.objective) }
+                }
             case .idle, .probing, .planning, .completed:
-                compactButton("重建", icon: "sparkles", tint: .lingHolo) { state.prepareAutonomousRun(objective: state.autonomousRun.objective) }
+                compactButton("重建", icon: "sparkles", tint: .lingHolo) {
+                    if standing { state.goLiveAsStandingPerson() } else { state.prepareAutonomousRun(objective: state.autonomousRun.objective) }
+                }
             }
             compactButton("停止", icon: "stop.fill", tint: .red) { state.stopAutonomousRun() }
         }

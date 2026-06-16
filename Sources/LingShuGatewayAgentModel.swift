@@ -63,6 +63,10 @@ final class LingShuGatewayAgentModel: LingShuAgentModel, @unchecked Sendable {
             if Task.isCancelled { return .text("（本轮已被取消）") }
             do {
                 let reply = try await client.send(request)
+                // 前缀缓存可观测:命中多少输入 token 写进诊断日志(验证缓存确实生效 + 省了多少)。
+                if let cached = reply.cachedTokens, cached > 0 {
+                    lingShuControlLog("prefix-cache hit=\(cached)/\(reply.promptTokens ?? -1) input tokens | provider=\(provider) model=\(model)")
+                }
                 if !reply.toolCalls.isEmpty {
                     // 边做边想:把模型发起动作时的旁白上报(供执行流像 codex 一样显示「分析→动作」)。
                     let aside = LingShuReasoningText.stripThinkTags(reply.text).trimmingCharacters(in: .whitespacesAndNewlines)
@@ -86,6 +90,41 @@ final class LingShuGatewayAgentModel: LingShuAgentModel, @unchecked Sendable {
         }
         // 基础设施中断(非任务失败):重试耗尽 → 返回 .failed,循环据此 .interrupted 并保留上下文,等重连自动续跑。
         return .failed(reason: "模型调用连续 \(maxAttempts) 次未成功:\(lastError?.localizedDescription ?? "未知原因")。可能是主通道不可达或网络问题——已暂停,联网后自动接着跑。")
+    }
+
+    /// 流式应答:最终答复逐字经 `onTextDelta` 回调(进 UI 气泡 + 按句早读 TTS)。工具轮 content 基本为空、
+    /// 不进气泡,只累积 tool_calls 后返回 .toolCalls。仅 chat/completions 形态真流式,其余回退非流式。
+    func respondStreaming(messages: [LingShuAgentMessage], tools: [LingShuAgentTool], onTextDelta: @Sendable (String) async -> Void) async -> LingShuAgentModelResponse {
+        guard client.supportsAgentStreaming(provider: provider, endpoint: endpoint, protocolName: protocolName) else {
+            return await respond(messages: messages, tools: tools)
+        }
+        if Task.isCancelled { return .text("（本轮已被取消）") }
+        let request = LingShuRemoteModelRequest(
+            provider: provider, model: model, endpoint: endpoint, protocolName: protocolName,
+            apiKey: apiKey, systemPrompt: "", userPrompt: "", temperature: temperature,
+            stream: true, timeout: timeout, continuationToken: nil,
+            conversationMessages: messages.map(Self.toModelMessage), tools: tools.map(Self.toToolDefinition)
+        )
+        do {
+            let reply = try await client.streamAgent(request, onContentDelta: onTextDelta)
+            if let cached = reply.cachedTokens, cached > 0 {
+                lingShuControlLog("prefix-cache hit=\(cached)/\(reply.promptTokens ?? -1) input tokens (stream) | provider=\(provider) model=\(model)")
+            }
+            if !reply.toolCalls.isEmpty {
+                let aside = LingShuReasoningText.stripThinkTags(reply.text).trimmingCharacters(in: .whitespacesAndNewlines)
+                if !aside.isEmpty { onReasoning?(aside) }
+                return .toolCalls(reply.toolCalls.map {
+                    LingShuAgentToolCall(id: $0.id, name: $0.name, argumentsJSON: $0.arguments)
+                })
+            }
+            return .text(LingShuReasoningText.stripThinkTags(reply.text))
+        } catch is CancellationError {
+            return .text("（本轮已被取消）")
+        } catch {
+            lingShuControlLog("agent stream error: \(error) | endpoint=\(endpoint) provider=\(provider) model=\(model)")
+            // 流式不内部重试(重试会让已逐字的气泡重复):失败当基础设施中断 → 循环 .interrupted → 挂起,重连后续跑。
+            return .failed(reason: "流式连接中断:\(error.localizedDescription)。已暂停,联网后自动接着跑。")
+        }
     }
 
     // MARK: - 类型互转

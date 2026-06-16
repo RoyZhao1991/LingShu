@@ -7,7 +7,7 @@ extension VoiceIOManager {
     /// 正在播报或还有排队句子未播完：连续通话用它判断"灵枢还在说话"，
     /// 避免分句间隙被误判为播报结束而提前重启麦克风（回声误触发）。
     var isSpeakingOrQueued: Bool {
-        isSpeaking || !speechQueue.isEmpty || speechQueueDrainTask != nil
+        isSpeaking || !speechQueue.isEmpty || speechQueueDrainTask != nil || streamingSpeechDrainTask != nil
     }
 
     /// 排队播报：供流式分句早读使用——不打断正在播的句子，按顺序续读。

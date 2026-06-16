@@ -27,6 +27,10 @@ private final class AudioTapEmitThrottle: @unchecked Sendable {
 // 麦克风/播放的实时电平与音频缓冲处理。从 VoiceIOManager 拆出以守住 800 行硬上限。
 @MainActor
 extension VoiceIOManager {
+    var hasAudibleOutput: Bool {
+        outputLevel >= 0.035
+    }
+
     /// 输出电平驱动：AVAudioPlayer 路径用真实音量计；Apple 合成器无音量计时用与语音同步的活跃动画值。
     func startOutputMetering() {
         outputMeterTask?.cancel()
@@ -38,10 +42,17 @@ extension VoiceIOManager {
                     let power = player.averagePower(forChannel: 0) // dB，约 -160...0
                     let normalized = max(0, min(1, (power + 50) / 50))
                     self.outputLevel = normalized
-                } else {
-                    // Apple 合成器：无逐帧音量，用活跃波动表达“正在发声”。
+                } else if self.activeStreamingPlayer?.isPlaying == true || self.streamingSpeechPlayer?.isPlaying == true {
+                    // 流式 PCM 播放器会按真实 PCM 块回报 outputLevel；这里不要用假波形覆盖它。
+                    if self.outputLevel < 0.01 { self.outputLevel = 0 }
+                } else if self.speechSynthesizer.isSpeaking {
+                    // Apple 合成器没有逐帧音量计，只在系统合成器确实开始说话后给同步波动；
+                    // 等待云端 TTS 或网络卡顿时保持 0，避免嘴部假亮。
                     phase += 0.5
                     self.outputLevel = 0.35 + 0.4 * abs(sin(phase))
+                } else {
+                    self.outputLevel = max(0, self.outputLevel * 0.35)
+                    if self.outputLevel < 0.01 { self.outputLevel = 0 }
                 }
                 try? await Task.sleep(nanoseconds: 50_000_000)
             }

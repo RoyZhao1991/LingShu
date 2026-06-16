@@ -138,6 +138,7 @@ extension VoiceIOManager {
                 self.activeStreamingPlayer = nil
                 self.speechAudioPlayer?.stop()
                 let reason = "云端男声请求失败（\(Self.shortFailureReason(error))），已降级本机语音"
+                lingShuControlLog("TTS speak() 降级本机: \(Self.shortFailureReason(error)) | 文本\(cleanedText.count)字 段数=\(LingShuSpeechSegmenter.segments(from: cleanedText).count) 「\(cleanedText.prefix(20))」")
                 self.cloudVoiceDegradedReason = reason
                 self.setOutputStatus(reason)
                 self.speakWithAppleSpeech(cleanedText, statusAlreadySet: true, generation: gen)
@@ -288,7 +289,9 @@ extension VoiceIOManager {
                 if player == nil {
                     headerBytes.append(byte)
                     guard let located = LingShuStreamingWAVHeader.locate(in: headerBytes) else { continue }
-                    guard let started = LingShuStreamingPCMPlayer(sampleRate: located.sampleRate) else {
+                    guard let started = LingShuStreamingPCMPlayer(sampleRate: located.sampleRate, onOutputLevel: { [weak self] level in
+                        Task { @MainActor in self?.outputLevel = level }
+                    }) else {
                         throw LingShuVoiceError.embeddedRuntimeLaunchFailed("流式播放器初始化失败")
                     }
                     try started.start()
@@ -510,7 +513,7 @@ extension VoiceIOManager {
         }
     }
 
-    private func resolvedSpeechOutputAPIKey(for provider: LingShuSpeechOutputProviderDescriptor) -> String {
+    func resolvedSpeechOutputAPIKey(for provider: LingShuSpeechOutputProviderDescriptor) -> String {
         let explicitKey = speechOutputAPIKey.trimmingCharacters(in: .whitespacesAndNewlines)
         guard explicitKey.isEmpty, provider.kind == .dataNetSpeakerTTS else {
             return explicitKey

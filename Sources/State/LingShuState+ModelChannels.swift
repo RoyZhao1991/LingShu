@@ -29,6 +29,11 @@ extension LingShuState {
     nonisolated static let asrCustomKey = "asr:custom"
     nonisolated static func ttsChannelKey(_ id: String) -> String { "tts:\(id)" }
 
+    // MARK: - 感知通道默认值(视觉/听觉走数据网关专项接口;配置项留空时展示这些真实默认,而不是空白)
+    nonisolated static let perceptionGatewayEndpoint = "https://model-gateway.datanet.bj.cn/v1"
+    nonisolated static let visionDefaultModel = "qwen2.5-vl"
+    nonisolated static let asrDefaultModel = "swds-realtime-hearing"
+
     func channelValidation(_ key: String) -> LingShuChannelValidation? { channelValidations[key] }
     func isChannelValidated(_ key: String) -> Bool { channelValidations[key]?.ok == true }
     func isChannelValidating(_ key: String) -> Bool { validatingChannels.contains(key) }
@@ -66,6 +71,14 @@ extension LingShuState {
     /// 可切换的文本通道(子线程 picker / 模态用):已配置 且(校验通过 或 就是当前在用的)。
     func switchableTextProviders() -> [ModelProviderPreset] {
         configuredTextProviders().filter { $0.name == modelProvider || isChannelValidated(Self.brainChannelKey($0.name)) }
+    }
+
+    /// 某文本通道的前缀缓存策略(供 UI 展示「切到它会怎么启用缓存」——OpenAI 系自动 / Anthropic 显式)。
+    /// 策略由 requestFormat(按 provider/protocol/endpoint 推导)决定,所以换模型自动选对,无需各处改代码。
+    func prefixCacheStrategy(for preset: ModelProviderPreset) -> LingShuPrefixCacheStrategy {
+        let ep = (preset.name == modelProvider) ? endpoint : preset.endpoint
+        let format = LingShuModelGateway().requestFormat(provider: preset.name, endpoint: ep, protocolName: preset.protocolName)
+        return LingShuPrefixCache.strategy(for: format)
     }
 
     // MARK: - 语音合成 TTS 通道(口)
@@ -171,6 +184,29 @@ extension LingShuState {
             detail = ok ? "凭据已配置 · 数据网关" : "缺数据网关 token"
         }
         channelValidations[key] = .init(ok: ok, detail: detail, at: Date())
+    }
+
+    // MARK: - 本地模式应用(耳/口的本机兜底显式开关:本机有方案的能力让用户确认走不走本机)
+    /// 语音口:本地模式开=系统语音;关时若当前是系统语音则切回云端情绪语音。
+    func applyTTSLocalMode() {
+        guard let vm = voiceManager else { return }
+        if ttsLocalModeEnabled {
+            vm.speechOutputProvider = .appleSpeech
+        } else if vm.speechOutputProvider.kind == .appleSpeech {
+            vm.speechOutputProvider = .dataNetSpeakerTTS
+            vm.speechOutputEndpoint = LingShuSpeechOutputProviderDescriptor.dataNetSpeakerTTS.defaultEndpoint
+        }
+    }
+
+    /// 听觉:本地模式开=本机识别(Apple Speech);关=偏好云端实时 ASR 适配器。
+    /// 注:当前实时麦克风链路以本机识别为主,云端 ASR 经数据网关用于音频片段感知。
+    func applyASRLocalMode() {
+        guard let vm = voiceManager else { return }
+        if asrLocalModeEnabled {
+            vm.transcriptionProvider = .appleSpeech
+        } else if vm.transcriptionProvider.kind == .appleSpeech {
+            vm.transcriptionProvider = .externalRealtimeAdapter
+        }
     }
 
     /// 校验用小测试图(64×64 纯蓝 PNG base64,内嵌避免跨线程画图)。

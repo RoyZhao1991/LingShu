@@ -59,6 +59,15 @@ enum LingShuAgentModelResponse: Sendable {
 /// 编排循环依赖的模型接口(注入,便于真实网关与 mock 替换)。
 protocol LingShuAgentModel: Sendable {
     func respond(messages: [LingShuAgentMessage], tools: [LingShuAgentTool]) async -> LingShuAgentModelResponse
+    /// 流式变体:`onTextDelta` 在最终答复轮逐字回调(async 串行 → 保证到 UI 的顺序)。
+    /// 默认回退非流式 `respond`(脚本模型/测试/不支持流式的供应商无需各自实现)。
+    func respondStreaming(messages: [LingShuAgentMessage], tools: [LingShuAgentTool], onTextDelta: @Sendable (String) async -> Void) async -> LingShuAgentModelResponse
+}
+
+extension LingShuAgentModel {
+    func respondStreaming(messages: [LingShuAgentMessage], tools: [LingShuAgentTool], onTextDelta: @Sendable (String) async -> Void) async -> LingShuAgentModelResponse {
+        await respond(messages: messages, tools: tools)
+    }
 }
 
 /// 脚本化模型:按预设序列逐轮返回。用于 dev/演示(确定性,不依赖网络)。
@@ -104,6 +113,9 @@ actor LingShuAgentSession {
     private var pendingCorrection: String?
     /// 子任务完成后回灌主线程的**简报**(信息同步,非完整上下文同步):在回合边界作为 system 提示注入。
     private var pendingBriefings: [String] = []
+    /// 最终答复逐字流式的接收口(注入)。**非 nil 才走流式**——只有主会话设它(逐字进气泡 + 按句早读 TTS);
+    /// 子会话/自主/测试不设 → 继续走非流式 `respond`,行为零变更。
+    private var textDeltaSink: (@Sendable (String) async -> Void)?
 
     init(
         id: String,
@@ -128,6 +140,11 @@ actor LingShuAgentSession {
     }
 
     var isBlocked: Bool { pendingBlockToolCallID != nil }
+
+    /// 设置/清除最终答复逐字流式接收口。只有主会话调它(把 delta 接进 UI 气泡);传 nil 即关闭流式。
+    func setTextDeltaSink(_ sink: (@Sendable (String) async -> Void)?) {
+        textDeltaSink = sink
+    }
 
     /// 投入一条用户输入,跑完整循环直到模型收尾、卡住或到轮次上限。
     func send(_ userText: String) async -> LingShuAgentRunResult {
@@ -243,7 +260,13 @@ actor LingShuAgentSession {
             _ = consumePendingCorrection()
             step += 1
             turnsUsed += 1
-            let response = await model.respond(messages: messages, tools: tools)
+            // 设了 delta 接收口(仅主会话)→ 走流式,最终答复逐字回调进气泡;否则非流式(子会话/自主/测试,零变更)。
+            let response: LingShuAgentModelResponse
+            if let sink = textDeltaSink {
+                response = await model.respondStreaming(messages: messages, tools: tools, onTextDelta: sink)
+            } else {
+                response = await model.respond(messages: messages, tools: tools)
+            }
             switch response {
             case .failed(let reason):
                 // 基础设施中断(网络/网关不可达):**不收尾、不污染上下文**——绝不追加假的"调用失败"助手消息,

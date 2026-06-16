@@ -8,6 +8,8 @@ private enum LingShuPreferenceKeys {
     static let modelProvider = "lingshu.model.provider"
     static let modelName = "lingshu.model.name"
     static let modelEndpoint = "lingshu.model.endpoint"
+    static let asrLocalMode = "lingshu.perception.asrLocalMode"
+    static let ttsLocalMode = "lingshu.perception.ttsLocalMode"
 }
 
 private enum LingShuPreferenceDefaults {
@@ -45,8 +47,8 @@ final class LingShuState: ObservableObject {
     @Published var prompt: String = ""
     @Published var isListening = false
     @Published var missionTitle = "待机中"
-    @Published var missionStatus = "我在。能力池已注册，等待你的目标。"
-    @Published var trustScore = 91
+    @Published var missionStatus = "我在。能力池已注册，随时待命，等你开口。"
+    // trustScore（顶栏/核心区 TRUST）现为**真实计算的就绪度**，不再写死——见 LingShuState+RuntimeStatus.swift。
     @Published var coreState: LingShuCoreState = .standby
     // 每秒变化的计时量不做 @Published：它们只服务于超时判断与文案拼装，
     // 界面上的实时读数由 TimelineView 局部自刷新，避免每秒让全部观察者失效。
@@ -93,6 +95,21 @@ final class LingShuState: ObservableObject {
     @Published var isModelExecuting = false
     @Published var voiceOutputEnabled = true
     @Published var voiceWakeListeningEnabled = false
+    /// 听觉·本地模式：开=强制本机识别（Apple Speech，实时麦克风兜底永远可用）；关=偏好数据网关云端 ASR。
+    /// 本机有兜底方案的能力（耳/口）给用户一个显式开关，确认到底走不走本机，而不是悄悄自动降级。
+    @Published var asrLocalModeEnabled = LingShuPreferenceDefaults.bool(forKey: LingShuPreferenceKeys.asrLocalMode, defaultValue: true) {
+        didSet {
+            UserDefaults.standard.set(asrLocalModeEnabled, forKey: LingShuPreferenceKeys.asrLocalMode)
+            applyASRLocalMode()
+        }
+    }
+    /// 语音口·本地模式：开=强制 macOS 系统语音；关=偏好数据网关情绪语音（不可用时仍兜底本机）。
+    @Published var ttsLocalModeEnabled = LingShuPreferenceDefaults.bool(forKey: LingShuPreferenceKeys.ttsLocalMode, defaultValue: false) {
+        didSet {
+            UserDefaults.standard.set(ttsLocalModeEnabled, forKey: LingShuPreferenceKeys.ttsLocalMode)
+            applyTTSLocalMode()
+        }
+    }
     @Published var requiresVoiceWakeWord = LingShuPreferenceDefaults.bool(
         forKey: LingShuPreferenceKeys.requiresVoiceWakeWord,
         defaultValue: true
@@ -162,6 +179,8 @@ final class LingShuState: ObservableObject {
     @Published var pendingAttachments: [LingShuAttachment] = []
     /// 极简语音模式：全屏只显示输入/输出两条音频波形，纯语音对话。
     @Published var isMinimalVoiceMode = false
+    /// 数字人身体表现层：由大脑/工具临时下发的表现指令；为空时由实时状态自动推导。
+    @Published var digitalHumanDirective: LingShuDigitalHumanDirective?
 
     let mainThreadKernel = LingShuMainThreadKernel()
     let memoryService = LingShuMemoryService()
@@ -581,6 +600,7 @@ final class LingShuState: ObservableObject {
         refreshRemoteSessionStatus()
         tickMainRemoteConnectionGuard(now: now)
         tickAutonomousRun(now: now)
+        expireDigitalHumanDirectiveIfNeeded(now: now)
 
         if hasActiveModelCall, let lastModelHeartbeatAt {
             modelHeartbeatIdleSeconds = max(0, Int(now.timeIntervalSince(lastModelHeartbeatAt)))
@@ -688,7 +708,12 @@ final class LingShuState: ObservableObject {
     /// 网关计量：记录本轮调用消耗的 token，供前端展示用量。
     func recordModelUsage(_ reply: LingShuRemoteModelReply, stage: String) {
         guard let tokens = reply.totalTokens else { return }
-        appendTrace(kind: .system, actor: "用量", title: stage, detail: "本轮消耗 \(tokens) tokens（网关计量）。")
+        var detail = "本轮消耗 \(tokens) tokens（网关计量）。"
+        if let cached = reply.cachedTokens, cached > 0 {
+            let prompt = reply.promptTokens ?? 0
+            detail += " 前缀缓存命中 \(cached)" + (prompt > 0 ? "/\(prompt)" : "") + " 输入 token（按缓存价计费，省钱）。"
+        }
+        appendTrace(kind: .system, actor: "用量", title: stage, detail: detail)
     }
 
     /// 感知专项接口客户端：仅当当前通道是数据网络网关且已配置 token 时可用。
@@ -901,6 +926,11 @@ final class LingShuState: ObservableObject {
             taskRecordID: taskRecordID
         ) {
             return autonomousResponse
+        }
+
+        // 常驻数字人在岗时,对话/语音直接喂给在岗执行会话(带其权限级与四肢),让它真去做。
+        if let standingAck = handleStandingPersonInputIfNeeded(prompt: trimmedPrompt, taskRecordID: taskRecordID) {
+            return standingAck
         }
 
         // 续接/追问(已有记录)→ 直接主回合,不分诊(继续这件事,不重新派发)。

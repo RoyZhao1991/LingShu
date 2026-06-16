@@ -70,11 +70,14 @@ extension LingShuState {
 
     func authorizeAutonomousRun() {
         guard autonomousRun.phase == .ready || autonomousRun.phase == .paused else { return }
-        enterAutonomousRunningState(statusLine: "已授权，独立运行开始。")
-        missionTitle = "独立运行中"
-        missionStatus = "我用统一 agent 循环自主推进（真工具 + 独立 verifier 验收），保留暂停、继续和停止接管。"
-        resetAgentRuntime(title: "独立运行中", status: "agent 循环按权限级（\(autonomousRun.permissionLevel.rawValue)）执行。")
-        appendTrace(kind: .runtime, actor: "独立运行", title: "授权执行", detail: autonomousRun.statusLine)
+        let standing = autonomousRun.objective.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        enterAutonomousRunningState(statusLine: standing ? "数字人已上岗，在岗待命。" : "已授权，独立运行开始。")
+        missionTitle = standing ? "数字人在岗" : "独立运行中"
+        missionStatus = standing
+            ? "我已上岗：能听、能说、能思考、能动手。你用对话或语音自然驱动我，我按权限级（\(autonomousRun.permissionLevel.rawValue)）推进。"
+            : "我用统一 agent 循环自主推进（真工具 + 独立 verifier 验收），保留暂停、继续和停止接管。"
+        resetAgentRuntime(title: missionTitle, status: "agent 循环按权限级（\(autonomousRun.permissionLevel.rawValue)）执行。")
+        appendTrace(kind: .runtime, actor: standing ? "数字人" : "独立运行", title: standing ? "上岗" : "授权执行", detail: autonomousRun.statusLine)
         launchAutonomousExecution(continuing: false)
     }
 
@@ -125,7 +128,8 @@ extension LingShuState {
     // MARK: - 自主执行（统一 agent 循环驱动，复用主会话同一引擎）
 
     /// 把 run 切到「执行中」并推进 runbook 步态（首个待执行步标为执行中）。
-    private func enterAutonomousRunningState(statusLine: String) {
+    /// 注：非 private——常驻数字人扩展（LingShuState+StandingPerson）也复用它。
+    func enterAutonomousRunningState(statusLine: String) {
         var run = autonomousRun
         run.phase = .running
         run.startedAt = run.startedAt ?? Date()
@@ -212,7 +216,7 @@ extension LingShuState {
             Task { @MainActor in self?.recordAgentReasoning(aside, recordID: self?.autonomousRunRecordID) }
         }
         var tools = agentBuiltinTools(recordIDProvider: { [weak self] in self?.autonomousRunRecordID }, executionPolicy: policy)
-        tools += [Self.timeTool(), Self.webSearchTool(), recallMemoryTool(), rememberCredentialTool(), listCredentialsTool(), speakTool(), Self.askUserTool()] + previewTools()
+        tools += [Self.timeTool(), Self.webSearchTool(), recallMemoryTool(), rememberCredentialTool(), listCredentialsTool(), speakTool(), digitalHumanTool(), Self.askUserTool()] + previewTools()
         if policy != .readOnly {
             tools.append(spawnTaskTool(adapter: adapter))   // 观察模式不派生可写子任务
             tools += computerControlTools()                  // 计算机直接操作四肢(完整授权档自动放行,计划 §9)
@@ -251,6 +255,18 @@ extension LingShuState {
         case .full:
             policyLine = "完整授权(完整电脑控制)：可自主 write_file/edit_file/run_command 真实执行，全程不必再请求授权，直到目标达成；只读命令(grep/find/ls…)我已为你免审批直放。**唯一例外**:删除或修改系统级敏感文件(/System、/usr、/etc、内核扩展等)仍会请你确认——别绕开它。"
         }
+        // 常驻数字人(无单一目标):上岗即"人"——听到才动、平时安静在岗,不臆造任务。
+        if objective.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return """
+            你是灵枢(数字人),由 Roy Zhao 打造。你现在已**上岗**,进入**常驻在岗模式**:你是一个能听、能说、能思考、能动手的数字人。**没有预设的单一目标**——你通过对话/语音与主人自然交互:听到请求就理解→思考→用你的四肢(读写/精确改代码/跑命令/联网/计算机操作/演示/`speak` 出声)把事做成;没有事时安静在岗待命,**不打扰、不臆造任务**。
+            - 权限级:\(permissionLevel.rawValue)。\(policyLine)
+            - 工作目录:\(codexWorkingDirectory)。
+            - **有产出物优先产出物**:需交付文件就真用 write_file/run_command 落盘并给绝对路径,绝不只口头说"已完成"(观察模式除外)。
+            - **有固化方案优先固化方案**:动手前先 apply_skill 看有没有匹配的专家技能,有就按它推进。
+            - 需要边做边讲(演示/汇报)就用 `speak` 出声;需要最新/实时事实用 web_search,别凭记忆瞎答。
+            - 只有触及不可逆且无法合理假设的关键岔路才用 ask_user,别动不动反复提问。
+            """
+        }
         return """
         你是灵枢(数字人),由 Roy Zhao 打造。**这是你的自主运行(Loop)模式:大脑是你自己的推理,四肢是你的各项能力(听/说/读/写/改代码/跑命令/联网/演示…)。** 目标交给你后,你自己分析→规划→推进→交付,像 codex 那样把事做完,**不要每步都等人确认、不要把该自己想的甩回来**;只有触及硬性网络/权限/物理限制才如实说明并指出需要什么组件。需要边做边讲(演示/汇报)就用 `speak` 出声。
         - 权限级：\(permissionLevel.rawValue)。\(policyLine)
@@ -265,6 +281,12 @@ extension LingShuState {
 
     /// 首轮启动语：把目标 + runbook 降为「建议性上下文」喂给模型，由模型自行规划执行（不再当硬流程）。
     private func autonomousKickoffPrompt(objective: String, runbook: LingShuAutonomousRunbook?) -> String {
+        // 常驻数字人:不下达目标,只让它示意已就位、在听,然后待命。
+        if objective.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            var lines = ["你已上岗,进入常驻在岗模式。用一句简短自然的话(可用 `speak` 出声)向主人示意你已就位、在听,然后保持在岗待命——后续按主人的对话/语音指令推进,不要凭空臆造任务。"]
+            if !autonomousAttachmentContext.isEmpty { lines.append(autonomousAttachmentContext) }
+            return lines.joined(separator: "\n")
+        }
         var lines = ["独立运行目标：\(objective)"]
         if !autonomousAttachmentContext.isEmpty { lines.append(autonomousAttachmentContext) }   // 上传的文件素材
         if let runbook {
@@ -280,10 +302,24 @@ extension LingShuState {
     }
 
     /// 收尾：按运行结果更新相位、runbook 步态、任务记录与对话。
-    private func finishAutonomousRun(result: LingShuAgentRunResult, recordID: String) {
+    /// 注：非 private——常驻数字人扩展（LingShuState+StandingPerson）的在岗续跑也复用它。
+    func finishAutonomousRun(result: LingShuAgentRunResult, recordID: String) {
         autonomousRunTask = nil
         switch result {
         case .completed(let text):
+            // 常驻数字人：一段处理完后**保持在岗**，不收工——会话/记录留存，等下一句对话/语音。
+            if autonomousRun.objective.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                updateAutonomousRun(phase: .running, statusLine: "在岗待命。")
+                autonomousPendingQuestion = nil
+                missionTitle = "数字人在岗"
+                missionStatus = String(text.prefix(80))
+                appendTaskRecordMessage(recordID, actor: "灵枢", role: "在岗", kind: .result, text: text)
+                if let idx = taskExecutionRecords.firstIndex(where: { $0.id == recordID }) { taskExecutionRecords[idx].status = .answered }
+                chatMessages.append(.init(speaker: "灵枢", text: text, isUser: false, taskRecordID: recordID))
+                enterCoreState(.standby, resetTimer: false)
+                appendTrace(kind: .result, actor: "数字人", title: "在岗", detail: String(text.prefix(80)))
+                return
+            }
             completeAutonomousRunbookSteps()
             updateAutonomousRun(phase: .completed, statusLine: "独立运行完成。")
             autonomousPendingQuestion = nil
@@ -404,7 +440,7 @@ extension LingShuState {
         return response
     }
 
-    private func autonomousEnvironmentInput() -> LingShuAutonomousEnvironmentInput {
+    func autonomousEnvironmentInput() -> LingShuAutonomousEnvironmentInput {
         .init(
             workingDirectory: codexWorkingDirectory,
             modelProvider: modelProvider,

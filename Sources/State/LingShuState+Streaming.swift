@@ -128,6 +128,7 @@ extension LingShuState {
             .trimmingCharacters(in: .whitespacesAndNewlines)
         spokenStreamOffsets[messageID] = boundary + 1
         if sentence.count >= 2 {
+            lingShuControlLog("流式早读句: 「\(sentence.prefix(12))」 id=\(messageID.uuidString.prefix(8))")
             speaker(sentence)
         }
     }
@@ -135,14 +136,19 @@ extension LingShuState {
     /// 流式消息定稿时的语音收尾：早读过的消息补读尾句并打去重标记，
     /// 避免根视图把整段回复再念一遍；没早读过则不干预（保持原有整段播报）。
     func concludeStreamedSpeech(for messageID: UUID, streamedText: String) {
-        guard let offset = spokenStreamOffsets.removeValue(forKey: messageID) else { return }
+        guard let offset = spokenStreamOffsets.removeValue(forKey: messageID) else {
+            lingShuControlLog("concludeStreamedSpeech: 无早读offset → 根视图会整段朗读 id=\(messageID.uuidString.prefix(8))")
+            return
+        }
+        lingShuControlLog("concludeStreamedSpeech: 设去重标记 id=\(messageID.uuidString.prefix(8))")
         lastSpokenMessageID = messageID
         let characters = Array(streamedText)
-        guard offset < characters.count, let speaker = streamingSentenceSpeaker else { return }
-        let tail = String(characters[offset...]).trimmingCharacters(in: .whitespacesAndNewlines)
-        if tail.count >= 2 {
-            speaker(tail)
+        if offset < characters.count, let speaker = streamingSentenceSpeaker {
+            let tail = String(characters[offset...]).trimmingCharacters(in: .whitespacesAndNewlines)
+            if tail.count >= 2 { speaker(tail) }
         }
+        // 没有更多句子了 → 流式发声收口(drainer 播完剩余即 finishAndDrain)。
+        voiceManager?.finishStreamingSpeech()
     }
 
     /// 定稿流式气泡：流式中的临时文本替换为验收后的最终回复。没有流式气泡

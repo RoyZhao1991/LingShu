@@ -110,24 +110,6 @@ private struct LingShuChatCompletionsRequest: Codable, Equatable {
     var stream: Bool
 }
 
-private struct LingShuAnthropicMessagesRequest: Codable, Equatable {
-    var model: String
-    var system: String
-    var messages: [LingShuModelMessage]
-    var maxTokens: Int
-    var temperature: Double
-    var stream: Bool
-
-    enum CodingKeys: String, CodingKey {
-        case model
-        case system
-        case messages
-        case maxTokens = "max_tokens"
-        case temperature
-        case stream
-    }
-}
-
 struct LingShuModelGateway {
     private let encoder: JSONEncoder
 
@@ -286,14 +268,15 @@ struct LingShuModelGateway {
                 body = try JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys])
             }
         case .anthropicMessages:
-            body = try encoder.encode(LingShuAnthropicMessagesRequest(
+            // Anthropic 必须显式打 cache_control 断点才会命中前缀缓存——按厂商策略自动启用（换模型自动选对）。
+            body = try Self.anthropicMessagesBody(
                 model: model,
-                system: systemPrompt,
+                systemPrompt: systemPrompt,
                 messages: messages.filter { $0.role != "system" },
-                maxTokens: 4096,
                 temperature: temperature,
-                stream: stream
-            ))
+                stream: stream,
+                cache: LingShuPrefixCache.strategy(for: format)
+            )
         case .codexBridge, .hostAdapter:
             preconditionFailure("Non-HTTP model formats are handled before body construction.")
         }
@@ -305,6 +288,42 @@ struct LingShuModelGateway {
             body: body,
             format: format
         )
+    }
+
+    /// Anthropic /messages 请求体。`cache=anthropicExplicit` 时给 **system + 最后一条消息**打 `cache_control` 断点
+    /// → 命中前缀缓存（缓存读取约原价 1/10）。system 通常是最大、最稳定的前缀（身份+seed），最先值得缓存；
+    /// 最后一条消息打断点会缓存"到上一轮为止"的整段对话前缀，多轮接力命中。其它策略退化为不带断点的等价请求体。
+    /// 注：Anthropic 只认 user/assistant；OpenAI 形态的 tool_calls/tool 角色不在此发（工具回合走 Anthropic 原生形态是另一处缺口）。
+    static func anthropicMessagesBody(
+        model: String,
+        systemPrompt: String,
+        messages: [LingShuModelMessage],
+        temperature: Double,
+        stream: Bool,
+        cache: LingShuPrefixCacheStrategy
+    ) throws -> Data {
+        let explicit = (cache == .anthropicExplicit)
+        var payload: [String: Any] = [
+            "model": model,
+            "max_tokens": 4096,
+            "temperature": temperature,
+            "stream": stream
+        ]
+        let trimmedSystem = systemPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedSystem.isEmpty {
+            payload["system"] = explicit
+                ? [LingShuPrefixCache.anthropicCachedTextBlock(systemPrompt)]
+                : systemPrompt
+        }
+        let lastIndex = messages.indices.last
+        payload["messages"] = messages.enumerated().map { idx, message -> [String: Any] in
+            let role = (message.role == "assistant") ? "assistant" : "user"
+            if explicit, idx == lastIndex {
+                return ["role": role, "content": [LingShuPrefixCache.anthropicCachedTextBlock(message.content)]]
+            }
+            return ["role": role, "content": message.content]
+        }
+        return try JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys])
     }
 
     /// 把一条消息序列化成 OpenAI chat/completions 的 wire 对象（含 tool_calls / tool_call_id）。

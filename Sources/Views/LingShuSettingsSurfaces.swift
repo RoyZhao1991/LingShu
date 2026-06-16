@@ -151,6 +151,7 @@ struct LingShuModelGatewaySurface: View {
                         .buttonStyle(.plain)
                     }
                     Spacer()
+                    localModeChip
                     addControl
                 }
 
@@ -213,6 +214,30 @@ struct LingShuModelGatewaySurface: View {
         .buttonStyle(.plain)
     }
 
+    /// 本机有兜底方案的能力(耳/口)用的「本地模式」轻量开关:只在语音/听觉 tab 的头部一行显示,说明走 tooltip。
+    @ViewBuilder private var localModeChip: some View {
+        switch channelTab {
+        case .voice:
+            compactLocalToggle(isOn: $state.ttsLocalModeEnabled,
+                               help: "本地模式 — 开:强制本机系统语音。关:优先数据网关情绪语音,不可用时仍兜底本机。")
+        case .hearing:
+            compactLocalToggle(isOn: $state.asrLocalModeEnabled,
+                               help: "本地模式 — 开:强制本机识别(实时麦克风兜底永远可用)。关:偏好数据网关云端 ASR。当前实时麦克风以本机识别为主。")
+        case .brain, .vision:
+            EmptyView()
+        }
+    }
+
+    private func compactLocalToggle(isOn: Binding<Bool>, help: String) -> some View {
+        Toggle(isOn: isOn) {
+            Text("本地模式").font(.system(size: 12, weight: .semibold)).foregroundStyle(.white.opacity(0.7))
+        }
+        .toggleStyle(.switch)
+        .controlSize(.mini)
+        .fixedSize()
+        .help(help)
+    }
+
     @ViewBuilder private var brainRows: some View {
         let providers = state.configuredTextProviders()
         if providers.isEmpty {
@@ -224,7 +249,7 @@ struct LingShuModelGatewaySurface: View {
                 LingShuChannelRow(
                     state: state,
                     title: preset.name,
-                    subtitle: "\(preset.region) · \(preset.name == state.modelProvider ? state.modelName : (preset.defaultModels.first ?? ""))",
+                    subtitle: "\(preset.region) · \(preset.name == state.modelProvider ? state.modelName : (preset.defaultModels.first ?? "")) · \(state.prefixCacheStrategy(for: preset).shortLabel)",
                     channelKey: LingShuState.brainChannelKey(preset.name),
                     isActive: preset.name == state.modelProvider,
                     onValidate: { await state.validateBrainChannel(preset.name) },
@@ -258,9 +283,10 @@ struct LingShuModelGatewaySurface: View {
         LingShuChannelRow(
             state: state, title: state.channelDisplayName(LingShuState.visionChannelKey, default: "视觉 / 视频 · 数据网关 VL"),
             subtitle: state.channelConfig(LingShuState.visionChannelKey).model.isEmpty ? "swds-vision-fast · Qwen2.5-VL" : state.channelConfig(LingShuState.visionChannelKey).model,
-            channelKey: LingShuState.visionChannelKey, isActive: false,
+            channelKey: LingShuState.visionChannelKey,
+            isActive: state.isChannelValidated(LingShuState.visionChannelKey),
             onValidate: { await state.validateVisionChannel() }, onUse: nil,
-            onEdit: { sheet = .channel(key: LingShuState.visionChannelKey, title: "视觉 · 数据网关 VL", endpoint: state.channelConfig(LingShuState.visionChannelKey).endpoint, model: state.channelConfig(LingShuState.visionChannelKey).model) }
+            onEdit: { sheet = .channel(key: LingShuState.visionChannelKey, title: "视觉 · 数据网关 VL", endpoint: LingShuState.perceptionGatewayEndpoint, model: LingShuState.visionDefaultModel) }
         )
         if state.hasChannelConfig(LingShuState.visionCustomKey) {
             LingShuChannelRow(
@@ -276,10 +302,11 @@ struct LingShuModelGatewaySurface: View {
     @ViewBuilder private var hearingRows: some View {
         LingShuChannelRow(
             state: state, title: state.channelDisplayName(LingShuState.asrChannelKey, default: "语音识别 · 数据网关"),
-            subtitle: state.channelConfig(LingShuState.asrChannelKey).model.isEmpty ? "数据网络模型网关" : state.channelConfig(LingShuState.asrChannelKey).model,
-            channelKey: LingShuState.asrChannelKey, isActive: false,
+            subtitle: state.channelConfig(LingShuState.asrChannelKey).model.isEmpty ? "数据网络模型网关 · swds-realtime-hearing" : state.channelConfig(LingShuState.asrChannelKey).model,
+            channelKey: LingShuState.asrChannelKey,
+            isActive: state.isChannelValidated(LingShuState.asrChannelKey) && !state.asrLocalModeEnabled,
             onValidate: { state.validateASRChannel(LingShuState.asrChannelKey) }, onUse: nil,
-            onEdit: { sheet = .channel(key: LingShuState.asrChannelKey, title: "语音识别 · 数据网关", endpoint: state.channelConfig(LingShuState.asrChannelKey).endpoint, model: state.channelConfig(LingShuState.asrChannelKey).model) }
+            onEdit: { sheet = .channel(key: LingShuState.asrChannelKey, title: "语音识别 · 数据网关", endpoint: LingShuState.perceptionGatewayEndpoint, model: LingShuState.asrDefaultModel) }
         )
         if state.hasChannelConfig(LingShuState.asrCustomKey) {
             LingShuChannelRow(

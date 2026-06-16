@@ -197,22 +197,28 @@ struct LingShuCoreHeader: View {
                     Text(state.coreState.rawValue)
                         .font(.system(size: 17, weight: .bold))
                         .foregroundStyle(state.coreState.color)
-                    TimelineView(.periodic(from: .now, by: 1)) { _ in
-                        Text(state.coreStateSubtitle)
-                            .font(.system(size: 10, weight: .semibold, design: .monospaced))
-                            .foregroundStyle(state.coreState.color.opacity(0.75))
+                    // 待机时不显示副标题：它会压在核心中央的白点上重叠。仅思考/执行/异常时显示已用时。
+                    if state.coreState != .standby {
+                        TimelineView(.periodic(from: .now, by: 1)) { _ in
+                            Text(state.coreStateSubtitle)
+                                .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                                .foregroundStyle(state.coreState.color.opacity(0.75))
+                        }
                     }
                     LingShuVoiceWaveView(
                         color: state.coreState.color,
                         isActive: voice.isRecording || voice.isSpeaking
                     )
                 }
+                // 整体上移，让文字避开核心中央的白色圆心（圆心在 ZStack 几何中心）。
+                .offset(y: -14)
             }
 
             VStack(alignment: .trailing, spacing: 10) {
                 LingShuHUDReadout(label: "CHANNEL", value: state.modelProvider, color: state.isModelConnected ? .lingHolo : .orange)
                 LingShuHUDReadout(label: "SESSIONS", value: state.remoteSessionStatus)
                 LingShuHUDReadout(label: "TRUST", value: "\(state.trustScore)%", color: .lingHolo)
+                    .help(state.trustBreakdown)
             }
             .frame(maxWidth: .infinity, alignment: .trailing)
         }

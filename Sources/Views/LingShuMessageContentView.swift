@@ -245,6 +245,15 @@ struct LingShuMarkdownText: View {
         for p in ["- ", "* ", "+ "] where s.hasPrefix(p) {
             return ("•", String(s.dropFirst(p.count)))
         }
+        // 宽松:行首 "-" 后**紧跟非空格、非 "-"**(排除分隔线 ---,已在 lineView 前置处理)也认作列表项——
+        // 有的模型(如 DeepSeek)输出紧凑列表 "-**读**:…",没有标准的 "- " 空格。只放宽 "-"(不放宽 "*",
+        // 否则 "*斜体*" 会被误判成列表)。
+        if s.hasPrefix("-"), s.count > 1 {
+            let after = s[s.index(after: s.startIndex)]
+            if after != "-" && after != " " {
+                return ("•", String(s.dropFirst(1)))
+            }
+        }
         if let dot = s.firstIndex(of: "."),
            dot > s.startIndex,
            s[s.startIndex..<dot].allSatisfy(\.isNumber),
