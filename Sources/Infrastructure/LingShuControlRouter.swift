@@ -580,6 +580,14 @@ final class LingShuControlRouter {
             "perceptionDebug": state.perceptionDebugLine,
             "voiceListening": state.isListening,
             "voiceWake": state.voiceWakeListeningEnabled,
+            "previewState": [
+                "isPresented": state.previewController.isPresented,
+                "slideshow": state.previewController.slideshow,   // true=全屏演示模式
+                "pageIndex": state.previewController.pageIndex,
+                "pageCount": state.previewController.pageCount,
+                "title": state.previewController.title
+            ],
+            "recentSpoken": Array(state.recentSpokenLines.suffix(14)),   // 演示文字稿(核验对得上画面)
             "chatCount": state.chatMessages.count,
             "taskRecordCount": state.taskExecutionRecords.count,
             "recentTaskRecords": state.taskExecutionRecords.prefix(8).map { record in

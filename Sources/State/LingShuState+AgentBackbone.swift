@@ -443,9 +443,16 @@ extension LingShuState {
             return await MainActor.run { [weak self] in
                 guard let self, let voice = self.voiceManager else { return "语音未就绪(UI 未注入),本次无法出声。" }
                 voice.speak(text)
+                self.recordSpokenLine(text)   // 留痕:演示/讲解的文字稿可被脚本核验(对得上画面)
                 return "(已说出:\(text.prefix(40)))"
             }
         }
+    }
+
+    /// 记录最近念出口的话(环形缓冲,封顶 40 条):供 MCP 核验"演示文字稿"是否对得上幻灯片内容。
+    func recordSpokenLine(_ text: String) {
+        recentSpokenLines.append(text)
+        if recentSpokenLines.count > 40 { recentSpokenLines.removeFirst(recentSpokenLines.count - 40) }
     }
 
     func recallMemoryTool() -> LingShuAgentTool {

@@ -125,6 +125,8 @@ final class LingShuState: ObservableObject {
     }
     @Published var isVoiceConversationActive = false
     var lastSpokenMessageID: UUID?
+    /// 最近经 `speak` 念出口的话(环形缓冲,封顶 40 条)——供脚本核验演示文字稿对得上幻灯片。
+    @Published var recentSpokenLines: [String] = []
     @Published var temperature = 0.2
     @Published var contextBudget = 128000.0
     @Published var localStreamingDialogueEnabled = true
