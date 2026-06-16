@@ -7,6 +7,8 @@ struct LingShuRootView: View {
     @ObservedObject var perceptionGateway: LingShuRealtimePerceptionGateway
     @State private var lastVisionTraceAt = Date.distantPast
     private let coreTimer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
+    /// 在岗/自主运行时的麦克风语音通话控制器(复用极简模式那套:听→ASR→思考→回应)。
+    @StateObject private var standingVoiceCall = LingShuVoiceCallController()
 
     var body: some View {
         Group {
@@ -23,6 +25,7 @@ struct LingShuRootView: View {
                     .frame(minWidth: 1240, minHeight: 820)
             }
         }
+        .overlay(alignment: .top) { LingShuTakeoverOverlay(state: state) }   // 完全接管态遮罩 + 一键夺回(模块1)
         .preferredColorScheme(.dark)
         .background(LingShuPreviewHost(controller: state.previewController))   // 大脑 open_preview → 弹出预览
         .sheet(item: $state.pendingShellApproval) { pending in
@@ -32,6 +35,12 @@ struct LingShuRootView: View {
         }
         .onChange(of: state.isMinimalVoiceMode) { _, minimal in
             LingShuWindowPlacement.applyMinimalVoiceWindow(minimal)
+            // 极简模式有自己的通话控制器:进极简就停在岗收听(避免双麦),退出极简且仍在岗则恢复。
+            if minimal {
+                standingVoiceCall.stop()
+            } else if state.isStandingPersonOnDuty {
+                state.startStandingVoiceListening?()
+            }
         }
         .onAppear {
             state.refreshCodexAuthStatusIfNeeded()
@@ -54,6 +63,15 @@ struct LingShuRootView: View {
             // 新一轮开始时掐掉上一条朗读(防音频/文字 desync)。
             state.interruptSpeechOutput = { [weak voice] in voice?.stopSpeaking() }
             state.voiceManager = voice   // 供会议对话控制器经 MCP/UI 驱动
+            // 在岗/自主运行时同步开/关麦克风收听(听→ASR→思考→回应,和极简模式一致)。
+            // 由 begin/endAutonomousActivity 调,故与运行/暂停/停止生命周期严格对齐(不靠视图重渲时机)。
+            let standingCall = standingVoiceCall   // 捕获控制器实例(类引用)
+            state.startStandingVoiceListening = { [weak state, weak voice, weak perceptionGateway] in
+                guard let state, let voice, let perceptionGateway, !state.isMinimalVoiceMode else { return }
+                state.voiceOutputEnabled = true   // 语音对话:必须能出声回应
+                standingCall.start(state: state, voice: voice, perceptionGateway: perceptionGateway)
+            }
+            state.stopStandingVoiceListening = { standingCall.stop() }
             // 把持久化的「本地模式」偏好应用到 voiceManager(didSet 不会为初始值触发,启动时手动应用一次)。
             state.applyASRLocalMode()
             state.applyTTSLocalMode()

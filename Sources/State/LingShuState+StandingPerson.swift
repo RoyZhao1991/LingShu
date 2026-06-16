@@ -61,7 +61,9 @@ extension LingShuState {
         autonomousRunTask = Task { @MainActor [weak self] in
             await previous?.value
             guard let self, !Task.isCancelled else { return }
-            let initial = await session.resume(prompt)
+            // 把当前周期感知态势前置进指令,大脑接令时已"看到"当前屏幕(更快、连贯)。
+            let framed = self.standingPromptWithPerception(prompt)
+            let initial = await session.resume(framed)
             let result = await self.verifyAndContinue(session: session, result: initial, userRequest: prompt, taskRecordID: recordID)
             guard !Task.isCancelled else { return }
             self.finishAutonomousRun(result: result, recordID: recordID)

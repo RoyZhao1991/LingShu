@@ -228,6 +228,12 @@ final class VoiceIOManager: ObservableObject {
         }
 
         let inputNode = audioEngine.inputNode
+        // 开启系统语音处理(AEC 回声消除):TTS 播放时麦克风**不再自听灵枢自己的声音**,
+        // 从而可在灵枢说话时**持续收音**、随时听到主人插话并打断(barge-in)。
+        // 失败/不支持则退回无 AEC(识别仍可用,只是说话时不宜常开麦)。必须在引擎启动前设、会改输入格式。
+        if !inputNode.isVoiceProcessingEnabled {
+            try? inputNode.setVoiceProcessingEnabled(true)
+        }
         let recordingFormat = inputNode.outputFormat(forBus: 0)
         guard recordingFormat.sampleRate > 0 else {
             throw LingShuVoiceError.audioInputUnavailable

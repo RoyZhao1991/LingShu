@@ -89,19 +89,22 @@ final class LingShuVoiceCallController: ObservableObject {
 
         adaptiveVAD.observe(level: level, isCapturingSpeech: hasCapturedSpeech || voice.isSpeakingOrQueued)
 
-        // 灵枢正在回应（TTS）：暂停麦克风避免自听；只在【确认是真指令】(持续真实说话 ≥0.7s)才打断，
-        // 短促噪音/回声忽略。
+        // 灵枢正在回应（TTS）：**不再停麦**——靠 AEC(setVoiceProcessingEnabled)消掉灵枢自己的声音,
+        // 麦克风持续收音、随时判定主人是否插话。只在【确认是真指令】(持续真实说话 ≥0.7s)才打断 TTS,
+        // 短促噪音/回声(AEC 残留)忽略。打断后不 resetUtterance:让识别继续累积主人这句,收口正常提交。
         if voice.isSpeakingOrQueued {
             phase = .responding
-            if voice.isRecording { voice.stopRecognition() }
+            if !voice.isRecording {   // 保持麦克风常开(不停),以便边播边听
+                LingShuPerceptionActions.resumeListening(state: state, voice: voice, perceptionGateway: perceptionGateway)
+            }
             if level > adaptiveVAD.bargeInThreshold {
                 if let started = bargeInStartedAt {
                     if now.timeIntervalSince(started) > 0.7 {
-                        voice.stopSpeaking()
+                        voice.stopSpeaking()   // 主人确实在说话 → 打断灵枢的 TTS,接住主人这句
                         bargeInStartedAt = nil
-                        resetUtterance()
-                        LingShuPerceptionActions.resumeListening(state: state, voice: voice, perceptionGateway: perceptionGateway)
-                        phase = .listening
+                        hasCapturedSpeech = true   // 已在捕获主人这句(不清空,收口后提交)
+                        silenceStartedAt = nil
+                        phase = .capturing
                     }
                 } else {
                     bargeInStartedAt = now

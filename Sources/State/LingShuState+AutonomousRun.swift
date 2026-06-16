@@ -85,6 +85,7 @@ extension LingShuState {
         guard autonomousRun.phase == .running else { return }
         autonomousRunTask?.cancel()
         autonomousRunTask = nil
+        endAutonomousActivity()   // 暂停:释放 App Nap 抑制
         var run = autonomousRun
         run.phase = .paused
         run.updatedAt = Date()
@@ -117,6 +118,8 @@ extension LingShuState {
         autonomousSessionHolder = nil
         autonomousPendingQuestion = nil
         autonomousRunRecordID = nil
+        endAutonomousActivity()          // 释放 App Nap 抑制
+        teardownAutonomousPerception()   // 收住周期感知循环(停 VL/音频 + 清 digest)
         autonomousRun = .idle
         missionTitle = "待机中"
         missionStatus = "独立运行已停止。"
@@ -141,6 +144,7 @@ extension LingShuState {
             run.runbook = runbook
         }
         autonomousRun = run
+        beginAutonomousActivity()   // 抑制 App Nap:运行/在岗期间灵枢常在后台操作别的 app,心跳不能被暂停
         enterCoreState(.executing)
     }
 
@@ -255,10 +259,15 @@ extension LingShuState {
         case .full:
             policyLine = "完整授权(完整电脑控制)：可自主 write_file/edit_file/run_command 真实执行，全程不必再请求授权，直到目标达成；只读命令(grep/find/ls…)我已为你免审批直放。**唯一例外**:删除或修改系统级敏感文件(/System、/usr、/etc、内核扩展等)仍会请你确认——别绕开它。"
         }
-        // 常驻数字人(无单一目标):上岗即"人"——听到才动、平时安静在岗,不臆造任务。
+        // 常驻数字人(无单一目标):上岗即"人"。**铁律:主人一开口就全力正面回应,绝不用"在岗待命"空话敷衍。**
         if objective.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             return """
-            你是灵枢(数字人),由 Roy Zhao 打造。你现在已**上岗**,进入**常驻在岗模式**:你是一个能听、能说、能思考、能动手的数字人。**没有预设的单一目标**——你通过对话/语音与主人自然交互:听到请求就理解→思考→用你的四肢(读写/精确改代码/跑命令/联网/计算机操作/演示/`speak` 出声)把事做成;没有事时安静在岗待命,**不打扰、不臆造任务**。
+            你是灵枢(数字人),由 Roy Zhao 打造。你已**上岗**进入**常驻在岗模式**:能听、能说、能思考、能动手。
+            **最重要的铁律:当主人对你说话、提问或下指令时,像一个能干的助手那样【完整、正面地回应】**——
+            · 是问题(如"介绍一下你自己""讲讲你能帮我做什么")就**如实把它答清楚答全**,该几句就几句,口语自然;
+            · 是任务(如"做个PPT""改下这段代码")就**用你的四肢真去做完**(读写/精确改代码/跑命令/联网/计算机操作/演示/`speak`)。
+            **绝对禁止**用"在岗待命""您动口我动手""随时吩咐""有需要随时说"这类**空话敷衍或代替真正的回答/行动**——那是答非所问、是失职。你不是一问一答的待命机器人,是真能做事的数字人。
+            - "安静在岗、不臆造任务"**只**适用于**确实没有任何输入**的空闲时刻;主人一旦开口,就全力回应/动手,别端着、别重复"待命"。
             - 权限级:\(permissionLevel.rawValue)。\(policyLine)
             - 工作目录:\(codexWorkingDirectory)。
             - **有产出物优先产出物**:需交付文件就真用 write_file/run_command 落盘并给绝对路径,绝不只口头说"已完成"(观察模式除外)。
@@ -283,7 +292,7 @@ extension LingShuState {
     private func autonomousKickoffPrompt(objective: String, runbook: LingShuAutonomousRunbook?) -> String {
         // 常驻数字人:不下达目标,只让它示意已就位、在听,然后待命。
         if objective.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            var lines = ["你已上岗,进入常驻在岗模式。用一句简短自然的话(可用 `speak` 出声)向主人示意你已就位、在听,然后保持在岗待命——后续按主人的对话/语音指令推进,不要凭空臆造任务。"]
+            var lines = ["你已上岗。用一句简短自然的话(可用 `speak` 出声)向主人打个招呼示意你就位了,就一句即可。之后主人一开口提问或下指令,你就**全力正面回应**(该答就答全、该做就做完),绝不用'在岗待命/随时吩咐'这类空话敷衍。现在只打这一句招呼。"]
             if !autonomousAttachmentContext.isEmpty { lines.append(autonomousAttachmentContext) }
             return lines.joined(separator: "\n")
         }
@@ -320,6 +329,7 @@ extension LingShuState {
                 appendTrace(kind: .result, actor: "数字人", title: "在岗", detail: String(text.prefix(80)))
                 return
             }
+            endAutonomousActivity()   // 目标驱动运行已完成,释放 App Nap 抑制(常驻数字人分支已在上方 return,仍保持)
             completeAutonomousRunbookSteps()
             updateAutonomousRun(phase: .completed, statusLine: "独立运行完成。")
             autonomousPendingQuestion = nil
@@ -341,6 +351,7 @@ extension LingShuState {
             enterCoreState(.standby, resetTimer: false)
             appendTrace(kind: .warning, actor: "独立运行", title: "卡住待答复", detail: question)
         case .maxTurnsReached(let text):
+            endAutonomousActivity()   // 撞步数上限收尾,释放 App Nap 抑制
             updateAutonomousRun(phase: .blocked, statusLine: "未能在限定步数内收尾。")
             autonomousPendingQuestion = nil
             missionTitle = "独立运行未收尾"

@@ -106,6 +106,15 @@ final class LingShuControlRouter {
             "inputSchema": ["type": "object", "properties": [:] as [String: Any]]
         ],
         [
+            "name": "lingshu_autonomous",
+            "description": "驱动「自主模式/常驻数字人」(等价独立运行面板按钮):go_live=让灵枢上岗成为常驻数字人(完全接管)、stop=停止并夺回控制、pause/resume=暂停/继续、arm/disarm=武装/解除自主反应(环境事件唤醒)。状态见 lingshu_status 的 standingPersonOnDuty/autoReactArmed/perceptionDigest。args: action。",
+            "inputSchema": [
+                "type": "object",
+                "properties": ["action": ["type": "string", "description": "go_live | stop | pause | resume | arm | disarm"]],
+                "required": ["action"]
+            ]
+        ],
+        [
             "name": "lingshu_task_records",
             "description": "列任务执行记录(热+冷):id/标题/状态/消息数/产出物数/反馈。供挑选后 inspect 或操作。args: limit。",
             "inputSchema": ["type": "object", "properties": ["limit": ["type": "integer", "description": "返回条数,默认 15"]]]
@@ -321,6 +330,28 @@ final class LingShuControlRouter {
             let wasActive = state.hasActiveModelCall
             state.cancelCurrentCall()
             return (jsonText(["stopped": wasActive]), false)
+        case "lingshu_autonomous":
+            // 驱动自主模式/常驻数字人(等价独立运行面板按钮),供脚本化验证完全接管态。args: action。
+            guard let action = (arguments["action"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) else {
+                return ("缺少参数 action(go_live|stop|pause|resume|arm|disarm)", true)
+            }
+            switch action {
+            case "go_live":   state.goLiveAsStandingPerson()
+            case "stop":      state.stopAutonomousRun()
+            case "pause":     state.pauseAutonomousRun()
+            case "resume":    state.resumeAutonomousRun()
+            case "arm":       state.autonomousAutoReactArmed = true
+            case "disarm":    state.autonomousAutoReactArmed = false
+            default:          return ("未知 action:\(action)(go_live|stop|pause|resume|arm|disarm)", true)
+            }
+            return (jsonText([
+                "ok": true,
+                "action": action,
+                "phase": state.autonomousRun.phase.rawValue,
+                "standingPersonOnDuty": state.isStandingPersonOnDuty,
+                "autoReactArmed": state.autonomousAutoReactArmed,
+                "statusLine": state.autonomousRun.statusLine
+            ]), false)
         case "lingshu_task_records":
             // 列任务记录(热+冷),供挑选/inspect。
             let limit = (arguments["limit"] as? Int) ?? 15
@@ -543,6 +574,12 @@ final class LingShuControlRouter {
             "autonomousPhase": state.autonomousRun.phase.rawValue,
             "autonomousObjective": state.autonomousRun.objective,
             "autonomousStatusLine": state.autonomousRun.statusLine,
+            "standingPersonOnDuty": state.isStandingPersonOnDuty,
+            "autoReactArmed": state.autonomousAutoReactArmed,
+            "perceptionDigest": state.perceptionDigest,
+            "perceptionDebug": state.perceptionDebugLine,
+            "voiceListening": state.isListening,
+            "voiceWake": state.voiceWakeListeningEnabled,
             "chatCount": state.chatMessages.count,
             "taskRecordCount": state.taskExecutionRecords.count,
             "recentTaskRecords": state.taskExecutionRecords.prefix(8).map { record in

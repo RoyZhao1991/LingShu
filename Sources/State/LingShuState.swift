@@ -279,6 +279,39 @@ final class LingShuState: ObservableObject {
     var autonomousRunRecordID: String?
     var autonomousSessionHolder: LingShuAgentSession?
     var autonomousPendingQuestion: String?
+    // 周期感知循环(模块2):常驻数字人在岗时定时感知屏幕+系统声音 → 注入/唤醒。详见 LingShuState+AutonomousPerception。
+    /// 自主反应「武装」开关:开 = 环境事件(如有人开始说话)可唤醒大脑自主处理;关 = 只保持感知 digest 新鲜,不擅自行动(安全默认)。
+    @Published var autonomousAutoReactArmed = UserDefaults.standard.bool(forKey: "lingshu.autoReactArmed") {
+        didSet { UserDefaults.standard.set(autonomousAutoReactArmed, forKey: "lingshu.autoReactArmed") }
+    }
+    /// 最新一份周期感知态势(屏幕一句话描述 + 音频活动),供接管态遮罩显示、命令前置注入。
+    /// 仅由 LingShuState+AutonomousPerception 写入(跨文件扩展,故不能用 private(set))。
+    @Published var perceptionDigest = ""
+    let perceptionCadenceConfig = LingShuPerceptionCadenceConfig.default
+    var perceptionAudioDetector = LingShuAudioActivityDetector()
+    var lastPerceptionTickAt = Date.distantPast
+    var lastPerceptionVLAt = Date.distantPast
+    var lastPerceptionWakeAt = Date.distantPast
+    var lastScreenSignature = ""
+    var perceptionVLTask: Task<Void, Never>?
+    /// 周期感知是否由本对象启动了系统音频采集(会议未占用时);停感知时只关自己启的,不误关会议的。
+    var perceptionOwnsAudioCapture = false
+    /// 自主运行/在岗期间持有的 App Nap 抑制令牌:防止灵枢被切到后台(它正操作别的 app=自己必然在后台)时
+    /// 被系统 App Nap 暂停心跳定时器 → 周期感知/推进全停。在岗/运行时持有,暂停/停止时释放。
+    var autonomousActivityToken: NSObjectProtocol?
+    /// 周期感知的**专用驱动 Task**:不依赖 UI 的 Timer.publish(它在窗口被遮挡/后台时会被暂停),
+    /// 用协作线程池的 Task.sleep 自驱 + beginActivity 抑制 App Nap → 灵枢在后台操作别的 app 时感知仍持续。
+    var autonomousPerceptionDriverTask: Task<Void, Never>?
+    /// 在岗/自主运行时开关麦克风语音收听(=极简模式那套:听→ASR→思考→回应)。由根视图注入(它持 voice+perceptionGateway)。
+    var startStandingVoiceListening: (() -> Void)?
+    var stopStandingVoiceListening: (() -> Void)?
+    var perceptionLatestAudioState: LingShuAudioActivityState?
+    /// 锁存「起音」事件:心跳每秒采音,但 planner 只在 due 拍消费——免得在非 due 拍丢掉起音。
+    var perceptionAudioOnsetLatched = false
+    /// 周期感知最近一拍的诊断(为什么 VL 跑没跑),供 MCP/状态观测。**非 @Published**——只被 MCP 按需读,
+    /// 不绑定任何视图,避免每拍(4s)无谓触发 SwiftUI 重渲(尤其别在 TTS 播放时给主线程添负担)。
+    var perceptionDebugLine = ""
+    var perceptionTickSeq = 0
     private let permissionPolicy = LingShuPermissionPolicy()
     private let externalAgentRegistry = LingShuExternalAgentRegistry()
     private let externalAgentGateway = LingShuExternalAgentGateway()
@@ -600,6 +633,8 @@ final class LingShuState: ObservableObject {
         refreshRemoteSessionStatus()
         tickMainRemoteConnectionGuard(now: now)
         tickAutonomousRun(now: now)
+        // 周期感知循环(模块2)由专用驱动 Task 驱动(见 beginAutonomousActivity),**不挂这里的 UI 心跳**——
+        // UI Timer 在窗口遮挡/后台会被暂停,且在主线程跑 AX 会饿死音频。专用 Task 走后台算 AX + 抑制 App Nap。
         expireDigitalHumanDirectiveIfNeeded(now: now)
 
         if hasActiveModelCall, let lastModelHeartbeatAt {

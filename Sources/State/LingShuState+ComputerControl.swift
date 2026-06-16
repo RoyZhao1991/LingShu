@@ -60,19 +60,14 @@ extension LingShuState {
                 return "截屏失败(可能缺少屏幕录制授权:系统设置 > 隐私与安全性 > 屏幕录制 勾选\"灵枢\")。"
             }
             let size = LingShuComputerControl.mainScreenSize()
+            // 工具回给模型的 PNG 路径始终是**原图**(下游真要细节时可再读),只在 VL 上送时按需缩图。
             let header = "已截屏:\(path)\n屏幕逻辑尺寸:\(Int(size.width)) x \(Int(size.height)) 点(点击用点坐标,左上为原点)。"
             let client = await MainActor.run(body: { self.cloudPerceptionClient })
-            guard let client,
-                  let data = FileManager.default.contents(atPath: path) else {
+            guard let client else {
                 return header + "\n(视觉理解不可用,仅返回截图路径——可用 list_ui_elements 取可点元素坐标。)"
             }
-            let b64 = data.base64EncodedString()
-            if let r = try? await client.analyzeImage(imageBase64: b64, prompt: "描述这个电脑屏幕上有什么:主要区域、可点的按钮/菜单/输入框及其大致位置,以及屏幕上的文字。", includeGrounding: false), r.success {
-                let ocr = r.ocrTexts.prefix(20).joined(separator: " | ")
-                return header
-                    + "\n【屏幕描述】\(r.semanticSuggestions.prefix(600))"
-                    + (ocr.isEmpty ? "" : "\n【屏上文字】\(ocr.prefix(600))")
-                    + "\n提示:要精确点击,调 list_ui_elements 拿元素中心坐标更可靠。"
+            if let desc = await Self.analyzeScreenForControl(client: client, pngPath: path) {
+                return header + desc
             }
             return header + "\n(VL 解析未返回;可用 list_ui_elements 取可点元素坐标。)"
         }
@@ -182,6 +177,58 @@ extension LingShuState {
             LingShuComputerControl.scroll(dy: dy, dx: dx)
             return "已滚动 dy=\(dy) dx=\(dx)。"
         }
+    }
+
+    // MARK: - screen_capture 的 VL 上送(缩图兜底)
+
+    /// VL 上送原图的体积上限(字节):超过此值的 PNG 直接走缩图,免去一次几乎必败、且上游会**连续重试 3 次**
+    /// 才超时的昂贵往返(全屏 Retina PNG ~4MB 远超此线;非 Retina/小窗口/局部内容常 <1MB,可原图直传保细节)。
+    nonisolated static let screenCaptureOriginalByteCeiling = 1_000_000
+
+    /// 是否可把原图直接上送 VL(体积够小才行)。纯函数,便于单测。
+    nonisolated static func shouldSendOriginalScreenshot(
+        pngByteCount: Int,
+        ceiling: Int = screenCaptureOriginalByteCeiling
+    ) -> Bool {
+        pngByteCount > 0 && pngByteCount <= ceiling
+    }
+
+    /// `screen_capture` 的 VL 理解策略:这工具是给大脑「看清屏幕后精确点击/输入」用的,缩太狠会丢 UI 细节,
+    /// 故**体积安全时优先原图**;原图过大(`shouldSendOriginalScreenshot` 判否)或原图调用失败时,**自动缩到
+    /// 1600 长边 JPEG q0.7 重试一次**——既规避「全屏 Retina PNG ~4MB → 网关上游连续 3 次失败 → HTTP 500」
+    /// (见架构速查手册「周期感知 VL 必须缩图」不变量),又比周期感知的 1280/q0.6 保留更多可操作细节。
+    /// 返回拼好的【屏幕描述】片段(含 OCR + 操作提示);两条路径都拿不到返回 nil 交由上层兜底。
+    nonisolated static func analyzeScreenForControl(
+        client: LingShuCloudPerceptionClient,
+        pngPath: String
+    ) async -> String? {
+        let prompt = "描述这个电脑屏幕上有什么:主要区域、可点的按钮/菜单/输入框及其大致位置,以及屏幕上的文字。"
+        // 第一遍:体积安全的原图(保最大细节)。
+        if let data = FileManager.default.contents(atPath: pngPath),
+           shouldSendOriginalScreenshot(pngByteCount: data.count),
+           let desc = await analyzeImageForControl(client: client, base64: data.base64EncodedString(), prompt: prompt) {
+            return desc
+        }
+        // 第二遍:缩到 1600 长边 JPEG q0.7(规避上游 500,仍保够判断的 UI 细节)。
+        if let b64 = LingShuComputerControl.downscaledJPEGBase64(pngPath: pngPath, maxDimension: 1600, quality: 0.7),
+           let desc = await analyzeImageForControl(client: client, base64: b64, prompt: prompt) {
+            return desc
+        }
+        return nil
+    }
+
+    /// 调一次 VL 并把结果拼成给模型读的【屏幕描述】片段;抛错或 `success=false` 返回 nil(交由上层重试/兜底)。
+    private nonisolated static func analyzeImageForControl(
+        client: LingShuCloudPerceptionClient,
+        base64: String,
+        prompt: String
+    ) async -> String? {
+        guard let r = try? await client.analyzeImage(imageBase64: base64, prompt: prompt, includeGrounding: false),
+              r.success else { return nil }
+        let ocr = r.ocrTexts.prefix(20).joined(separator: " | ")
+        return "\n【屏幕描述】\(r.semanticSuggestions.prefix(600))"
+            + (ocr.isEmpty ? "" : "\n【屏上文字】\(ocr.prefix(600))")
+            + "\n提示:要精确点击,调 list_ui_elements 拿元素中心坐标更可靠。"
     }
 
     // MARK: - 纯工具(可测)

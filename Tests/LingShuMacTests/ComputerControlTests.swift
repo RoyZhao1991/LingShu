@@ -35,6 +35,19 @@ final class ComputerControlTests: XCTestCase {
         XCTAssertNil(LingShuState.computerToolDisplayName("write_file"), "非计算机操作工具返回 nil")
     }
 
+    func testShouldSendOriginalScreenshot() {
+        let ceiling = LingShuState.screenCaptureOriginalByteCeiling
+        // 体积安全的小图(非 Retina / 局部 / 小窗口)直接原图上送,保最大 UI 细节。
+        XCTAssertTrue(LingShuState.shouldSendOriginalScreenshot(pngByteCount: 300_000))
+        XCTAssertTrue(LingShuState.shouldSendOriginalScreenshot(pngByteCount: ceiling - 1))
+        XCTAssertTrue(LingShuState.shouldSendOriginalScreenshot(pngByteCount: ceiling), "等于上限算安全")
+        // 全屏 Retina ~4MB 远超上限 → 不发原图,改走缩图(避开上游连续 3 次失败→500)。
+        XCTAssertFalse(LingShuState.shouldSendOriginalScreenshot(pngByteCount: ceiling + 1))
+        XCTAssertFalse(LingShuState.shouldSendOriginalScreenshot(pngByteCount: 4_000_000))
+        // 读不到(0 字节)不发原图。
+        XCTAssertFalse(LingShuState.shouldSendOriginalScreenshot(pngByteCount: 0))
+    }
+
     func testToolDisplayNameRoutesComputerTools() {
         // toolDisplayName 应能回退到计算机操作工具名(供进展气泡)。
         XCTAssertEqual(LingShuState.toolDisplayName("type_text"), "键入文本")

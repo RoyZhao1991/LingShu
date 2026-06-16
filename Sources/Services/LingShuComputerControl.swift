@@ -50,6 +50,30 @@ enum LingShuComputerControl {
         return FileManager.default.fileExists(atPath: path) ? path : nil
     }
 
+    /// 把一张截图(PNG 路径)按最长边缩到 `maxDimension`、转 JPEG、base64——给**周期感知 VL** 用。
+    /// 全屏 Retina PNG 约 4MB,VL 网关上游会 500(实测「上游模型连续 3 次调用失败」);
+    /// 缩到 ~1280 长边 JPEG 通常 <300KB,既够「看懂屏幕」又快又稳。失败返回 nil。
+    static func downscaledJPEGBase64(pngPath: String, maxDimension: CGFloat = 1280, quality: CGFloat = 0.6) -> String? {
+        guard let image = NSImage(contentsOfFile: pngPath),
+              let tiff = image.tiffRepresentation,
+              let rep = NSBitmapImageRep(data: tiff),
+              let cg = rep.cgImage else { return nil }
+        let w = CGFloat(rep.pixelsWide), h = CGFloat(rep.pixelsHigh)
+        guard w > 0, h > 0 else { return nil }
+        let scale = min(1, maxDimension / max(w, h))
+        let targetW = max(1, Int(w * scale)), targetH = max(1, Int(h * scale))
+        guard let ctx = CGContext(
+            data: nil, width: targetW, height: targetH, bitsPerComponent: 8, bytesPerRow: 0,
+            space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue
+        ) else { return nil }
+        ctx.interpolationQuality = .medium
+        ctx.draw(cg, in: CGRect(x: 0, y: 0, width: targetW, height: targetH))
+        guard let scaled = ctx.makeImage() else { return nil }
+        return NSBitmapImageRep(cgImage: scaled)
+            .representation(using: .jpeg, properties: [.compressionFactor: quality])?
+            .base64EncodedString()
+    }
+
     // MARK: - 鼠标
 
     static func moveMouse(to point: CGPoint) {
@@ -208,6 +232,38 @@ enum LingShuComputerControl {
         AXValueGetValue(posRef as! AXValue, .cgPoint, &point)
         AXValueGetValue(sizeRef as! AXValue, .cgSize, &size)
         return CGRect(origin: point, size: size)
+    }
+
+    // MARK: - 廉价上下文签名（周期感知闸门）
+
+    /// 前台 app 标识(pid + 标签)。**只读 NSWorkspace,快,主线程调**。
+    /// 配 `windowTitleSignature(pid:label:)`(AX IPC,慢,后台线程调)拼成完整签名——
+    /// 把慢的 AX 调用挪出主线程,避免周期感知每拍卡住主线程的音频/UI(实测「在岗时音频卡顿」的根因)。
+    @MainActor
+    static func frontmostAppToken() -> (pid: pid_t, label: String)? {
+        guard let app = NSWorkspace.shared.frontmostApplication else { return nil }
+        return (app.processIdentifier, app.bundleIdentifier ?? app.localizedName ?? "unknown")
+    }
+
+    /// 用 pid 取焦点窗口标题拼成签名。**含 AX IPC(可能阻塞数十 ms,目标 app 卡时更久),务必在后台线程调**。
+    nonisolated static func windowTitleSignature(pid: pid_t, label: String) -> String {
+        guard isAccessibilityTrusted() else { return label }
+        let axApp = AXUIElementCreateApplication(pid)
+        var winRef: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(axApp, kAXFocusedWindowAttribute as CFString, &winRef) == .success,
+              let ref = winRef, CFGetTypeID(ref) == AXUIElementGetTypeID() else {
+            return label
+        }
+        let title = axString(ref as! AXUIElement, kAXTitleAttribute) ?? ""
+        return "\(label)|\(title)"
+    }
+
+    /// 前台上下文的**廉价签名**（前台 app + 焦点窗口标题），供周期感知判「屏幕变没变」。
+    /// 便利合成(主线程取 token + 同步 AX);**周期感知热路径请用 frontmostAppToken + windowTitleSignature 把 AX 放后台**。
+    @MainActor
+    static func frontmostContextSignature() -> String {
+        guard let token = frontmostAppToken() else { return "none" }
+        return windowTitleSignature(pid: token.pid, label: token.label)
     }
 }
 
