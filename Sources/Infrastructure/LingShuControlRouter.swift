@@ -196,6 +196,18 @@ final class LingShuControlRouter {
             ]
         ],
         [
+            "name": "lingshu_set_model",
+            "description": "切换灵枢的大脑(模型供应商/模型),选择持久化到配置(跨重启保留)。args: provider(供应商名,如 DeepSeek)、model(可选,如 deepseek-chat)。**不返显 api key**(只返回是否已配置 key)。",
+            "inputSchema": [
+                "type": "object",
+                "properties": [
+                    "provider": ["type": "string", "description": "供应商名,如 DeepSeek / MiniMax 官方"],
+                    "model": ["type": "string", "description": "模型名(可选),如 deepseek-chat / deepseek-reasoner"]
+                ],
+                "required": ["provider"]
+            ]
+        ],
+        [
             "name": "lingshu_main_session",
             "description": "读常驻主会话上下文尾部(role/内容片段/工具调用),用于核验子任务简报、纠正是否注入了主线程上下文。args: limit。",
             "inputSchema": ["type": "object", "properties": ["limit": ["type": "integer", "description": "返回条数,默认 12"]]]
@@ -374,6 +386,22 @@ final class LingShuControlRouter {
             state.credentialStore.setAPIKey(token, forProvider: provider)
             let stored = (state.credentialStore.apiKey(forProvider: provider)?.isEmpty == false)
             return (jsonText(["ok": stored, "provider": provider, "tokenSuffix": String(token.suffix(6))]), false)
+        case "lingshu_set_model":
+            // 切换大脑(模型供应商/模型),选择持久化(跨重启)。不返显 key,只报是否已配置。
+            guard let provider = (arguments["provider"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !provider.isEmpty else {
+                return ("缺少参数 provider", true)
+            }
+            state.applyModelProvider(provider)   // 设 provider/endpoint/默认 model,并从凭据库加载该 provider 的 key
+            if let model = (arguments["model"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !model.isEmpty {
+                state.modelName = model
+            }
+            return (jsonText([
+                "ok": state.modelProvider == provider,
+                "provider": state.modelProvider,
+                "model": state.modelName,
+                "endpoint": state.endpoint,
+                "keyConfigured": !state.apiKey.isEmpty
+            ]), false)
         case "lingshu_main_session":
             // 读常驻主会话上下文尾部(验证子任务简报/纠正是否注入)。args: limit。
             let limit = (arguments["limit"] as? Int) ?? 12

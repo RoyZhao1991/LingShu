@@ -5,6 +5,9 @@ import SwiftUI
 private enum LingShuPreferenceKeys {
     static let requiresVoiceWakeWord = "lingshu.voice.requiresWakeWord"
     static let voiceWakeWord = "lingshu.voice.wakeWord"
+    static let modelProvider = "lingshu.model.provider"
+    static let modelName = "lingshu.model.name"
+    static let modelEndpoint = "lingshu.model.endpoint"
 }
 
 private enum LingShuPreferenceDefaults {
@@ -61,9 +64,16 @@ final class LingShuState: ObservableObject {
     @Published var activeLayer = "灵枢中枢"
     @Published var runtimePhase: MissionRuntimePhase = .idle
     @Published var supervisionTick = 0
-    @Published var modelProvider = ModelProviderPreset.minimaxOfficial.name
-    @Published var modelName = ModelProviderPreset.minimaxOfficial.defaultModels[0]
-    @Published var endpoint = ModelProviderPreset.minimaxOfficial.endpoint
+    // 模型选择持久化(写进配置,跨重启保留所选大脑——灵枢可灵活更换大模型,选了 DeepSeek 重启后仍是 DeepSeek)。
+    @Published var modelProvider = UserDefaults.standard.string(forKey: LingShuPreferenceKeys.modelProvider) ?? ModelProviderPreset.minimaxOfficial.name {
+        didSet { UserDefaults.standard.set(modelProvider, forKey: LingShuPreferenceKeys.modelProvider) }
+    }
+    @Published var modelName = UserDefaults.standard.string(forKey: LingShuPreferenceKeys.modelName) ?? ModelProviderPreset.minimaxOfficial.defaultModels[0] {
+        didSet { UserDefaults.standard.set(modelName, forKey: LingShuPreferenceKeys.modelName) }
+    }
+    @Published var endpoint = UserDefaults.standard.string(forKey: LingShuPreferenceKeys.modelEndpoint) ?? ModelProviderPreset.minimaxOfficial.endpoint {
+        didSet { UserDefaults.standard.set(endpoint, forKey: LingShuPreferenceKeys.modelEndpoint) }
+    }
     @Published var apiKey = "" {
         didSet {
             guard apiKey != oldValue, let preset = selectedModelPreset else { return }
@@ -699,6 +709,11 @@ final class LingShuState: ObservableObject {
         if preset.name == "Codex Auth" {
             codexCLIPath = CodexBridge.bundledCLIPath
         }
+
+        // 换脑即时生效 + 记忆延续:重建常驻会话(主/自主),下次回合用新模型重新构造 adapter,
+        // 并经 seededDistilledMemory 重新 seed(蒸馏对话记忆 + 最近产出物)——换的是大脑,记忆接着用。
+        mainAgentSessionHolder = nil
+        autonomousSessionHolder = nil
 
         logEvent("现在  模型供应商切换为 \(preset.name)，协议：\(preset.protocolName)。")
         appendTrace(kind: .system, actor: "配置", title: "模型供应商", detail: "已切换为 \(preset.name)，协议：\(preset.protocolName)。")
