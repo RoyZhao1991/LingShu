@@ -63,21 +63,23 @@ extension LingShuState {
         if coreState == .abnormal {
             expression = .alert
             text = missionStatus
+        } else if loopPhase.isActive {
+            // 跑任务时本体**按 LOOP 环节给独立观感(颜色)**:理解/规划=思考态(青,沉稳慢脉动)、执行=执行态(橙,快脉动)、验收=确认态(绿)。
+            // 出声(讲解/演示)时**叠加真实音量脉动**——边讲边按环节色一起脉动,既保留语音反馈、又能看清当前在哪个环节(执行不再被发声态吞成绿色)。
+            switch loopPhase {
+            case .understanding: expression = .thinking;   text = "理解中"; phaseIntensity = 0.42
+            case .planning:      expression = .thinking;   text = "规划中"; phaseIntensity = 0.58
+            case .executing:     expression = .executing;  text = audibleOutput ? "演示中" : "执行中"; phaseIntensity = 0.82
+            case .verifying:     expression = .confirming; text = "验收中"; phaseIntensity = 0.64
+            case .idle:          expression = .executing;  text = missionTitle
+            }
+            if audibleOutput { phaseIntensity = min(1, (phaseIntensity ?? 0.6) + Double(voice.outputLevel) * 0.35) }
         } else if audibleOutput {
             expression = .speaking
             text = "正在发声"
         } else if voice.isRecording || isVoiceConversationActive {
             expression = .listening
             text = "正在聆听"
-        } else if loopPhase.isActive {
-            // 不出声的间隙,按 LOOP 环节给本体独立观感:理解/规划=思考态(青,沉稳慢脉动),执行=执行态(橙,快脉动),验收=确认态(绿)。
-            switch loopPhase {
-            case .understanding: expression = .thinking;   text = "理解中"; phaseIntensity = 0.42
-            case .planning:      expression = .thinking;   text = "规划中"; phaseIntensity = 0.58
-            case .executing:     expression = .executing;  text = "执行中"; phaseIntensity = 0.82
-            case .verifying:     expression = .confirming; text = "验收中"; phaseIntensity = 0.64
-            case .idle:          expression = .executing;  text = missionTitle
-            }
         } else if coreState == .thinking {
             expression = .thinking
             text = missionTitle
