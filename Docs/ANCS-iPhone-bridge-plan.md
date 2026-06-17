@@ -6,6 +6,29 @@
 
 ---
 
+## ✅ 落地状态(2026-06-17)
+
+按用户拍板,实现成**通用「外接设备感知框架」**(ANCS 只是其中一个可插拔模块),代码在
+`Sources/ExternalSensory/`,接线 `Sources/State/LingShuState+ExternalSensory.swift`,UI 在
+「配置 → 外接设备」。详见[架构速查手册](架构速查手册.md)「外接设备感知框架」行。
+
+- **框架/汇聚/无缝切换(§2)**:`LingShuExternalSensorySource` 协议 + `LingShuExternalSensoryHub`
+  汇聚成标准输入 `LingShuExternalSensoryReading`,经 `LingShuSituationContext.ExternalSensoryComponent`
+  与视觉/听觉并列注入大脑。**已落地、单测覆盖**。
+- **M1 ANCS(§3)**:`LingShuANCSProtocol`(8 字节包解析 / Control Point 请求构造 / Data Source 分片重组,
+  **纯函数、已单测**)+ `LingShuANCSSensorySource`(CoreBluetooth posture #1:Mac 作 central)。
+  **结构完整,但 M0 BLE 链路待真机配对验证**——macOS 作 central 能否订到 iPhone 的 ANCS 是头号风险(§1);
+  订不到时如实发 `.unavailable`,Hub 无缝切到 EventKit 兜底。
+- **M3 蒸馏(§4)**:`LingShuPhoneTodoDistiller`(降噪去重 + 纯启发式蒸馏,**已单测**)+
+  `LingShuState.distillPhoneTodos`(模型驱动,失败回退启发式)。**已落地**。
+- **M5 UI + 隐私(§5)**:配置页(主开关默认关 / 各模块启停 + 状态 + 配对提示 / 待办列表 / 隐私说明,中英 i18n)。
+  本地只读、正文不落盘、关闭即清空内存。**已落地**。
+- **兜底源(§8)**:`LingShuEventKitSensorySource`(日历 + 提醒事项,**零配对、实测可用**)=最稳起步源,已落地。
+- **待办**:① M0 真机验证 ANCS 链路(拿明确 yes/no);② M4 `MaterialPrepper`(待办→预备资料,复用现有
+  web_search/write_file 四肢);③ 后续模块(短信库 / 可穿戴 / 智能家居)按协议加在 `makeDefault()`。
+
+---
+
 ## 0. 一句话原理(为什么蓝牙这条能走)
 iOS 自己暴露一个标准 GATT 服务 **ANCS(Apple Notification Center Service)**:**配对过的「配件」**(智能手表/手环就是这么显示 iPhone 通知的)订阅它,即可拿到 iPhone 全部通知的 **app 标识 / 标题 / 副标题 / 正文 / 时间 / 类别**。让灵枢(Mac)扮成这样一个配件去订阅,就读到了 iPhone 通知——**无需在 iPhone 上装 app**。卡点不在蓝牙传输,而在「iPhone 端谁合法地交出数据」,ANCS 正是 Apple 官方给配件的那条合法通道。
 

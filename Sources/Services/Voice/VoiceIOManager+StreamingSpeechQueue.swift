@@ -20,6 +20,7 @@ extension VoiceIOManager {
     func speakStreamingSentence(_ text: String) {
         let cleaned = Self.strippedForSpeech(text).trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cleaned.isEmpty else { return }
+        lingShuControlLog("TTS来源③: 流式分句早读 文本「\(cleaned.prefix(40))」")
 
         let provider = speechOutputProvider
         let apiKey = resolvedSpeechOutputAPIKey(for: provider)

@@ -76,19 +76,31 @@ struct LingShuAutonomousOrbOnlyView: View {
 
     /// LOOP 相位标签:执行过程中实时显示「理解中 / 规划中 / 执行中 / 验收中」,免得用户干等不知发生了什么。
     /// 暂停时显示「已暂停」;空闲(idle)时显示「在岗」让本体始终有态。
+    /// 串行管线状态(用户定调 2026-06-17),**以音频为准、不以文字回复为准**(TTS 有起播延迟):
+    /// 待机中 → 听到进音→我在听 → 有效语音收口→处理中(持续到 TTS **真开始播**) → 回应中(音频播放中) → 播完→待机中。
+    private func standingStateChip() -> (text: String, tint: Color, icon: String) {
+        // **回应中=音频真正在播**(`hasAudibleOutput`=输出电平真起来了);只有文字、TTS 还在取音/没出声 → 仍算处理中
+        // (`isSpeaking` 在"请求发声"时就置 true、早于真出声,故不能用它判回应中)。TTS 没开则永远不出声 → 跳过回应中。
+        let responding = voice.hasAudibleOutput
+        let speechPending = voice.isSpeakingOrQueued && !responding              // 已请求TTS但还没真出声 → 处理中
+        let processing = state.hasActiveModelCall || state.loopPhase.isActive || speechPending
+        let hearing = voice.isRecording && (!voice.transcript.isEmpty || voice.inputLevel >= 0.04)
+        if paused { return ("已暂停", .orange, "pause.circle") }
+        if responding { return ("回应中", .green, "speaker.wave.2.fill") }
+        if processing { return ("处理中", .cyan, "brain") }
+        if hearing { return ("我在听", .green, "ear.fill") }
+        return ("待机中", .white.opacity(0.55), "moon.zzz")
+    }
+
     @ViewBuilder private var phaseLabel: some View {
-        let phase = state.loopPhase
-        let active = phase.isActive && !paused
-        let text = paused ? "已暂停" : (active ? phase.rawValue : "在岗")
-        let tint: Color = paused ? .orange : (active ? phase.color : .white.opacity(0.6))
-        let icon = paused ? "pause.circle" : (active ? phase.icon : "dot.radiowaves.left.and.right")
-        Label(text, systemImage: icon)
+        let chip = standingStateChip()
+        Label(chip.text, systemImage: chip.icon)
             .font(.system(size: 10, weight: .bold))
-            .foregroundStyle(tint)
+            .foregroundStyle(chip.tint)
             .padding(.horizontal, 9).frame(height: 21)
-            .background(tint.opacity(0.16), in: Capsule())
-            .overlay { Capsule().stroke(tint.opacity(0.4), lineWidth: 0.5) }
-            .animation(.easeInOut(duration: 0.25), value: phase)
+            .background(chip.tint.opacity(0.16), in: Capsule())
+            .overlay { Capsule().stroke(chip.tint.opacity(0.4), lineWidth: 0.5) }
+            .animation(.easeInOut(duration: 0.25), value: chip.text)
             .animation(.easeInOut(duration: 0.25), value: paused)
     }
 

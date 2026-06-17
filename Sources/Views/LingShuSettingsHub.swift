@@ -10,7 +10,8 @@ struct LingShuSettingsHub: View {
         case model = "模型通道"
         case policy = "系统配置"
         case residency = "常驻与触发"
-        case skills = "技能与连接器"
+        case skills = "技能"
+        case connectors = "连接器"
         case memory = "记忆"
         var id: String { rawValue }
         var icon: String {
@@ -19,6 +20,7 @@ struct LingShuSettingsHub: View {
             case .policy: "gearshape"
             case .residency: "clock.badge"
             case .skills: "puzzlepiece.extension"
+            case .connectors: "app.connected.to.app.below.fill"
             case .memory: "brain"
             }
         }
@@ -27,7 +29,8 @@ struct LingShuSettingsHub: View {
             case .model: "Models"
             case .policy: "System"
             case .residency: "Standby & Triggers"
-            case .skills: "Skills & Connectors"
+            case .skills: "Skills"
+            case .connectors: "Connectors"
             case .memory: "Memory"
             }
         }
@@ -81,12 +84,10 @@ struct LingShuSettingsHub: View {
                     }
                 case .skills:
                     ScrollView {
-                        VStack(alignment: .leading, spacing: 16) {
-                            LingShuSkillsPanel(state: state)
-                            LingShuConnectorsPanel(registry: state.connectorRegistry)
-                        }
-                        .padding(22)
+                        LingShuSkillsPanel(state: state).padding(22)
                     }
+                case .connectors:
+                    LingShuConnectorsHub(state: state)
                 case .memory:
                     ScrollView {
                         LingShuMemoryStatsPanel(state: state)
@@ -96,6 +97,75 @@ struct LingShuSettingsHub: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+    }
+}
+
+// MARK: - 连接器中心（MCP 连接器 / 外设连接器 两个子 tab）
+
+/// 「连接器」= 灵枢对接外部能力的两类通道:**MCP 连接器**(软件工具 server)与
+/// **外设连接器**(硬件/外接设备,如 iPhone 蓝牙通知桥 ANCS)。两者各一个子 tab。
+struct LingShuConnectorsHub: View {
+    @ObservedObject var state: LingShuState
+
+    enum Sub: String, CaseIterable, Identifiable {
+        case mcp = "MCP 连接器"
+        case peripheral = "外设连接器"
+        var id: String { rawValue }
+        var icon: String {
+            switch self {
+            case .mcp: "app.connected.to.app.below.fill"
+            case .peripheral: "sensor.tag.radiowaves.forward"
+            }
+        }
+        var englishName: String {
+            switch self {
+            case .mcp: "MCP"
+            case .peripheral: "Peripherals"
+            }
+        }
+    }
+
+    @State private var sub: Sub = .mcp
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 4) {
+                ForEach(Sub.allCases) { item in
+                    Button {
+                        sub = item
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: item.icon)
+                                .font(.system(size: 11.5, weight: .semibold))
+                            Text(state.loc(item.rawValue, item.englishName))
+                                .font(.system(size: 12, weight: .semibold))
+                        }
+                        .foregroundStyle(sub == item ? Color.lingVoid : .white.opacity(0.7))
+                        .padding(.horizontal, 11)
+                        .padding(.vertical, 6)
+                        .background(
+                            sub == item ? Color.lingHolo : Color.white.opacity(0.05),
+                            in: RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        )
+                    }
+                    .buttonStyle(.plain)
+                }
+                Spacer()
+            }
+            .padding(.horizontal, 22)
+            .padding(.top, 14)
+            .padding(.bottom, 10)
+
+            ScrollView {
+                switch sub {
+                case .mcp:
+                    LingShuConnectorsPanel(registry: state.connectorRegistry).padding(22)
+                case .peripheral:
+                    LingShuExternalSensoryView(state: state, hub: state.externalSensory).padding(22)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 

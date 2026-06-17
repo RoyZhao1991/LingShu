@@ -27,6 +27,7 @@ extension VoiceIOManager {
     func speakQueued(_ text: String) {
         let cleaned = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cleaned.isEmpty else { return }
+        lingShuControlLog("TTS来源④: 排队朗读 文本「\(cleaned.prefix(40))」")
         speechQueue.append(cleaned)
         drainSpeechQueueIfNeeded()
     }

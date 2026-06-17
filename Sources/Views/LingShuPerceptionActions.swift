@@ -198,7 +198,65 @@ enum LingShuPerceptionActions {
             return
         }
 
-        let command = LingShuWakeWordMatcher.stripWakeWord(from: cleanedText, wakeWord: effectiveWakeWord(for: state))
+        let containsWake = LingShuWakeWordMatcher.contains(cleanedText, wakeWord: effectiveWakeWord(for: state))
+        let command = containsWake
+            ? LingShuWakeWordMatcher.commandAfterWake(from: cleanedText, wakeWord: effectiveWakeWord(for: state))
+            : cleanedText
+        let pureWake = containsWake && command.isEmpty   // 整句就是「灵枢」=纯触发
+
+        // busy 判据(以音频为准):模型在跑 / LOOP 在跑 / TTS 已请求或正在播 / 刚说完的回声冷却。
+        let speaking = voice.isSpeaking || voice.hasAudibleOutput
+        let speechPending = voice.isSpeakingOrQueued && !speaking
+        let echoCooldown = Date().timeIntervalSince(voice.lastSpeechEndedAt) < voice.echoCooldownSeconds
+        let busy = speaking || state.hasActiveModelCall || state.loopPhase.isActive || speechPending || echoCooldown
+        let ambientGated = state.isStandingPersonOnDuty && state.meetingDetectionState.inMeeting
+
+        // ① **纯唤醒词=进入聆听/打断的触发(最高优先,永不当回声、不被 busy 拦)**:不提交、不调模型。
+        if pureWake {
+            if busy { state.interruptSpeechOutput?(); voice.stopSpeaking() }   // 喊「灵枢」打断当前
+            state.prompt = ""
+            if !state.voiceListeningArmed {
+                state.voiceListeningArmed = true
+                state.lastVoiceActivityAt = Date()
+                state.missionStatus = "我在听,请说。"
+                LingShuCueSound.playWakeChime()
+                lingShuControlLog("voice: 唤醒词→进入我在听(触发,不当指令提交)")
+            }
+            return
+        }
+
+        // ② **自激回声兜底**:发声中或刚说完 5s 内,听到的若是灵枢自己说过的话(或其片段)→ 判回声丢弃。
+        // **不再因为含唤醒词就跳过**——灵枢自己的话常含"灵枢"同音误识别(如"林纾"),那也是回声、不能当指令。
+        // (纯唤醒词已在 ① 放行,不会被这里误杀;真打断指令"灵枢,做X"不匹配最近输出 → 不算回声。)
+        let echoWindow = voice.isSpeaking || Date().timeIntervalSince(voice.lastSpeechEndedAt) < 5
+        if echoWindow, LingShuEchoDetector.isEcho(cleanedText, recentOutputs: state.recentSpokenForEcho()) {
+            state.prompt = ""
+            if result.isFinal { lingShuControlLog("voice: 回声(灵枢自己说的话)忽略「\(cleanedText.prefix(24))」") }
+            return
+        }
+
+        // ③ busy/会议:非唤醒词一律忽略(串行管线,忙时只接受唤醒词打断)。
+        if (busy || ambientGated), !containsWake {
+            state.prompt = ""
+            if result.isFinal {
+                state.missionStatus = busy ? "正在处理中,喊一声「\(effectiveWakeWord(for: state))」可打断。"
+                                           : "会议/多人环境:喊一声「\(effectiveWakeWord(for: state))」我才应。"
+                lingShuControlLog("voice: 门(\(busy ? "忙·非唤醒" : "会议·非唤醒"))忽略「\(cleanedText.prefix(20))」")
+            }
+            return
+        }
+
+        // 「进入聆听模式」提示音:非会议靠声音、会议靠唤醒词;同段会话不重复响,静默 25s 后重置。
+        let nowTS = Date()
+        if nowTS.timeIntervalSince(state.lastVoiceActivityAt) > 25 { state.voiceListeningArmed = false }
+        state.lastVoiceActivityAt = nowTS
+        let entersListening = ambientGated ? containsWake : true
+        if entersListening, !state.voiceListeningArmed {
+            state.voiceListeningArmed = true
+            LingShuCueSound.playWakeChime()
+            lingShuControlLog("voice: 进入聆听模式(\(ambientGated ? "唤醒词" : "声音"))→ 提示音")
+        }
+
         // 连续模式即便对话态标志没置上也照收(显式上岗/通话);非连续模式仍需进对话态。
         guard continuousMode || state.isVoiceConversationActive, !command.isEmpty else { return }
 
@@ -209,7 +267,7 @@ enum LingShuPerceptionActions {
         // 连续态(通话/在岗)= 显式拨给灵枢的"电话",单人环境默认都在对它说话。
         let verdict = LingShuVoiceAddressingGate.decide(.init(
             transcript: command,
-            containsWakeWord: LingShuWakeWordMatcher.contains(cleanedText, wakeWord: effectiveWakeWord(for: state)),
+            containsWakeWord: containsWake,
             lockEnabled: perceptionGateway.ownerIdentityLockEnabled,
             ownerVoiceConfidence: perceptionGateway.ownerIdentitySnapshot.voiceConfidence,
             multipleSpeakersDetected: perceptionGateway.multipleSpeakersSuspected,
@@ -219,6 +277,14 @@ enum LingShuPerceptionActions {
 
         switch verdict {
         case .respond:
+            // 调大模型前先筛:无意义语句(纯语气词/标点/噪声)**直接放弃、转待机**,不惊动大脑(省钱+免乱回应)。
+            guard LingShuUtteranceMeaning.isMeaningful(command) else {
+                state.prompt = ""
+                state.voiceListeningArmed = false   // 收口本句,下次开口重新进入聆听
+                lingShuControlLog("voice: 丢弃无意义语句「\(command.prefix(20))」→ 不调模型,转待机")
+                return
+            }
+            // 进入聆听的提示音已在上面按"两套激活逻辑"响过(声音/唤醒词),这里不再重复响。
             // 连续 LOOP + 灵枢正说话/在跑:这是「中途插话」——先掐掉正在播的 TTS,再把整句交给中枢
             // (submitTextInput→在岗会话会把它注入正在跑的那条脑回路,答完再续)。
             if voice.isSpeaking || state.hasActiveModelCall { voice.stopSpeaking() }

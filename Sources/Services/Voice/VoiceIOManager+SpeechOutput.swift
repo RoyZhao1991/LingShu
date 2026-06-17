@@ -48,6 +48,8 @@ extension VoiceIOManager {
         // 朗读前剥 markdown(代码块/表格/标记):否则长回复会把 `**`、`|`、`-` 等当文本念,既乱又可能整段失败。
         let cleanedText = Self.strippedForSpeech(text)
         guard !cleanedText.isEmpty else { return }
+        // TTS 链路日志:每次整段出声都记一条(文本 + 代次),供排查"谁在说话/为什么有两声招呼"。
+        lingShuControlLog("speak(整段) gen=\(speechGeneration &+ 1) 文本「\(cleanedText.prefix(40))」")
 
         // 递增发声代次:本次之后再有新发声/降级都会让先前在飞的音频「过期」(下方各处按 gen 守卫,不再出声/不翻转状态)。
         speechGeneration &+= 1

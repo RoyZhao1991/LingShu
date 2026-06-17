@@ -7,7 +7,9 @@ import Foundation
 enum LingShuWakeWordMatcher {
 
     /// 仍保留一小撮字面变体作快路/兜底（拼音转换偶尔拿不到时）。主力是下面的拼音模糊匹配。
-    static let lingShuVariants: [String] = ["灵枢", "灵书", "铃枢", "凌枢", "灵树"]
+    /// 含 ASR 常见误识别(liú shū / líng shū 近音):"刘叔/刘书/留书"等——用户实测被叫成"刘叔",
+    /// 把这些都当作唤醒词命中并剥离,避免误识别的名字被当成主人称呼污染上下文。
+    static let lingShuVariants: [String] = ["灵枢", "灵书", "铃枢", "凌枢", "灵树", "刘叔", "刘书", "留书", "凌书"]
 
     /// 文本是否点名了灵枢（读音匹配 + 字面兜底）。
     static func contains(_ text: String, wakeWord: String) -> Bool {
@@ -53,6 +55,40 @@ enum LingShuWakeWordMatcher {
         if keys.count >= wakeKeys.count, Array(keys.prefix(wakeKeys.count)) == wakeKeys {
             let after = trimmed.index(trimmed.startIndex, offsetBy: consumed)
             return tail(of: trimmed, after: after)
+        }
+        return trimmed
+    }
+
+    /// 剥掉唤醒词后返回**纯指令体**;若整句就是唤醒词(纯触发、没带指令)→ 返回**空串**。
+    /// 与 `stripWakeWord` 的区别:后者剥成空时回退原文(怕丢内容);这里**保留空**,供调用方判定
+    /// "唤醒词只是进入聆听的触发、不是指令"(用户定调:喊「灵枢」不该被当成一句话提交给大脑)。
+    static func commandAfterWake(from text: String, wakeWord: String) -> String {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let cut = CharacterSet.whitespacesAndNewlines.union(.punctuationCharacters)
+        var literals = lingShuVariants
+        let configured = wakeWord.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !configured.isEmpty { literals.append(configured) }
+        for needle in literals.sorted(by: { $0.count > $1.count }) {
+            if let range = trimmed.range(of: needle, options: [.caseInsensitive, .diacriticInsensitive]) {
+                return String(trimmed[range.upperBound...]).trimmingCharacters(in: cut)
+            }
+        }
+        // 读音剥离:句首与唤醒词同音的几个字连同其后标点去掉,返回剩余(可空)。
+        let wakeKeys = fuzzyPinyinKeys(configured.isEmpty ? "灵枢" : configured)
+        guard !wakeKeys.isEmpty else { return trimmed }
+        let chars = Array(trimmed)
+        var keys: [String] = []
+        var consumed = 0
+        while consumed < chars.count, keys.count < wakeKeys.count {
+            let ch = chars[consumed]
+            let chKeys = fuzzyPinyinKeys(String(ch))
+            guard chKeys.count == 1, !ch.isASCII else { break }
+            keys.append(contentsOf: chKeys)
+            consumed += 1
+        }
+        if keys.count >= wakeKeys.count, Array(keys.prefix(wakeKeys.count)) == wakeKeys {
+            let after = trimmed.index(trimmed.startIndex, offsetBy: consumed)
+            return String(trimmed[after...]).trimmingCharacters(in: cut)
         }
         return trimmed
     }

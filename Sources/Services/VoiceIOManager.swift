@@ -43,9 +43,21 @@ final class VoiceIOManager: ObservableObject {
                 startOutputMetering()
             } else {
                 stopOutputMetering()
+                lastSpeechEndedAt = Date()   // 记录刚说完的时刻:其后短暂冷却内忽略麦克风(吃掉 TTS 回声尾巴)
+                // **整段发声真正结束**(没有后续排队句)时,才丢弃麦克风累积的转写(那是 TTS 回声)。
+                // 句间间隙(isSpeakingOrQueued 仍 true)**不清**——否则会把用户的打断「灵枢」/接话也清掉
+                // (实测:之前每次切换都清,导致回应中喊灵枢打不断、第一轮后再说话进了"我在听"却没提交)。
+                if !isSpeakingOrQueued {
+                    transcript = ""
+                    lastPartialAt = .distantPast
+                }
             }
         }
     }
+    /// 最近一次 TTS 发声结束的时刻;其后 `echoCooldownSeconds` 内的非唤醒词麦克风输入按回声忽略。
+    var lastSpeechEndedAt: Date = .distantPast
+    /// 发声结束后的回声冷却时长(秒):吃掉 TTS 尾音回声,避免被当成新输入。
+    let echoCooldownSeconds: TimeInterval = 1.0
     @Published var transcript = ""
     @Published var inputStatusMessage = "收音待机"
     @Published var outputStatusMessage = "发声待机"
@@ -68,6 +80,11 @@ final class VoiceIOManager: ObservableObject {
     @Published var micSilentWarning: String?
     /// 最近一次音频 tap 真收到缓冲的时刻(看门狗据此判"引擎在跑但麦克风没进音")。
     var lastInputBufferAt: Date = .distantPast
+    /// 静音收口:最近一次 ASR partial 更新的时刻。partial 文本静默超过 `silenceFinalizeSeconds`
+    /// 就**强制把当前转写当一句收口提交**,不傻等 SFSpeech 的 isFinal(它常迟迟不来 → 卡在"我在听"不进思考)。
+    var lastPartialAt: Date = .distantPast
+    /// 静音收口阈值(秒);<=0 关闭。默认 2s = 说完停顿 2 秒即转入思考。
+    var silenceFinalizeSeconds: TimeInterval = 2.0
     private var micWatchdogTask: Task<Void, Never>?
     /// 是否启用系统语音处理(AEC)。VPIO 在某些机器/设备组合下会把麦克风弄哑(引擎在跑却零进音);
     /// 看门狗发现没进音会把它关掉重试一次(宁可没回声消除,也要麦克风能用)。
@@ -350,6 +367,7 @@ final class VoiceIOManager: ObservableObject {
                     let wasEmpty = self.transcript.isEmpty
                     let transcription = self.makeTranscriptionResult(text: recognizedText, isFinal: isFinal)
                     self.transcript = transcription.text
+                    self.lastPartialAt = Date()   // 记录最近 partial 时间(静音收口判据)
                     callbacks.onText(transcription.text)
                     callbacks.onResult?(transcription)
                     // 诊断:ASR 真出了转写(本句首个 partial + 每个 final)——定位"麦克风有进音但没识别出来"还是"识别了没提交"。
@@ -359,7 +377,9 @@ final class VoiceIOManager: ObservableObject {
 
                     if isFinal {
                         callbacks.onFinal?(transcription.text)
-                        self.armSpeechRecognition()   // 无缝轮换到下一句
+                        self.transcript = ""              // 收口后清空,避免静音判据用旧文本重复触发
+                        self.lastPartialAt = .distantPast
+                        self.armSpeechRecognition()       // 无缝轮换到下一句
                     }
                 }
 
@@ -373,6 +393,27 @@ final class VoiceIOManager: ObservableObject {
                 }
             }
         }
+    }
+
+    /// 静音收口判定(由音频 tap 每 ~50ms 在主线程调):有未收口的转写、且 partial 静默超过阈值 → 强制收口。
+    /// 这就是"说完停 2 秒就进入思考"——不傻等 SFSpeech 的 isFinal(连续识别下它常迟迟不来)。
+    func evaluateUtteranceSilence(now: Date = Date()) {
+        guard isRecording, silenceFinalizeSeconds > 0,
+              !transcript.isEmpty, lastPartialAt != .distantPast,
+              now.timeIntervalSince(lastPartialAt) >= silenceFinalizeSeconds else { return }
+        forceFinalizeUtterance()
+    }
+
+    /// 强制把当前 partial 转写当一句 final 提交(走 onResult,isFinal=true → 主线程转入思考),并轮换识别接下一句。
+    private func forceFinalizeUtterance() {
+        let text = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty, let callbacks = speechCallbacks else { return }
+        transcript = ""
+        lastPartialAt = .distantPast
+        lingShuControlLog("voice/asr: 静音 \(String(format: "%.0f", silenceFinalizeSeconds))s 强制收口「\(text.prefix(24))」→ 转入思考")
+        callbacks.onResult?(makeTranscriptionResult(text: text, isFinal: true))
+        callbacks.onFinal?(text)
+        armSpeechRecognition()
     }
 
     private func makeTranscriptionResult(text: String, isFinal: Bool) -> LingShuVoiceTranscriptionResult {

@@ -124,6 +124,24 @@ struct LingShuRootView: View {
             // 把持久化的「本地模式」偏好应用到 voiceManager(didSet 不会为初始值触发,启动时手动应用一次)。
             state.applyASRLocalMode()
             state.applyTTSLocalMode()
+            // 外接设备感知:注入模型驱动蒸馏器 + 恢复上次开关偏好(默认关)。
+            state.wireExternalSensory()
+            // 系统通知中枢:设代理(前台也弹横幅)+ 查授权状态(配置页可主动授予)。
+            LingShuNotificationCenter.shared.bootstrap()
+            // 感知链:注入"活感官"采样器(只在传感器真在跑时投,避免陈旧态被当成实时),并起高频采样。
+            state.liveSenseSampler = { [weak voice, weak vision, weak perceptionGateway] in
+                var samples: [LingShuPerceptionSample] = []
+                guard let perceptionGateway else { return samples }
+                let snap = perceptionGateway.latestSnapshot
+                if vision?.isCameraRunning == true, !snap.visualSummary.isEmpty {
+                    samples.append(.init(channel: .vision, text: snap.visualSummary))
+                }
+                if voice?.isRecording == true, !snap.audioSummary.isEmpty {
+                    samples.append(.init(channel: .hearing, text: snap.audioSummary))
+                }
+                return samples
+            }
+            state.startPerceptionChain()
 
             perceptionGateway.registerCloudPerceptionRoute(client: state.cloudPerceptionClient)
             [0.1, 0.8, 1.6].forEach { delay in
@@ -174,7 +192,7 @@ struct LingShuRootView: View {
         }
 
         state.lastSpokenMessageID = message.id
-        lingShuControlLog("speak: 朗读消息 id=\(message.id.uuidString.prefix(8)) 文本「\(String(message.text.prefix(40)))」")
+        lingShuControlLog("TTS来源②: 自动朗读回复气泡 id=\(message.id.uuidString.prefix(8)) 文本「\(String(message.text.prefix(40)))」")
         // 任务型交付只念简短摘要(避免整段念路径/英文/代码);对话/汇报型念全文。决策需模型,异步。
         Task { @MainActor in
             let toSpeak = await state.spokenReplyText(for: message)

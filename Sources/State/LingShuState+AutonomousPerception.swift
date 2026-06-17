@@ -64,6 +64,13 @@ extension LingShuState {
         let audioForPlanner: LingShuAudioActivityState? =
             perceptionAudioOnsetLatched ? .onset : perceptionLatestAudioState
 
+        // 会议检测(反射):据前台 app/窗口标题/声音活动判断进入/离开会议,起停会议纪要累积。
+        updateMeetingDetection(
+            windowSignature: signature,
+            audioActive: audioForPlanner == .onset || audioForPlanner == .active,
+            now: now
+        )
+
         let decision = LingShuPerceptionCadencePlanner.decide(.init(
             now: now,
             lastTickAt: lastPerceptionTickAt,
@@ -101,7 +108,12 @@ extension LingShuState {
                 reason: "灵枢自主运行/在岗:需持续感知屏幕+系统声音并推进,避免后台 App Nap 暂停心跳。"
             )
         }
-        startStandingVoiceListening?()   // 同步开启麦克风收听(听→ASR→思考→回应,和极简模式一致;幂等)
+        // 上岗只开**麦克风收听(Apple SFSpeech,已验证可用)**。
+        // 不切麦克风引擎、不起系统声音 ASR——这两样都曾把麦克风搞哑:① 两个 SFSpeech 并发互相饿死;
+        // ② 切到 SenseVoice 后麦克风没跑通(实测 13:11 上岗后说话不回复)。系统声音转写(会议纪要)
+        // 需要"两路 ASR 真并发"的能力,尚未验证跑通,**暂不自动开**,绝不再因此弄哑麦克风。
+        voiceOutputEnabled = true   // 自主模式语音播报必须自动打开(否则只有文字、没有"回应中"语音)
+        startStandingVoiceListening?()
         guard autonomousPerceptionDriverTask == nil else { return }
         // 驱动 Task **不是 @MainActor**:主线程只做廉价心跳,AX 焦点窗口签名(慢)在后台算,绝不卡主线程音频。
         autonomousPerceptionDriverTask = Task { [weak self] in
@@ -123,6 +135,12 @@ extension LingShuState {
         autonomousPerceptionDriverTask?.cancel()
         autonomousPerceptionDriverTask = nil
         stopStandingVoiceListening?()   // 离开运行/在岗态:停麦克风收听
+        stopStandingAmbientListening()  // 停「听系统声音」
+        // 还原麦克风识别引擎(上岗时若为腾 SFSpeech 切到过 SenseVoice)。
+        if let prev = standingPrevMicProvider {
+            voiceManager?.transcriptionProvider = prev
+            standingPrevMicProvider = nil
+        }
         if let token = autonomousActivityToken {
             ProcessInfo.processInfo.endActivity(token)
             autonomousActivityToken = nil
@@ -167,12 +185,40 @@ extension LingShuState {
         Task { try? await LingShuSystemAudioCapture.shared.start() }
     }
 
-    /// 只停**本对象启的**采集;会议此刻在用就不动(避免误关会议的听)。
+    /// 只停**本对象启的**采集;会议此刻在用、或在岗「听系统声音」仍要用,就不动(避免误关别人的听)。
     private func stopAutonomousPerceptionAudioIfNeeded() {
         guard perceptionOwnsAudioCapture else { return }
         perceptionOwnsAudioCapture = false
-        guard !meetingConversation.isActive else { return }
+        guard !meetingConversation.isActive, !standingAmbientASRActive else { return }
         Task { await LingShuSystemAudioCapture.shared.stop() }
+    }
+
+    /// 在岗「听系统声音」:系统音频 → 会议 ASR → 滚动转写(供感知链 ambient 通道采样)。
+    /// **纯听不应答**(不走会议的虚拟麦应答闭环)。会议模式已在听就不重复。上岗自动调,幂等。
+    func startStandingAmbientListening() {
+        guard !standingAmbientASRActive else { return }
+        guard !meetingConversation.isActive else { return }   // 会议模式自己在听+应答,别重复
+        standingAmbientASRActive = true
+        LingShuMeetingASR.shared.start()
+        let cap = LingShuSystemAudioCapture.shared
+        cap.onPCMChunk = { samples, sampleRate in
+            LingShuMeetingASR.shared.appendPCM(samples, sampleRate: sampleRate)
+        }
+        if !cap.isCapturing {
+            Task { try? await cap.start() }
+        }
+        appendTrace(kind: .runtime, actor: "在岗", title: "听系统声音", detail: "系统音频→ASR 已起,转写进感知链(系统声音通道)")
+    }
+
+    /// 停在岗「听系统声音」;采集若没别人(会议/感知活动)还要用,才真停。
+    func stopStandingAmbientListening() {
+        guard standingAmbientASRActive else { return }
+        standingAmbientASRActive = false
+        LingShuMeetingASR.shared.stop()
+        let cap = LingShuSystemAudioCapture.shared
+        cap.onPCMChunk = nil
+        guard !meetingConversation.isActive, !perceptionOwnsAudioCapture else { return }
+        Task { await cap.stop() }
     }
 
     /// 花一次 VL 理解当前屏幕 → 更新 digest。关键帧用完即删(零留存)。并发保护:上次 VL 没回来不叠加。
@@ -227,6 +273,8 @@ extension LingShuState {
         }
     }
 
+    /// 多模态合并:屏幕(眼)+ 声音(耳)+ 外接设备(第六感)汇聚成一份周期态势 digest。
+    /// 这是「定时」给大脑的多模态信号合并点——各通道各自独立采集,在此刻合并成一套标准输入。
     private func updatePerceptionDigest(screen: String, audio: LingShuAudioActivityState?) {
         var parts: [String] = []
         if !screen.isEmpty { parts.append("屏幕:\(screen)") }
@@ -235,6 +283,12 @@ extension LingShuState {
         case .offset, .silent: parts.append("声音:安静")
         case nil: break
         }
+        // 外接设备(手机通知/日历…)汇聚成的标准输入,并入多模态信号。
+        if let ext = externalSensory.situationContribution()?.replacingOccurrences(of: "\n", with: " ") {
+            parts.append("外接设备:\(ext)")
+        }
+        // 屏幕语义昂贵(VL 节流),拿到就单独投进感知链(高频采样器不碰 VL)。
+        if !screen.isEmpty { perceptionChain.note(.screen, screen) }
         let digest = parts.joined(separator: " · ")
         guard !digest.isEmpty else { return }
         perceptionDigest = digest

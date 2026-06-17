@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 struct LingShuOperationsSurface: View {
     @ObservedObject var state: LingShuState
@@ -327,70 +328,61 @@ struct LingShuExecutionPolicySurface: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            SectionHeader(icon: "gearshape", title: state.loc("系统配置", "System"), subtitle: state.loc("基础配置 · 安全配置", "Basic · Security"))
+            SectionHeader(icon: "gearshape", title: state.loc("系统配置", "System"), subtitle: state.loc("界面 · 目录 · 偏好 · 安全", "UI · Directory · Preferences · Security"))
 
-            // 两大块:基础配置 / 安全配置。同类设置并排同行,省纵向空间、更紧凑。
-            group(state.loc("基础配置", "Basic"), tint: .lingHolo) {
-                // 语言 | 工作目录 同行(语言定宽分段、工作目录占满剩余)。
-                HStack(alignment: .top, spacing: 18) {
-                    labeled(state.loc("界面语言", "Language")) {
-                        Picker("Language", selection: $state.language) {
-                            ForEach(LingShuVoiceLanguage.allCases) { Text($0.displayName).tag($0) }
-                        }
-                        .pickerStyle(.segmented).labelsHidden().frame(width: 190)
-                    }
-                    .fixedSize(horizontal: true, vertical: false)
-                    labeled(state.loc("工作目录", "Working directory")) {
-                        TextField(state.loc("项目目录绝对路径", "Absolute project path"), text: $state.codexWorkingDirectory)
-                            .textFieldStyle(.roundedBorder).font(.system(size: 12.5, design: .monospaced))
-                    }
+            // 统一「名称：控件」对齐列表:标签定宽右对齐(冒号对齐)→ 所有控件左缘对齐;每项单行不换行,无分组标题/配色。
+            VStack(alignment: .leading, spacing: 14) {
+                row(state.loc("界面语言", "Language")) {
+                    Picker("Language", selection: $state.language) {
+                        ForEach(LingShuVoiceLanguage.allCases) { Text($0.displayName).tag($0) }
+                    }.pickerStyle(.segmented).labelsHidden().frame(width: 190)
                 }
-                // 语音朗读 | 随机性 同行。
-                HStack(alignment: .center, spacing: 16) {
-                    Toggle(state.loc("语音朗读", "Speak aloud"), isOn: $state.voiceOutputEnabled).toggleStyle(.switch).fixedSize()
-                    Divider().frame(height: 18).overlay(Color.white.opacity(0.12))
-                    Text(state.loc("随机性", "Temperature"))
-                    Slider(value: $state.temperature, in: 0...1, step: 0.1)
-                    Text(String(format: "%.1f", state.temperature)).font(.system(size: 12.5, weight: .bold, design: .monospaced)).foregroundStyle(Color.lingHolo).frame(width: 30, alignment: .trailing)
+                row(state.loc("工作目录", "Working dir")) {
+                    TextField(state.loc("项目目录绝对路径", "Absolute project path"), text: $state.codexWorkingDirectory)
+                        .textFieldStyle(.roundedBorder).font(.system(size: 12.5, design: .monospaced)).frame(maxWidth: 460)
                 }
-                .font(.system(size: 12.5, weight: .semibold)).foregroundStyle(.white.opacity(0.82))
-            }
+                row(state.loc("语音朗读", "Speak aloud")) {
+                    Toggle("", isOn: $state.voiceOutputEnabled).toggleStyle(.switch).labelsHidden()
+                }
+                row(state.loc("随机性", "Temperature")) {
+                    Slider(value: $state.temperature, in: 0...1, step: 0.1).frame(width: 300)
+                    Text(String(format: "%.1f", state.temperature)).font(.system(size: 12.5, weight: .bold, design: .monospaced)).foregroundStyle(Color.lingHolo)
+                }
 
-            group(state.loc("安全配置", "Security"), tint: .orange) {
-                // 权限模式 | 两个高风险开关 同行。
-                HStack(alignment: .center, spacing: 16) {
-                    labeled(state.loc("权限模式", "Permission")) {
-                        Picker(state.loc("权限模式", "Permission mode"), selection: $state.codexPermissionMode) {
-                            ForEach(CodexPermissionMode.allCases) { Text(state.loc($0.rawValue, $0.englishName)).tag($0) }
-                        }
-                        .pickerStyle(.segmented).labelsHidden().frame(width: 190)
-                    }
-                    .fixedSize(horizontal: true, vertical: false)
-                    Divider().frame(height: 30).overlay(Color.white.opacity(0.12))
-                    Toggle(state.loc("高风险需人工确认", "Confirm high-risk"), isOn: $state.requireHumanApproval).toggleStyle(.switch).fixedSize()
-                    Toggle(state.loc("计算机直接操作", "Direct computer control"), isOn: $state.computerControlEnabled).toggleStyle(.switch).fixedSize()
-                    Spacer()
+                Divider().overlay(Color.white.opacity(0.08))
+
+                row(state.loc("权限模式", "Permission mode")) {
+                    Picker("", selection: $state.codexPermissionMode) {
+                        ForEach(CodexPermissionMode.allCases) { Text(state.loc($0.rawValue, $0.englishName)).tag($0) }
+                    }.pickerStyle(.segmented).labelsHidden().frame(width: 190)
                 }
-                .font(.system(size: 12.5, weight: .semibold)).foregroundStyle(.white.opacity(0.82))
-                Text(state.loc("开启「计算机直接操作」后,\(state.appName)可直接看屏 / 点击 / 键入,会向系统申请辅助功能 + 屏幕录制授权。", "With Direct computer control on, \(state.appName) can view the screen / click / type, requesting Accessibility + Screen Recording permissions."))
-                    .font(.system(size: 10.5, weight: .medium)).foregroundStyle(.white.opacity(0.42))
-                    .fixedSize(horizontal: false, vertical: true)
+                row(state.loc("高风险需人工确认", "Confirm high-risk")) {
+                    Toggle("", isOn: $state.requireHumanApproval).toggleStyle(.switch).labelsHidden()
+                }
+                row(state.loc("计算机直接操作", "Computer control")) {
+                    Toggle("", isOn: $state.computerControlEnabled).toggleStyle(.switch).labelsHidden()
+                    Text(state.loc("开启后向系统申请辅助功能 + 屏幕录制授权", "requests Accessibility + Screen Recording"))
+                        .font(.system(size: 10.5)).foregroundStyle(.white.opacity(0.4)).lineLimit(1)
+                }
             }
+            .padding(16)
+            .background(Color.white.opacity(0.04), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+
+            LingShuSystemPermissionsPanel(state: state)
         }
         .frame(maxWidth: .infinity, alignment: .topLeading)
         .padding(16)
     }
 
-    /// 一组设置卡片:左上小标题 + 内容,统一留白与圆角;安全组用橙色描边醒目。
-    @ViewBuilder private func group<Content: View>(_ title: String, tint: Color = .lingHolo, @ViewBuilder _ content: () -> Content) -> some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text(title).font(.system(size: 11, weight: .bold)).tracking(0.5).foregroundStyle(tint.opacity(0.85))
+    /// 统一一行:`名称：` 定宽右对齐(中文用全角冒号、英文半角)+ 控件左缘对齐;单行不换行。
+    @ViewBuilder private func row<C: View>(_ label: String, @ViewBuilder _ content: () -> C) -> some View {
+        HStack(spacing: 10) {
+            Text(label + state.loc("：", ":"))
+                .font(.system(size: 12.5, weight: .semibold)).foregroundStyle(.white.opacity(0.72))
+                .frame(width: 152, alignment: .trailing).lineLimit(1)
             content()
+            Spacer(minLength: 0)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(14)
-        .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-        .overlay { RoundedRectangle(cornerRadius: 10, style: .continuous).stroke(tint.opacity(0.14), lineWidth: 0.5) }
     }
 
     /// 带小标题的字段(标题在上、控件在下),用于同行并排多个字段。
@@ -400,6 +392,81 @@ struct LingShuExecutionPolicySurface: View {
             content()
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+/// 系统权限面板:屏幕录制 + 系统通知,可在配置里**主动授予**(避免录制/推送时人不在却没授权而失败)。
+struct LingShuSystemPermissionsPanel: View {
+    @ObservedObject var state: LingShuState
+    @ObservedObject private var notifications = LingShuNotificationCenter.shared
+    @State private var screenRecordingTrusted = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            SectionHeader(
+                icon: "lock.shield",
+                title: state.loc("系统权限", "System Permissions"),
+                subtitle: state.loc("提前授予,避免会议录制/主动推送时人不在却没权限而失败", "Grant ahead so recording / push won't fail while you're away")
+            )
+
+            permissionRow(
+                icon: "rectangle.dashed.badge.record",
+                title: state.loc("屏幕录制", "Screen Recording"),
+                detail: state.loc("听系统声音 / 看屏幕(会议纪要必需)", "System audio / screen (required for meeting minutes)"),
+                granted: screenRecordingTrusted,
+                grantTitle: state.loc("授予", "Grant")
+            ) {
+                _ = LingShuComputerControl.requestScreenCaptureAccess()
+                openSettings("x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { screenRecordingTrusted = LingShuComputerControl.isScreenCaptureTrusted() }
+            }
+
+            permissionRow(
+                icon: "bell.badge",
+                title: state.loc("系统通知", "Notifications"),
+                detail: state.loc("灵枢主动推送横幅(纪要完成 / 异常提醒)", "Lets 灵枢 push banners (minutes done / alerts)"),
+                granted: notifications.authorized,
+                grantTitle: state.loc("授予", "Grant")
+            ) {
+                notifications.requestAuthorization()
+                openSettings("x-apple.systempreferences:com.apple.preference.notifications")
+            }
+        }
+        .padding(14)
+        .background(Color.white.opacity(0.045), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .overlay { RoundedRectangle(cornerRadius: 10, style: .continuous).stroke(Color.lingHolo.opacity(0.14)) }
+        .onAppear {
+            screenRecordingTrusted = LingShuComputerControl.isScreenCaptureTrusted()
+            notifications.refreshStatus()
+        }
+    }
+
+    @ViewBuilder
+    private func permissionRow(icon: String, title: String, detail: String, granted: Bool, grantTitle: String, grant: @escaping () -> Void) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: icon).foregroundStyle(granted ? .green : Color.lingHolo).frame(width: 22)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title).font(.system(size: 12.5, weight: .bold)).foregroundStyle(.white.opacity(0.9))
+                Text(detail).font(.system(size: 10.5, weight: .medium)).foregroundStyle(.white.opacity(0.45)).lineLimit(1)
+            }
+            Spacer()
+            HStack(spacing: 5) {
+                Circle().fill(granted ? Color.green : Color.orange).frame(width: 7, height: 7)
+                Text(granted ? state.loc("已授权", "Granted") : state.loc("未授权", "Not granted"))
+                    .font(.system(size: 10.5, weight: .semibold)).foregroundStyle(.white.opacity(0.6))
+            }
+            if !granted {
+                Button(action: grant) {
+                    Text(grantTitle).font(.system(size: 11, weight: .bold))
+                }.buttonStyle(.borderedProminent).controlSize(.small).tint(.lingHolo)
+            }
+        }
+        .padding(.vertical, 7).padding(.horizontal, 10)
+        .background(Color.white.opacity(0.04), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+
+    private func openSettings(_ urlString: String) {
+        if let url = URL(string: urlString) { NSWorkspace.shared.open(url) }
     }
 }
 

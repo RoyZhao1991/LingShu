@@ -10,6 +10,14 @@ final class DigitalHumanTests: XCTestCase {
         XCTAssertEqual(LingShuDigitalHumanExpression.parse("警戒"), .alert)
     }
 
+    func testReceivingInputStateIsGreen() {
+        // 自主运行「接收输入」态:绿色 +「我在听」。
+        XCTAssertEqual(LingShuDigitalHumanExpression.receiving.displayName, "我在听")
+        XCTAssertEqual(LingShuDigitalHumanExpression.receiving.accent, .green)
+        XCTAssertEqual(LingShuDigitalHumanExpression.parse("接收输入"), .receiving)
+        XCTAssertEqual(LingShuDigitalHumanExpression.parse("我在听"), .receiving)
+    }
+
     @MainActor
     func testDirectiveDrivesDigitalHumanSnapshot() {
         let state = LingShuState()

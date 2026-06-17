@@ -1,7 +1,9 @@
 import Foundation
 
 /// 会议端到端对话的接线层:把 `LingShuMeetingConversationController` 接上 state + 注入的语音管理器。
-/// 入口:UI(会议按钮)/ MCP(`meeting_converse_start`/`meeting_converse_stop`)。
+/// 入口:**MCP**(`meeting_converse_start`/`meeting_converse_stop`)——目前**没有 UI 按钮**。
+/// 另:在岗(独立运行)会**自动**起「听系统声音」的纯听半边(系统音频→ASR→感知链 ambient 通道,
+/// 不走这里的虚拟麦应答闭环),见 `startStandingAmbientListening`。
 @MainActor
 extension LingShuState {
 

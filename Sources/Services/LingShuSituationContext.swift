@@ -23,14 +23,17 @@ enum LingShuSituationContext {
         var visionSummary: String?
         var activeTaskTitle: String?
         var activeTaskStage: String?
+        /// 外接设备感知（手机通知/日历…）汇聚成的标准输入摘要。与视觉/听觉并列的"一种感知"。
+        var externalSensoryLine: String?
     }
 
-    /// 默认装配清单（顺序即拼接顺序）：时间 → 连续使用 → 说话人 → 视觉 → 后台任务。
+    /// 默认装配清单（顺序即拼接顺序）：时间 → 连续使用 → 说话人 → 视觉 → 外接设备 → 后台任务。
     static let defaultComponents: [LingShuSituationComponent] = [
         TimeComponent(),
         SessionDurationComponent(),
         SpeakerComponent(),
         VisionComponent(),
+        ExternalSensoryComponent(),
         TaskProgressComponent()
     ]
 
@@ -69,6 +72,15 @@ enum LingShuSituationContext {
                 return nil
             }
             return "摄像头画面：\(vision)。"
+        }
+    }
+
+    struct ExternalSensoryComponent: LingShuSituationComponent {
+        func contribute(_ inputs: Inputs) -> String? {
+            guard let line = inputs.externalSensoryLine?.trimmingCharacters(in: .whitespacesAndNewlines), !line.isEmpty else {
+                return nil
+            }
+            return line
         }
     }
 

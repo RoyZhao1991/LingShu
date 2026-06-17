@@ -105,6 +105,7 @@ extension VoiceIOManager {
                     self?.inputLevel = level
                     self?.lastInputBufferAt = now   // 看门狗据此判断麦克风是否真在进音
                     self?.micSilentWarning = nil     // 进音了→清掉"没进音"告警
+                    self?.evaluateUtteranceSilence(now: now)   // 说完静默 2s → 强制收口转入思考(不傻等 isFinal)
                 }
             }
 

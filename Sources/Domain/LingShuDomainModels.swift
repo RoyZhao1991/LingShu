@@ -407,6 +407,8 @@ struct ChatMessage: Identifiable, Codable, Equatable, Sendable {
     var thinkingPreview: String?
     /// 本条用户消息随附的附件文件名(发送时携带的)；nil/空=无附件。Optional 保证旧持久化记录向后兼容解码。
     var attachmentNames: [String]?
+    /// 是否是「上岗开场白」气泡:用于去重——每次上岗只保留一句,不让历史里的旧招呼越堆越多。Optional 向后兼容。
+    var isStandingGreeting: Bool?
 
     init(
         id: UUID = UUID(),
@@ -419,7 +421,8 @@ struct ChatMessage: Identifiable, Codable, Equatable, Sendable {
         choices: CodexRouteChoicePrompt? = nil,
         resolvedChoice: String? = nil,
         thinkingPreview: String? = nil,
-        attachmentNames: [String]? = nil
+        attachmentNames: [String]? = nil,
+        isStandingGreeting: Bool? = nil
     ) {
         self.id = id
         self.speaker = speaker
@@ -432,6 +435,7 @@ struct ChatMessage: Identifiable, Codable, Equatable, Sendable {
         self.resolvedChoice = resolvedChoice
         self.thinkingPreview = thinkingPreview
         self.attachmentNames = attachmentNames
+        self.isStandingGreeting = isStandingGreeting
     }
 }
 

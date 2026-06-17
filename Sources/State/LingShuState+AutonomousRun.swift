@@ -170,9 +170,26 @@ extension LingShuState {
                 self.autonomousSessionHolder = session
                 kickoff = self.resolveKickoffPrompt(objective: objective, runbook: runbook)
             }
-            let result = await self.driveAgentDelivery(session: session, prompt: kickoff, taskRecordID: recordID)
+            let result: LingShuAgentRunResult
+            let isStandingKickoff = objective.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !continuing
+            if isStandingKickoff {
+                // 常驻上岗开场白:用**无工具一次性会话**生成一句招呼。主会话带 speak 工具会一边出声(①)
+                // 一边产出回复气泡被自动朗读(②)→ 双份音频(实测日志确认);无工具会话只回一句文本 → 自动朗读念一次。
+                let greeter = LingShuAgentSession(
+                    id: "greet-\(UUID().uuidString.prefix(6))",
+                    system: "你是灵枢,刚上岗。用一句自然的话向主人示意你已就位待命即可。**别自我介绍、别用具体名字称呼(历史里的名字可能是误识别)、别调任何工具**,只输出这一句招呼。",
+                    tools: [],
+                    model: self.makeAgentModelAdapter(),
+                    maxTurns: 1
+                )
+                result = await greeter.send("打个招呼,一句话。")
+            } else if objective.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                result = await session.send(kickoff)   // 在岗续跑(continuing)等:走主会话
+            } else {
+                result = await self.driveAgentDelivery(session: session, prompt: kickoff, taskRecordID: recordID)
+            }
             guard !Task.isCancelled else { return }
-            self.finishAutonomousRun(result: result, recordID: recordID)
+            self.finishAutonomousRun(result: result, recordID: recordID, isKickoffGreeting: isStandingKickoff)
         }
     }
 
@@ -218,7 +235,7 @@ extension LingShuState {
             Task { @MainActor in self?.recordAgentReasoning(aside, recordID: self?.autonomousRunRecordID) }
         }
         var tools = agentBuiltinTools(recordIDProvider: { [weak self] in self?.autonomousRunRecordID }, executionPolicy: policy)
-        tools += [Self.timeTool(), Self.webSearchTool(), recallMemoryTool(), rememberCredentialTool(), listCredentialsTool(), speakTool(), digitalHumanTool(), Self.askUserTool()] + previewTools()
+        tools += [Self.timeTool(), Self.webSearchTool(), recallMemoryTool(), perceiveTool(), pushNotificationTool(), rememberCredentialTool(), listCredentialsTool(), speakTool(), digitalHumanTool(), Self.askUserTool()] + previewTools()
         if policy != .readOnly {
             tools.append(spawnTaskTool(adapter: adapter))   // 观察模式不派生可写子任务
             tools += computerControlTools()                  // 计算机直接操作四肢(完整授权档自动放行,计划 §9)
@@ -288,31 +305,9 @@ extension LingShuState {
         """
     }
 
-    /// 首轮启动语：把目标 + runbook 降为「建议性上下文」喂给模型（不再当硬流程）。非 private：resolveKickoffPrompt 复用。
-    func autonomousKickoffPrompt(objective: String, runbook: LingShuAutonomousRunbook?) -> String {
-        // 常驻灵枢:不下达目标,只让它示意已进入自主运行状态、在听,然后待命。
-        if objective.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            var lines = ["**现在进入「自主运行状态」**:你已上岗,能听、能说、能看屏幕、能动手。用一句简短自然的话(用 `speak` 出声)向主人打个招呼、示意你已进入自主运行状态并就位待命,就一句即可。之后主人一开口提问或下指令,你就**全力正面回应**(该答就答全、该做就做完),绝不用'在岗待命/随时吩咐'这类空话敷衍。现在只打这一句招呼。"]
-            if !autonomousAttachmentContext.isEmpty { lines.append(autonomousAttachmentContext) }
-            return lines.joined(separator: "\n")
-        }
-        var lines = ["独立运行目标：\(objective)"]
-        if !autonomousAttachmentContext.isEmpty { lines.append(autonomousAttachmentContext) }   // 上传的文件素材
-        if let runbook {
-            if !runbook.assumptions.isEmpty { lines.append("已知假设：" + runbook.assumptions.joined(separator: "；")) }
-            if !runbook.expectedArtifacts.isEmpty { lines.append("期望产出物：" + runbook.expectedArtifacts.joined(separator: "、")) }
-            if !runbook.reviewGates.isEmpty { lines.append("验收要点：" + runbook.reviewGates.joined(separator: "、")) }
-            let stepTitles = runbook.steps.map(\.title)
-            if !stepTitles.isEmpty { lines.append("建议步骤（仅供参考，可自行规划）：" + stepTitles.joined(separator: " → ")) }
-        }
-        if let skillHint = matchedSkillHint(for: objective) { lines.append(skillHint) }
-        lines.append("现在开始自主推进，直到目标达成；完成后用一句话总结产出物与结论。")
-        return lines.joined(separator: "\n")
-    }
-
     /// 收尾：按运行结果更新相位、runbook 步态、任务记录与对话。
     /// 注：非 private——常驻灵枢扩展（LingShuState+StandingPerson）的在岗续跑也复用它。
-    func finishAutonomousRun(result: LingShuAgentRunResult, recordID: String) {
+    func finishAutonomousRun(result: LingShuAgentRunResult, recordID: String, isKickoffGreeting: Bool = false) {
         autonomousRunTask = nil
         switch result {
         case .completed(let text):
@@ -324,7 +319,11 @@ extension LingShuState {
                 missionStatus = String(text.prefix(80))
                 appendTaskRecordMessage(recordID, actor: "灵枢", role: "在岗", kind: .result, text: text)
                 if let idx = taskExecutionRecords.firstIndex(where: { $0.id == recordID }) { taskExecutionRecords[idx].status = .answered }
-                chatMessages.append(.init(speaker: "灵枢", text: text, isUser: false, taskRecordID: recordID))
+                // 上岗开场白:先把**尾部残留的旧招呼**去掉(每次上岗只留一句,不让历史里的招呼越堆越多),再追加这句并标记。
+                if isKickoffGreeting {
+                    while let last = chatMessages.last, last.isStandingGreeting == true { chatMessages.removeLast() }
+                }
+                chatMessages.append(.init(speaker: "灵枢", text: text, isUser: false, taskRecordID: recordID, isStandingGreeting: isKickoffGreeting ? true : nil))
                 enterCoreState(.standby, resetTimer: false)
                 appendTrace(kind: .result, actor: "灵枢", title: "在岗", detail: String(text.prefix(80)))
                 return

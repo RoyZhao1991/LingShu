@@ -17,6 +17,11 @@ extension LingShuState {
     /// 让灵枢「上岗」成为常驻灵枢：不需要预设目标——环境自检通过即直接上岗（能听/能说/能思考/能动手），
     /// 之后由对话/语音自然驱动。环境有阻断项则不上岗，提示先处理。
     func goLiveAsStandingPerson() {
+        // 已在岗就不再重新上岗 + 重打招呼(否则每点一次「上岗」都堆一句欢迎语)。
+        guard !isStandingPersonOnDuty else {
+            appendTrace(kind: .system, actor: "灵枢", title: "已在岗", detail: "无需重复上岗,直接说话即可。")
+            return
+        }
         let now = Date()
         autonomousAttachmentContext = attachmentContextBlock()   // 可选：上岗时带的素材
         clearAttachments()
@@ -71,6 +76,29 @@ extension LingShuState {
             return standingTaskKickoffPrompt(task)
         }
         return autonomousKickoffPrompt(objective: objective, runbook: runbook)
+    }
+
+    /// 首轮启动语：把目标 + runbook 降为「建议性上下文」喂给模型（不再当硬流程）。
+    /// (从 LingShuState+AutonomousRun 移来,守住单文件 ≤500 行;kickoff 与 resolveKickoffPrompt 同域。)
+    func autonomousKickoffPrompt(objective: String, runbook: LingShuAutonomousRunbook?) -> String {
+        // 常驻灵枢:不下达目标,只让它示意已进入自主运行状态、在听,然后待命。
+        if objective.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            var lines = ["**现在进入「自主运行状态」**:你已上岗,能听、能说、能看屏幕、能动手。用一句简短自然的话(用 `speak` 出声)向主人打个招呼、示意你已进入自主运行状态并就位待命,就一句即可。**打招呼时别用具体名字称呼**(历史里若出现过某个名字,可能是语音误识别,不可靠)——用「主人」或干脆不带称呼。之后主人一开口提问或下指令,你就**全力正面回应**(该答就答全、该做就做完),绝不用'在岗待命/随时吩咐'这类空话敷衍。现在只打这一句招呼。"]
+            if !autonomousAttachmentContext.isEmpty { lines.append(autonomousAttachmentContext) }
+            return lines.joined(separator: "\n")
+        }
+        var lines = ["独立运行目标：\(objective)"]
+        if !autonomousAttachmentContext.isEmpty { lines.append(autonomousAttachmentContext) }   // 上传的文件素材
+        if let runbook {
+            if !runbook.assumptions.isEmpty { lines.append("已知假设：" + runbook.assumptions.joined(separator: "；")) }
+            if !runbook.expectedArtifacts.isEmpty { lines.append("期望产出物：" + runbook.expectedArtifacts.joined(separator: "、")) }
+            if !runbook.reviewGates.isEmpty { lines.append("验收要点：" + runbook.reviewGates.joined(separator: "、")) }
+            let stepTitles = runbook.steps.map(\.title)
+            if !stepTitles.isEmpty { lines.append("建议步骤（仅供参考，可自行规划）：" + stepTitles.joined(separator: " → ")) }
+        }
+        if let skillHint = matchedSkillHint(for: objective) { lines.append(skillHint) }
+        lines.append("现在开始自主推进，直到目标达成；完成后用一句话总结产出物与结论。")
+        return lines.joined(separator: "\n")
     }
 
     /// 上岗即开干这件交互任务的开场指令(取代寒暄开场白):告诉灵枢现在要当面演示/讲解/主持,

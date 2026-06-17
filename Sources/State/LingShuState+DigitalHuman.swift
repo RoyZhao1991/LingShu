@@ -78,8 +78,14 @@ extension LingShuState {
             expression = .speaking
             text = "正在发声"
         } else if voice.isRecording || isVoiceConversationActive {
-            expression = .listening
-            text = "正在聆听"
+            // 自主/在岗时:接收主人输入用专门的绿色「我在听」态;普通对话仍用聆听(青)。
+            if isStandingPersonOnDuty {
+                expression = .receiving
+                text = "我在听"
+            } else {
+                expression = .listening
+                text = "正在聆听"
+            }
         } else if coreState == .thinking {
             expression = .thinking
             text = missionTitle

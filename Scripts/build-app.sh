@@ -53,6 +53,18 @@ if [ -d "$ROOT_DIR/Resources/DesignKB" ]; then
   ditto "$ROOT_DIR/Resources/DesignKB" "$RES_DIR/DesignKB"
 fi
 
+# SenseVoice 本地 ASR(sherpa-onnx)随包交付:麦克风走它(独立引擎)、系统声音走 Apple SFSpeech,
+# 两路 ASR 不再撞车。缺就自动下载安装(install-sensevoice.sh 幂等),再打进 .app 的 Resources/Models/SenseVoice。
+if [ ! -x "$ROOT_DIR/Models/SenseVoice/bin/sherpa-onnx-vad-microphone-offline-asr" ]; then
+  echo "==> SenseVoice 未安装,自动安装(随灵枢一起交付)"
+  bash "$ROOT_DIR/Scripts/install-sensevoice.sh" || echo "   (SenseVoice 安装失败/跳过——麦克风回退 Apple Speech;不阻塞构建)"
+fi
+if [ -d "$ROOT_DIR/Models/SenseVoice" ]; then
+  echo "==> copying SenseVoice ASR"
+  mkdir -p "$RES_DIR/Models/SenseVoice"
+  ditto "$ROOT_DIR/Models/SenseVoice" "$RES_DIR/Models/SenseVoice"
+fi
+
 # 灵枢虚拟麦克风 HAL 驱动:随包交付,运行时由灵枢自安装(一次授权),不需用户手动操作。
 if [ -d "$ROOT_DIR/Drivers/LingShuAudioDriver" ]; then
   echo "==> building + bundling 灵枢虚拟麦克风驱动"
@@ -85,6 +97,11 @@ cat > "$CONTENTS/Info.plist" <<PLIST
     <key>NSCameraUsageDescription</key><string>用于视觉解析，让灵枢读取摄像头画面并形成实时观察。</string>
     <key>NSMicrophoneUsageDescription</key><string>用于语音输入，将你的语音转换为文字指令。</string>
     <key>NSSpeechRecognitionUsageDescription</key><string>用于将语音识别为灵枢可处理的文字指令。</string>
+    <key>NSBluetoothAlwaysUsageDescription</key><string>用于通过蓝牙读取已配对 iPhone 的系统通知(ANCS)，汇聚为灵枢的一种感知。仅本地、只读。</string>
+    <key>NSCalendarsUsageDescription</key><string>用于读取日历事件并汇聚为灵枢的待办感知。仅本地、只读。</string>
+    <key>NSCalendarsFullAccessUsageDescription</key><string>用于读取日历事件并汇聚为灵枢的待办感知。仅本地、只读。</string>
+    <key>NSRemindersUsageDescription</key><string>用于读取提醒事项并汇聚为灵枢的待办感知。仅本地、只读。</string>
+    <key>NSRemindersFullAccessUsageDescription</key><string>用于读取提醒事项并汇聚为灵枢的待办感知。仅本地、只读。</string>
 </dict>
 </plist>
 PLIST
@@ -128,6 +145,14 @@ if security find-identity -v -p codesigning 2>/dev/null | grep -q "$SIGN_IDENTIT
     elif [[ "$SIGN_IDENTITY" == Developer\ ID* ]]; then
       echo "   ==> (跳过公证:未提供 LINGSHU_NOTARY_PROFILE 或 Apple ID 凭据;coreaudiod 需**公证后**才加载驱动——见 Drivers/LingShuAudioDriver/README)"
     fi
+  fi
+  # SenseVoice sherpa-onnx 二进制 + dylib 单独签(在 app --deep 之前):它是被 Process 启的独立可执行,
+  # 不套 app 的 hardened runtime(--options runtime 会让它加载同包 dylib 时触发库校验失败);同一身份签即可放行。
+  SV_DIR="$RES_DIR/Models/SenseVoice"
+  if [ -d "$SV_DIR" ]; then
+    echo "   ==> signing SenseVoice runtime ($SIGN_IDENTITY)"
+    find "$SV_DIR/lib" -name '*.dylib' -exec codesign --force --sign "$SIGN_IDENTITY" {} \; 2>/dev/null || true
+    codesign --force --sign "$SIGN_IDENTITY" "$SV_DIR/bin/sherpa-onnx-vad-microphone-offline-asr" 2>/dev/null || true
   fi
   # app 最后签,seal 住已 staple 的驱动。
   codesign --force --deep --sign "$SIGN_IDENTITY" \

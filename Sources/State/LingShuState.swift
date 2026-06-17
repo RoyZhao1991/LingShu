@@ -59,6 +59,8 @@ final class LingShuState: ObservableObject {
             guard language != oldValue else { return }
             UserDefaults.standard.set(language.rawValue, forKey: "lingshu.voiceLanguage")
             voiceManager?.voiceLanguage = language
+            // 外接设备蓝牙广播名随语言切换(中文「灵枢」/ 英文「Nous」)。
+            externalSensory.setBluetoothLocalName(appName)
         }
     }
     // 每秒变化的计时量不做 @Published：它们只服务于超时判断与文案拼装，
@@ -135,6 +137,10 @@ final class LingShuState: ObservableObject {
         }
     }
     @Published var isVoiceConversationActive = false
+    /// 「进入聆听模式」会话:已进入(响过提示音)为 true;静默超时后失效、下次再进入会重新响。
+    /// 非会议=声音触发进入,会议=唤醒词触发进入(见 LingShuPerceptionActions)。
+    var voiceListeningArmed = false
+    var lastVoiceActivityAt = Date.distantPast
     var lastSpokenMessageID: UUID?
     /// 最近经 `speak` 念出口的话(环形缓冲,封顶 40 条)——供脚本核验演示文字稿对得上幻灯片。
     @Published var recentSpokenLines: [String] = []
@@ -318,6 +324,16 @@ final class LingShuState: ObservableObject {
     var perceptionVLTask: Task<Void, Never>?
     /// 周期感知是否由本对象启动了系统音频采集(会议未占用时);停感知时只关自己启的,不误关会议的。
     var perceptionOwnsAudioCapture = false
+    /// 在岗「听系统声音」是否在跑(系统音频→会议 ASR→感知链 ambient 通道,纯听不应答)。上岗自动开、离岗关。
+    var standingAmbientASRActive = false
+    /// 在岗期间把麦克风切到 SenseVoice(独立引擎,腾出 SFSpeech 给系统声音)前的原识别提供方,离岗还原。
+    var standingPrevMicProvider: LingShuVoiceTranscriptionProviderDescriptor?
+    // 会议纪要(在岗时:检测进入会议→分段累积转写→离会自动生成纪要落档+推送)。详见 LingShuState+MeetingMinutes。
+    var meetingDetectionState = LingShuMeetingDetectionState()
+    var meetingMinutesActive = false
+    var meetingMinutesSegments: [LingShuMeetingMinuteSegment] = []
+    var meetingMinutesStartedAt: Date?
+    var meetingMinutesRotationTask: Task<Void, Never>?
     /// 自主运行/在岗期间持有的 App Nap 抑制令牌:防止灵枢被切到后台(它正操作别的 app=自己必然在后台)时
     /// 被系统 App Nap 暂停心跳定时器 → 周期感知/推进全停。在岗/运行时持有,暂停/停止时释放。
     var autonomousActivityToken: NSObjectProtocol?
@@ -344,6 +360,14 @@ final class LingShuState: ObservableObject {
     let taskExecutionJournal = LingShuTaskExecutionJournal()
     let engineeringArtifactService = LingShuEngineeringArtifactService()
     let autonomousEnvironmentProbe = LingShuAutonomousEnvironmentProbe()
+    /// 外接设备感知中枢（手机通知/日历…独立模块汇聚成标准输入）。详见 LingShuState+ExternalSensory。
+    let externalSensory = LingShuExternalSensoryHub.makeDefault()
+    /// 感知链:各感官独立采集 → ~1s 高频融合进一条有界缓冲;大脑按时间窗瞬时拉取(感知节奏与大脑节奏解耦)。
+    let perceptionChain = LingShuPerceptionChain()
+    /// 根视图注入:返回此刻摄像头/麦克风等"活感官"的采样(感知网关持有,故经闭包取)。
+    var liveSenseSampler: (() -> [LingShuPerceptionSample])?
+    /// 感知链高频采样驱动 Task(~1s)。
+    var perceptionChainDriverTask: Task<Void, Never>?
     let autonomousRunbookPlanner = LingShuAutonomousRunbookPlanner()
     let autonomousSelfCheckRunner = LingShuAutonomousSelfCheckRunner()
     var missionRunID = 0

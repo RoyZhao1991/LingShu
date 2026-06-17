@@ -15,7 +15,8 @@ extension LingShuState {
         hint += "\n" + LingShuSituationContext.compose(.init(
             sessionStartedAt: sessionStartedAt,
             activeTaskTitle: isModelExecuting ? activeTaskThread.map { String($0.prompt.prefix(40)) } : nil,
-            activeTaskStage: isModelExecuting ? "\(missionTitle)，已进行 \(formatElapsed(executionElapsedSeconds))" : nil
+            activeTaskStage: isModelExecuting ? "\(missionTitle)，已进行 \(formatElapsed(executionElapsedSeconds))" : nil,
+            externalSensoryLine: externalSensory.situationContribution()
         ))
         return hint
     }

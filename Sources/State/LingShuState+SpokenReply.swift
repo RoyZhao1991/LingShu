@@ -6,6 +6,13 @@ import Foundation
 @MainActor
 extension LingShuState {
 
+    /// 灵枢最近说/回复的若干句,供回声判定(语音输入若是这些的回声 → 丢弃,防自激循环)。
+    func recentSpokenForEcho() -> [String] {
+        var out = Array(recentSpokenLines.suffix(6))
+        out += chatMessages.filter { !$0.isUser }.suffix(5).map { $0.text }
+        return out
+    }
+
     /// 网络中断/重连类提示的统一播报兜底(**写死,不调模型**):断网时根本调不动大模型来生成摘要,
     /// 旧逻辑会走 briefSpokenSummary→模型失败→回退"任务完成"(误报)。所有 🌐 开头的网络状态消息都念这一句。
     static let networkInterruptSpokenLine = "网络异常中断,我正在重试,网络恢复后会继续执行。"

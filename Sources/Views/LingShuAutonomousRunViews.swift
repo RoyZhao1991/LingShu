@@ -41,28 +41,9 @@ struct LingShuAutonomousRunPanel: View {
     }
 
     private var idleBody: some View {
-        // 极简:默认完整授权(完整电脑控制),不再选权限档、不堆文字说明。一个素材入口 + 一个大按钮。
+        // 极简:默认完整授权(完整电脑控制),不选权限档、不堆文字说明、不挂素材入口
+        // (上岗后直接在对话里告诉它去哪找素材即可)。只留一个大按钮。
         VStack(alignment: .leading, spacing: 14) {
-            if !state.pendingAttachments.isEmpty {
-                LingShuAttachmentTray(state: state)
-            }
-
-            HStack(spacing: 10) {
-                Button {
-                    state.presentAttachmentPicker()
-                } label: {
-                    Label("带点素材(可选)", systemImage: "paperclip")
-                        .font(.system(size: 11.5, weight: .bold))
-                        .foregroundStyle(Color.lingHolo)
-                        .frame(height: 30)
-                        .padding(.horizontal, 12)
-                        .background(Color.lingHolo.opacity(0.1), in: RoundedRectangle(cornerRadius: 8))
-                        .overlay { RoundedRectangle(cornerRadius: 8).stroke(Color.lingHolo.opacity(0.25), lineWidth: 1) }
-                }
-                .buttonStyle(.plain)
-                Spacer()
-            }
-
             // 贾维斯式上岗按钮:大、居中、科技感。默认完整授权,点一下即上岗。
             JarvisLaunchButton(
                 title: "让灵枢上岗",

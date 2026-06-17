@@ -32,5 +32,15 @@
     <string>用于语音输入，将你的语音转换为文字指令。</string>
     <key>NSSpeechRecognitionUsageDescription</key>
     <string>用于将语音识别为灵枢可处理的文字指令。</string>
+    <key>NSBluetoothAlwaysUsageDescription</key>
+    <string>用于通过蓝牙读取已配对 iPhone 的系统通知(ANCS),将关键待办汇聚为灵枢的一种感知。仅本地、只读。</string>
+    <key>NSCalendarsUsageDescription</key>
+    <string>用于读取日历事件并汇聚为灵枢的待办感知。仅本地、只读。</string>
+    <key>NSCalendarsFullAccessUsageDescription</key>
+    <string>用于读取日历事件并汇聚为灵枢的待办感知。仅本地、只读。</string>
+    <key>NSRemindersUsageDescription</key>
+    <string>用于读取提醒事项并汇聚为灵枢的待办感知。仅本地、只读。</string>
+    <key>NSRemindersFullAccessUsageDescription</key>
+    <string>用于读取提醒事项并汇聚为灵枢的待办感知。仅本地、只读。</string>
 </dict>
 </plist>

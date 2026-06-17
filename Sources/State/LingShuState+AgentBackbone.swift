@@ -130,7 +130,7 @@ extension LingShuState {
         }
         let tools = withPhaseTracking(withBatchRunner(   // 相位跟踪:每个工具调用前把 LOOP 阶段切到理解/规划/执行,本体实时显示
             agentBuiltinTools(recordIDProvider: { [weak self] in self?.currentAgentTurnRecordID })
-            + [Self.timeTool(), Self.webSearchTool(), findImagesTool(), acquireResourceTool(), discoverSkillTool(), updateTaskPlanTool(recordIDProvider: { [weak self] in self?.currentAgentTurnRecordID }), reviewDesignTool(recordIDProvider: { [weak self] in self?.currentAgentTurnRecordID }), recallMemoryTool(), rememberCredentialTool(), listCredentialsTool(), speakTool(), digitalHumanTool(), enterManagedModeTool(), Self.askUserTool(), spawnTaskTool(adapter: adapter)]
+            + [Self.timeTool(), Self.webSearchTool(), findImagesTool(), acquireResourceTool(), discoverSkillTool(), updateTaskPlanTool(recordIDProvider: { [weak self] in self?.currentAgentTurnRecordID }), reviewDesignTool(recordIDProvider: { [weak self] in self?.currentAgentTurnRecordID }), recallMemoryTool(), perceiveTool(), pushNotificationTool(), rememberCredentialTool(), listCredentialsTool(), speakTool(), digitalHumanTool(), enterManagedModeTool(), Self.askUserTool(), spawnTaskTool(adapter: adapter)]
             + previewTools()
             + computerControlTools()   // 计算机直接操作四肢(授权在 call-time 判,计划 §9)
             + backgroundWatchTools()   // 后台守候 + 完成即续(自动识别需求→无人值守推进)
@@ -447,6 +447,7 @@ extension LingShuState {
             let voice: VoiceIOManager? = await MainActor.run { self?.voiceManager }
             guard let voice else { return "语音未就绪(UI 未注入),本次无法出声。" }
             await MainActor.run {
+                lingShuControlLog("TTS来源①: speak工具(模型主动) 文本「\(text.prefix(40))」")
                 voice.speak(text)
                 self?.recordSpokenLine(text)   // 留痕:演示/讲解的文字稿可被脚本核验(对得上画面)
             }
@@ -460,6 +461,7 @@ extension LingShuState {
         recentSpokenLines.append(text)
         if recentSpokenLines.count > 40 { recentSpokenLines.removeFirst(recentSpokenLines.count - 40) }
     }
+
 
     func recallMemoryTool() -> LingShuAgentTool {
         LingShuAgentTool(

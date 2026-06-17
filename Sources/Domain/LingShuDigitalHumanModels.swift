@@ -5,6 +5,7 @@ import SwiftUI
 enum LingShuDigitalHumanExpression: String, CaseIterable, Codable, Equatable, Identifiable {
     case standby
     case listening
+    case receiving   // 自主/在岗:正在接收主人输入(绿色「我在听」)
     case speaking
     case thinking
     case executing
@@ -19,6 +20,7 @@ enum LingShuDigitalHumanExpression: String, CaseIterable, Codable, Equatable, Id
         switch self {
         case .standby: "待机"
         case .listening: "聆听"
+        case .receiving: "我在听"
         case .speaking: "发声"
         case .thinking: "思考"
         case .executing: "执行"
@@ -33,6 +35,7 @@ enum LingShuDigitalHumanExpression: String, CaseIterable, Codable, Equatable, Id
         switch self {
         case .standby: .lingHolo
         case .listening: .cyan
+        case .receiving: .green
         case .speaking: .green
         case .thinking: .cyan
         case .executing: .orange
@@ -47,6 +50,7 @@ enum LingShuDigitalHumanExpression: String, CaseIterable, Codable, Equatable, Id
         switch self {
         case .standby: 0.18
         case .listening: 0.72
+        case .receiving: 0.74
         case .speaking: 0.86
         case .thinking: 0.92
         case .executing: 0.78
@@ -65,6 +69,7 @@ enum LingShuDigitalHumanExpression: String, CaseIterable, Codable, Equatable, Id
         switch normalized {
         case "idle", "ready", "待机", "待命": return .standby
         case "listen", "hearing", "聆听", "听", "收声": return .listening
+        case "receiving", "receive", "接收", "接收输入", "我在听": return .receiving
         case "speak", "talking", "发声", "说话", "口播": return .speaking
         case "think", "思考", "分析": return .thinking
         case "execute", "working", "执行", "工作": return .executing
