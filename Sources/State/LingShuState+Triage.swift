@@ -1,5 +1,19 @@
 import Foundation
 
+/// 一条可续的派发任务线程(供上下文感知分诊识别"用户在回答哪条任务的提问")。
+struct TriageThread {
+    let label: String       // T1/T2…(给分诊器引用)
+    let recordID: String    // 对应隔离子任务记录
+    let summary: String     // 标题 + 它上次说的话(+是否⏳正等回答)
+}
+
+/// 分诊上下文:近上下文(逐字)+ 远上下文(压缩摘要)+ 可续任务线程。
+struct TriageContext {
+    let near: String
+    let far: String
+    let threads: [TriageThread]
+}
+
 /// 主线程分诊(Stage 2 多任务真隔离的第一步):灵枢收到消息后**先判**能否直接对话作答(chat),
 /// 还是需要派发执行(task)。chat 留主线程(连续对话);task 派发独立隔离 session 并行跑。
 /// 旧的「启发式前置门」在 82fc503 被删,这里在现代 agent loop 之上重建一个轻量分诊。
@@ -8,55 +22,78 @@ extension LingShuState {
 
     enum DispatchKind { case chat, task, reply }
 
-    /// 一次轻量模型判定(无工具、单回合)。task 时附一句话总目标。
-    /// 若上一轮是**派发的隔离任务**对用户说话(尤其在问问题/要信息)→ 多一类 `reply`(用户在回答它,应续那条任务)。
-    /// **保守**:判定失败/解析不出 → 当 chat(留主线程),绝不把普通对话误派成任务。
-    func classifyDispatch(_ prompt: String, previousTurn: String? = nil) async -> (kind: DispatchKind, goal: String?) {
-        // 极简语音对话模式:一律当对话,不分诊、不派发(用户硬性要求)。
-        if isMinimalVoiceMode { return (.chat, nil) }
+    /// **上下文感知**的轻量分诊(用户定调 2026-06-17):每次分诊都带上**完整语义的近上下文(最近逐字)+ 压缩的远上下文
+    /// (对话摘要)+ 当前可续的派发任务线程**,让分诊器能(a)分得更准、(b)**回溯到前面隔了几条才问的问题**——
+    /// 用户回答某条任务线程的提问(哪怕中间穿插了几句闲聊)也能认出来、续到**那条隔离会话本身**。
+    /// 返回 reply 时附 `replyRecordID`(要续的那条派发线程记录)。**保守**:判不出 → chat(留主线程),不误派。
+    func classifyDispatch(_ prompt: String) async -> (kind: DispatchKind, goal: String?, replyRecordID: String?) {
+        if isMinimalVoiceMode { return (.chat, nil, nil) }   // 极简语音:一律对话
 
-        let replyClause = previousTurn.map { prev in
-            """
+        let ctx = buildTriageContext()
+        var threadBlock = ""
+        if !ctx.threads.isEmpty {
+            let lines = ctx.threads.map { "[\($0.label)] \($0.summary)" }.joined(separator: "\n")
+            threadBlock = "\n【当前可续的任务线程】(用户可能在回答/延续其中某条,哪怕中间隔了几句别的话):\n\(lines)\n"
+        }
+        let far = ctx.far.isEmpty ? "" : "【更早对话摘要(压缩)】\n\(ctx.far)\n\n"
+        let replyOut = ctx.threads.isEmpty ? "" : "、{\"kind\":\"reply\",\"thread\":\"T1\"}"
+        let system = """
+        你是分诊器。下面给你与用户的对话上下文(近期逐字 + 更早摘要)和当前可续的任务线程。
+        判断用户【最新一条】消息属于哪一类,**只输出一行 JSON,不要任何解释**:
+        - reply:用户在【回答/延续/补充/确认】上面某条可续任务线程(尤其它标了"⏳正等你回答"、或在问主题/要信息/给选项)——**哪怕中间隔了几句闲聊也算**,指出是哪条 thread(如 "T1")。
+        - chat:与任何任务线程无关、灵枢能直接对话作答(闲聊/解释概念/问事实/给建议/介绍自己)。
+        - task:与现有线程无关的**全新**执行任务(做PPT/文档/代码/爬虫、要落盘产出物、跑命令、明显多步)。
 
-            灵枢上一条对用户说的是:「\(String(prev.prefix(280)))」。如果用户这条是在【回答/回应/补充/延续/确认】灵枢上一条(尤其上一条在问主题/要信息/给选项/等确认时),归为 reply。
-            - reply:在延续上一件事(回答上一条的问题、补充信息、说"就这个/继续/可以")→ 应接着上一件事做,而不是另起。
-            """
-        } ?? ""
-
+        \(far)【近期对话(逐字)】
+        \(ctx.near)
+        \(threadBlock)
+        输出:{"kind":"chat"}、{"kind":"task","goal":"一句话总目标(高度概括)"}\(replyOut)
+        """
         let classifier = LingShuAgentSession(
             id: "triage-\(UUID().uuidString.prefix(6))",
-            system: """
-            你是分诊器。判断用户这条消息属于哪一类,**只输出一行 JSON,不要任何解释**:
-            - chat:灵枢能直接对话/问答完成(闲聊、解释概念、问事实、给建议、简单查询、介绍自己),无需写文件/跑命令/多步执行。
-            - task:需要执行的、**与上一条无关的全新**任务(做 PPT/文档/代码/爬虫/系统、要落盘产出物、要跑命令、明显多步推进)。\(replyClause)
-            输出:{"kind":"chat"} 或 {"kind":"task","goal":"一句话总目标(高度概括,如「构建一个清分结算系统」)"}\(previousTurn != nil ? " 或 {\"kind\":\"reply\"}" : "")
-            """,
-            tools: [],
-            model: makeAgentModelAdapter(),
-            maxTurns: 1
+            system: system, tools: [], model: makeAgentModelAdapter(), maxTurns: 1
         )
-        let result = await classifier.send(prompt)
-        guard case .completed(let raw) = result else { return (.chat, nil) }
+        let result = await classifier.send("用户最新消息:\(prompt)")
+        guard case .completed(let raw) = result else { return (.chat, nil, nil) }
         let text = LingShuReasoningText.stripThinkTags(raw)
-        let normalized = text.lowercased().replacingOccurrences(of: " ", with: "")
-        if previousTurn != nil, normalized.contains("\"kind\":\"reply\"") || normalized.contains("kind:reply") {
-            return (.reply, nil)
+        let norm = text.lowercased().replacingOccurrences(of: " ", with: "")
+        if !ctx.threads.isEmpty, norm.contains("\"kind\":\"reply\"") || norm.contains("kind:reply") {
+            let label = (Self.jsonField(text, "thread") ?? "").trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+            let rid = ctx.threads.first(where: { $0.label.uppercased() == label })?.recordID ?? ctx.threads.first?.recordID
+            if let rid { return (.reply, nil, rid) }
         }
-        let isTask = normalized.contains("\"kind\":\"task\"") || normalized.contains("kind:task")
-        guard isTask else { return (.chat, nil) }
+        let isTask = norm.contains("\"kind\":\"task\"") || norm.contains("kind:task")
+        guard isTask else { return (.chat, nil, nil) }
         let goal = Self.jsonField(text, "goal")?.trimmingCharacters(in: .whitespacesAndNewlines)
-        return (.task, (goal?.isEmpty == false) ? goal : nil)
+        return (.task, (goal?.isEmpty == false) ? goal : nil, nil)
     }
 
-    /// 最近的派发隔离任务若仍是「用户正在回复的那一条」(上一条非用户消息就来自它、且新鲜),返回 (记录id, 它上一条说的话)。
-    /// 用于判断:用户这条是不是在回答/延续刚才那条派发任务(如它问"做什么主题")。
-    func continuableDispatchedThread() -> (recordID: String, previousTurn: String)? {
-        guard let rid = lastDispatchedThreadRecordID,
-              let at = lastDispatchedThreadAt, Date().timeIntervalSince(at) < 1800,  // 30 分钟内才算"紧接着回复"
-              agentSubTaskRecords.values.contains(rid),                              // 隔离会话还在(可续)
-              let lastAssistant = chatMessages.last(where: { !$0.isUser }),
-              lastAssistant.taskRecordID == rid else { return nil }                  // 上一条非用户消息确实来自这条任务
-        return (rid, lastAssistant.text)
+    /// 构造分诊上下文:近上下文(最近逐字,派发线程消息打 [Tk] 标签)+ 远上下文(对话摘要压缩)+ 可续派发线程清单。
+    func buildTriageContext() -> TriageContext {
+        let dispatchedRecordIDs = Set(agentSubTaskRecords.values)
+        // 可续线程 = 近 40 条聊天里出现过的、属于隔离子任务的灵枢消息,取每条线程最近一句作为"它上次说的"。
+        var lastSay: [String: (text: String, at: Date)] = [:]
+        for m in chatMessages.suffix(40) where !m.isUser {
+            guard let rid = m.taskRecordID, dispatchedRecordIDs.contains(rid) else { continue }
+            lastSay[rid] = (m.text, m.createdAt)
+        }
+        let ordered = lastSay.sorted { $0.value.at > $1.value.at }.prefix(3)   // 取最近 3 条线程
+        var threads: [TriageThread] = []
+        for (i, kv) in ordered.enumerated() {
+            let title = taskExecutionRecords.first(where: { $0.id == kv.key })?.title ?? "任务"
+            let awaiting = kv.key == blockedDispatchedRecordID ? "⏳正等你回答 " : ""
+            let summary = "\(awaiting)标题=「\(title.prefix(28))」 它上次说:「\(kv.value.text.prefix(120))」"
+            threads.append(.init(label: "T\(i + 1)", recordID: kv.key, summary: summary))
+        }
+        // 近上下文:最近 8 条逐字,线程消息打标签(让分诊器看清这句话属于哪条线程)。
+        let labelByRecord = Dictionary(threads.map { ($0.recordID, $0.label) }, uniquingKeysWith: { a, _ in a })
+        var near: [String] = []
+        for m in chatMessages.suffix(8) {
+            let who = m.isUser ? "用户" : (m.taskRecordID.flatMap { labelByRecord[$0] }.map { "灵枢[\($0)]" } ?? "灵枢")
+            near.append("\(who): \(m.text.prefix(140))")
+        }
+        let far = persistedConversationDigest.trimmingCharacters(in: .whitespacesAndNewlines)
+        return .init(near: near.joined(separator: "\n"), far: String(far.prefix(500)), threads: threads)
     }
 
     /// 把一个任务派发给**独立隔离 session** 并行跑(Stage 2 真隔离):本任务自己的 record + 全新 session,
@@ -68,8 +105,6 @@ extension LingShuState {
         interruptSpeechOutput?()
         let subID = "task-\(UUID().uuidString.prefix(6))"
         agentSubTaskRecords[subID] = taskRecordID   // 预映射:.spawned 据此复用这条记录,不另建
-        lastDispatchedThreadRecordID = taskRecordID  // 记最近派发线程,供用户紧接着的回复续到这条隔离会话
-        lastDispatchedThreadAt = Date()
         if let goal, !goal.isEmpty, let i = taskExecutionRecords.firstIndex(where: { $0.id == taskRecordID }) {
             taskExecutionRecords[i].goal = goal
             persistTaskExecutionRecords()
@@ -117,24 +152,14 @@ extension LingShuState {
         return pending.text
     }
 
-    /// 派发的隔离任务正卡在 ask_user 等用户回答 → 本轮输入即答案,直接续那条隔离会话(不重新分诊)。
-    /// 返回非 nil = 已接管本轮。与自主运行的 handleAutonomousAnswerIfNeeded 同理,但作用于派发的隔离子任务。
-    func handleDispatchedTaskAnswerIfNeeded(prompt: String) -> String? {
-        guard let rid = blockedDispatchedRecordID,
-              agentSubTaskRecords.values.contains(rid), !hasActiveModelCall else { return nil }
-        blockedDispatchedRecordID = nil
-        continueDispatchedThread(prompt: prompt, recordID: rid)
-        return ""   // 真实回复由编排器事件回填该任务气泡
-    }
-
-    /// 用户这条是在**回答/延续刚才那条派发的隔离任务**(如它问"做什么主题"):续跑**那条隔离会话本身**(带真上下文),
-    /// 而不是另起新会话。这样"做PPT→问主题→你答主题"能接上去真把 PPT 做出来,不再答非所问。通用,不限 PPT。
+    /// 用户这条是在**回答/延续某条派发的隔离任务**(如它问"做什么主题"、或几条之前问过):续跑**那条隔离会话本身**
+    /// (带真上下文),而不是另起新会话。这样"做PPT→问主题→你答主题"能接上去真把 PPT 做出来,不再答非所问。通用,不限 PPT。
     func continueDispatchedThread(prompt: String, recordID: String) {
-        appendTrace(kind: .route, actor: "主线程分诊", title: "续答派发任务", detail: "判为对刚才派发任务的回复,续跑那条隔离会话(带真上下文,不另起)。")
+        if recordID == blockedDispatchedRecordID { blockedDispatchedRecordID = nil }   // 已回答,解除"正等回答"标记
+        appendTrace(kind: .route, actor: "主线程分诊", title: "续答派发任务", detail: "判为对该派发任务的回复,续跑那条隔离会话(带真上下文,不另起)。")
         let pending = ChatMessage(speaker: "灵枢", text: dialogueAcknowledgement.intake(for: prompt), isUser: false, isLoading: true, taskRecordID: recordID)
         chatMessages.append(pending)
         dispatchedTaskBubbles[recordID] = pending.id   // 完成由编排器事件回填这条气泡
-        lastDispatchedThreadAt = Date()                // 刷新新鲜度:多轮澄清都能接着续
         submitTaskFollowup(prompt, recordID: recordID) // 隔离子任务 → orchestrator.resumeWithInput(续那条会话)
     }
 

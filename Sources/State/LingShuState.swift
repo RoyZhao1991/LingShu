@@ -210,12 +210,8 @@ final class LingShuState: ObservableObject {
     /// 主线程分诊「派发」的任务:记录 id → 它在对话里的加载气泡 id(完成时回填这条气泡而非另起一条)。
     /// Stage 2 多任务真隔离:每条派发任务有自己的气泡 + 独立 session,互不串。
     var dispatchedTaskBubbles: [String: UUID] = [:]
-    /// 最近一条**派发的隔离任务**记录 id + 时间:用户紧接着的回复若是在延续/回答它(如它问"做什么主题"),
-    /// 应续跑**那条隔离会话**(带真上下文),而不是被当成全新输入重新分诊到主会话(否则答非所问,实测 bug)。
-    var lastDispatchedThreadRecordID: String?
-    var lastDispatchedThreadAt: Date?
-    /// 某条**派发的隔离任务**正卡在 ask_user 等用户回答(它问了主题/要信息):下一条主输入**就是答案**,
-    /// 直接续跑那条隔离会话(不重新分诊),与自主运行的 handleAutonomousAnswerIfNeeded 同理。
+    /// 某条**派发的隔离任务**正卡在 ask_user 等用户回答(它问了主题/要信息):上下文感知分诊把它标成
+    /// "⏳正等你回答",让分诊器认出用户的答复(哪怕隔了几条)并续到那条隔离会话。见 buildTriageContext。
     var blockedDispatchedRecordID: String?
     /// 主会话当前回合的任务记录 id;工具桥据此把产出文件登记到正确记录。
     var currentAgentTurnRecordID: String?
@@ -976,37 +972,30 @@ final class LingShuState: ObservableObject {
             return standingAck
         }
 
-        // 派发的隔离任务正卡在 ask_user 等回答(它问了"做什么主题"等)→ 本轮输入就是答案:
-        // 直接续跑那条隔离会话(带真上下文),不重新分诊(否则"做PPT→问主题→你答主题→它却跑去聊天"=答非所问)。
-        if let answerAck = handleDispatchedTaskAnswerIfNeeded(prompt: trimmedPrompt) {
-            return answerAck
-        }
-
-        // 到这里才真正需要一条本轮记录(直答/派发/续接都要)。
-        let taskRecordID = existingTaskRecordID ?? createTaskExecutionRecord(for: trimmedPrompt)
-
         // 续接/追问(已有记录)→ 直接主回合,不分诊(继续这件事,不重新派发)。
-        if existingTaskRecordID != nil {
-            return runMainAgentTurn(prompt: trimmedPrompt, taskRecordID: taskRecordID)
+        if let existing = existingTaskRecordID {
+            return runMainAgentTurn(prompt: trimmedPrompt, taskRecordID: existing)
         }
 
-        // 新顶层输入:主线程**先分诊**(Stage 2 多任务真隔离)——
-        //   reply(在回答/延续刚才那条**派发的隔离任务**,如它问"做什么主题")→ 续跑**那条隔离会话**(带真上下文),
-        //     不再被当全新输入重新分诊到主会话(否则"答非所问":做PPT问主题→你答主题→它却去聊天介绍能力);
-        //   直答(对话/问答)→ 留主 session(runMainAgentTurn,对话连续);
-        //   任务(要执行/落盘/多步)→ 派发**独立隔离 session 并行跑**(dispatchIsolatedTask,不串主上下文)。
-        // 分诊是一次轻量模型判定(保守:失败/对话一律留主线程,不误派)。异步,故即时无文案,真回复经气泡给出。
-        let continuable = continuableDispatchedThread()
+        // 新顶层输入:**上下文感知分诊**(近全 + 远压缩 + 可续任务线程)——
+        //   reply(在回答/延续某条**派发的隔离任务**,如它问"做什么主题",哪怕隔了几条)→ 续跑**那条隔离会话**(带真上下文);
+        //   chat(直答/问答)→ 留主 session(对话连续);
+        //   task(全新执行/落盘/多步)→ 派发**独立隔离 session 并行跑**(不串主上下文)。
+        // 记录**按需建**:reply 续用派发线程自己的记录(不另建),task/chat 各建一条。异步,真回复经气泡给出。
         Task { @MainActor [weak self] in
             guard let self else { return }
-            let triage = await self.classifyDispatch(trimmedPrompt, previousTurn: continuable?.previousTurn)
+            let triage = await self.classifyDispatch(trimmedPrompt)
             switch triage.kind {
-            case .reply where continuable != nil:
-                self.continueDispatchedThread(prompt: trimmedPrompt, recordID: continuable!.recordID)
+            case .reply:
+                if let rid = triage.replyRecordID, self.agentSubTaskRecords.values.contains(rid) {
+                    self.continueDispatchedThread(prompt: trimmedPrompt, recordID: rid)
+                } else {   // 兜底:线程没了 → 当对话留主线程
+                    _ = self.runMainAgentTurn(prompt: trimmedPrompt, taskRecordID: self.createTaskExecutionRecord(for: trimmedPrompt))
+                }
             case .task:
-                self.dispatchIsolatedTask(prompt: trimmedPrompt, taskRecordID: taskRecordID, goal: triage.goal)
-            case .reply, .chat:
-                _ = self.runMainAgentTurn(prompt: trimmedPrompt, taskRecordID: taskRecordID)
+                self.dispatchIsolatedTask(prompt: trimmedPrompt, taskRecordID: self.createTaskExecutionRecord(for: trimmedPrompt), goal: triage.goal)
+            case .chat:
+                _ = self.runMainAgentTurn(prompt: trimmedPrompt, taskRecordID: self.createTaskExecutionRecord(for: trimmedPrompt))
             }
         }
         return ""
