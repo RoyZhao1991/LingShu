@@ -59,6 +59,7 @@ extension LingShuState {
 
         let expression: LingShuDigitalHumanExpression
         let text: String
+        var phaseIntensity: Double? = nil   // LOOP 各环节给本体不同的"身体表现"(色+脉动快慢),不只是文字
         if coreState == .abnormal {
             expression = .alert
             text = missionStatus
@@ -68,6 +69,15 @@ extension LingShuState {
         } else if voice.isRecording || isVoiceConversationActive {
             expression = .listening
             text = "正在聆听"
+        } else if loopPhase.isActive {
+            // 不出声的间隙,按 LOOP 环节给本体独立观感:理解/规划=思考态(青,沉稳慢脉动),执行=执行态(橙,快脉动),验收=确认态(绿)。
+            switch loopPhase {
+            case .understanding: expression = .thinking;   text = "理解中"; phaseIntensity = 0.42
+            case .planning:      expression = .thinking;   text = "规划中"; phaseIntensity = 0.58
+            case .executing:     expression = .executing;  text = "执行中"; phaseIntensity = 0.82
+            case .verifying:     expression = .confirming; text = "验收中"; phaseIntensity = 0.64
+            case .idle:          expression = .executing;  text = missionTitle
+            }
         } else if coreState == .thinking {
             expression = .thinking
             text = missionTitle
@@ -89,8 +99,8 @@ extension LingShuState {
             expression: expression,
             displayText: text,
             source: "状态推导",
-            // 发声时强度 = 基线 + 真实音量加成(随 outputLevel 提升,封顶 1)。原 max(base, level) 在音量<基线时恒等于基线、永远不会更高(与测试矛盾)。
-            intensity: expression == .speaking ? min(1, expression.baseIntensity + Double(voice.outputLevel) * 0.3) : expression.baseIntensity,
+            // 发声时强度 = 基线 + 真实音量加成(随 outputLevel 提升,封顶 1)。LOOP 环节用各自的脉动强度(phaseIntensity)区分快慢。
+            intensity: expression == .speaking ? min(1, expression.baseIntensity + Double(voice.outputLevel) * 0.3) : (phaseIntensity ?? expression.baseIntensity),
             activeSignals: signals,
             isDirectiveDriven: false
         )

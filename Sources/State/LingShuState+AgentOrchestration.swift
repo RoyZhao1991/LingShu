@@ -24,6 +24,11 @@ extension LingShuState {
     }
 
     func handleOrchestratorEvent(_ event: LingShuOrchestratorEvent) {
+        // 派发任务进入终态(完成/失败/卡住/中断)→ 收掉 LOOP 相位,别让本体停在"执行中"不灭。
+        switch event {
+        case .completed, .failed, .blocked, .interrupted: setLoopPhase(.idle)
+        default: break
+        }
         switch event {
         case .spawned(let id, let objective):
             // 主线程分诊派发的任务已**预映射**到自己的记录(dispatchIsolatedTask),复用之;否则(模型 spawn_task)新建一条。

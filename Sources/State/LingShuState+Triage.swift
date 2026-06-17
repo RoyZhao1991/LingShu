@@ -122,11 +122,13 @@ extension LingShuState {
             Task { @MainActor in self?.recordAgentReasoning(aside, recordID: self?.agentSubTaskRecords[subID], updateMissionStatus: false) }
         }
         let recordProvider: @MainActor @Sendable () -> String? = { [weak self] in self?.agentSubTaskRecords[subID] }
-        let tools = agentBuiltinTools(recordIDProvider: recordProvider)
+        let tools = withPhaseTracking(   // 相位跟踪:派发任务也驱动本体显示理解/规划/执行/验收(光球随环节变色变脉动)
+            agentBuiltinTools(recordIDProvider: recordProvider)
             + [Self.timeTool(), Self.webSearchTool(), recallMemoryTool(), Self.askUserTool(),
                findImagesTool(), acquireResourceTool(),
                updateTaskPlanTool(recordIDProvider: recordProvider), reviewDesignTool(recordIDProvider: recordProvider), speakTool(), digitalHumanTool(), enterManagedModeTool()]
             + previewTools()
+        )
         // 注入"最近产出物"上下文:让"运行起来/继续/改一下"这类派发任务接得上(知道刚做了什么、在哪、怎么跑),
         // 不再重新扫工作目录瞎猜(根治"超级玛丽做完了却问我要运行哪个项目")。
         let deliverCtx = recentDeliverablesContext()
