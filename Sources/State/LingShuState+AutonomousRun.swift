@@ -113,6 +113,8 @@ extension LingShuState {
         autonomousSessionHolder = nil
         autonomousPendingQuestion = nil
         autonomousRunRecordID = nil
+        _ = previewController.close()    // **退出必恢复屏幕**:关预览 + 退全屏(防演示黑屏卡死后夺不回)
+        Task { @MainActor in await agentOrchestrator.cancelAllRunning() }   // 停掉后台跑飞的演示/任务
         endAutonomousActivity()          // 释放 App Nap 抑制
         teardownAutonomousPerception()   // 收住周期感知循环(停 VL/音频 + 清 digest)
         autonomousRun = .idle

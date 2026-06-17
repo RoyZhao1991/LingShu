@@ -11,10 +11,16 @@ struct LingShuRootView: View {
     @StateObject private var standingVoiceCall = LingShuVoiceCallController()
     /// 自主模式「只剩本体」终态:进入仪式(融化→离子化)播完后置真,界面整个让位给右上角的悬浮本体。
     @State private var autonomousOrbMode = false
+    /// 演示/预览打开时:本体浮窗(无边框小窗)**让位**给正常窗口,否则预览 sheet 挂在 140px 无边框小窗上
+    /// + 全屏会黑屏卡死(实测灾难)。预览一关,自动回到本体态。
+    @State private var previewActive = false
+    /// 全屏演示中检测到手动操作 → 弹"是否退出自主"确认框(并已先退全屏恢复屏幕)。
+    @State private var manualTakeover = false
+    private var orbActive: Bool { state.isStandingPersonOnDuty && autonomousOrbMode && !previewActive }
 
     var body: some View {
         Group {
-            if state.isStandingPersonOnDuty && autonomousOrbMode {
+            if orbActive {
                 // 终态:界面消失,只剩半透明悬浮本体(右键暂停/继续、解除自主模式)。窗口由 controller 收缩成小浮窗。
                 LingShuAutonomousOrbOnlyView(state: state, voice: voice, vision: vision, perceptionGateway: perceptionGateway)
             } else if state.isMinimalVoiceMode {
@@ -31,8 +37,26 @@ struct LingShuRootView: View {
             }
         }
         // 进入仪式只在「上岗→终态之前」的过渡期覆盖(界面融化→离子化凝成本体);终态(只剩本体)不再覆盖。
-        .overlay { if state.isStandingPersonOnDuty && !autonomousOrbMode { LingShuAutonomousIntroOverlay(state: state) } }
-        .background(LingShuAutonomousWindowController(active: state.isStandingPersonOnDuty && autonomousOrbMode))
+        .overlay { if state.isStandingPersonOnDuty && !autonomousOrbMode && !previewActive { LingShuAutonomousIntroOverlay(state: state) } }
+        .background(LingShuAutonomousWindowController(active: orbActive))
+        .onReceive(state.previewController.$isPresented) { presented in
+            // 预览开=让位正常窗口(否则黑屏);预览关=若仍在岗,回到本体态。
+            withAnimation(.easeInOut(duration: 0.25)) { previewActive = presented }
+        }
+        // **手动接管安全闸**:自主运行 + 正在全屏演示时,一旦检测到你的键鼠操作 → 立刻退全屏恢复屏幕 + 弹框问是否退出自主。
+        // 演示期间灵枢不产生键鼠事件(翻页走内部 previewController),故此时任何键鼠输入=你在夺回控制,判定可靠。
+        .background(LingShuManualTakeoverMonitor(
+            active: state.autonomousRun.phase == .running && state.previewController.slideshow && !manualTakeover
+        ) { manualTakeover = true })
+        .onChange(of: manualTakeover) { _, on in
+            if on { _ = state.previewController.setSlideshow(false) }   // 先立刻退全屏,把屏幕还给用户(无论选是选否)
+        }
+        .confirmationDialog("检测到你在手动操作", isPresented: $manualTakeover, titleVisibility: .visible) {
+            Button("退出自主运行模式", role: .destructive) { state.stopAutonomousRun() }
+            Button("继续自主运行", role: .cancel) { }
+        } message: {
+            Text("是否停止当前自主任务、退回正常对话界面?\n（已先退出全屏,把屏幕还给你）")
+        }
         .onChange(of: state.isStandingPersonOnDuty) { _, onDuty in
             if onDuty {
                 autonomousOrbMode = false
@@ -196,6 +220,44 @@ struct LingShuRootView: View {
             title: "实时观测",
             detail: observation.summary
         )
+    }
+}
+
+/// 手动接管监听:active 时挂键鼠监听(本 app 内 local + 其他 app global),任一键鼠按下即回调。
+/// 仅在「自主运行 + 全屏演示」时启用,此时灵枢自身不产生键鼠事件,故任何输入=用户夺回控制。
+private struct LingShuManualTakeoverMonitor: NSViewRepresentable {
+    let active: Bool
+    let onManualInput: () -> Void
+
+    func makeNSView(context: Context) -> NSView { NSView() }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        let c = context.coordinator
+        c.onInput = onManualInput
+        if active, c.local == nil {
+            c.local = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .leftMouseDown, .rightMouseDown]) { event in
+                c.onInput?(); return event
+            }
+            c.global = NSEvent.addGlobalMonitorForEvents(matching: [.keyDown, .leftMouseDown, .rightMouseDown]) { _ in
+                c.onInput?()
+            }
+        } else if !active {
+            c.teardown()
+        }
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    final class Coordinator {
+        var local: Any?
+        var global: Any?
+        var onInput: (() -> Void)?
+        func teardown() {
+            if let local { NSEvent.removeMonitor(local) }
+            if let global { NSEvent.removeMonitor(global) }
+            local = nil; global = nil
+        }
+        deinit { teardown() }
     }
 }
 
