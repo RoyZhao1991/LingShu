@@ -61,6 +61,15 @@ struct LingShuAutonomousOrbOnlyView: View {
             controlBar
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)   // 填满整窗、内容居中(本体不被裁)
+        .contextMenu {   // 兜底:无边框窗口若按钮点不动,右键本体一样能暂停/退出
+            if paused {
+                Button { state.resumeAutonomousRun() } label: { Label("继续运行", systemImage: "play.fill") }
+            } else {
+                Button { state.pauseAutonomousRun() } label: { Label("暂停", systemImage: "pause.fill") }
+            }
+            Divider()
+            Button(role: .destructive) { state.stopAutonomousRun() } label: { Label("退出自主模式", systemImage: "xmark") }
+        }
         .transition(.scale(scale: 0.3).combined(with: .opacity))
     }
 
@@ -88,13 +97,6 @@ struct LingShuAutonomousOrbOnlyView: View {
     }
 }
 
-/// 无边框可成为 key 的窗口:borderless 的 NSWindow 默认 `canBecomeKey=false`→里面的按钮点不动。
-/// 只 override 这两个计算属性、不加任何存储属性,故可对现有窗口安全 `object_setClass` 临时换类(退出再换回)。
-final class LingShuBorderlessKeyWindow: NSWindow {
-    override var canBecomeKey: Bool { true }
-    override var canBecomeMain: Bool { true }
-}
-
 /// 自主模式终态的窗口处理:把灵枢主窗口**变无边框(borderless,根治黑标题条)+ 透明背景 + 浮于顶层 + 收成右上角小浮窗**。
 /// borderless 没有标题栏视图(那条黑框就是标题栏),从源头消除;`object_setClass` 换成可成为 key 的子类让本体上的
 /// 暂停/退出按钮仍可点。退出自主模式时**完整还原**(类/样式/尺寸/透明/层级);兜底:控制条「退出」任何时候可回正常界面。
@@ -119,8 +121,9 @@ struct LingShuAutonomousWindowController: NSViewRepresentable {
     }
 
     private static func applyOrbMode(_ w: NSWindow) {
-        object_setClass(w, LingShuBorderlessKeyWindow.self)   // 换可成 key 的类(borderless 按钮才点得动)
-        w.styleMask = .borderless                              // **无边框=无标题栏视图=无黑框**(根治)
+        // **无边框=无标题栏视图=无黑框**(根治)。不再 object_setClass(实测会让 SwiftUI 窗口崩溃)——
+        // 只改 styleMask 为 borderless;按钮在前台 app 里靠鼠标事件仍可点(canBecomeKey 只影响键盘焦点)。
+        w.styleMask = [.borderless, .resizable]
         w.isOpaque = false
         w.backgroundColor = .clear
         w.hasShadow = false
@@ -132,14 +135,13 @@ struct LingShuAutonomousWindowController: NSViewRepresentable {
             let vf = screen.visibleFrame
             w.setFrame(NSRect(x: vf.maxX - width - margin, y: vf.maxY - height - margin, width: width, height: height), display: true, animate: true)
         }
-        w.makeKeyAndOrderFront(nil)                            // 成为 key,按钮可点
+        w.orderFront(nil)
     }
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
     final class Coordinator {
         var shrunk = false
-        private var originalClass: AnyClass?
         private var frame: NSRect?
         private var opaque = true
         private var bg: NSColor?
@@ -150,7 +152,6 @@ struct LingShuAutonomousWindowController: NSViewRepresentable {
         private var minSize = NSSize.zero
 
         func capture(_ w: NSWindow) {
-            originalClass = object_getClass(w)
             frame = w.frame; opaque = w.isOpaque; bg = w.backgroundColor; shadow = w.hasShadow
             styleMask = w.styleMask
             movableByBG = w.isMovableByWindowBackground
@@ -158,7 +159,6 @@ struct LingShuAutonomousWindowController: NSViewRepresentable {
         }
 
         func restore(_ w: NSWindow) {
-            if let originalClass { object_setClass(w, originalClass) }   // 换回原窗口类
             w.styleMask = styleMask                                       // 恢复 .titled 等(标题栏回来)
             w.isOpaque = opaque; w.backgroundColor = bg; w.hasShadow = shadow
             w.isMovableByWindowBackground = movableByBG
