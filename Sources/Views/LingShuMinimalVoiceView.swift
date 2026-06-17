@@ -64,6 +64,18 @@ struct LingShuMinimalVoiceView: View {
                 .tracking(2)
                 .foregroundStyle(.white.opacity(0.4))
         }
+        .overlay(alignment: .bottomLeading) {
+            // 麦克风没进音(权限/设备)时浮一句可见告警,别让用户对着没反应的麦克风干等(原来静默无错)。
+            if let warn = voice.micSilentWarning {
+                Text("⚠️ " + warn)
+                    .font(.system(size: 10.5, weight: .semibold))
+                    .foregroundStyle(.orange)
+                    .padding(.horizontal, 8).padding(.vertical, 4)
+                    .background(Color.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 6))
+                    .fixedSize(horizontal: false, vertical: true)
+                    .offset(y: 26)
+            }
+        }
     }
 
     // MARK: - 自拍摄像头

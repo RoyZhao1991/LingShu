@@ -64,6 +64,11 @@ final class VoiceIOManager: ObservableObject {
     @Published var inputLevel: Float = 0
     /// 实时输出电平 0...1（TTS 播放音量计），供极简模式的输出波形使用。
     @Published var outputLevel: Float = 0
+    /// 麦克风没进音的可见告警(权限未授权/设备问题致"语音无反应"时,别再静默失败——浮出一句话让用户能修)。
+    @Published var micSilentWarning: String?
+    /// 最近一次音频 tap 真收到缓冲的时刻(看门狗据此判"引擎在跑但麦克风没进音")。
+    var lastInputBufferAt: Date = .distantPast
+    private var micWatchdogTask: Task<Void, Never>?
 
     var outputMeterTask: Task<Void, Never>?
 
@@ -228,6 +233,9 @@ final class VoiceIOManager: ObservableObject {
         }
 
         let inputNode = audioEngine.inputNode
+        // 诊断:点名当前麦克风/语音识别授权态(0=未决 1=受限 2=拒绝 3=已授权)——
+        // "引擎在跑但 tap 不进音"最常见真因=授权没真给(或签名变了 TCC 失效),这行直接坐实。
+        lingShuControlLog("voice/perm: speech=\(SFSpeechRecognizer.authorizationStatus().rawValue) mic=\(AVCaptureDevice.authorizationStatus(for: .audio).rawValue)")
         // 开启系统语音处理(AEC 回声消除):TTS 播放时麦克风**不再自听灵枢自己的声音**,
         // 从而可在灵枢说话时**持续收音**、随时听到主人插话并打断(barge-in)。
         // 失败/不支持则退回无 AEC(识别仍可用,只是说话时不宜常开麦)。必须在引擎启动前设、会改输入格式。
@@ -255,6 +263,30 @@ final class VoiceIOManager: ObservableObject {
         transcript = ""
         setInputStatus(speechRecognizer.supportsOnDeviceRecognition ? "正在听（本机）" : "正在听")
         armSpeechRecognition()
+        startMicAudioWatchdog()
+    }
+
+    /// 麦克风进音看门狗:引擎"启动成功"≠真有音频流(授权未真给/签名变了 TCC 失效/设备问题时,
+    /// 引擎在跑但 tap 一个缓冲都不回 → "语音无反应"还**静默无错**)。3.5s 内没收到任何音频缓冲就**浮出可见告警**,
+    /// 别让用户对着没反应的麦克风干等还不知道为什么。收到音频会自动清掉告警(见 tap)。
+    private func startMicAudioWatchdog() {
+        micWatchdogTask?.cancel()
+        let startedAt = Date()
+        micWatchdogTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 3_500_000_000)
+            guard let self, self.isRecording, !Task.isCancelled else { return }
+            if self.lastInputBufferAt < startedAt {   // 启动后从没进过音
+                let speech = SFSpeechRecognizer.authorizationStatus().rawValue
+                let mic = AVCaptureDevice.authorizationStatus(for: .audio).rawValue
+                let denied = mic != 3 || speech != 3
+                let msg = denied
+                    ? "麦克风/语音识别**没授权**(系统设置 › 隐私与安全性 › 麦克风 + 语音识别,把灵枢打开,再重开通话)"
+                    : "麦克风没进音(权限看似已给但收不到声音,可能是输入设备/系统麦被占用)"
+                self.micSilentWarning = msg
+                self.setInputStatus("⚠️ " + msg)
+                lingShuControlLog("voice/watchdog: 3.5s 无音频进入,mic=\(mic) speech=\(speech) → 告警:\(msg)")
+            }
+        }
     }
 
     /// 轮换识别请求：每句结束只换一个轻量请求/任务，引擎与 tap 不动——

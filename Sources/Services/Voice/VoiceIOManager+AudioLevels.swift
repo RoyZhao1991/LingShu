@@ -103,6 +103,8 @@ extension VoiceIOManager {
             if throttle.shouldEmitLevel(at: now) {
                 Task { @MainActor in
                     self?.inputLevel = level
+                    self?.lastInputBufferAt = now   // 看门狗据此判断麦克风是否真在进音
+                    self?.micSilentWarning = nil     // 进音了→清掉"没进音"告警
                 }
             }
 

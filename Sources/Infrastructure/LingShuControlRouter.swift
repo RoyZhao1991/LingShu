@@ -581,6 +581,8 @@ final class LingShuControlRouter {
             "perceptionDebug": state.perceptionDebugLine,
             "voiceListening": state.isListening,
             "voiceWake": state.voiceWakeListeningEnabled,
+            "micSilentWarning": state.voiceManager?.micSilentWarning ?? "",   // 非空=麦克风没进音(权限/设备)
+            "micLastInputAgoSec": state.voiceManager.map { Int(Date().timeIntervalSince($0.lastInputBufferAt)) } ?? -1,
             "previewState": [
                 "isPresented": state.previewController.isPresented,
                 "slideshow": state.previewController.slideshow,   // true=全屏演示模式
