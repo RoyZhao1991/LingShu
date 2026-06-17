@@ -61,7 +61,8 @@ extension VoiceIOManager {
             speechSynthesizer.stopSpeaking(at: .immediate)
         }
 
-        if speechOutputProvider.kind == .appleSpeech {
+        // 本机嗓,或国际化选了**英文**(云端 CosyVoice2 是中文男声,英文走本机英文嗓)→ 本机 TTS。
+        if speechOutputProvider.kind == .appleSpeech || voiceLanguage == .english {
             speakWithAppleSpeech(cleanedText, generation: gen)
             return
         }
@@ -404,11 +405,13 @@ extension VoiceIOManager {
         // 过期发声(已被更新发声/取消取代)不再发出本机音——防止与新发声或云端 TTS 重叠(双声线)。
         guard generation == speechGeneration else { return }
         let utterance = AVSpeechUtterance(string: cleanedText)
-        let voice = preferredChineseVoice()
+        // 国际化:英文走本机英文嗓(自然音高);中文走男声逻辑(压低近似男声)。
+        let isEnglish = voiceLanguage == .english
+        let voice = isEnglish ? preferredEnglishVoice() : preferredChineseVoice()
         utterance.voice = voice
         utterance.rate = 0.45
-        // 有真男声（如用户下载的 Li-mu）用自然音高；本机只剩女声兜底时大幅压低音高近似男声。
-        utterance.pitchMultiplier = (voice?.gender == .male) ? 0.92 : 0.68
+        // 有真男声（如用户下载的 Li-mu）用自然音高；本机只剩女声兜底时大幅压低音高近似男声;英文用自然音高。
+        utterance.pitchMultiplier = isEnglish ? 1.0 : ((voice?.gender == .male) ? 0.92 : 0.68)
         utterance.volume = 1.0
 
         isSpeaking = true
@@ -454,6 +457,19 @@ extension VoiceIOManager {
             if (lhs.language == "zh-CN") != (rhs.language == "zh-CN") { return lhs.language == "zh-CN" }
             return lhs.quality.rawValue > rhs.quality.rawValue
         }.first ?? AVSpeechSynthesisVoice(language: "zh-CN")
+    }
+
+    /// 选一个**英文**嗓(优先 en-US 高音质,男声优先)。国际化语音选 English 时用。
+    private func preferredEnglishVoice() -> AVSpeechSynthesisVoice? {
+        let en = AVSpeechSynthesisVoice.speechVoices().filter { $0.language.hasPrefix("en") }
+        let pool = en.filter { !$0.identifier.contains(".eloquence.") }
+        let candidates = pool.isEmpty ? en : pool
+        if let male = candidates.filter({ $0.gender == .male })
+            .sorted(by: { $0.quality.rawValue > $1.quality.rawValue }).first { return male }
+        return candidates.sorted { lhs, rhs in
+            if (lhs.language == "en-US") != (rhs.language == "en-US") { return lhs.language == "en-US" }
+            return lhs.quality.rawValue > rhs.quality.rawValue
+        }.first ?? AVSpeechSynthesisVoice(language: "en-US")
     }
 
     func outputStandbyStatus(for provider: LingShuSpeechOutputProviderDescriptor) -> String {

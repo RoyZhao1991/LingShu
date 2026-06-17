@@ -327,7 +327,19 @@ struct LingShuExecutionPolicySurface: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            SectionHeader(icon: "checkmark.shield", title: "执行策略", subtitle: "工作目录 · 常规偏好 · 高风险边界")
+            SectionHeader(icon: "gearshape", title: "系统配置", subtitle: "语言 · 工作目录 · 常规偏好 · 高风险边界")
+
+            // 国际化:语音语言(中/英)。切换即改 ASR 识别 + TTS 嗓音(英文走本机英文嗓)。
+            VStack(alignment: .leading, spacing: 6) {
+                Text("语音语言").font(.system(size: 12, weight: .semibold)).foregroundStyle(.white.opacity(0.7))
+                Picker("语音语言", selection: Binding(
+                    get: { state.voiceManager?.voiceLanguage ?? .chinese },
+                    set: { state.voiceManager?.voiceLanguage = $0 }
+                )) {
+                    ForEach(LingShuVoiceLanguage.allCases) { Text($0.displayName).tag($0) }
+                }
+                .pickerStyle(.segmented).labelsHidden()
+            }
 
             LingShuConfigLine(title: "目标", value: state.codexWorkingDirectory)
             TextField("目标项目目录", text: $state.codexWorkingDirectory).textFieldStyle(.roundedBorder)

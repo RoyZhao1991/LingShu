@@ -79,7 +79,19 @@ final class VoiceIOManager: ObservableObject {
     var outputMeterTask: Task<Void, Never>?
 
     private let audioEngine = AVAudioEngine()
-    private let speechRecognizer = SFSpeechRecognizer(locale: Locale(identifier: "zh_CN"))
+    /// 语音语言(国际化,中/英)。改它会重建 ASR 识别器,并让 TTS 选对应语种嗓音(英文走本机英文嗓)。持久化。
+    @Published var voiceLanguage: LingShuVoiceLanguage = VoiceIOManager.persistedVoiceLanguage {
+        didSet {
+            guard voiceLanguage != oldValue else { return }
+            UserDefaults.standard.set(voiceLanguage.rawValue, forKey: "lingshu.voiceLanguage")
+            speechRecognizer = SFSpeechRecognizer(locale: Locale(identifier: voiceLanguage.asrLocale))
+        }
+    }
+    static var persistedVoiceLanguage: LingShuVoiceLanguage {
+        LingShuVoiceLanguage(rawValue: UserDefaults.standard.string(forKey: "lingshu.voiceLanguage") ?? "zh") ?? .chinese
+    }
+    // 识别器随语言可重建(不再 let):初始 locale 取持久化语言。
+    private var speechRecognizer = SFSpeechRecognizer(locale: Locale(identifier: VoiceIOManager.persistedVoiceLanguage.asrLocale))
     let speechSynthesizer = AVSpeechSynthesizer()
     private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
     private var recognitionTask: SFSpeechRecognitionTask?

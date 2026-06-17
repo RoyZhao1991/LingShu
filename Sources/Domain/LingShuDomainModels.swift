@@ -99,6 +99,16 @@ enum LingShuLoopPhase: String {
     }
 }
 
+/// 语音语言(国际化,目前中/英两档)。决定 ASR 识别 locale + TTS 嗓音语言。配置在「系统配置」里切换。
+enum LingShuVoiceLanguage: String, CaseIterable, Identifiable {
+    case chinese = "zh"
+    case english = "en"
+    var id: String { rawValue }
+    var displayName: String { self == .chinese ? "中文" : "English" }
+    var asrLocale: String { self == .chinese ? "zh_CN" : "en_US" }   // SFSpeechRecognizer locale
+    var ttsLanguage: String { self == .chinese ? "zh-CN" : "en-US" }  // AVSpeechSynthesisVoice language
+}
+
 enum LingShuCoreState: String {
     case standby = "待机中"
     case thinking = "思考中"
