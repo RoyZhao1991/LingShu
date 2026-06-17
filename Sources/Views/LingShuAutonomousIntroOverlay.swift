@@ -128,17 +128,28 @@ struct LingShuAutonomousWindowController: NSViewRepresentable {
             let vf = screen.visibleFrame
             w.setFrame(NSRect(x: vf.maxX - width - margin, y: vf.maxY - height - margin, width: width, height: height), display: true, animate: true)
         }
-        // **那条黑框=标题栏容器(NSTitlebarContainerView)的暗色材质**——藏掉它(fullSizeContentView 已让内容铺满,不影响布局)。
-        // setFrame/styleMask 变更后 AppKit 可能重建标题栏,故延时再补一刀,确保藏住。
+        // **那条黑框=标题栏容器(NSTitlebarContainerView)的暗色材质**。AppKit 在 setFrame/布局后会反复把它 isHidden 复位,
+        // 所以一次性藏不住——开一条短任务在前 1.2s 内每 80ms 重藏一次(alpha=0 + isHidden 双保险),把它彻底压住。
         Self.setTitlebarHidden(w, true)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak w] in if let w { Self.setTitlebarHidden(w, true) } }
+        Task { @MainActor [weak w] in
+            for _ in 0..<15 {
+                try? await Task.sleep(nanoseconds: 80_000_000)
+                guard let w, w.styleMask.contains(.fullSizeContentView), !w.isOpaque else { return }   // 已退出 orb 态就停
+                Self.setTitlebarHidden(w, true)
+            }
+        }
     }
 
     /// 显/隐标题栏容器视图(NSTitlebarContainerView)——它的暗色材质就是那条"黑框"。退出自主模式时复原。
     static func setTitlebarHidden(_ w: NSWindow, _ hidden: Bool) {
         guard let themeFrame = w.contentView?.superview else { return }
-        for sub in themeFrame.subviews where String(describing: type(of: sub)).contains("TitlebarContainer") {
-            sub.isHidden = hidden
+        // 藏掉标题栏/工具栏类视图:alpha=0 + isHidden 双保险(单 isHidden 会被 AppKit 复位)。
+        for sub in themeFrame.subviews {
+            let name = String(describing: type(of: sub))
+            if name.contains("Titlebar") || name.contains("TitleBar") || name.contains("Toolbar") {
+                sub.isHidden = hidden
+                sub.alphaValue = hidden ? 0 : 1
+            }
         }
     }
 
