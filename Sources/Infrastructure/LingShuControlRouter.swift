@@ -571,7 +571,6 @@ final class LingShuControlRouter {
         [
             "coreState": state.coreStateDisplay,
             "loopPhase": state.loopPhase.rawValue,   // 理解中/规划中/执行中/验收中(空=空闲)
-            "pendingManagedMode": state.pendingManagedModeRequest?.reason ?? "",   // 非空=大脑在申请进托管模式、等主人确认
             "missionTitle": state.missionTitle,
             "missionStatus": state.missionStatus,
             "autonomousPhase": state.autonomousRun.phase.rawValue,

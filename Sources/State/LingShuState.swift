@@ -366,8 +366,8 @@ final class LingShuState: ObservableObject {
     var mainRemoteLastDiagnosticLog = ""
     /// 待用户授权的系统命令（高风险动作人工确认弹窗）：非空即弹中文授权框。
     @Published var pendingShellApproval: LingShuPendingShellApproval?
-    /// 待确认的「进入托管模式」请求(大脑调 enter_managed_mode 申请实时演示/互动 → 弹窗征主人同意)。见 LingShuState+ManagedMode。
-    @Published var pendingManagedModeRequest: LingShuPendingManagedMode?
+    /// 经托管模式确认转入(goLiveForInteractiveTask)→ 本体**立即出现**(跳过 2.5s 入场仪式,免演示开场那段没本体)。见根视图 onChange。
+    var enteringViaManagedHandoff = false
     /// 用户在本次会话里选了「完全授权」后置真：后续 run_command 不再逐条弹窗。
     var sessionShellAlwaysAllowed = false
     /// 自发现高风险 skill 脚本的隔离表(运行期):materialize 时按 skillID 隔离清单填入,
@@ -728,10 +728,6 @@ final class LingShuState: ObservableObject {
         // 若正卡在系统命令授权弹窗上：按拒绝收口，解除挂起的工具协程，别让弹窗悬着。
         if pendingShellApproval != nil {
             resolveShellApproval(.deny)
-        }
-        // 同理:卡在「进入托管模式」确认上 → 按不同意收口,解除挂起协程。
-        if pendingManagedModeRequest != nil {
-            resolveManagedMode(false)
         }
 
         let messageID = activeThinkingMessageID

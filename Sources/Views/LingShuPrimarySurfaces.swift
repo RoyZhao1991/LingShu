@@ -56,27 +56,20 @@ struct LingShuRootView: View {
         } message: {
             Text("是否停止当前任务、退回正常界面?\n（已先退出全屏,把屏幕还给你）")
         }
-        // **进入「托管模式」确认**:大脑判断要占屏实时演示/互动时弹此框征求同意(普通任务→托管的转变点)。
-        .confirmationDialog(
-            "进入「托管模式」?",
-            isPresented: Binding(
-                get: { state.pendingManagedModeRequest != nil },
-                set: { presented in if !presented, state.pendingManagedModeRequest != nil { state.resolveManagedMode(false) } }
-            ),
-            titleVisibility: .visible,
-            presenting: state.pendingManagedModeRequest
-        ) { _ in
-            Button("进入托管模式,开始") { state.resolveManagedMode(true) }
-            Button("留在普通模式", role: .cancel) { state.resolveManagedMode(false) }
-        } message: { req in
-            Text("灵枢要进入「托管模式」来完成:\n\(req.reason)\n\n这会让灵枢本体在位、占屏实时演示 / 与你实时互动。是否同意?")
-        }
+        // 注:进入「托管模式」确认改用 AppKit NSAlert(见 LingShuState.requestManagedMode)——
+        // 它会把灵枢拉到前台、app-modal 一定可见,根治 SwiftUI confirmationDialog 在灵枢非前台时不弹的问题。
         .onChange(of: state.isStandingPersonOnDuty) { _, onDuty in
             if onDuty {
-                autonomousOrbMode = false
-                // 仪式播完(~2.5s)再切终态:此刻屏幕还被暗幕盖着,窗口收缩不露馅。
-                DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
-                    if state.isStandingPersonOnDuty { withAnimation(.easeInOut(duration: 0.35)) { autonomousOrbMode = true } }
+                if state.enteringViaManagedHandoff {
+                    // 托管模式转入(演示/互动中途):本体**立即**出现,不放入场仪式——否则开场那 2.5s 没本体,看着像"本体消失了"。
+                    state.enteringViaManagedHandoff = false
+                    withAnimation(.easeInOut(duration: 0.3)) { autonomousOrbMode = true }
+                } else {
+                    autonomousOrbMode = false
+                    // 手动上岗:仪式播完(~2.5s)再切终态(此刻屏幕还被暗幕盖着,窗口收缩不露馅)。
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
+                        if state.isStandingPersonOnDuty { withAnimation(.easeInOut(duration: 0.35)) { autonomousOrbMode = true } }
+                    }
                 }
             } else {
                 withAnimation(.easeInOut(duration: 0.3)) { autonomousOrbMode = false }

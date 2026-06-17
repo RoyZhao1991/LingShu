@@ -55,6 +55,7 @@ extension LingShuState {
             return
         }
         pendingStandingKickoff = prompt
+        enteringViaManagedHandoff = true   // 托管转入:本体立即出现,不放 2.5s 入场仪式(免演示开场那段没本体/被仪式盖住)
         appendTrace(kind: .route, actor: "灵枢", title: "交互任务→自主模式", detail: String(prompt.prefix(40)))
         goLiveAsStandingPerson()
         // 只在上岗**受阻**(环境阻断,phase 同步即为 .blocked)时清待办。不能用 isStandingPersonOnDuty 判断——
