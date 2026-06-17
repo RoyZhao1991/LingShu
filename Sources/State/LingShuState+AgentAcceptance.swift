@@ -27,6 +27,15 @@ extension LingShuState {
             .filter { FileManager.default.fileExists(atPath: $0.location) }.count
     }
 
+    /// 交付物里是否含**真·源码文件**(决定验收门要不要死磕正确性):有 → 代码交付(测试/运行门死磕);
+    /// 全是 PPT/文档/数据(.pptx/.docx/.md/.json…)→ 非代码交付,主观设计意见不无限返工(给时间预算)。
+    func deliverableHasCodeArtifact(_ taskRecordID: String?) -> Bool {
+        let codeExts: Set<String> = ["swift", "py", "js", "ts", "jsx", "tsx", "go", "rs", "java", "kt",
+                                     "c", "cpp", "cc", "h", "hpp", "m", "rb", "php", "cs", "sh", "html", "css", "vue"]
+        return (taskExecutionRecords.first { $0.id == taskRecordID }?.artifacts ?? [])
+            .contains { codeExts.contains(($0.location as NSString).pathExtension.lowercased()) }
+    }
+
     /// 撞顶恢复:对「推进耗尽 per-run 天花板但未收尾」的结果,有界地补预算续跑(每次 resume = 全新 maxTurns)。
     /// 只对**确有在制品**且非「原地打转(反复尝试同一动作)」的撞顶恢复——后者补预算也无用,留给后续诚实交还。
     private func recoverFromExhaustionIfNeeded(session: LingShuAgentSession, result initial: LingShuAgentRunResult, taskRecordID: String?) async -> LingShuAgentRunResult {
@@ -67,6 +76,12 @@ extension LingShuState {
         guard case .completed = result,
               producedRealArtifacts || Self.replyClaimsArtifact(Self.runResultText(result)) else { return result }
         let verifyCeiling = 8   // 安全天花板,非目标位
+        // **非代码交付的返工时间预算(2026-06-17,防"PPT卡几分钟")**:PPT/文档这类没有确定性测试门的交付,
+        // verifier 给的是**主观设计意见**(每轮还不一样),不会触发"停滞"判定 → 会一直返工到 8 轮,叠加云端慢时
+        // 拖成几分钟、看着像卡死。所以:**非代码交付**一旦已有真产出物,返工总时长超预算就交付现有版本,不再死磕。
+        // 代码交付不设此预算——它有确定性测试/运行门,正确性要死磕到底。
+        let nonCodeDeliverable = !deliverableHasCodeArtifact(taskRecordID)
+        let revisionDeadline = Date().addingTimeInterval(120)
         var round = 0
         var lastArtifactCount = -1
         var lastCritique = ""
@@ -85,6 +100,12 @@ extension LingShuState {
             // 停滞判定:这一轮 maker 没产出新文件,且验收意见与上轮实质相同 → 在原地打转,诚实交还。
             let artifactCount = (taskExecutionRecords.first { $0.id == taskRecordID }?.artifacts ?? [])
                 .filter { FileManager.default.fileExists(atPath: $0.location) }.count
+            // 非代码交付 + 已有真产出物 + 返工超时预算 → 别再为主观设计意见死磕,交付当前版本(用户更要"快出东西")。
+            if nonCodeDeliverable, round > 0, artifactCount > artifactBaseline, Date() > revisionDeadline {
+                appendTrace(kind: .result, actor: "验收", title: "返工超预算·交付现有版本", detail: "非代码交付(如PPT)已多轮打磨且超时,先交付当前版本,避免无限返工。")
+                let delivery = await composeDeliveryMessage(userRequest: userRequest, makerText: Self.runResultText(result), taskRecordID: taskRecordID)
+                return .completed(text: delivery)
+            }
             if round > 0, artifactCount <= lastArtifactCount, critique.prefix(120) == lastCritique.prefix(120) {
                 appendTrace(kind: .warning, actor: "验收", title: "停滞交还", detail: "连续未通过且无新进展,交还用户。")
                 return .maxTurnsReached(lastText: Self.runResultText(result) + "\n\n（验收一直没通过且我已无新进展:\(critique.prefix(160))。先停下交还——需要你的判断或补充信息。）")

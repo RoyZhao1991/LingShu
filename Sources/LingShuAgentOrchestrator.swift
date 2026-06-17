@@ -44,6 +44,9 @@ actor LingShuAgentOrchestrator {
     private var sessions: [String: LingShuAgentSession] = [:]
     private var entries: [String: LingShuLedgerEntry] = [:]
     private var order: [String] = []
+    /// 正在后台跑的子任务驱动 Task(供"停止并夺回"真正取消跑飞的隔离子任务——它们不计入主状态 hasActiveModelCall,
+    /// 旧逻辑根本停不掉,跑飞的 PPT 等夺不回)。终态(record)即清除。
+    private var driveTasks: [String: Task<Void, Never>] = [:]
     /// 因网络/网关中断而暂停、等重连自动续跑的子任务 id(会话仍保留在 `sessions`)。
     private var suspendedForReconnect: Set<String> = []
     /// 各子任务的目标(续跑时 acceptanceHook 要用,且暂停后 entries 仍保有,这里冗余存一份保险)。
@@ -109,9 +112,28 @@ actor LingShuAgentOrchestrator {
         concurrency.requestAdmission(threadID: id, summary: objective)   // 有容量,必纳入运行
         upsert(id: id, objective: objective, status: .running, summary: "已开始(后台)")
         await onEvent?(.spawned(id: id, objective: objective))
-        Task { await self.drive(id: id, objective: objective) }
+        driveTasks[id] = Task { await self.drive(id: id, objective: objective) }
         return true
     }
+
+    /// 停止**所有正在跑的隔离子任务**(用户"停止并夺回"用)。取消驱动 Task(循环在边界 `Task.isCancelled` 退出)、
+    /// 释放并发槽、标记账本,并发 `.failed("用户已停止")` 事件让 UI 把记录从"执行中"收尾。返回停了几条。
+    @discardableResult
+    func cancelAllRunning() -> Int {
+        let ids = Array(driveTasks.keys)
+        for (id, task) in driveTasks {
+            task.cancel()
+            let objective = objectives[id] ?? entries[id]?.objective ?? ""
+            upsert(id: id, objective: objective, status: .failed, summary: "用户已停止")
+            _ = concurrency.complete(threadID: id)
+            Task { await self.onEvent?(.failed(id: id, objective: objective, summary: "用户已停止")) }
+        }
+        driveTasks.removeAll()
+        return ids.count
+    }
+
+    /// 当前后台正在跑的子任务数(供"是否有可停的派发任务"判断)。
+    func activeDriveCount() -> Int { driveTasks.count }
 
     private func drive(id: String, objective: String) async {
         guard let session = sessions[id] else { return }
@@ -151,6 +173,7 @@ actor LingShuAgentOrchestrator {
     // MARK: 内部
 
     private func record(id: String, objective: String, result: LingShuAgentRunResult) {
+        driveTasks[id] = nil   // 终态:驱动 Task 已结束,从可取消集合移除
         switch result {
         case .completed(let text):
             upsert(id: id, objective: objective, status: .completed, summary: digest(text))
@@ -193,7 +216,7 @@ actor LingShuAgentOrchestrator {
         concurrency.requestAdmission(threadID: id, summary: objective)
         upsert(id: id, objective: objective, status: .running, summary: "网络恢复,自动续跑中")
         await onEvent?(.resumed(id: id, objective: objective))
-        Task { await self.driveContinue(id: id, objective: objective, session: session) }
+        driveTasks[id] = Task { await self.driveContinue(id: id, objective: objective, session: session) }
     }
 
     /// 手动续接(任务窗口/主线程「继续」):把用户输入喂给**这条隔离会话本身**(它才有真上下文)续跑。
@@ -224,7 +247,7 @@ actor LingShuAgentOrchestrator {
         guard let next = concurrency.complete(threadID: id) else { return }
         guard let objective = entries[next]?.objective, sessions[next] != nil else { return }
         upsert(id: next, objective: objective, status: .running, summary: "已开始(后台)")
-        Task { await self.drive(id: next, objective: objective) }
+        driveTasks[next] = Task { await self.drive(id: next, objective: objective) }
     }
 
     private func upsert(id: String, objective: String, status: LingShuLedgerStatus, summary: String, blockedOn: String? = nil) {

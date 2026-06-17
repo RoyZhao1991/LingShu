@@ -326,10 +326,11 @@ final class LingShuControlRouter {
             let limit = (arguments["limit"] as? Int) ?? 30
             return (jsonText(["trace": tracePayload(limit: limit)]), false)
         case "lingshu_stop":
-            // 停止在飞回合(等价任务窗口"停止"按钮)。
+            // 停止在飞回合 + **正在跑的派发隔离子任务**(等价任务窗口"停止"按钮 / 接管态"停止并夺回")。
             let wasActive = state.hasActiveModelCall
+            let dispatched = await state.agentOrchestrator.activeDriveCount()
             state.cancelCurrentCall()
-            return (jsonText(["stopped": wasActive]), false)
+            return (jsonText(["stopped": wasActive || dispatched > 0, "mainTurn": wasActive, "dispatchedStopped": dispatched]), false)
         case "lingshu_autonomous":
             // 驱动自主模式/常驻灵枢(等价独立运行面板按钮),供脚本化验证完全接管态。args: action。
             guard let action = (arguments["action"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) else {

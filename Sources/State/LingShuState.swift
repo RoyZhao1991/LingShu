@@ -690,6 +690,15 @@ final class LingShuState: ObservableObject {
     }
 
     func cancelCurrentCall() {
+        // **先停派发的隔离子任务**:它们不计入 hasActiveModelCall,旧逻辑(下面的 guard)根本停不掉——
+        // 跑飞/卡死的 PPT 等隔离任务夺不回。cancelAllRunning 取消其驱动 Task,.failed 事件把记录收尾。
+        let orchestrator = agentOrchestrator
+        Task { @MainActor [weak self] in
+            let n = await orchestrator.cancelAllRunning()
+            guard let self, n > 0 else { return }
+            self.appendTrace(kind: .warning, actor: "用户", title: "停止派发任务", detail: "已取消 \(n) 条正在跑的隔离子任务。")
+            if !self.hasActiveModelCall { self.missionTitle = "待机中"; self.enterCoreState(.standby, resetTimer: false) }
+        }
         guard hasActiveModelCall else { return }
 
         // 若正卡在系统命令授权弹窗上：按拒绝收口，解除挂起的工具协程，别让弹窗悬着。
