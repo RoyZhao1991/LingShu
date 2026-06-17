@@ -329,54 +329,67 @@ struct LingShuExecutionPolicySurface: View {
         VStack(alignment: .leading, spacing: 14) {
             SectionHeader(icon: "gearshape", title: state.loc("系统配置", "System"), subtitle: state.loc("语言 · 工作目录 · 常规偏好 · 高风险边界", "Language · Working dir · Preferences · High-risk limits"))
 
-            // **国际化总开关**:切它整个界面/状态/本体 + 语音(ASR/TTS/回复语言)一起切。
-            VStack(alignment: .leading, spacing: 6) {
-                Text(state.loc("界面语言", "Language")).font(.system(size: 12, weight: .semibold)).foregroundStyle(.white.opacity(0.7))
+            // 分组卡片:每类设置独立成块,标题—内容对齐,留白一致(根治原来"读写目录重复显示 + 挤成一面墙")。
+            // 界面语言(国际化总开关:切它整个界面/状态/本体 + 语音一起切)。
+            group(state.loc("界面语言", "Language")) {
                 Picker("Language", selection: $state.language) {
                     ForEach(LingShuVoiceLanguage.allCases) { Text($0.displayName).tag($0) }
                 }
-                .pickerStyle(.segmented).labelsHidden()
+                .pickerStyle(.segmented).labelsHidden().frame(maxWidth: 240)
             }
 
-            LingShuConfigLine(title: state.loc("目标", "Working dir"), value: state.codexWorkingDirectory)
-            TextField(state.loc("目标项目目录", "Target project directory"), text: $state.codexWorkingDirectory).textFieldStyle(.roundedBorder)
-
-            // 常规偏好(非高风险)。本地流式多轮是**固定模式**(按模型类型自动决定),不再做开关。
-            HStack(spacing: 18) {
-                Toggle(state.loc("语音朗读", "Speak aloud"), isOn: $state.voiceOutputEnabled).toggleStyle(.switch)
-                Spacer()
-            }
-            .font(.system(size: 12, weight: .semibold)).foregroundStyle(.white.opacity(0.76))
-
-            VStack(alignment: .leading, spacing: 6) {
-                Text("\(state.loc("随机性", "Temperature")) \(String(format: "%.1f", state.temperature))").font(.system(size: 12, weight: .semibold)).foregroundStyle(.white.opacity(0.7))
-                Slider(value: $state.temperature, in: 0...1, step: 0.1)
+            // 工作目录:只留一个可编辑框(原来 read-only 行 + 输入框重复显示同一路径,冗余且丑)。
+            group(state.loc("工作目录", "Working directory")) {
+                TextField(state.loc("项目目录绝对路径", "Absolute project path"), text: $state.codexWorkingDirectory)
+                    .textFieldStyle(.roundedBorder).font(.system(size: 12.5, design: .monospaced))
             }
 
-            Divider().overlay(Color.white.opacity(0.08))
-
-            // 高风险边界:权限模式 + 人工确认 + 计算机直接操作 归一组。
-            Text(state.loc("高风险边界", "High-risk limits")).font(.system(size: 11, weight: .bold)).foregroundStyle(.white.opacity(0.5))
-
-            Picker(state.loc("权限模式", "Permission mode"), selection: $state.codexPermissionMode) {
-                ForEach(CodexPermissionMode.allCases) { Text(state.loc($0.rawValue, $0.englishName)).tag($0) }
+            // 常规偏好:语音朗读 + 随机性。
+            group(state.loc("常规偏好", "Preferences")) {
+                Toggle(state.loc("语音朗读", "Speak aloud"), isOn: $state.voiceOutputEnabled)
+                    .toggleStyle(.switch).font(.system(size: 12.5, weight: .semibold)).foregroundStyle(.white.opacity(0.82))
+                HStack(spacing: 12) {
+                    Text(state.loc("随机性", "Temperature")).font(.system(size: 12.5, weight: .semibold)).foregroundStyle(.white.opacity(0.82))
+                    Slider(value: $state.temperature, in: 0...1, step: 0.1)
+                    Text(String(format: "%.1f", state.temperature)).font(.system(size: 12.5, weight: .bold, design: .monospaced)).foregroundStyle(Color.lingHolo).frame(width: 30, alignment: .trailing)
+                }
             }
-            .pickerStyle(.segmented)
 
-            HStack(spacing: 18) {
-                Toggle(state.loc("高风险需人工确认", "Confirm high-risk"), isOn: $state.requireHumanApproval).toggleStyle(.switch)
-                Toggle(state.loc("计算机直接操作", "Direct computer control"), isOn: $state.computerControlEnabled).toggleStyle(.switch)
-                Spacer()
+            // 高风险边界:权限模式 + 人工确认 + 计算机直接操作。
+            group(state.loc("高风险边界", "High-risk limits"), tint: .orange) {
+                HStack(spacing: 10) {
+                    Text(state.loc("权限模式", "Permission")).font(.system(size: 12.5, weight: .semibold)).foregroundStyle(.white.opacity(0.82))
+                    Picker(state.loc("权限模式", "Permission mode"), selection: $state.codexPermissionMode) {
+                        ForEach(CodexPermissionMode.allCases) { Text(state.loc($0.rawValue, $0.englishName)).tag($0) }
+                    }
+                    .pickerStyle(.segmented).labelsHidden().frame(maxWidth: 240)
+                    Spacer()
+                }
+                HStack(spacing: 24) {
+                    Toggle(state.loc("高风险需人工确认", "Confirm high-risk"), isOn: $state.requireHumanApproval).toggleStyle(.switch)
+                    Toggle(state.loc("计算机直接操作", "Direct computer control"), isOn: $state.computerControlEnabled).toggleStyle(.switch)
+                    Spacer()
+                }
+                .font(.system(size: 12.5, weight: .semibold)).foregroundStyle(.white.opacity(0.82))
+                Text(state.loc("开启「计算机直接操作」后,\(state.appName)可直接看屏 / 点击 / 键入,会向系统申请辅助功能 + 屏幕录制授权。", "With Direct computer control on, \(state.appName) can view the screen / click / type, requesting Accessibility + Screen Recording permissions."))
+                    .font(.system(size: 10.5, weight: .medium)).foregroundStyle(.white.opacity(0.42))
+                    .fixedSize(horizontal: false, vertical: true)
             }
-            .font(.system(size: 12, weight: .semibold)).foregroundStyle(.white.opacity(0.76))
-
-            Text(state.loc("计算机直接操作:开启后灵枢可直接看屏/点击/键入,会向系统申请辅助功能 + 屏幕录制授权。", "Direct computer control: when on, \(state.appName) can view the screen / click / type, requesting Accessibility + Screen Recording permissions."))
-                .font(.system(size: 10.5, weight: .medium)).foregroundStyle(.white.opacity(0.42))
-                .fixedSize(horizontal: false, vertical: true)
         }
         .frame(maxWidth: .infinity, alignment: .topLeading)
         .padding(16)
-        .background(Color.white.opacity(0.065), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+
+    /// 一组设置卡片:左上小标题 + 内容,统一留白与圆角;高风险组用橙色描边醒目。
+    @ViewBuilder private func group<Content: View>(_ title: String, tint: Color = .lingHolo, @ViewBuilder _ content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(title).font(.system(size: 11, weight: .bold)).tracking(0.5).foregroundStyle(tint.opacity(0.85))
+            content()
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(14)
+        .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .overlay { RoundedRectangle(cornerRadius: 10, style: .continuous).stroke(tint.opacity(0.14), lineWidth: 0.5) }
     }
 }
 

@@ -14,13 +14,13 @@ struct LingShuTopPerceptionStrip: View {
             isDetailPresented.toggle()
         } label: {
             HStack(spacing: compact ? 8 : 10) {
-                PerceptionDotStatus(title: "耳", value: earStatusText, isActive: state.voiceWakeListeningEnabled, compact: compact)
-                PerceptionDotStatus(title: "嘴", value: mouthStatusText, isActive: mouthIsActive, compact: compact)
-                PerceptionDotStatus(title: "眼", value: vision.isCameraRunning ? "看" : "待机", isActive: vision.isCameraRunning, compact: compact)
-                PerceptionDotStatus(title: "主", value: perceptionGateway.ownerIdentitySnapshot.shortStatus, isActive: perceptionGateway.isOwnerIdentityLocked, compact: compact)
+                PerceptionDotStatus(title: state.loc("耳", "Ear"), value: earStatusText, isActive: state.voiceWakeListeningEnabled, compact: compact)
+                PerceptionDotStatus(title: state.loc("嘴", "Voice"), value: mouthStatusText, isActive: mouthIsActive, compact: compact)
+                PerceptionDotStatus(title: state.loc("眼", "Eye"), value: vision.isCameraRunning ? state.loc("看", "On") : state.loc("待机", "Idle"), isActive: vision.isCameraRunning, compact: compact)
+                PerceptionDotStatus(title: state.loc("主", "Owner"), value: perceptionGateway.ownerIdentitySnapshot.shortStatus, isActive: perceptionGateway.isOwnerIdentityLocked, compact: compact)
                 PerceptionDotStatus(
-                    title: "析",
-                    value: perceptionGateway.isRemoteRouteActive ? "模型" : "本地",
+                    title: state.loc("析", "Sense"),
+                    value: perceptionGateway.isRemoteRouteActive ? state.loc("模型", "Cloud") : state.loc("本地", "Local"),
                     isActive: !perceptionGateway.statusText.contains("中断"),
                     compact: compact
                 )
