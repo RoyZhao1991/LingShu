@@ -290,10 +290,13 @@ struct LingShuStableTopBar: View {
                 .help(state.trustBreakdown)
 
             Button {
-                if !state.autonomousRun.isActive {
-                    state.prepareAutonomousRun()
+                // 右上角闪电=一键进/出自主模式(化身右上角悬浮本体)。在岗→退出夺回;否则→直接上岗(常驻灵枢,无需目标)。
+                // 旧逻辑调 prepareAutonomousRun(需目标)→点了只会"缺少目标·空目标已拒绝启动",根本进不去自主模式。
+                if state.isStandingPersonOnDuty {
+                    state.stopAutonomousRun()
+                } else {
+                    state.goLiveAsStandingPerson()
                 }
-                state.selectedSurface = .runtime
             } label: {
                 Image(systemName: state.autonomousRun.isActive ? "bolt.circle.fill" : "bolt.circle")
                     .font(.system(size: 15, weight: .bold))
@@ -304,7 +307,7 @@ struct LingShuStableTopBar: View {
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .help("准备独立运行模式")
+            .help(state.isStandingPersonOnDuty ? "退出自主模式" : "进入自主模式（灵枢上岗，化身右上角悬浮本体）")
 
             Button {
                 state.isMinimalVoiceMode = true

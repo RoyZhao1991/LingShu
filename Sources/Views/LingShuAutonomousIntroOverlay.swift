@@ -115,9 +115,10 @@ struct LingShuAutonomousWindowController: NSViewRepresentable {
         w.isOpaque = false
         w.backgroundColor = .clear
         w.hasShadow = false
-        w.styleMask.insert(.fullSizeContentView)    // 内容铺满整窗(含原标题栏区)=无黑条、本体完整显示
+        w.styleMask.insert(.fullSizeContentView)    // 内容铺满整窗(含原标题栏区)
         w.titlebarAppearsTransparent = true
         w.titleVisibility = .hidden
+        w.titlebarSeparatorStyle = .none
         w.isMovableByWindowBackground = true         // 拖本体即可挪动这颗悬浮球
         [.closeButton, .miniaturizeButton, .zoomButton].forEach { w.standardWindowButton($0)?.isHidden = true }
         w.minSize = NSSize(width: 100, height: 120)
@@ -126,6 +127,18 @@ struct LingShuAutonomousWindowController: NSViewRepresentable {
             let width: CGFloat = 140, height: CGFloat = 168, margin: CGFloat = 24
             let vf = screen.visibleFrame
             w.setFrame(NSRect(x: vf.maxX - width - margin, y: vf.maxY - height - margin, width: width, height: height), display: true, animate: true)
+        }
+        // **那条黑框=标题栏容器(NSTitlebarContainerView)的暗色材质**——藏掉它(fullSizeContentView 已让内容铺满,不影响布局)。
+        // setFrame/styleMask 变更后 AppKit 可能重建标题栏,故延时再补一刀,确保藏住。
+        Self.setTitlebarHidden(w, true)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak w] in if let w { Self.setTitlebarHidden(w, true) } }
+    }
+
+    /// 显/隐标题栏容器视图(NSTitlebarContainerView)——它的暗色材质就是那条"黑框"。退出自主模式时复原。
+    static func setTitlebarHidden(_ w: NSWindow, _ hidden: Bool) {
+        guard let themeFrame = w.contentView?.superview else { return }
+        for sub in themeFrame.subviews where String(describing: type(of: sub)).contains("TitlebarContainer") {
+            sub.isHidden = hidden
         }
     }
 
@@ -156,7 +169,9 @@ struct LingShuAutonomousWindowController: NSViewRepresentable {
 
         func restore(_ w: NSWindow) {
             w.isOpaque = opaque; w.backgroundColor = bg; w.hasShadow = shadow
+            LingShuAutonomousWindowController.setTitlebarHidden(w, false)   // 复原标题栏
             if !styleMask.contains(.fullSizeContentView) { w.styleMask.remove(.fullSizeContentView) }
+            w.titlebarSeparatorStyle = .automatic
             w.titlebarAppearsTransparent = titlebarTransparent; w.titleVisibility = titleVis
             w.isMovableByWindowBackground = movableByBG
             w.level = level; w.minSize = minSize
