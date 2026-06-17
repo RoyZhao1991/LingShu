@@ -48,6 +48,7 @@ extension LingShuState {
         appendTrace(kind: .warning, actor: "干预", title: "用户中途纠正", detail: display)
         captureDesignFeedbackForDreaming(trimmed, recordID: recordID)   // 设计任务的纠正→dreaming 固化
         missionStatus = "收到纠正,正在调整方向…"
+        batchInterruptRequested = true   // 若正在 run_steps 批量执行,让它在下一步边界停下交还大脑采纳纠正
         clearAttachments()
         let main = mainAgentSessionHolder
         let autonomous = autonomousSessionHolder

@@ -17,6 +17,22 @@ extension LingShuState {
                 return await self?.previewController.open(path: path) ?? "预览不可用"
             },
             LingShuAgentTool(
+                name: "preview_document_text",
+                description: "一次性读取当前预览文档**所有页**的文字(先理解全篇、再规划讲稿——做演示/讲解前先用它把整篇读完,而不是逐页翻着边读边讲)。返回每页 内容。配合 run_steps:读全 → 想好每页讲稿 → 批量顺滑播。",
+                parametersJSON: "{\"type\":\"object\",\"properties\":{}}"
+            ) { [weak self] _ in
+                await MainActor.run {
+                    guard let self, self.previewController.pageCount > 0 else { return "还没打开任何预览,先 open_preview。" }
+                    var out = "【全文共 \(self.previewController.pageCount) 页】\n"
+                    for i in 0..<self.previewController.pageCount {
+                        let t = self.previewController.pageText(i).trimmingCharacters(in: .whitespacesAndNewlines)
+                        out += "—— 第 \(i + 1) 页 ——\n\(t.isEmpty ? "(无可提取文字,可能是图片页,讲前可 screen_capture 看一眼)" : t)\n"
+                        if out.count > 9000 { out += "…(已截断,余下页讲到时再看)"; break }
+                    }
+                    return out
+                }
+            },
+            LingShuAgentTool(
                 name: "preview_next",
                 description: "预览翻到下一页(演示时:讲完一页 speak 后翻页)。**返回里带新页的【实际内容】——照它讲。**",
                 parametersJSON: "{\"type\":\"object\",\"properties\":{}}"

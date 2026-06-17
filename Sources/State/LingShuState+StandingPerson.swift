@@ -78,7 +78,7 @@ extension LingShuState {
         var lines = [
             "**你已上岗进入「自主运行状态」,当面给主人完成这件事**:\(task)",
             "这是一次需要你**占屏 + 出声 + 全程在场互动**的任务。请直接开始做,不要先寒暄。",
-            "若是演示/讲 PPT:用 `open_preview` 打开文件、`present_fullscreen` 进入全屏演示,然后**一页一页讲**——每页先 `speak` 把这页讲透(speak 会等你这句念完才返回),再 `next` 翻下一页;讲完最后一页用 `speak` 收个尾。",
+            "若是演示/讲 PPT:`open_preview` 打开 → `preview_document_text` **一次性读完整篇、想好每页讲稿** → `present_fullscreen(true)` 进全屏 → **`run_steps` 一次性排上 [speak 第1页讲稿 → preview_next → speak 第2页 → preview_next → …] 批量顺滑播完**(别逐页一步步往返,会卡)→ `present_fullscreen(false)` 退。主人中途插话会自动打断批量,你答完问一句「要继续吗」,他说继续就从断点页 run_steps 续上。",
             "若是开会/答疑:用 `speak` 主持与应答。全程**留在岗**,主人随时可能插话或提问,你正面接住、答完接着推进。"
         ]
         if !autonomousAttachmentContext.isEmpty { lines.append(autonomousAttachmentContext) }
@@ -114,6 +114,7 @@ extension LingShuState {
 
         // 正在跑长回合 → 中途插话注入(通用 LOOP),不重启那条脑回路。
         if autonomousRunTask != nil {
+            batchInterruptRequested = true   // 若正在 run_steps 批量演示/连续执行,让它在下一步边界停下交还大脑
             appendTrace(kind: .system, actor: "灵枢", title: "在岗插话", detail: String(prompt.prefix(40)))
             missionStatus = "收到插话，正在回应…"
             Task { @MainActor [weak self] in
