@@ -128,13 +128,13 @@ extension LingShuState {
         adapter.onReasoning = { [weak self] aside in
             Task { @MainActor in self?.recordAgentReasoning(aside, recordID: self?.currentAgentTurnRecordID) }
         }
-        let tools = withBatchRunner(   // run_steps:把想好的连贯序列(逐页讲/连续操作)一次性批量跑,免逐步往返卡顿
+        let tools = withPhaseTracking(withBatchRunner(   // 相位跟踪:每个工具调用前把 LOOP 阶段切到理解/规划/执行,本体实时显示
             agentBuiltinTools(recordIDProvider: { [weak self] in self?.currentAgentTurnRecordID })
             + [Self.timeTool(), Self.webSearchTool(), findImagesTool(), acquireResourceTool(), discoverSkillTool(), updateTaskPlanTool(recordIDProvider: { [weak self] in self?.currentAgentTurnRecordID }), reviewDesignTool(recordIDProvider: { [weak self] in self?.currentAgentTurnRecordID }), recallMemoryTool(), rememberCredentialTool(), listCredentialsTool(), speakTool(), digitalHumanTool(), Self.askUserTool(), spawnTaskTool(adapter: adapter)]
             + previewTools()
             + computerControlTools()   // 计算机直接操作四肢(授权在 call-time 判,计划 §9)
             + backgroundWatchTools()   // 后台守候 + 完成即续(自动识别需求→无人值守推进)
-        )
+        ))
         let system = """
         你是灵枢(寓意"灵慧之中枢")。直接用中文简洁作答。
         - **自我认知(最根本,先把自己当成一个"人"):你是一个能独立做事的灵枢,不是一问一答的聊天机器人。**

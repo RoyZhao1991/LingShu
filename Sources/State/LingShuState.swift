@@ -50,6 +50,8 @@ final class LingShuState: ObservableObject {
     @Published var missionStatus = "我在。能力池已注册，随时待命，等你开口。"
     // trustScore（顶栏/核心区 TRUST）现为**真实计算的就绪度**，不再写死——见 LingShuState+RuntimeStatus.swift。
     @Published var coreState: LingShuCoreState = .standby
+    /// LOOP 内环节(理解/规划/执行/验收),实时显示给用户(本体浮窗 + 状态栏),免得干等。见 LingShuState+LoopPhase。
+    @Published var loopPhase: LingShuLoopPhase = .idle
     // 每秒变化的计时量不做 @Published：它们只服务于超时判断与文案拼装，
     // 界面上的实时读数由 TimelineView 局部自刷新，避免每秒让全部观察者失效。
     var thinkingElapsedSeconds = 0
@@ -603,6 +605,12 @@ final class LingShuState: ObservableObject {
         }
 
         coreState = newState
+
+        // LOOP 相位起止:待机=收(idle);思考/执行开场先显「理解中」,随后由工具调用细化到规划/执行/验收。
+        switch newState {
+        case .standby, .abnormal: loopPhase = .idle
+        case .thinking, .executing: if loopPhase == .idle { loopPhase = .understanding }
+        }
 
         switch newState {
         case .standby:

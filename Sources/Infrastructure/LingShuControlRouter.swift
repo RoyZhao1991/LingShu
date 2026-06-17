@@ -570,6 +570,7 @@ final class LingShuControlRouter {
     private func statusPayload() -> [String: Any] {
         [
             "coreState": state.coreStateDisplay,
+            "loopPhase": state.loopPhase.rawValue,   // 理解中/规划中/执行中/验收中(空=空闲)
             "missionTitle": state.missionTitle,
             "missionStatus": state.missionStatus,
             "autonomousPhase": state.autonomousRun.phase.rawValue,

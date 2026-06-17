@@ -33,6 +33,14 @@ extension LingShuState {
     }
 
     var coreStateDisplay: String {
+        // 跑任务时优先显示更细的 LOOP 环节(理解/规划/执行/验收中),让用户看得到当前在干什么、别干等。
+        if loopPhase.isActive {
+            switch coreState {
+            case .thinking: return "\(loopPhase.rawValue) \(formatElapsed(thinkingElapsedSeconds))"
+            case .executing: return "\(loopPhase.rawValue) \(formatElapsed(executionElapsedSeconds))"
+            default: return loopPhase.rawValue
+            }
+        }
         switch coreState {
         case .standby:
             return coreState.rawValue

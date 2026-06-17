@@ -228,7 +228,7 @@ extension LingShuState {
             id: "autonomous-\(UUID().uuidString.prefix(6))",
             system: autonomousSystemPrompt(objective: objective, permissionLevel: permissionLevel, runbook: runbook),
             initialMessages: await seededDistilledMemory(),
-            tools: withBatchRunner(tools),   // run_steps:演示/连续序列一次性批量跑,免逐页 LLM 往返卡顿
+            tools: withPhaseTracking(withBatchRunner(tools)),   // run_steps 批量跑 + 相位跟踪(本体显示理解/规划/执行)
             model: adapter,
             maxTurns: 120   // 自主运行长程;安全天花板(防失控),非目标预算——撞顶由验收续跑恢复
         )

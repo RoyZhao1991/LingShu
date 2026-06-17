@@ -75,6 +75,7 @@ extension LingShuState {
         let producedRealArtifacts = currentArtifactCount(taskRecordID) > artifactBaseline
         guard case .completed = result,
               producedRealArtifacts || Self.replyClaimsArtifact(Self.runResultText(result)) else { return result }
+        setLoopPhase(.verifying)   // 本体/状态栏显示「验收中」(独立 verifier 核对产出物)
         let verifyCeiling = 8   // 安全天花板,非目标位
         // **非代码交付的返工时间预算(2026-06-17,防"PPT卡几分钟")**:PPT/文档这类没有确定性测试门的交付,
         // verifier 给的是**主观设计意见**(每轮还不一样),不会触发"停滞"判定 → 会一直返工到 8 轮,叠加云端慢时

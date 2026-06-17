@@ -58,6 +58,7 @@ struct LingShuAutonomousOrbOnlyView: View {
                     .offset(y: bob)
                     .overlay { if paused { Image(systemName: "pause.fill").font(.system(size: 22, weight: .heavy)).foregroundStyle(.white.opacity(0.85)) } }
             }
+            phaseLabel
             controlBar
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)   // 填满整窗、内容居中(本体不被裁)
@@ -71,6 +72,24 @@ struct LingShuAutonomousOrbOnlyView: View {
             Button(role: .destructive) { state.stopAutonomousRun() } label: { Label("退出自主模式", systemImage: "xmark") }
         }
         .transition(.scale(scale: 0.3).combined(with: .opacity))
+    }
+
+    /// LOOP 相位标签:执行过程中实时显示「理解中 / 规划中 / 执行中 / 验收中」,免得用户干等不知发生了什么。
+    /// 暂停时显示「已暂停」;空闲(idle)时显示「在岗」让本体始终有态。
+    @ViewBuilder private var phaseLabel: some View {
+        let phase = state.loopPhase
+        let active = phase.isActive && !paused
+        let text = paused ? "已暂停" : (active ? phase.rawValue : "在岗")
+        let tint: Color = paused ? .orange : (active ? phase.color : .white.opacity(0.6))
+        let icon = paused ? "pause.circle" : (active ? phase.icon : "dot.radiowaves.left.and.right")
+        Label(text, systemImage: icon)
+            .font(.system(size: 10, weight: .bold))
+            .foregroundStyle(tint)
+            .padding(.horizontal, 9).frame(height: 21)
+            .background(tint.opacity(0.16), in: Capsule())
+            .overlay { Capsule().stroke(tint.opacity(0.4), lineWidth: 0.5) }
+            .animation(.easeInOut(duration: 0.25), value: phase)
+            .animation(.easeInOut(duration: 0.25), value: paused)
     }
 
     private var controlBar: some View {
@@ -131,7 +150,7 @@ struct LingShuAutonomousWindowController: NSViewRepresentable {
         w.minSize = NSSize(width: 100, height: 120)
         w.level = .floating
         if let screen = w.screen ?? NSScreen.main {
-            let width: CGFloat = 140, height: CGFloat = 168, margin: CGFloat = 24
+            let width: CGFloat = 150, height: CGFloat = 198, margin: CGFloat = 24   // 加高容纳 LOOP 相位标签(理解/规划/执行/验收中)
             let vf = screen.visibleFrame
             w.setFrame(NSRect(x: vf.maxX - width - margin, y: vf.maxY - height - margin, width: width, height: height), display: true, animate: true)
         }

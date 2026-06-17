@@ -69,6 +69,36 @@ enum MissionRuntimePhase: String {
     case delivering = "交付"
 }
 
+/// LOOP 内环节(比 CoreState 更细):把"理解→规划→执行→验收"暴露给用户(本体/状态栏实时显示),
+/// 免得用户干等不知道发生了什么。由工具调用(withPhaseTracking)+ 验收器驱动。
+enum LingShuLoopPhase: String {
+    case idle = ""
+    case understanding = "理解中"
+    case planning = "规划中"
+    case executing = "执行中"
+    case verifying = "验收中"
+
+    var isActive: Bool { self != .idle }
+    var icon: String {
+        switch self {
+        case .idle: "circle"
+        case .understanding: "eye"
+        case .planning: "list.bullet.clipboard"
+        case .executing: "play.circle"
+        case .verifying: "checkmark.seal"
+        }
+    }
+    var color: Color {
+        switch self {
+        case .idle: .white
+        case .understanding: .cyan
+        case .planning: .lingHoloAlt
+        case .executing: .lingHolo
+        case .verifying: .green
+        }
+    }
+}
+
 enum LingShuCoreState: String {
     case standby = "待机中"
     case thinking = "思考中"
