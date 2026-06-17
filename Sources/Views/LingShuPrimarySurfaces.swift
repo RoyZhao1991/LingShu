@@ -11,12 +11,11 @@ struct LingShuRootView: View {
     @StateObject private var standingVoiceCall = LingShuVoiceCallController()
     /// 自主模式「只剩本体」终态:进入仪式(融化→离子化)播完后置真,界面整个让位给右上角的悬浮本体。
     @State private var autonomousOrbMode = false
-    /// 演示/预览打开时:本体浮窗(无边框小窗)**让位**给正常窗口,否则预览 sheet 挂在 140px 无边框小窗上
-    /// + 全屏会黑屏卡死(实测灾难)。预览一关,自动回到本体态。
-    @State private var previewActive = false
+    /// 演示窗是否处于"全屏(撑满)"态——供手动接管安全闸判定(演示在独立窗口里,本体浮窗始终在位,不再让位)。
+    @State private var previewSlideshow = false
     /// 全屏演示中检测到手动操作 → 弹"是否退出自主"确认框(并已先退全屏恢复屏幕)。
     @State private var manualTakeover = false
-    private var orbActive: Bool { state.isStandingPersonOnDuty && autonomousOrbMode && !previewActive }
+    private var orbActive: Bool { state.isStandingPersonOnDuty && autonomousOrbMode }
 
     var body: some View {
         Group {
@@ -37,16 +36,13 @@ struct LingShuRootView: View {
             }
         }
         // 进入仪式只在「上岗→终态之前」的过渡期覆盖(界面融化→离子化凝成本体);终态(只剩本体)不再覆盖。
-        .overlay { if state.isStandingPersonOnDuty && !autonomousOrbMode && !previewActive { LingShuAutonomousIntroOverlay(state: state) } }
+        .overlay { if state.isStandingPersonOnDuty && !autonomousOrbMode { LingShuAutonomousIntroOverlay(state: state) } }
         .background(LingShuAutonomousWindowController(active: orbActive))
-        .onReceive(state.previewController.$isPresented) { presented in
-            // 预览开=让位正常窗口(否则黑屏);预览关=若仍在岗,回到本体态。
-            withAnimation(.easeInOut(duration: 0.25)) { previewActive = presented }
-        }
-        // **手动接管安全闸**:自主运行 + 正在全屏演示时,一旦检测到你的键鼠操作 → 立刻退全屏恢复屏幕 + 弹框问是否退出自主。
+        .onReceive(state.previewController.$slideshow) { previewSlideshow = $0 }
+        // **手动接管安全闸**:自主运行 + 演示窗全屏(撑满)时,一旦检测到你的键鼠操作 → 立刻退全屏恢复屏幕 + 弹框问是否退出自主。
         // 演示期间灵枢不产生键鼠事件(翻页走内部 previewController),故此时任何键鼠输入=你在夺回控制,判定可靠。
         .background(LingShuManualTakeoverMonitor(
-            active: state.autonomousRun.phase == .running && state.previewController.slideshow && !manualTakeover
+            active: state.autonomousRun.phase == .running && previewSlideshow && !manualTakeover
         ) { manualTakeover = true })
         .onChange(of: manualTakeover) { _, on in
             if on { _ = state.previewController.setSlideshow(false) }   // 先立刻退全屏,把屏幕还给用户(无论选是选否)

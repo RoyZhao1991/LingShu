@@ -1,12 +1,51 @@
 import SwiftUI
 import PDFKit
+import AppKit
 
-/// 把预览面板作为 sheet 挂到根视图(观察 controller 的 isPresented,大脑 open_preview 即弹出)。
-struct LingShuPreviewHost: View {
+/// 预览面板挂到**独立窗口**(不再是主窗口上的 sheet)——用户定调 2026-06-17:演示 PPT 另开一个窗,
+/// 灵枢本体浮窗**全程在位**(右上角),可实时看到灵枢状态;演示窗与主窗/本体互不干扰(根治"无边框小窗+sheet+全屏=黑屏卡死")。
+/// 观察 `controller.isPresented`:大脑 open_preview → 开窗;close_preview / 用户关窗 → 同步收掉。
+struct LingShuPreviewHost: NSViewRepresentable {
     @ObservedObject var controller: LingShuPreviewController
-    var body: some View {
-        Color.clear.sheet(isPresented: $controller.isPresented) {
-            LingShuPreviewSheet(controller: controller)
+
+    func makeNSView(context: Context) -> NSView { NSView() }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        context.coordinator.sync(controller: controller)
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    @MainActor
+    final class Coordinator: NSObject, NSWindowDelegate {
+        private var window: NSWindow?
+        private weak var controller: LingShuPreviewController?
+
+        func sync(controller: LingShuPreviewController) {
+            self.controller = controller
+            if controller.isPresented, window == nil {
+                let host = NSHostingController(rootView: LingShuPreviewSheet(controller: controller))
+                let w = NSWindow(contentViewController: host)
+                w.title = "灵枢演示"
+                w.setContentSize(NSSize(width: 1040, height: 720))
+                w.styleMask = [.titled, .closable, .resizable, .miniaturizable, .fullSizeContentView]
+                w.collectionBehavior.insert(.fullScreenPrimary)
+                w.isReleasedWhenClosed = false
+                w.delegate = self
+                w.center()
+                w.makeKeyAndOrderFront(nil)
+                window = w
+            } else if !controller.isPresented, let w = window {
+                w.delegate = nil
+                w.close()
+                window = nil
+            }
+        }
+
+        /// 用户手动关演示窗 → 同步 controller(大脑/状态据此知道演示结束;自主演示时这等于"夺回控制"信号之一)。
+        func windowWillClose(_ notification: Notification) {
+            window = nil
+            if controller?.isPresented == true { _ = controller?.close() }
         }
     }
 }
@@ -69,10 +108,10 @@ struct LingShuPreviewSheet: View {
     }
 }
 
-/// 把承载窗口的全屏状态同步到 `active`(全屏演示进/出)。
-/// 坑:预览是 `.sheet`,sheet 窗口默认不带 `.fullScreenPrimary`→`toggleFullScreen` 静默无效(实测"全屏演示"没放大)。
-/// 修:进全屏前先补上 `.fullScreenPrimary`+`.resizable` 让原生全屏生效;短延时后若仍没进全屏(sheet 顽抗),
-/// **兜底把窗口 frame 撑到整屏**(`screen.frame`)——保证幻灯片一定被放大铺满,达到"演示模式放大讲解"的效果。
+/// 把演示窗的"全屏"同步到 `active`。**用窗口撑满整屏(`screen.visibleFrame`)而非原生全屏**(2026-06-17):
+/// 原生 `toggleFullScreen` 会另起一个 macOS 全屏 Space → 灵枢本体浮窗就被挡到别的 Space 看不见了,
+/// 还在某些组合下黑屏卡死。改成把演示窗 frame 撑到屏幕可见区:幻灯片照样铺满讲解,且**和本体在同一 Space、
+/// 本体(.floating)始终浮在演示窗之上可见**;退出还原原窗口大小。演示在独立窗口里,不碰主窗/本体。
 private struct WindowFullscreenToggler: NSViewRepresentable {
     let active: Bool
     func makeNSView(context: Context) -> NSView { NSView() }
@@ -81,24 +120,14 @@ private struct WindowFullscreenToggler: NSViewRepresentable {
         let coordinator = context.coordinator
         DispatchQueue.main.async {
             guard let window = nsView.window else { return }
-            let isFull = window.styleMask.contains(.fullScreen)
-            if active, !isFull {
+            if active {
                 if coordinator.savedFrame == nil { coordinator.savedFrame = window.frame }
-                window.collectionBehavior.insert(.fullScreenPrimary)
-                window.styleMask.insert(.resizable)
-                window.toggleFullScreen(nil)
-                // 兜底:sheet 可能拒绝原生全屏 → 0.35s 后还没全屏就把 frame 撑满整屏。
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
-                    guard active, !window.styleMask.contains(.fullScreen),
-                          let screen = window.screen ?? NSScreen.main else { return }
-                    window.setFrame(screen.frame, display: true, animate: true)
+                if let screen = window.screen ?? NSScreen.main {
+                    window.setFrame(screen.visibleFrame, display: true, animate: true)   // 撑满可见区(让本体仍可浮其上)
                 }
-            } else if !active {
-                if isFull { window.toggleFullScreen(nil) }
-                if let saved = coordinator.savedFrame {   // 还原退出前的窗口大小
-                    window.setFrame(saved, display: true, animate: true)
-                    coordinator.savedFrame = nil
-                }
+            } else if let saved = coordinator.savedFrame {
+                window.setFrame(saved, display: true, animate: true)   // 还原退出全屏前的窗口大小
+                coordinator.savedFrame = nil
             }
         }
     }
