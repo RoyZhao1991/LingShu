@@ -283,10 +283,15 @@ final class VoiceIOManager: ObservableObject {
                 guard let self, self.isRecording, self.recognitionRequest === request else { return }
 
                 if let recognizedText {
+                    let wasEmpty = self.transcript.isEmpty
                     let transcription = self.makeTranscriptionResult(text: recognizedText, isFinal: isFinal)
                     self.transcript = transcription.text
                     callbacks.onText(transcription.text)
                     callbacks.onResult?(transcription)
+                    // 诊断:ASR 真出了转写(本句首个 partial + 每个 final)——定位"麦克风有进音但没识别出来"还是"识别了没提交"。
+                    if isFinal || wasEmpty {
+                        lingShuControlLog("voice/asr: 听到「\(recognizedText.prefix(24))」isFinal=\(isFinal)")
+                    }
 
                     if isFinal {
                         callbacks.onFinal?(transcription.text)
@@ -295,6 +300,7 @@ final class VoiceIOManager: ObservableObject {
                 }
 
                 if hasError {
+                    lingShuControlLog("voice/asr: 错误 \(String(describing: error).prefix(70))")
                     self.stopRecognition()
                     self.setInputStatus("语音识别已中断")
                     if !isFinal {

@@ -8,6 +8,9 @@ private final class AudioTapEmitThrottle: @unchecked Sendable {
     private let lock = NSLock()
     private var lastLevel = Date.distantPast
     private var lastChunk = Date.distantPast
+    private var lastDiag = Date.distantPast
+    private var diagBuffers = 0
+    private var diagPeak: Float = 0
 
     func shouldEmitLevel(at now: Date) -> Bool {
         lock.lock(); defer { lock.unlock() }
@@ -21,6 +24,18 @@ private final class AudioTapEmitThrottle: @unchecked Sendable {
         guard now.timeIntervalSince(lastChunk) >= 0.2 else { return false }
         lastChunk = now
         return true
+    }
+
+    /// 诊断:累计每拍 buffer 数与峰值电平,每 2s 吐一次(供定位"麦克风到底有没有进音")。返回非 nil=到点。
+    func diagnostic(at now: Date, level: Float) -> (buffers: Int, peak: Float)? {
+        lock.lock(); defer { lock.unlock() }
+        diagBuffers += 1
+        if level > diagPeak { diagPeak = level }
+        guard now.timeIntervalSince(lastDiag) >= 2.0 else { return nil }
+        lastDiag = now
+        let result = (diagBuffers, diagPeak)
+        diagBuffers = 0; diagPeak = 0
+        return result
     }
 }
 
@@ -77,9 +92,15 @@ extension VoiceIOManager {
         return { [weak self] buffer, _ in
             box.append(buffer)   // 灌进"当前"请求；每句结束只轮换请求，引擎与 tap 不动
             let now = Date()
+            let level = Self.normalizedRMS(from: buffer)   // 音频线程算,便宜
+
+            // 诊断:每 2s 记一次"麦克风进音情况"(buffers=tap 有没有在回调、peak=有没有真声音电平)——
+            // 定位"语音无反应"到底是麦克风没进音(buffers=0/peak≈0)还是 ASR 没转写(有电平却无识别结果)。
+            if let diag = throttle.diagnostic(at: now, level: level) {
+                Task { @MainActor in lingShuControlLog("voice/mic: 2s buffers=\(diag.buffers) peak=\(String(format: "%.3f", diag.peak))") }
+            }
 
             if throttle.shouldEmitLevel(at: now) {
-                let level = Self.normalizedRMS(from: buffer)
                 Task { @MainActor in
                     self?.inputLevel = level
                 }
