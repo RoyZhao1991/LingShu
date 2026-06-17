@@ -38,7 +38,7 @@ final class LingShuGatewayAgentModel: LingShuAgentModel, @unchecked Sendable {
     }
 
     func respond(messages: [LingShuAgentMessage], tools: [LingShuAgentTool]) async -> LingShuAgentModelResponse {
-        let conversation = messages.map(Self.toModelMessage)
+        let conversation = Self.sanitizeToolCallSequence(messages.map(Self.toModelMessage))
         let toolDefs = tools.map(Self.toToolDefinition)
         let request = LingShuRemoteModelRequest(
             provider: provider,
@@ -82,6 +82,10 @@ final class LingShuGatewayAgentModel: LingShuAgentModel, @unchecked Sendable {
             } catch {
                 lastError = error
                 lingShuControlLog("agent model error(尝试 \(attempt)/\(maxAttempts)): \(error) | endpoint=\(endpoint) provider=\(provider) model=\(model) keyLen=\(apiKey.count) msgs=\(messages.count) tools=\(tools.count)")
+                // 4xx 客户端错误(消息结构/参数非法,**非** 429 限流)→ 重试也不会好,**绝不**当网络中断无限重刷:直接如实终止本轮。
+                if case let LingShuModelGatewayError.requestFailed(code, body) = error, (400..<500).contains(code), code != 429 {
+                    return .text("(本轮请求被模型服务端拒绝 HTTP \(code):\(body.prefix(160))。这是请求结构/参数问题,不是网络中断——我先停下这轮,不重试。)")
+                }
                 if attempt < maxAttempts {
                     // 退避:1.5s、3s——给瞬时超时/限流喘息,再原样重发同一上下文。
                     try? await Task.sleep(nanoseconds: UInt64(1_500_000_000 * attempt))
@@ -103,7 +107,7 @@ final class LingShuGatewayAgentModel: LingShuAgentModel, @unchecked Sendable {
             provider: provider, model: model, endpoint: endpoint, protocolName: protocolName,
             apiKey: apiKey, systemPrompt: "", userPrompt: "", temperature: temperature,
             stream: true, timeout: timeout, continuationToken: nil,
-            conversationMessages: messages.map(Self.toModelMessage), tools: tools.map(Self.toToolDefinition)
+            conversationMessages: Self.sanitizeToolCallSequence(messages.map(Self.toModelMessage)), tools: tools.map(Self.toToolDefinition)
         )
         do {
             let reply = try await client.streamAgent(request, onContentDelta: onTextDelta)
@@ -122,12 +126,46 @@ final class LingShuGatewayAgentModel: LingShuAgentModel, @unchecked Sendable {
             return .text("（本轮已被取消）")
         } catch {
             lingShuControlLog("agent stream error: \(error) | endpoint=\(endpoint) provider=\(provider) model=\(model)")
-            // 流式不内部重试(重试会让已逐字的气泡重复):失败当基础设施中断 → 循环 .interrupted → 挂起,重连后续跑。
+            // 4xx 客户端错误(结构/参数,非 429)→ 不当网络中断无限重刷,如实终止本轮。
+            if case let LingShuModelGatewayError.requestFailed(code, body) = error, (400..<500).contains(code), code != 429 {
+                return .text("(本轮请求被模型服务端拒绝 HTTP \(code):\(body.prefix(160))。这是请求结构/参数问题,不是网络中断——我先停下这轮,不重试。)")
+            }
+            // 其余(网络/网关/5xx/超时)当基础设施中断 → 循环 .interrupted → 挂起,重连后续跑。
             return .failed(reason: "流式连接中断:\(error.localizedDescription)。已暂停,联网后自动接着跑。")
         }
     }
 
     // MARK: - 类型互转
+
+    /// **自愈消息结构**:OpenAI/DeepSeek 协议要求每个带 `tool_calls` 的 assistant 消息后,必须紧跟对应**每个 tool_call_id**的 tool 结果。
+    /// 中途插话/续跑/历史裁剪等若让某次 tool_calls 没补齐结果(实测:发反馈时插到工具调用中间),严格服务端(DeepSeek)会
+    /// 400 invalid_request,且被外层误判成"网络中断"无限重试刷屏。这里在发送前补齐:凡缺失结果的 tool_call_id 补一条占位 tool 消息。
+    static func sanitizeToolCallSequence(_ messages: [LingShuModelMessage]) -> [LingShuModelMessage] {
+        var result: [LingShuModelMessage] = []
+        result.reserveCapacity(messages.count)
+        var i = 0
+        while i < messages.count {
+            let m = messages[i]
+            result.append(m)
+            if m.role == "assistant", let calls = m.toolCalls, !calls.isEmpty {
+                var provided = Set<String>()
+                var j = i + 1
+                while j < messages.count, messages[j].role == "tool" {
+                    result.append(messages[j])
+                    if let id = messages[j].toolCallID { provided.insert(id) }
+                    j += 1
+                }
+                for call in calls where !provided.contains(call.id) {
+                    result.append(LingShuModelMessage(role: "tool",
+                        content: "(该工具调用未补齐结果,占位以保证消息结构合法)", toolCalls: nil, toolCallID: call.id))
+                }
+                i = j
+            } else {
+                i += 1
+            }
+        }
+        return result
+    }
 
     private static func toModelMessage(_ message: LingShuAgentMessage) -> LingShuModelMessage {
         LingShuModelMessage(
