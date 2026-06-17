@@ -9,10 +9,15 @@ struct LingShuRootView: View {
     private let coreTimer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
     /// 在岗/自主运行时的麦克风语音通话控制器(复用极简模式那套:听→ASR→思考→回应)。
     @StateObject private var standingVoiceCall = LingShuVoiceCallController()
+    /// 自主模式「只剩本体」终态:进入仪式(融化→离子化)播完后置真,界面整个让位给右上角的悬浮本体。
+    @State private var autonomousOrbMode = false
 
     var body: some View {
         Group {
-            if state.isMinimalVoiceMode {
+            if state.isStandingPersonOnDuty && autonomousOrbMode {
+                // 终态:界面消失,只剩半透明悬浮本体(右键暂停/继续、解除自主模式)。窗口由 controller 收缩成小浮窗。
+                LingShuAutonomousOrbOnlyView(state: state, voice: voice, vision: vision, perceptionGateway: perceptionGateway)
+            } else if state.isMinimalVoiceMode {
                 LingShuMinimalVoiceView(
                     state: state,
                     voice: voice,
@@ -25,11 +30,20 @@ struct LingShuRootView: View {
                     .frame(minWidth: 1240, minHeight: 820)
             }
         }
-        .overlay(alignment: .top) { LingShuTakeoverOverlay(state: state) }   // 完全接管态遮罩 + 一键夺回(模块1)
-        .overlay(alignment: .topTrailing) {   // 常驻悬浮本体(右上角)+ 进入仪式
-            LingShuFloatingOrb(state: state, voice: voice, vision: vision, perceptionGateway: perceptionGateway)
+        // 进入仪式只在「上岗→终态之前」的过渡期覆盖(界面融化→离子化凝成本体);终态(只剩本体)不再覆盖。
+        .overlay { if state.isStandingPersonOnDuty && !autonomousOrbMode { LingShuAutonomousIntroOverlay(state: state) } }
+        .background(LingShuAutonomousWindowController(active: state.isStandingPersonOnDuty && autonomousOrbMode))
+        .onChange(of: state.isStandingPersonOnDuty) { _, onDuty in
+            if onDuty {
+                autonomousOrbMode = false
+                // 仪式播完(~2.5s)再切终态:此刻屏幕还被暗幕盖着,窗口收缩不露馅。
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
+                    if state.isStandingPersonOnDuty { withAnimation(.easeInOut(duration: 0.35)) { autonomousOrbMode = true } }
+                }
+            } else {
+                withAnimation(.easeInOut(duration: 0.3)) { autonomousOrbMode = false }
+            }
         }
-        .overlay { LingShuAutonomousIntroOverlay(state: state) }   // 自主开启瞬间:界面融化→离子化凝成本体落右上角
         .preferredColorScheme(.dark)
         .background(LingShuPreviewHost(controller: state.previewController))   // 大脑 open_preview → 弹出预览
         .sheet(item: $state.pendingShellApproval) { pending in

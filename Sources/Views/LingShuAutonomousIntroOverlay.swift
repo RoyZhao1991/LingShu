@@ -1,8 +1,9 @@
 import SwiftUI
+import AppKit
 
 /// 自主运行「进入仪式」(用户定调 2026-06-17,只增强仪式感、不改任何业务流程):
 /// 自主模式开启的**瞬间**——整屏覆一层暗幕(界面"融化")→ 大量青色离子从屏幕各处汇聚到**右上角**、
-/// 凝成灵枢本体(光球)→ 暗幕退去。之后由常驻悬浮光球 `LingShuFloatingOrb` 接管右上角。
+/// 凝成灵枢本体(光球)→ 暗幕退去。之后界面整个让位给 `LingShuAutonomousOrbOnlyView`(只剩右上角半透明本体)。
 /// 触发:`isStandingPersonOnDuty` 由 false→true(上岗瞬间)。纯表现,`allowsHitTesting(false)` 不挡操作。
 struct LingShuAutonomousIntroOverlay: View {
     @ObservedObject var state: LingShuState
@@ -32,29 +33,109 @@ struct LingShuAutonomousIntroOverlay: View {
     }
 }
 
-/// 常驻悬浮光球:自主模式在岗时,灵枢本体悬浮在屏幕**右上角**(仪式结束后接管此位)。
-/// 轻微上下浮动 = "悬浮"感;复用现成 mini 光球(听/说/思考/执行真实态驱动)。点它=停止并夺回的快捷不做,只展示。
-struct LingShuFloatingOrb: View {
+/// 自主模式「只剩本体」终态(用户定调 2026-06-17):仪式结束后整窗收缩成一颗**半透明悬浮本体**——
+/// 灵枢界面整个消失、化身为右上角的光球,除本体外别无一物。**右键本体**=暂停/继续 + 解除自主模式。
+/// 本视图只画本体;窗口收缩成小浮窗 + 透明背景由 `LingShuAutonomousWindowController` 负责。
+struct LingShuAutonomousOrbOnlyView: View {
     @ObservedObject var state: LingShuState
     @ObservedObject var voice: VoiceIOManager
     @ObservedObject var vision: VisionIOManager
     @ObservedObject var perceptionGateway: LingShuRealtimePerceptionGateway
 
     var body: some View {
-        if state.isStandingPersonOnDuty {
-            let snapshot = state.digitalHumanSnapshot(voice: voice, vision: vision, perceptionGateway: perceptionGateway)
+        let snapshot = state.digitalHumanSnapshot(voice: voice, vision: vision, perceptionGateway: perceptionGateway)
+        ZStack {
+            Color.clear   // 透明:除本体外什么都没有(窗口背景已设为透明)
             TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { tl in
-                let bob = sin(tl.date.timeIntervalSinceReferenceDate * 1.4) * 4   // 悬浮微浮动
+                let bob = sin(tl.date.timeIntervalSinceReferenceDate * 1.4) * 3   // 悬浮微浮动
                 LingShuDigitalHumanMiniOrb(snapshot: snapshot, audioLevel: Double(voice.outputLevel))
-                    .frame(width: 60, height: 60)
-                    .shadow(color: Color.lingHolo.opacity(0.5), radius: 14)
+                    .frame(width: 92, height: 92)
+                    .opacity(0.9)   // 半透明本体
+                    .shadow(color: Color.lingHolo.opacity(0.65), radius: 20)
                     .offset(y: bob)
             }
-            .padding(.top, 56)      // 落在顶栏下方的右上角,不压住导航
-            .padding(.trailing, 20)
-            .transition(.scale(scale: 0.4).combined(with: .opacity))
-            .animation(.spring(response: 0.5, dampingFraction: 0.7), value: state.isStandingPersonOnDuty)
-            .help("灵枢自主运行中 · 悬浮本体")
+            .contextMenu {   // 右键本体:暂停/继续 + 解除自主模式
+                if state.autonomousRun.phase == .paused {
+                    Button { state.resumeAutonomousRun() } label: { Label("继续运行", systemImage: "play.fill") }
+                } else {
+                    Button { state.pauseAutonomousRun() } label: { Label("暂停", systemImage: "pause.fill") }
+                }
+                Divider()
+                Button(role: .destructive) { state.stopAutonomousRun() } label: { Label("解除自主模式", systemImage: "hand.raised.fill") }
+            }
+            .help("灵枢自主运行中 · 右键：暂停/继续、解除自主模式")
+        }
+        .frame(width: 104, height: 104)
+        .transition(.scale(scale: 0.3).combined(with: .opacity))
+    }
+}
+
+/// 自主模式终态的窗口处理:把灵枢主窗口**收缩成右上角的小浮窗 + 透明背景 + 隐藏标题栏/红绿灯**,
+/// 让"界面消失、只剩本体"成立(本体是圆的,透明背景=圆球悬浮)。退出自主模式时**完整还原**窗口
+/// (尺寸/不透明/标题栏/红绿灯/层级)。务实:有右键「解除自主模式」兜底,任何时候都能回到正常界面。
+struct LingShuAutonomousWindowController: NSViewRepresentable {
+    let active: Bool   // true = 进入只剩本体的小浮窗终态
+
+    func makeNSView(context: Context) -> NSView { NSView() }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        let coord = context.coordinator
+        DispatchQueue.main.async {
+            guard let window = nsView.window else { return }
+            if active, !coord.shrunk {
+                coord.capture(window)
+                applyOrbMode(window)
+                coord.shrunk = true
+            } else if !active, coord.shrunk {
+                coord.restore(window)
+                coord.shrunk = false
+            }
+        }
+    }
+
+    private func applyOrbMode(_ w: NSWindow) {
+        w.isOpaque = false
+        w.backgroundColor = .clear
+        w.hasShadow = false
+        w.titlebarAppearsTransparent = true
+        w.titleVisibility = .hidden
+        [.closeButton, .miniaturizeButton, .zoomButton].forEach { w.standardWindowButton($0)?.isHidden = true }
+        w.minSize = NSSize(width: 80, height: 80)
+        w.level = .floating
+        if let screen = w.screen ?? NSScreen.main {
+            let s: CGFloat = 116, margin: CGFloat = 26
+            let vf = screen.visibleFrame
+            w.setFrame(NSRect(x: vf.maxX - s - margin, y: vf.maxY - s - margin, width: s, height: s), display: true, animate: true)
+        }
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    final class Coordinator {
+        var shrunk = false
+        private var frame: NSRect?
+        private var opaque = true
+        private var bg: NSColor?
+        private var shadow = true
+        private var titlebarTransparent = false
+        private var titleVis: NSWindow.TitleVisibility = .visible
+        private var level: NSWindow.Level = .normal
+        private var minSize = NSSize.zero
+        private var hiddenButtons: [NSWindow.ButtonType: Bool] = [:]
+
+        func capture(_ w: NSWindow) {
+            frame = w.frame; opaque = w.isOpaque; bg = w.backgroundColor; shadow = w.hasShadow
+            titlebarTransparent = w.titlebarAppearsTransparent; titleVis = w.titleVisibility
+            level = w.level; minSize = w.minSize
+            [.closeButton, .miniaturizeButton, .zoomButton].forEach { hiddenButtons[$0] = w.standardWindowButton($0)?.isHidden ?? false }
+        }
+
+        func restore(_ w: NSWindow) {
+            w.isOpaque = opaque; w.backgroundColor = bg; w.hasShadow = shadow
+            w.titlebarAppearsTransparent = titlebarTransparent; w.titleVisibility = titleVis
+            w.level = level; w.minSize = minSize
+            hiddenButtons.forEach { w.standardWindowButton($0.key)?.isHidden = $0.value }
+            if let frame { w.setFrame(frame, display: true, animate: true) }
         }
     }
 }
