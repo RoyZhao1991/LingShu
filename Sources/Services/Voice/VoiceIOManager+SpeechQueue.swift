@@ -10,6 +10,18 @@ extension VoiceIOManager {
         isSpeaking || !speechQueue.isEmpty || speechQueueDrainTask != nil || streamingSpeechDrainTask != nil
     }
 
+    /// 阻塞等当前这句念完(供 speak 工具同步返回:演示逐页讲自然停顿)。先等起播(TTS 有起播延迟),
+    /// 再等念完;双封顶防卡:起播最多 3s、整句最多 90s,到顶即放行不阻塞 agent 循环。
+    func awaitPlaybackDone() async {
+        let start = Date()
+        while Date().timeIntervalSince(start) < 3, !isSpeakingOrQueued {
+            try? await Task.sleep(nanoseconds: 120_000_000)
+        }
+        while Date().timeIntervalSince(start) < 90, isSpeakingOrQueued {
+            try? await Task.sleep(nanoseconds: 150_000_000)
+        }
+    }
+
     /// 排队播报：供流式分句早读使用——不打断正在播的句子，按顺序续读。
     /// 与 speak(_:) 的"替换式"语义不同，整段重播仍走 speak(_:)。
     func speakQueued(_ text: String) {

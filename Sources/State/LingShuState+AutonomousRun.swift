@@ -168,7 +168,7 @@ extension LingShuState {
             } else {
                 session = await self.makeAutonomousSession(objective: objective, permissionLevel: permissionLevel, runbook: runbook)
                 self.autonomousSessionHolder = session
-                kickoff = self.autonomousKickoffPrompt(objective: objective, runbook: runbook)
+                kickoff = self.resolveKickoffPrompt(objective: objective, runbook: runbook)
             }
             let result = await self.driveAgentDelivery(session: session, prompt: kickoff, taskRecordID: recordID)
             guard !Task.isCancelled else { return }
@@ -288,8 +288,8 @@ extension LingShuState {
         """
     }
 
-    /// 首轮启动语：把目标 + runbook 降为「建议性上下文」喂给模型，由模型自行规划执行（不再当硬流程）。
-    private func autonomousKickoffPrompt(objective: String, runbook: LingShuAutonomousRunbook?) -> String {
+    /// 首轮启动语：把目标 + runbook 降为「建议性上下文」喂给模型（不再当硬流程）。非 private：resolveKickoffPrompt 复用。
+    func autonomousKickoffPrompt(objective: String, runbook: LingShuAutonomousRunbook?) -> String {
         // 常驻灵枢:不下达目标,只让它示意已进入自主运行状态、在听,然后待命。
         if objective.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             var lines = ["**现在进入「自主运行状态」**:你已上岗,能听、能说、能看屏幕、能动手。用一句简短自然的话(用 `speak` 出声)向主人打个招呼、示意你已进入自主运行状态并就位待命,就一句即可。之后主人一开口提问或下指令,你就**全力正面回应**(该答就答全、该做就做完),绝不用'在岗待命/随时吩咐'这类空话敷衍。现在只打这一句招呼。"]

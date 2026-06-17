@@ -39,19 +39,22 @@ struct LingShuRootView: View {
         .overlay { if state.isStandingPersonOnDuty && !autonomousOrbMode { LingShuAutonomousIntroOverlay(state: state) } }
         .background(LingShuAutonomousWindowController(active: orbActive))
         .onReceive(state.previewController.$slideshow) { previewSlideshow = $0 }
-        // **手动接管安全闸**:自主运行 + 演示窗全屏(撑满)时,一旦检测到你的键鼠操作 → 立刻退全屏恢复屏幕 + 弹框问是否退出自主。
-        // 演示期间灵枢不产生键鼠事件(翻页走内部 previewController),故此时任何键鼠输入=你在夺回控制,判定可靠。
+        // **手动接管安全闸**:只要演示窗在全屏(撑满)——无论自主运行还是普通派发任务——一旦检测到你的键鼠/移动/滚动
+        // → 立刻退全屏恢复屏幕 + 弹框问是否停止。演示期间灵枢不产生键鼠事件(翻页走内部),故此时任何输入=你在夺回控制,判定可靠。
         .background(LingShuManualTakeoverMonitor(
-            active: state.autonomousRun.phase == .running && previewSlideshow && !manualTakeover
+            active: previewSlideshow && !manualTakeover
         ) { manualTakeover = true })
         .onChange(of: manualTakeover) { _, on in
             if on { _ = state.previewController.setSlideshow(false) }   // 先立刻退全屏,把屏幕还给用户(无论选是选否)
         }
         .confirmationDialog("检测到你在手动操作", isPresented: $manualTakeover, titleVisibility: .visible) {
-            Button("退出自主运行模式", role: .destructive) { state.stopAutonomousRun() }
-            Button("继续自主运行", role: .cancel) { }
+            Button("停止,回到正常界面", role: .destructive) {
+                _ = state.previewController.close()
+                if state.isStandingPersonOnDuty { state.stopAutonomousRun() } else { state.cancelCurrentCall() }
+            }
+            Button("继续演示", role: .cancel) { }
         } message: {
-            Text("是否停止当前自主任务、退回正常对话界面?\n（已先退出全屏,把屏幕还给你）")
+            Text("是否停止当前任务、退回正常界面?\n（已先退出全屏,把屏幕还给你）")
         }
         .onChange(of: state.isStandingPersonOnDuty) { _, onDuty in
             if onDuty {
@@ -231,11 +234,17 @@ private struct LingShuManualTakeoverMonitor: NSViewRepresentable {
         let c = context.coordinator
         c.onInput = onManualInput
         if active, c.local == nil {
-            c.local = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .leftMouseDown, .rightMouseDown]) { event in
-                c.onInput?(); return event
+            // 键盘、点击、**移动鼠标**、拖拽、滚动都算"你在夺回控制"——演示期间灵枢不产生这些事件(翻页走内部)。
+            let mask: NSEvent.EventTypeMask = [.keyDown, .leftMouseDown, .rightMouseDown, .otherMouseDown,
+                                               .mouseMoved, .leftMouseDragged, .scrollWheel]
+            // 为了 .mouseMoved 在自家窗口上也能被本地监听捕获,打开所有窗口的"接收鼠标移动"。
+            NSApp.windows.forEach { $0.acceptsMouseMovedEvents = true }
+            c.armedAt = Date()
+            c.local = NSEvent.addLocalMonitorForEvents(matching: mask) { event in
+                c.fireIfArmed(); return event
             }
-            c.global = NSEvent.addGlobalMonitorForEvents(matching: [.keyDown, .leftMouseDown, .rightMouseDown]) { _ in
-                c.onInput?()
+            c.global = NSEvent.addGlobalMonitorForEvents(matching: mask) { _ in
+                c.fireIfArmed()
             }
         } else if !active {
             c.teardown()
@@ -248,10 +257,16 @@ private struct LingShuManualTakeoverMonitor: NSViewRepresentable {
         var local: Any?
         var global: Any?
         var onInput: (() -> Void)?
+        var armedAt: Date?
+        /// 武装后 0.8s 内的事件忽略(避免演示刚开屏瞬间光标残留移动误触发);之后任何输入即判定夺回控制。
+        func fireIfArmed() {
+            guard let armedAt, Date().timeIntervalSince(armedAt) > 0.8 else { return }
+            onInput?()
+        }
         func teardown() {
             if let local { NSEvent.removeMonitor(local) }
             if let global { NSEvent.removeMonitor(global) }
-            local = nil; global = nil
+            local = nil; global = nil; armedAt = nil
         }
         deinit { teardown() }
     }

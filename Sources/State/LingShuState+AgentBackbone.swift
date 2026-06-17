@@ -435,17 +435,19 @@ extension LingShuState {
     func speakTool() -> LingShuAgentTool {
         LingShuAgentTool(
             name: "speak",
-            description: "出声说一句话(立即 TTS 播报,这是你的'嘴')。做演示/讲 PPT/会议应答时,用它一句句把内容讲出来;需要边做边解说也用它。纯文字任务不必用。",
+            description: "出声说一句话(TTS 播报,这是你的'嘴')。**这句念完才会返回**——讲 PPT/演示时,先 speak 把本页讲完、它返回后你再 next 翻页,逐页自然停顿、不会抢拍(别在一句还没念完就连着翻页)。做演示/讲 PPT/会议应答都用它一句句讲;纯文字任务不必用。",
             parametersJSON: "{\"type\":\"object\",\"properties\":{\"text\":{\"type\":\"string\",\"description\":\"要说出口的话(一句或一段)\"}},\"required\":[\"text\"]}"
         ) { [weak self] argumentsJSON in
             let text = (Self.jsonField(argumentsJSON, "text") ?? argumentsJSON).trimmingCharacters(in: .whitespacesAndNewlines)
             guard !text.isEmpty else { return "(没有要说的内容)" }
-            return await MainActor.run { [weak self] in
-                guard let self, let voice = self.voiceManager else { return "语音未就绪(UI 未注入),本次无法出声。" }
+            let voice: VoiceIOManager? = await MainActor.run { self?.voiceManager }
+            guard let voice else { return "语音未就绪(UI 未注入),本次无法出声。" }
+            await MainActor.run {
                 voice.speak(text)
-                self.recordSpokenLine(text)   // 留痕:演示/讲解的文字稿可被脚本核验(对得上画面)
-                return "(已说出:\(text.prefix(40)))"
+                self?.recordSpokenLine(text)   // 留痕:演示/讲解的文字稿可被脚本核验(对得上画面)
             }
+            await voice.awaitPlaybackDone()   // **等这句念完再返回**:逐页讲不抢拍(否则只有第一页有声)
+            return "(已说完:\(text.prefix(40)))"
         }
     }
 

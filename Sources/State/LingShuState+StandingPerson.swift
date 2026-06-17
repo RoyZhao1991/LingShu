@@ -45,6 +45,56 @@ extension LingShuState {
         authorizeAutonomousRun()
     }
 
+    /// 复杂多交互任务(演示 PPT / 讲解 / 开会 / 答疑……)**默认进自主运行模式**(用户定调 2026-06-17):
+    /// 这类任务要灵枢占屏 + 出声 + 全程跟人互动,正是自主模式为之设计的——本体浮窗全程在位、手动接管安全闸生效。
+    /// 做法:把这件事暂存为「上岗后第一件事」,然后上岗;上岗的开场白即直接做它(见 launchAutonomousExecution + standingTaskKickoffPrompt)。
+    /// 若已在岗,则不重复上岗,直接当在岗输入喂进去。
+    func goLiveForInteractiveTask(prompt: String) {
+        if isStandingPersonOnDuty {
+            _ = handleStandingPersonInputIfNeeded(prompt: prompt, taskRecordID: nil)
+            return
+        }
+        pendingStandingKickoff = prompt
+        appendTrace(kind: .route, actor: "灵枢", title: "交互任务→自主模式", detail: String(prompt.prefix(40)))
+        goLiveAsStandingPerson()
+        if !isStandingPersonOnDuty { pendingStandingKickoff = nil }   // 上岗受阻(环境阻断)→ 别留悬挂的待办
+    }
+
+    /// 启动语选择:在岗且有暂存的交互任务 → 开场即做它(取代寒暄);否则走常规启动语(寒暄/目标驱动)。用完即清待办。
+    func resolveKickoffPrompt(objective: String, runbook: LingShuAutonomousRunbook?) -> String {
+        if objective.isEmpty, let task = pendingStandingKickoff {
+            pendingStandingKickoff = nil
+            return standingTaskKickoffPrompt(task)
+        }
+        return autonomousKickoffPrompt(objective: objective, runbook: runbook)
+    }
+
+    /// 上岗即开干这件交互任务的开场指令(取代寒暄开场白):告诉灵枢现在要当面演示/讲解/主持,
+    /// 用 speak 一句句讲、讲 PPT 用 open_preview/present_fullscreen,逐页讲完再翻页,全程留在岗等人插话/提问。
+    func standingTaskKickoffPrompt(_ task: String) -> String {
+        var lines = [
+            "**你已上岗进入「自主运行状态」,当面给主人完成这件事**:\(task)",
+            "这是一次需要你**占屏 + 出声 + 全程在场互动**的任务。请直接开始做,不要先寒暄。",
+            "若是演示/讲 PPT:用 `open_preview` 打开文件、`present_fullscreen` 进入全屏演示,然后**一页一页讲**——每页先 `speak` 把这页讲透(speak 会等你这句念完才返回),再 `next` 翻下一页;讲完最后一页用 `speak` 收个尾。",
+            "若是开会/答疑:用 `speak` 主持与应答。全程**留在岗**,主人随时可能插话或提问,你正面接住、答完接着推进。"
+        ]
+        if !autonomousAttachmentContext.isEmpty { lines.append(autonomousAttachmentContext) }
+        return lines.joined(separator: "\n")
+    }
+
+    /// 判定一条新任务是否属于"复杂多交互任务"(演示/讲解/会议/答疑)→ 该走自主运行模式而非无头派发。
+    /// 保守命中:只在出现强信号(演示/放映/全屏/演讲/路演/汇报/开会/主持/答疑,或"讲/念"+文稿类)时才判 true,
+    /// 避免把"讲解一下某概念"这类纯问答误拉进占屏自主模式。
+    func taskWantsAutonomousPresence(_ prompt: String, goal: String?) -> Bool {
+        let text = (prompt + " " + (goal ?? "")).lowercased()
+        let strong = ["演示", "放映", "全屏", "演讲", "路演", "汇报", "述职", "开会", "会议", "主持", "答疑", "问答环节", "present", "presentation", "slideshow"]
+        if strong.contains(where: { text.contains($0) }) { return true }
+        // "讲/讲解/讲一下/念" + 文稿类载体 → 也算当面讲(讲 PPT)。
+        let talk = ["讲", "念", "解说"]
+        let doc = ["ppt", "幻灯", "slides", "演示文稿", "稿子", "讲稿", "课件"]
+        return talk.contains(where: { text.contains($0) }) && doc.contains(where: { text.contains($0) })
+    }
+
     /// 灵枢在岗时，用户对话/语音 → 直接喂给在岗的执行会话（带其权限级与四肢），让它真去做，
     /// 而不是另起一个无权限的主回合。返回非 nil 表示已接管本轮输入；真实回复由 finishAutonomousRun 的在岗分支回灌。
     ///

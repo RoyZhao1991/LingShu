@@ -284,6 +284,9 @@ final class LingShuState: ObservableObject {
     var autonomousRunRecordID: String?
     var autonomousSessionHolder: LingShuAgentSession?
     var autonomousPendingQuestion: String?
+    /// 复杂多交互任务(演示/讲解/会议/答疑)直接上岗时,把"上岗后第一件要做的事"暂存到这——
+    /// 让上岗的开场白直接变成"做这件交互任务",而不是先寒暄。用完即清。详见 goLiveForInteractiveTask。
+    var pendingStandingKickoff: String?
     // 周期感知循环(模块2):常驻灵枢在岗时定时感知屏幕+系统声音 → 注入/唤醒。详见 LingShuState+AutonomousPerception。
     /// 自主反应「武装」开关:开 = 环境事件(如有人开始说话)可唤醒大脑自主处理;关 = 只保持感知 digest 新鲜,不擅自行动(安全默认)。
     @Published var autonomousAutoReactArmed = UserDefaults.standard.bool(forKey: "lingshu.autoReactArmed") {
@@ -1010,7 +1013,12 @@ final class LingShuState: ObservableObject {
                     _ = self.runMainAgentTurn(prompt: trimmedPrompt, taskRecordID: self.createTaskExecutionRecord(for: trimmedPrompt))
                 }
             case .task:
-                self.dispatchIsolatedTask(prompt: trimmedPrompt, taskRecordID: self.createTaskExecutionRecord(for: trimmedPrompt), goal: triage.goal)
+                // 复杂多交互任务(演示/讲解/会议/答疑)→ 进自主运行模式(本体在位 + 安全闸),而非无头派发。
+                if self.taskWantsAutonomousPresence(trimmedPrompt, goal: triage.goal) {
+                    self.goLiveForInteractiveTask(prompt: trimmedPrompt)
+                } else {
+                    self.dispatchIsolatedTask(prompt: trimmedPrompt, taskRecordID: self.createTaskExecutionRecord(for: trimmedPrompt), goal: triage.goal)
+                }
             case .chat:
                 _ = self.runMainAgentTurn(prompt: trimmedPrompt, taskRecordID: self.createTaskExecutionRecord(for: trimmedPrompt))
             }
