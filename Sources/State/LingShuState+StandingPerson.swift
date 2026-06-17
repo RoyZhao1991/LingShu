@@ -57,7 +57,10 @@ extension LingShuState {
         pendingStandingKickoff = prompt
         appendTrace(kind: .route, actor: "灵枢", title: "交互任务→自主模式", detail: String(prompt.prefix(40)))
         goLiveAsStandingPerson()
-        if !isStandingPersonOnDuty { pendingStandingKickoff = nil }   // 上岗受阻(环境阻断)→ 别留悬挂的待办
+        // 只在上岗**受阻**(环境阻断,phase 同步即为 .blocked)时清待办。不能用 isStandingPersonOnDuty 判断——
+        // 它要求 autonomousSessionHolder!=nil,而会话是在 launchAutonomousExecution 里**异步**建的,此刻还没建好,
+        // 误判会把刚存的待办清掉,导致开场退回寒暄而非干活(实测 bug)。
+        if autonomousRun.phase != .running { pendingStandingKickoff = nil }
     }
 
     /// 启动语选择:在岗且有暂存的交互任务 → 开场即做它(取代寒暄);否则走常规启动语(寒暄/目标驱动)。用完即清待办。
