@@ -394,6 +394,14 @@ final class LingShuState: ObservableObject {
         mainThreadHeartbeatText = report.heartbeatText
         mainMemoryStatus = report.memoryStatus
         taskExecutionRecords = taskExecutionJournal.loadRecords()
+        // 启动清理:后台任务不跨重启存活,所以加载到的"执行中"记录都是上次没收尾的僵尸——标为"已暂停",
+        // 别让任务列表挂一堆永远"执行中"(实测困惑)。状态本身不触发自动续跑(那靠内存里的暂停集合,重启已空)。
+        var hadZombie = false
+        for i in taskExecutionRecords.indices where taskExecutionRecords[i].status == .running {
+            taskExecutionRecords[i].status = .suspended
+            hadZombie = true
+        }
+        if hadZombie { persistTaskExecutionRecords() }
         taskRecordFeedback = (UserDefaults.standard.dictionary(forKey: "lingshu.taskFeedback") as? [String: Bool]) ?? [:]
         archivedTaskExecutionRecords = taskExecutionJournal.loadArchivedRecords()
         refreshRemoteSessionStatus()
