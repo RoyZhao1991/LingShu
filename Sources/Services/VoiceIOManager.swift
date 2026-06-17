@@ -69,6 +69,12 @@ final class VoiceIOManager: ObservableObject {
     /// 最近一次音频 tap 真收到缓冲的时刻(看门狗据此判"引擎在跑但麦克风没进音")。
     var lastInputBufferAt: Date = .distantPast
     private var micWatchdogTask: Task<Void, Never>?
+    /// 是否启用系统语音处理(AEC)。VPIO 在某些机器/设备组合下会把麦克风弄哑(引擎在跑却零进音);
+    /// 看门狗发现没进音会把它关掉重试一次(宁可没回声消除,也要麦克风能用)。
+    /// **持久**:一旦在本机判定 VPIO 坏麦,下次直接从一开始就不开它,省掉每次 3.5s 自愈延迟。
+    private var preferVoiceProcessing = !UserDefaults.standard.bool(forKey: "lingshu.voiceProcessingBroken")
+    /// 重开识别用(看门狗自愈时复用同一组回调,不必让上层重新调用)。
+    private var restartRecognition: (@MainActor () -> Void)?
 
     var outputMeterTask: Task<Void, Never>?
 
@@ -239,8 +245,10 @@ final class VoiceIOManager: ObservableObject {
         // 开启系统语音处理(AEC 回声消除):TTS 播放时麦克风**不再自听灵枢自己的声音**,
         // 从而可在灵枢说话时**持续收音**、随时听到主人插话并打断(barge-in)。
         // 失败/不支持则退回无 AEC(识别仍可用,只是说话时不宜常开麦)。必须在引擎启动前设、会改输入格式。
-        if !inputNode.isVoiceProcessingEnabled {
+        if preferVoiceProcessing, !inputNode.isVoiceProcessingEnabled {
             try? inputNode.setVoiceProcessingEnabled(true)
+        } else if !preferVoiceProcessing, inputNode.isVoiceProcessingEnabled {
+            try? inputNode.setVoiceProcessingEnabled(false)   // 自愈:VPIO 把麦克风弄哑了,关掉 AEC 重来
         }
         let recordingFormat = inputNode.outputFormat(forBus: 0)
         guard recordingFormat.sampleRate > 0 else {
@@ -259,6 +267,9 @@ final class VoiceIOManager: ObservableObject {
         try audioEngine.start()
 
         speechCallbacks = VoiceSpeechCallbacks(onText: onText, onFinal: onFinal, onInterruption: onInterruption, onResult: onResult)
+        restartRecognition = { [weak self] in
+            try? self?.startRecognition(onText: onText, onFinal: onFinal, onAudioChunk: onAudioChunk, onInterruption: onInterruption, onResult: onResult)
+        }
         isRecording = true
         transcript = ""
         setInputStatus(speechRecognizer.supportsOnDeviceRecognition ? "正在听（本机）" : "正在听")
@@ -275,17 +286,26 @@ final class VoiceIOManager: ObservableObject {
         micWatchdogTask = Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: 3_500_000_000)
             guard let self, self.isRecording, !Task.isCancelled else { return }
-            if self.lastInputBufferAt < startedAt {   // 启动后从没进过音
-                let speech = SFSpeechRecognizer.authorizationStatus().rawValue
-                let mic = AVCaptureDevice.authorizationStatus(for: .audio).rawValue
-                let denied = mic != 3 || speech != 3
-                let msg = denied
-                    ? "麦克风/语音识别**没授权**(系统设置 › 隐私与安全性 › 麦克风 + 语音识别,把灵枢打开,再重开通话)"
-                    : "麦克风没进音(权限看似已给但收不到声音,可能是输入设备/系统麦被占用)"
-                self.micSilentWarning = msg
-                self.setInputStatus("⚠️ " + msg)
-                lingShuControlLog("voice/watchdog: 3.5s 无音频进入,mic=\(mic) speech=\(speech) → 告警:\(msg)")
+            guard self.lastInputBufferAt < startedAt else { return }   // 进音正常,无事
+            let speech = SFSpeechRecognizer.authorizationStatus().rawValue
+            let mic = AVCaptureDevice.authorizationStatus(for: .audio).rawValue
+            // **自愈**:权限都给了(mic/speech=3)却零进音,八成是 VPIO(AEC)把麦克风弄哑 → 关掉它重开一次。
+            if mic == 3, speech == 3, self.preferVoiceProcessing {
+                self.preferVoiceProcessing = false
+                UserDefaults.standard.set(true, forKey: "lingshu.voiceProcessingBroken")   // 持久:下次直接不开 VPIO
+                lingShuControlLog("voice/watchdog: 3.5s 无音频(mic=3 speech=3)→ 关 VPIO 重开识别自愈")
+                self.stopRecognition()
+                self.restartRecognition?()
+                return
             }
+            // 关了 VPIO 还是没进音,或权限确实没给 → 浮出可见告警,别静默。
+            let denied = mic != 3 || speech != 3
+            let msg = denied
+                ? "麦克风/语音识别**没授权**(系统设置 › 隐私与安全性 › 麦克风 + 语音识别,把灵枢打开,再重开通话)"
+                : "麦克风收不到声音(已关回声消除仍无进音,可能输入设备异常/被别的录音 App 独占)"
+            self.micSilentWarning = msg
+            self.setInputStatus("⚠️ " + msg)
+            lingShuControlLog("voice/watchdog: 仍无音频,mic=\(mic) speech=\(speech) VPIO=\(self.preferVoiceProcessing) → 告警:\(msg)")
         }
     }
 
