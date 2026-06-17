@@ -60,7 +60,7 @@ struct ChatBubbleView: View {
             }
 
             VStack(alignment: .leading, spacing: 6) {
-                Text(message.isUser ? "你" : "灵枢")
+                Text(message.isUser ? state.loc("你", "You") : state.appName)
                     .font(.system(size: 11, weight: .bold))
                     .foregroundStyle(message.isUser ? .white.opacity(0.72) : Color.lingHolo.opacity(0.84))
 
@@ -137,7 +137,7 @@ struct ChatBubbleView: View {
                     Button {
                         state.openTaskRecord(taskRecordID)
                     } label: {
-                        Label("查看任务执行记录", systemImage: "bubble.left.and.bubble.right")
+                        Label(state.loc("查看任务执行记录", "View task record"), systemImage: "bubble.left.and.bubble.right")
                             .font(.system(size: 11.5, weight: .semibold))
                             .foregroundStyle(Color.lingHolo.opacity(0.92))
                             .padding(.horizontal, 8)

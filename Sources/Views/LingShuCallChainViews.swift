@@ -8,7 +8,7 @@ struct LingShuCallChainPanel: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 15) {
-                SectionHeader(icon: "point.3.connected.trianglepath.dotted", title: "本轮进展", subtitle: state.hasLiveProgress ? "实时执行中" : "空闲待命")
+                SectionHeader(icon: "point.3.connected.trianglepath.dotted", title: state.loc("本轮进展", "Live Progress"), subtitle: state.hasLiveProgress ? state.loc("实时执行中", "Running") : state.loc("空闲待命", "Idle"))
 
                 VStack(alignment: .leading, spacing: 8) {
                     Text(state.missionTitle)
@@ -42,10 +42,10 @@ struct LingShuCallChainPanel: View {
 
     private var notConnectedNotice: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Label("主通道未接入", systemImage: "link.badge.plus")
+            Label(state.loc("主通道未接入", "Model channel offline"), systemImage: "link.badge.plus")
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(Color.orange.opacity(0.92))
-            Text("主通道就绪后这里会实时显示灵枢正在做什么；未接入时不展示任何虚假进展。")
+            Text(state.loc("主通道就绪后这里会实时显示灵枢正在做什么；未接入时不展示任何虚假进展。", "Once the model channel is ready, this shows what \(state.appName) is doing in real time; nothing fake is shown while offline."))
                 .font(.system(size: 11.5, weight: .medium))
                 .foregroundStyle(.white.opacity(0.56))
                 .fixedSize(horizontal: false, vertical: true)
@@ -56,25 +56,25 @@ struct LingShuCallChainPanel: View {
     private var liveProgressBody: some View {
         VStack(alignment: .leading, spacing: 12) {
             VStack(alignment: .leading, spacing: 9) {
-                HoloMetricRow(label: "中枢状态", value: state.coreStateDisplay, icon: state.coreState.icon, color: state.coreState.color)
+                HoloMetricRow(label: state.loc("中枢状态", "Core state"), value: state.coreStateDisplay, icon: state.coreState.icon, color: state.coreState.color)
                 if let elapsed = state.currentRoundElapsed {
-                    HoloMetricRow(label: "已用时", value: elapsed, icon: "timer", color: .lingHolo)
+                    HoloMetricRow(label: state.loc("已用时", "Elapsed"), value: elapsed, icon: "timer", color: .lingHolo)
                 }
                 if let tool = state.currentToolDisplay {
-                    HoloMetricRow(label: "当前动作", value: tool, icon: "cursorarrow.motionlines", color: .cyan)
+                    HoloMetricRow(label: state.loc("当前动作", "Action"), value: tool, icon: "cursorarrow.motionlines", color: .cyan)
                 }
                 if state.autonomousRun.isActive {
-                    HoloMetricRow(label: "权限", value: state.autonomousRun.permissionLevel.rawValue, icon: "lock.shield", color: .orange)
+                    HoloMetricRow(label: state.loc("权限", "Permission"), value: state.loc(state.autonomousRun.permissionLevel.rawValue, state.autonomousRun.permissionLevel.englishName), icon: "lock.shield", color: .orange)
                 }
                 if let progress = state.currentPlanProgress {
-                    HoloMetricRow(label: "计划", value: "\(progress.done)/\(progress.total) 步完成", icon: "checklist", color: .green)
+                    HoloMetricRow(label: state.loc("计划", "Plan"), value: state.loc("\(progress.done)/\(progress.total) 步完成", "\(progress.done)/\(progress.total) done"), icon: "checklist", color: .green)
                 }
             }
 
             if let running = state.autonomousRunningStep {
                 LingShuDivider()
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("当前 Runbook 步")
+                    Text(state.loc("当前 Runbook 步", "Current step"))
                         .font(.system(size: 12.5, weight: .bold))
                         .foregroundStyle(.white)
                     HStack(alignment: .top, spacing: 10) {
@@ -99,12 +99,12 @@ struct LingShuCallChainPanel: View {
             LingShuDivider()
 
             VStack(alignment: .leading, spacing: 9) {
-                Text("执行轨迹")
+                Text(state.loc("执行轨迹", "Execution trace"))
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(.white)
                 let messages = state.recentExecutionMessages
                 if messages.isEmpty {
-                    Text(state.coreState == .thinking ? "灵枢正在思考，尚未发起动作。" : "本轮刚开始，等待第一步动作。")
+                    Text(state.coreState == .thinking ? state.loc("灵枢正在思考，尚未发起动作。", "\(state.appName) is thinking; no action yet.") : state.loc("本轮刚开始，等待第一步动作。", "Just started; waiting for the first action."))
                         .font(.system(size: 11.5, weight: .medium))
                         .foregroundStyle(.white.opacity(0.5))
                 } else {
@@ -123,16 +123,16 @@ struct LingShuCallChainPanel: View {
                 Image(systemName: "moon.zzz")
                     .font(.system(size: 13, weight: .bold))
                     .foregroundStyle(Color.lingHolo.opacity(0.8))
-                Text("空闲中 · 随时待命")
+                Text(state.loc("空闲中 · 随时待命", "Idle · ready"))
                     .font(.system(size: 13.5, weight: .semibold))
                     .foregroundStyle(.white.opacity(0.85))
             }
-            Text("当前没有进行中的任务。在对话里发指令，或到左侧「独立运行」让灵枢上岗成为常驻灵枢——这里会实时显示它正在执行的步骤、调用的工具与执行轨迹。")
+            Text(state.loc("当前没有进行中的任务。在对话里发指令，或让灵枢上岗成为常驻灵枢——这里会实时显示它正在执行的步骤、调用的工具与执行轨迹。", "No active task. Send a command in chat, or have \(state.appName) go on duty — its live steps, tools and trace will show here."))
                 .font(.system(size: 11.5, weight: .medium))
                 .foregroundStyle(.white.opacity(0.55))
                 .fixedSize(horizontal: false, vertical: true)
-            HoloMetricRow(label: "主记忆", value: state.mainMemoryStatus, icon: "memorychip", color: .cyan)
-            HoloMetricRow(label: "冷备库", value: state.coldMemoryStatus, icon: "externaldrive", color: .orange)
+            HoloMetricRow(label: state.loc("主记忆", "Memory"), value: state.mainMemoryStatus, icon: "memorychip", color: .cyan)
+            HoloMetricRow(label: state.loc("冷备库", "Cold store"), value: state.coldMemoryStatus, icon: "externaldrive", color: .orange)
         }
     }
 }

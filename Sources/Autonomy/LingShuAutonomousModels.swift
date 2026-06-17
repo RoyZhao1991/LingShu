@@ -42,6 +42,14 @@ enum LingShuAutonomousPermissionLevel: String, Codable, CaseIterable, Identifiab
 
     var id: String { rawValue }
 
+    var englishName: String {
+        switch self {
+        case .observe: "Observe"
+        case .delegated: "Delegated"
+        case .full: "Full access"
+        }
+    }
+
     var detail: String {
         switch self {
         case .observe:
