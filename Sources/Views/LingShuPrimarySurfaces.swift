@@ -56,6 +56,21 @@ struct LingShuRootView: View {
         } message: {
             Text("是否停止当前任务、退回正常界面?\n（已先退出全屏,把屏幕还给你）")
         }
+        // **进入「托管模式」确认**:大脑判断要占屏实时演示/互动时弹此框征求同意(普通任务→托管的转变点)。
+        .confirmationDialog(
+            "进入「托管模式」?",
+            isPresented: Binding(
+                get: { state.pendingManagedModeRequest != nil },
+                set: { presented in if !presented, state.pendingManagedModeRequest != nil { state.resolveManagedMode(false) } }
+            ),
+            titleVisibility: .visible,
+            presenting: state.pendingManagedModeRequest
+        ) { _ in
+            Button("进入托管模式,开始") { state.resolveManagedMode(true) }
+            Button("留在普通模式", role: .cancel) { state.resolveManagedMode(false) }
+        } message: { req in
+            Text("灵枢要进入「托管模式」来完成:\n\(req.reason)\n\n这会让灵枢本体在位、占屏实时演示 / 与你实时互动。是否同意?")
+        }
         .onChange(of: state.isStandingPersonOnDuty) { _, onDuty in
             if onDuty {
                 autonomousOrbMode = false

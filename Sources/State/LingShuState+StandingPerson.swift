@@ -85,19 +85,6 @@ extension LingShuState {
         return lines.joined(separator: "\n")
     }
 
-    /// 判定一条新任务是否属于"复杂多交互任务"(演示/讲解/会议/答疑)→ 该走自主运行模式而非无头派发。
-    /// 保守命中:只在出现强信号(演示/放映/全屏/演讲/路演/汇报/开会/主持/答疑,或"讲/念"+文稿类)时才判 true,
-    /// 避免把"讲解一下某概念"这类纯问答误拉进占屏自主模式。
-    func taskWantsAutonomousPresence(_ prompt: String, goal: String?) -> Bool {
-        let text = (prompt + " " + (goal ?? "")).lowercased()
-        let strong = ["演示", "放映", "全屏", "演讲", "路演", "汇报", "述职", "开会", "会议", "主持", "答疑", "问答环节", "present", "presentation", "slideshow"]
-        if strong.contains(where: { text.contains($0) }) { return true }
-        // "讲/讲解/讲一下/念" + 文稿类载体 → 也算当面讲(讲 PPT)。
-        let talk = ["讲", "念", "解说"]
-        let doc = ["ppt", "幻灯", "slides", "演示文稿", "稿子", "讲稿", "课件"]
-        return talk.contains(where: { text.contains($0) }) && doc.contains(where: { text.contains($0) })
-    }
-
     /// 灵枢在岗时，用户对话/语音 → 直接喂给在岗的执行会话（带其权限级与四肢），让它真去做，
     /// 而不是另起一个无权限的主回合。返回非 nil 表示已接管本轮输入；真实回复由 finishAutonomousRun 的在岗分支回灌。
     ///

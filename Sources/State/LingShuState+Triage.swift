@@ -125,7 +125,7 @@ extension LingShuState {
         let tools = agentBuiltinTools(recordIDProvider: recordProvider)
             + [Self.timeTool(), Self.webSearchTool(), recallMemoryTool(), Self.askUserTool(),
                findImagesTool(), acquireResourceTool(),
-               updateTaskPlanTool(recordIDProvider: recordProvider), reviewDesignTool(recordIDProvider: recordProvider), speakTool(), digitalHumanTool()]
+               updateTaskPlanTool(recordIDProvider: recordProvider), reviewDesignTool(recordIDProvider: recordProvider), speakTool(), digitalHumanTool(), enterManagedModeTool()]
             + previewTools()
         // 注入"最近产出物"上下文:让"运行起来/继续/改一下"这类派发任务接得上(知道刚做了什么、在哪、怎么跑),
         // 不再重新扫工作目录瞎猜(根治"超级玛丽做完了却问我要运行哪个项目")。
@@ -184,6 +184,7 @@ extension LingShuState {
         - 写代码配测试并 run_command 跑通(全绿)再交付;改已有文件用 edit_file,新建/整体重写才用 write_file。
         - **代码任务=构建通过 + 程序真正运行不崩 + 测试全绿,三者缺一不可**:跑崩了/编译错/报错/抛异常都是**要修复的观测**,不是交付——别拿异常收尾甩给用户,一路修到真跑通。推进用满一段也别停,接着干到目标达成。
         - 需要实时/不确定的事实调 web_search;信息确实不足才 ask_user。
+        - **要当面占屏实时演示 / 与主人实时互动答疑 / 接管屏幕操作时**:别自己直接 present_fullscreen 占屏——**先调 `enter_managed_mode`**(写清要实时做什么 + 文件绝对路径),它会弹窗征主人同意;同意后由托管会话接手实时演示/互动,你这条到此交接。普通做事(生成 PPT/写文件/查资料)不必调它。
         - 完成后用一句话给结果 + 关键产出物绝对路径。不暴露内部工具名/机制词。
         """
     }

@@ -366,6 +366,8 @@ final class LingShuState: ObservableObject {
     var mainRemoteLastDiagnosticLog = ""
     /// 待用户授权的系统命令（高风险动作人工确认弹窗）：非空即弹中文授权框。
     @Published var pendingShellApproval: LingShuPendingShellApproval?
+    /// 待确认的「进入托管模式」请求(大脑调 enter_managed_mode 申请实时演示/互动 → 弹窗征主人同意)。见 LingShuState+ManagedMode。
+    @Published var pendingManagedModeRequest: LingShuPendingManagedMode?
     /// 用户在本次会话里选了「完全授权」后置真：后续 run_command 不再逐条弹窗。
     var sessionShellAlwaysAllowed = false
     /// 自发现高风险 skill 脚本的隔离表(运行期):materialize 时按 skillID 隔离清单填入,
@@ -727,6 +729,10 @@ final class LingShuState: ObservableObject {
         if pendingShellApproval != nil {
             resolveShellApproval(.deny)
         }
+        // 同理:卡在「进入托管模式」确认上 → 按不同意收口,解除挂起协程。
+        if pendingManagedModeRequest != nil {
+            resolveManagedMode(false)
+        }
 
         let messageID = activeThinkingMessageID
         cancelActiveCodexCalls()
@@ -1024,12 +1030,9 @@ final class LingShuState: ObservableObject {
                     _ = self.runMainAgentTurn(prompt: trimmedPrompt, taskRecordID: self.createTaskExecutionRecord(for: trimmedPrompt))
                 }
             case .task:
-                // 复杂多交互任务(演示/讲解/会议/答疑)→ 进自主运行模式(本体在位 + 安全闸),而非无头派发。
-                if self.taskWantsAutonomousPresence(trimmedPrompt, goal: triage.goal) {
-                    self.goLiveForInteractiveTask(prompt: trimmedPrompt)
-                } else {
-                    self.dispatchIsolatedTask(prompt: trimmedPrompt, taskRecordID: self.createTaskExecutionRecord(for: trimmedPrompt), goal: triage.goal)
-                }
+                // 任务**一律先普通模式做**(不再按关键字预判直接进自主)。要占屏实时演示/互动时,由大脑自己调
+                // enter_managed_mode 申请、弹窗征主人同意后才转入托管(用户定调 2026-06-17:通配、不固化、模型自己想)。
+                self.dispatchIsolatedTask(prompt: trimmedPrompt, taskRecordID: self.createTaskExecutionRecord(for: trimmedPrompt), goal: triage.goal)
             case .chat:
                 _ = self.runMainAgentTurn(prompt: trimmedPrompt, taskRecordID: self.createTaskExecutionRecord(for: trimmedPrompt))
             }
