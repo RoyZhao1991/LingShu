@@ -327,47 +327,48 @@ struct LingShuExecutionPolicySurface: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            SectionHeader(icon: "gearshape", title: state.loc("系统配置", "System"), subtitle: state.loc("语言 · 工作目录 · 常规偏好 · 高风险边界", "Language · Working dir · Preferences · High-risk limits"))
+            SectionHeader(icon: "gearshape", title: state.loc("系统配置", "System"), subtitle: state.loc("基础配置 · 安全配置", "Basic · Security"))
 
-            // 分组卡片:每类设置独立成块,标题—内容对齐,留白一致(根治原来"读写目录重复显示 + 挤成一面墙")。
-            // 界面语言(国际化总开关:切它整个界面/状态/本体 + 语音一起切)。
-            group(state.loc("界面语言", "Language")) {
-                Picker("Language", selection: $state.language) {
-                    ForEach(LingShuVoiceLanguage.allCases) { Text($0.displayName).tag($0) }
+            // 两大块:基础配置 / 安全配置。同类设置并排同行,省纵向空间、更紧凑。
+            group(state.loc("基础配置", "Basic"), tint: .lingHolo) {
+                // 语言 | 工作目录 同行(语言定宽分段、工作目录占满剩余)。
+                HStack(alignment: .top, spacing: 18) {
+                    labeled(state.loc("界面语言", "Language")) {
+                        Picker("Language", selection: $state.language) {
+                            ForEach(LingShuVoiceLanguage.allCases) { Text($0.displayName).tag($0) }
+                        }
+                        .pickerStyle(.segmented).labelsHidden().frame(width: 190)
+                    }
+                    .fixedSize(horizontal: true, vertical: false)
+                    labeled(state.loc("工作目录", "Working directory")) {
+                        TextField(state.loc("项目目录绝对路径", "Absolute project path"), text: $state.codexWorkingDirectory)
+                            .textFieldStyle(.roundedBorder).font(.system(size: 12.5, design: .monospaced))
+                    }
                 }
-                .pickerStyle(.segmented).labelsHidden().frame(maxWidth: 240)
-            }
-
-            // 工作目录:只留一个可编辑框(原来 read-only 行 + 输入框重复显示同一路径,冗余且丑)。
-            group(state.loc("工作目录", "Working directory")) {
-                TextField(state.loc("项目目录绝对路径", "Absolute project path"), text: $state.codexWorkingDirectory)
-                    .textFieldStyle(.roundedBorder).font(.system(size: 12.5, design: .monospaced))
-            }
-
-            // 常规偏好:语音朗读 + 随机性。
-            group(state.loc("常规偏好", "Preferences")) {
-                Toggle(state.loc("语音朗读", "Speak aloud"), isOn: $state.voiceOutputEnabled)
-                    .toggleStyle(.switch).font(.system(size: 12.5, weight: .semibold)).foregroundStyle(.white.opacity(0.82))
-                HStack(spacing: 12) {
-                    Text(state.loc("随机性", "Temperature")).font(.system(size: 12.5, weight: .semibold)).foregroundStyle(.white.opacity(0.82))
+                // 语音朗读 | 随机性 同行。
+                HStack(alignment: .center, spacing: 16) {
+                    Toggle(state.loc("语音朗读", "Speak aloud"), isOn: $state.voiceOutputEnabled).toggleStyle(.switch).fixedSize()
+                    Divider().frame(height: 18).overlay(Color.white.opacity(0.12))
+                    Text(state.loc("随机性", "Temperature"))
                     Slider(value: $state.temperature, in: 0...1, step: 0.1)
                     Text(String(format: "%.1f", state.temperature)).font(.system(size: 12.5, weight: .bold, design: .monospaced)).foregroundStyle(Color.lingHolo).frame(width: 30, alignment: .trailing)
                 }
+                .font(.system(size: 12.5, weight: .semibold)).foregroundStyle(.white.opacity(0.82))
             }
 
-            // 高风险边界:权限模式 + 人工确认 + 计算机直接操作。
-            group(state.loc("高风险边界", "High-risk limits"), tint: .orange) {
-                HStack(spacing: 10) {
-                    Text(state.loc("权限模式", "Permission")).font(.system(size: 12.5, weight: .semibold)).foregroundStyle(.white.opacity(0.82))
-                    Picker(state.loc("权限模式", "Permission mode"), selection: $state.codexPermissionMode) {
-                        ForEach(CodexPermissionMode.allCases) { Text(state.loc($0.rawValue, $0.englishName)).tag($0) }
+            group(state.loc("安全配置", "Security"), tint: .orange) {
+                // 权限模式 | 两个高风险开关 同行。
+                HStack(alignment: .center, spacing: 16) {
+                    labeled(state.loc("权限模式", "Permission")) {
+                        Picker(state.loc("权限模式", "Permission mode"), selection: $state.codexPermissionMode) {
+                            ForEach(CodexPermissionMode.allCases) { Text(state.loc($0.rawValue, $0.englishName)).tag($0) }
+                        }
+                        .pickerStyle(.segmented).labelsHidden().frame(width: 190)
                     }
-                    .pickerStyle(.segmented).labelsHidden().frame(maxWidth: 240)
-                    Spacer()
-                }
-                HStack(spacing: 24) {
-                    Toggle(state.loc("高风险需人工确认", "Confirm high-risk"), isOn: $state.requireHumanApproval).toggleStyle(.switch)
-                    Toggle(state.loc("计算机直接操作", "Direct computer control"), isOn: $state.computerControlEnabled).toggleStyle(.switch)
+                    .fixedSize(horizontal: true, vertical: false)
+                    Divider().frame(height: 30).overlay(Color.white.opacity(0.12))
+                    Toggle(state.loc("高风险需人工确认", "Confirm high-risk"), isOn: $state.requireHumanApproval).toggleStyle(.switch).fixedSize()
+                    Toggle(state.loc("计算机直接操作", "Direct computer control"), isOn: $state.computerControlEnabled).toggleStyle(.switch).fixedSize()
                     Spacer()
                 }
                 .font(.system(size: 12.5, weight: .semibold)).foregroundStyle(.white.opacity(0.82))
@@ -380,9 +381,9 @@ struct LingShuExecutionPolicySurface: View {
         .padding(16)
     }
 
-    /// 一组设置卡片:左上小标题 + 内容,统一留白与圆角;高风险组用橙色描边醒目。
+    /// 一组设置卡片:左上小标题 + 内容,统一留白与圆角;安全组用橙色描边醒目。
     @ViewBuilder private func group<Content: View>(_ title: String, tint: Color = .lingHolo, @ViewBuilder _ content: () -> Content) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 14) {
             Text(title).font(.system(size: 11, weight: .bold)).tracking(0.5).foregroundStyle(tint.opacity(0.85))
             content()
         }
@@ -390,6 +391,15 @@ struct LingShuExecutionPolicySurface: View {
         .padding(14)
         .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
         .overlay { RoundedRectangle(cornerRadius: 10, style: .continuous).stroke(tint.opacity(0.14), lineWidth: 0.5) }
+    }
+
+    /// 带小标题的字段(标题在上、控件在下),用于同行并排多个字段。
+    @ViewBuilder private func labeled<C: View>(_ title: String, @ViewBuilder _ content: () -> C) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(title).font(.system(size: 11, weight: .semibold)).foregroundStyle(.white.opacity(0.6))
+            content()
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
