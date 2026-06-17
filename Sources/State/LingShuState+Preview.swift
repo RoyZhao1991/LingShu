@@ -60,11 +60,25 @@ extension LingShuState {
             },
             LingShuAgentTool(
                 name: "present_fullscreen",
-                description: "进入/退出**全屏演示模式**(把幻灯片放大铺满整个屏幕讲,像 PPT/Keynote 放映,不是在小预览窗里讲)。**做正式演讲/演示时必须先 present_fullscreen(true) 再开讲**,讲完 present_fullscreen(false) 退出。on=true 进、false 出。",
+                description: "进入/退出**全屏演示模式**(把幻灯片放大铺满整个屏幕讲,像 PPT/Keynote 放映)。**这是占屏动作**:若还没在托管模式,进全屏会**先弹窗征求主人同意进入托管模式**(同意后由托管会话接手演示)。讲完 present_fullscreen(false) 退出。on=true 进、false 出。",
                 parametersJSON: "{\"type\":\"object\",\"properties\":{\"on\":{\"type\":\"string\",\"description\":\"true 进入全屏演示 / false 退出,默认 true\"}},\"required\":[]}"
             ) { [weak self] args in
                 let on = !((Self.jsonField(args, "on") ?? "true").lowercased() == "false")
-                return await MainActor.run { self?.previewController.setSlideshow(on) ?? "预览不可用" }
+                guard let self else { return "预览不可用" }
+                // **占屏闸门**:非托管态要进全屏 → 先征同意进托管(不靠模型记得调 enter_managed_mode,从动作上兜住)。
+                let alreadyManaged = await MainActor.run { self.isStandingPersonOnDuty }
+                if on, !alreadyManaged {
+                    let title = await MainActor.run { self.previewController.title }
+                    let approved = await self.requestManagedMode(reason: "全屏演示「\(title.isEmpty ? "当前文档" : title)」")
+                    guard approved else { return "(主人未同意占屏全屏演示。可留在普通预览窗里讲,或换不占屏的方式——别再尝试进全屏。)" }
+                    let docPath = await MainActor.run { self.previewController.document?.documentURL?.path ?? "" }
+                    await MainActor.run {
+                        self.goLiveForInteractiveTask(prompt: docPath.isEmpty
+                            ? "全屏演示并逐页讲解刚打开的文档" : "全屏演示并逐页讲解这个文档:\(docPath)")
+                    }
+                    return "(主人已同意,转入托管会话全屏演示——你这条到此停止,不要重复打开或演示。)"
+                }
+                return await MainActor.run { self.previewController.setSlideshow(on) ?? "预览不可用" }
             },
             LingShuAgentTool(
                 name: "close_preview",
