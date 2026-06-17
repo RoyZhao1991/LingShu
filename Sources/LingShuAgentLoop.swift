@@ -236,6 +236,11 @@ actor LingShuAgentSession {
     /// 而不是让 maker 无限自测空转。`stuck` 检测只抓"完全相同"调用,抓不到"每次略不同的测试空转",故另设此门。
     static let overValidationNudgeAt = 10
     static let overValidationForceAt = 20
+    /// **只读空转收敛**(兼容各种模型,根治弱模型"反复读同一份文件就是不动手改/不收尾"):**还没产出过任何改动**就连续
+    /// 这么多步只读/查看 → `readOnlyStallNudgeAt` 先催它动手(产出/答复);再不动到 `readOnlyStallForceAt` 就诚实交还,
+    /// 别无限空转。与上面的过度自测门互补:那个抓"改完后空转",这个抓"从没改过的犹豫空转"。
+    static let readOnlyStallNudgeAt = 8
+    static let readOnlyStallForceAt = 16
 
     /// 目标驱动循环:**停止条件只有「目标达成(模型给出最终答复)/ 卡住等人(ask_user)/ 原地打转交还」**。
     /// `maxTurns` 不是目标预算,而是防失控的安全天花板(高位,正常远到不了)——不靠它来"到点收工"。
@@ -250,6 +255,7 @@ actor LingShuAgentSession {
         var turnsSinceMutation = 0
         var sawMutation = false
         var nudgedOverValidation = false
+        var nudgedReadOnlyStall = false
         while step < maxTurns {   // maxTurns = 安全天花板,非目标停止位
             // 用户停止:真停(任务取消)→ 诚实交还,不假装收尾。
             if Task.isCancelled {
@@ -316,6 +322,12 @@ actor LingShuAgentSession {
                     nudgedOverValidation = true
                     pendingSteer = "【系统纠偏】你已经连续很多步只在测试/查看、没有再改动任何文件——说明要做的东西已经做完了。**别再重复验证空转**,下一步请直接给出最终交付文本(做了什么 + 产出物绝对路径 + 怎么运行/打开),不要再调用工具。"
                 }
+                // **只读空转催动手**:还没产出过任何改动,就连续多步只读/查看(反复 read_file/cat 同一份)→ 催它立刻动手。
+                // 不强求 mutate(纯问答可直接答),所以措辞兼顾"改"与"答",不误伤只读任务;对各种模型都通用。
+                if !sawMutation, turnsSinceMutation >= Self.readOnlyStallNudgeAt, !nudgedReadOnlyStall, pendingSteer == nil {
+                    nudgedReadOnlyStall = true
+                    pendingSteer = "【系统提醒】你已经连续 \(turnsSinceMutation) 步只在读取/查看、还没产出任何东西。掌握足够信息就**立刻动手产出**——要改/建文件就用 edit_file/write_file 真的改(别只 read_file/cat 反复看),纯问答就直接给最终答复。别再反复读同一份内容空转。"
+                }
                 for call in calls {
                     toolInvocations.append(call.name)
                     let result: String
@@ -334,6 +346,10 @@ actor LingShuAgentSession {
                 // 停止 maker 无限自测,**返回 .completed 交独立验收(checker)** 判定,而非无界空转或被撞顶误判异常。
                 if sawMutation, turnsSinceMutation >= Self.overValidationForceAt {
                     return .completed(text: lastText.isEmpty ? "（工作已完成,产出物已落盘,停止重复验证,交付独立验收。）" : lastText)
+                }
+                // 只读空转到顶仍没动手 → 诚实交还(不假装完成,因为确实没产出),换路或等用户给方向(兼容犹豫的弱模型)。
+                if !sawMutation, turnsSinceMutation >= Self.readOnlyStallForceAt {
+                    return .maxTurnsReached(lastText: "（我连续 \(turnsSinceMutation) 步只在读取查看、没能动手产出——这步我判断不清,先停下。最近看到:\(lastText.prefix(160))。给我个方向或缺的信息,我换条路继续。）")
                 }
             }
         }

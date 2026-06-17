@@ -180,6 +180,21 @@ final class AgentLoopTests: XCTestCase {
         XCTAssertLessThan(used, 40, "停止位是停滞检测,不是 maxTurns 天花板")
     }
 
+    func testReadOnlyStallHandsBackWhenNeverMutating() async {
+        // 弱模型只反复读/查看、从不动手改:停滞检测抓不到(每次参数不同),但「只读空转门」应在阈值处诚实交还,
+        // 而非跑满天花板。证明对各种模型的犹豫空转有兜底。
+        var script: [LingShuAgentModelResponse] = []
+        for i in 0..<40 { script.append(.toolCalls([.init(id: "c\(i)", name: "read_file", argumentsJSON: "{\"path\":\"/f\",\"offset\":\(i)}")])) }
+        let model = ScriptedAgentModel(script)
+        let readTool = LingShuAgentTool(name: "read_file", description: "读") { _ in "文件内容若干…" }
+        let session = LingShuAgentSession(id: "s-ro", tools: [readTool], model: model, maxTurns: 40)
+        let result = await session.send("迭代这个文件")
+        guard case .maxTurnsReached = result else { return XCTFail("只读空转应触发交还") }
+        let used = await session.turnsUsed
+        XCTAssertLessThanOrEqual(used, LingShuAgentSession.readOnlyStallForceAt, "应在只读空转阈值处停,而非跑满天花板")
+        XCTAssertLessThan(used, 40)
+    }
+
     func testToolReceivesArgumentsJSON() async {
         let model = ScriptedAgentModel([
             .toolCalls([.init(id: "c1", name: "echo", argumentsJSON: "{\"text\":\"在\"}")]),
