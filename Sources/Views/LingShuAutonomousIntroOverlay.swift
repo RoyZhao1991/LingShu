@@ -88,9 +88,16 @@ struct LingShuAutonomousOrbOnlyView: View {
     }
 }
 
-/// 自主模式终态的窗口处理:把灵枢主窗口**收缩成右上角的小浮窗 + 透明背景 + 内容铺满整窗(`.fullSizeContentView`,
-/// 去掉黑标题条、本体不被裁)+ 隐藏红绿灯 + 可拖动**。退出自主模式时**完整还原**窗口(尺寸/不透明/样式/红绿灯/层级)。
-/// 务实:有控制条「退出」兜底,任何时候都能回正常界面。
+/// 无边框可成为 key 的窗口:borderless 的 NSWindow 默认 `canBecomeKey=false`→里面的按钮点不动。
+/// 只 override 这两个计算属性、不加任何存储属性,故可对现有窗口安全 `object_setClass` 临时换类(退出再换回)。
+final class LingShuBorderlessKeyWindow: NSWindow {
+    override var canBecomeKey: Bool { true }
+    override var canBecomeMain: Bool { true }
+}
+
+/// 自主模式终态的窗口处理:把灵枢主窗口**变无边框(borderless,根治黑标题条)+ 透明背景 + 浮于顶层 + 收成右上角小浮窗**。
+/// borderless 没有标题栏视图(那条黑框就是标题栏),从源头消除;`object_setClass` 换成可成为 key 的子类让本体上的
+/// 暂停/退出按钮仍可点。退出自主模式时**完整还原**(类/样式/尺寸/透明/层级);兜底:控制条「退出」任何时候可回正常界面。
 struct LingShuAutonomousWindowController: NSViewRepresentable {
     let active: Bool   // true = 进入只剩本体的小浮窗终态
 
@@ -102,7 +109,7 @@ struct LingShuAutonomousWindowController: NSViewRepresentable {
             guard let window = nsView.window else { return }
             if active, !coord.shrunk {
                 coord.capture(window)
-                applyOrbMode(window)
+                Self.applyOrbMode(window)
                 coord.shrunk = true
             } else if !active, coord.shrunk {
                 coord.restore(window)
@@ -111,16 +118,13 @@ struct LingShuAutonomousWindowController: NSViewRepresentable {
         }
     }
 
-    private func applyOrbMode(_ w: NSWindow) {
+    private static func applyOrbMode(_ w: NSWindow) {
+        object_setClass(w, LingShuBorderlessKeyWindow.self)   // 换可成 key 的类(borderless 按钮才点得动)
+        w.styleMask = .borderless                              // **无边框=无标题栏视图=无黑框**(根治)
         w.isOpaque = false
         w.backgroundColor = .clear
         w.hasShadow = false
-        w.styleMask.insert(.fullSizeContentView)    // 内容铺满整窗(含原标题栏区)
-        w.titlebarAppearsTransparent = true
-        w.titleVisibility = .hidden
-        w.titlebarSeparatorStyle = .none
-        w.isMovableByWindowBackground = true         // 拖本体即可挪动这颗悬浮球
-        [.closeButton, .miniaturizeButton, .zoomButton].forEach { w.standardWindowButton($0)?.isHidden = true }
+        w.isMovableByWindowBackground = true                  // 拖本体即可挪动这颗悬浮球
         w.minSize = NSSize(width: 100, height: 120)
         w.level = .floating
         if let screen = w.screen ?? NSScreen.main {
@@ -128,66 +132,39 @@ struct LingShuAutonomousWindowController: NSViewRepresentable {
             let vf = screen.visibleFrame
             w.setFrame(NSRect(x: vf.maxX - width - margin, y: vf.maxY - height - margin, width: width, height: height), display: true, animate: true)
         }
-        // **那条黑框=标题栏容器(NSTitlebarContainerView)的暗色材质**。AppKit 在 setFrame/布局后会反复把它 isHidden 复位,
-        // 所以一次性藏不住——开一条短任务在前 1.2s 内每 80ms 重藏一次(alpha=0 + isHidden 双保险),把它彻底压住。
-        Self.setTitlebarHidden(w, true)
-        Task { @MainActor [weak w] in
-            for _ in 0..<15 {
-                try? await Task.sleep(nanoseconds: 80_000_000)
-                guard let w, w.styleMask.contains(.fullSizeContentView), !w.isOpaque else { return }   // 已退出 orb 态就停
-                Self.setTitlebarHidden(w, true)
-            }
-        }
-    }
-
-    /// 显/隐标题栏容器视图(NSTitlebarContainerView)——它的暗色材质就是那条"黑框"。退出自主模式时复原。
-    static func setTitlebarHidden(_ w: NSWindow, _ hidden: Bool) {
-        guard let themeFrame = w.contentView?.superview else { return }
-        // 藏掉标题栏/工具栏类视图:alpha=0 + isHidden 双保险(单 isHidden 会被 AppKit 复位)。
-        for sub in themeFrame.subviews {
-            let name = String(describing: type(of: sub))
-            if name.contains("Titlebar") || name.contains("TitleBar") || name.contains("Toolbar") {
-                sub.isHidden = hidden
-                sub.alphaValue = hidden ? 0 : 1
-            }
-        }
+        w.makeKeyAndOrderFront(nil)                            // 成为 key,按钮可点
     }
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
     final class Coordinator {
         var shrunk = false
+        private var originalClass: AnyClass?
         private var frame: NSRect?
         private var opaque = true
         private var bg: NSColor?
         private var shadow = true
         private var styleMask: NSWindow.StyleMask = []
-        private var titlebarTransparent = false
-        private var titleVis: NSWindow.TitleVisibility = .visible
         private var movableByBG = false
         private var level: NSWindow.Level = .normal
         private var minSize = NSSize.zero
-        private var hiddenButtons: [NSWindow.ButtonType: Bool] = [:]
 
         func capture(_ w: NSWindow) {
+            originalClass = object_getClass(w)
             frame = w.frame; opaque = w.isOpaque; bg = w.backgroundColor; shadow = w.hasShadow
             styleMask = w.styleMask
-            titlebarTransparent = w.titlebarAppearsTransparent; titleVis = w.titleVisibility
             movableByBG = w.isMovableByWindowBackground
             level = w.level; minSize = w.minSize
-            [.closeButton, .miniaturizeButton, .zoomButton].forEach { hiddenButtons[$0] = w.standardWindowButton($0)?.isHidden ?? false }
         }
 
         func restore(_ w: NSWindow) {
+            if let originalClass { object_setClass(w, originalClass) }   // 换回原窗口类
+            w.styleMask = styleMask                                       // 恢复 .titled 等(标题栏回来)
             w.isOpaque = opaque; w.backgroundColor = bg; w.hasShadow = shadow
-            LingShuAutonomousWindowController.setTitlebarHidden(w, false)   // 复原标题栏
-            if !styleMask.contains(.fullSizeContentView) { w.styleMask.remove(.fullSizeContentView) }
-            w.titlebarSeparatorStyle = .automatic
-            w.titlebarAppearsTransparent = titlebarTransparent; w.titleVisibility = titleVis
             w.isMovableByWindowBackground = movableByBG
             w.level = level; w.minSize = minSize
-            hiddenButtons.forEach { w.standardWindowButton($0.key)?.isHidden = $0.value }
             if let frame { w.setFrame(frame, display: true, animate: true) }
+            w.makeKeyAndOrderFront(nil)
         }
     }
 }
