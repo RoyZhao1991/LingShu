@@ -33,46 +33,64 @@ struct LingShuAutonomousIntroOverlay: View {
     }
 }
 
-/// 自主模式「只剩本体」终态(用户定调 2026-06-17):仪式结束后整窗收缩成一颗**半透明悬浮本体**——
-/// 灵枢界面整个消失、化身为右上角的光球,除本体外别无一物。**右键本体**=暂停/继续 + 解除自主模式。
-/// 本视图只画本体;窗口收缩成小浮窗 + 透明背景由 `LingShuAutonomousWindowController` 负责。
+/// 自主模式「只剩本体」终态(用户定调 2026-06-17):仪式结束后整窗收缩成一颗**半透明悬浮本体** +
+/// 一条小控制条(**暂停/继续 + 退出**)。灵枢界面整个消失、化身为悬浮光球,除本体与控制条外别无一物。
+/// 暂停=本体冻结变暗(`pauseAutonomousRun`);继续=激活;退出=回主界面(`stopAutonomousRun`)。
+/// 窗口收缩成小浮窗 + 透明背景 + **内容铺满整窗(无黑标题条、本体不被裁)** 由 `LingShuAutonomousWindowController` 负责。
 struct LingShuAutonomousOrbOnlyView: View {
     @ObservedObject var state: LingShuState
     @ObservedObject var voice: VoiceIOManager
     @ObservedObject var vision: VisionIOManager
     @ObservedObject var perceptionGateway: LingShuRealtimePerceptionGateway
 
+    private var paused: Bool { state.autonomousRun.phase == .paused }
+
     var body: some View {
         let snapshot = state.digitalHumanSnapshot(voice: voice, vision: vision, perceptionGateway: perceptionGateway)
-        ZStack {
-            Color.clear   // 透明:除本体外什么都没有(窗口背景已设为透明)
+        VStack(spacing: 8) {
             TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { tl in
-                let bob = sin(tl.date.timeIntervalSinceReferenceDate * 1.4) * 3   // 悬浮微浮动
-                LingShuDigitalHumanMiniOrb(snapshot: snapshot, audioLevel: Double(voice.outputLevel))
-                    .frame(width: 92, height: 92)
-                    .opacity(0.9)   // 半透明本体
-                    .shadow(color: Color.lingHolo.opacity(0.65), radius: 20)
+                let bob = paused ? 0 : sin(tl.date.timeIntervalSinceReferenceDate * 1.4) * 3   // 暂停=冻结不浮动
+                LingShuDigitalHumanMiniOrb(snapshot: snapshot, audioLevel: paused ? 0 : Double(voice.outputLevel))
+                    .frame(width: 96, height: 96)
+                    .opacity(paused ? 0.4 : 0.95)        // 暂停=冻结变暗
+                    .saturation(paused ? 0.25 : 1)
+                    .shadow(color: Color.lingHolo.opacity(paused ? 0.15 : 0.6), radius: 18)
                     .offset(y: bob)
+                    .overlay { if paused { Image(systemName: "pause.fill").font(.system(size: 22, weight: .heavy)).foregroundStyle(.white.opacity(0.85)) } }
             }
-            .contextMenu {   // 右键本体:暂停/继续 + 解除自主模式
-                if state.autonomousRun.phase == .paused {
-                    Button { state.resumeAutonomousRun() } label: { Label("继续运行", systemImage: "play.fill") }
-                } else {
-                    Button { state.pauseAutonomousRun() } label: { Label("暂停", systemImage: "pause.fill") }
-                }
-                Divider()
-                Button(role: .destructive) { state.stopAutonomousRun() } label: { Label("解除自主模式", systemImage: "hand.raised.fill") }
-            }
-            .help("灵枢自主运行中 · 右键：暂停/继续、解除自主模式")
+            controlBar
         }
-        .frame(width: 104, height: 104)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)   // 填满整窗、内容居中(本体不被裁)
         .transition(.scale(scale: 0.3).combined(with: .opacity))
+    }
+
+    private var controlBar: some View {
+        HStack(spacing: 8) {
+            pill(paused ? "继续" : "暂停", icon: paused ? "play.fill" : "pause.fill", tint: paused ? .lingHolo : .lingHoloAlt) {
+                if paused { state.resumeAutonomousRun() } else { state.pauseAutonomousRun() }
+            }
+            pill("退出", icon: "xmark", tint: .red) { state.stopAutonomousRun() }
+        }
+        .padding(.horizontal, 7).padding(.vertical, 5)
+        .background(.ultraThinMaterial, in: Capsule())
+        .overlay { Capsule().stroke(Color.white.opacity(0.12), lineWidth: 0.5) }
+    }
+
+    private func pill(_ label: String, icon: String, tint: Color, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Label(label, systemImage: icon)
+                .font(.system(size: 10.5, weight: .bold))
+                .foregroundStyle(tint)
+                .padding(.horizontal, 9).frame(height: 24)
+                .background(tint.opacity(0.16), in: Capsule())
+        }
+        .buttonStyle(.plain)
     }
 }
 
-/// 自主模式终态的窗口处理:把灵枢主窗口**收缩成右上角的小浮窗 + 透明背景 + 隐藏标题栏/红绿灯**,
-/// 让"界面消失、只剩本体"成立(本体是圆的,透明背景=圆球悬浮)。退出自主模式时**完整还原**窗口
-/// (尺寸/不透明/标题栏/红绿灯/层级)。务实:有右键「解除自主模式」兜底,任何时候都能回到正常界面。
+/// 自主模式终态的窗口处理:把灵枢主窗口**收缩成右上角的小浮窗 + 透明背景 + 内容铺满整窗(`.fullSizeContentView`,
+/// 去掉黑标题条、本体不被裁)+ 隐藏红绿灯 + 可拖动**。退出自主模式时**完整还原**窗口(尺寸/不透明/样式/红绿灯/层级)。
+/// 务实:有控制条「退出」兜底,任何时候都能回正常界面。
 struct LingShuAutonomousWindowController: NSViewRepresentable {
     let active: Bool   // true = 进入只剩本体的小浮窗终态
 
@@ -97,15 +115,17 @@ struct LingShuAutonomousWindowController: NSViewRepresentable {
         w.isOpaque = false
         w.backgroundColor = .clear
         w.hasShadow = false
+        w.styleMask.insert(.fullSizeContentView)    // 内容铺满整窗(含原标题栏区)=无黑条、本体完整显示
         w.titlebarAppearsTransparent = true
         w.titleVisibility = .hidden
+        w.isMovableByWindowBackground = true         // 拖本体即可挪动这颗悬浮球
         [.closeButton, .miniaturizeButton, .zoomButton].forEach { w.standardWindowButton($0)?.isHidden = true }
-        w.minSize = NSSize(width: 80, height: 80)
+        w.minSize = NSSize(width: 100, height: 120)
         w.level = .floating
         if let screen = w.screen ?? NSScreen.main {
-            let s: CGFloat = 116, margin: CGFloat = 26
+            let width: CGFloat = 140, height: CGFloat = 168, margin: CGFloat = 24
             let vf = screen.visibleFrame
-            w.setFrame(NSRect(x: vf.maxX - s - margin, y: vf.maxY - s - margin, width: s, height: s), display: true, animate: true)
+            w.setFrame(NSRect(x: vf.maxX - width - margin, y: vf.maxY - height - margin, width: width, height: height), display: true, animate: true)
         }
     }
 
@@ -117,22 +137,28 @@ struct LingShuAutonomousWindowController: NSViewRepresentable {
         private var opaque = true
         private var bg: NSColor?
         private var shadow = true
+        private var styleMask: NSWindow.StyleMask = []
         private var titlebarTransparent = false
         private var titleVis: NSWindow.TitleVisibility = .visible
+        private var movableByBG = false
         private var level: NSWindow.Level = .normal
         private var minSize = NSSize.zero
         private var hiddenButtons: [NSWindow.ButtonType: Bool] = [:]
 
         func capture(_ w: NSWindow) {
             frame = w.frame; opaque = w.isOpaque; bg = w.backgroundColor; shadow = w.hasShadow
+            styleMask = w.styleMask
             titlebarTransparent = w.titlebarAppearsTransparent; titleVis = w.titleVisibility
+            movableByBG = w.isMovableByWindowBackground
             level = w.level; minSize = w.minSize
             [.closeButton, .miniaturizeButton, .zoomButton].forEach { hiddenButtons[$0] = w.standardWindowButton($0)?.isHidden ?? false }
         }
 
         func restore(_ w: NSWindow) {
             w.isOpaque = opaque; w.backgroundColor = bg; w.hasShadow = shadow
+            if !styleMask.contains(.fullSizeContentView) { w.styleMask.remove(.fullSizeContentView) }
             w.titlebarAppearsTransparent = titlebarTransparent; w.titleVisibility = titleVis
+            w.isMovableByWindowBackground = movableByBG
             w.level = level; w.minSize = minSize
             hiddenButtons.forEach { w.standardWindowButton($0.key)?.isHidden = $0.value }
             if let frame { w.setFrame(frame, display: true, animate: true) }
