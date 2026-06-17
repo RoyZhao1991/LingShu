@@ -307,11 +307,11 @@ struct LingShuStableTopBar: View {
                     .frame(width: 48, height: 48)
 
                 VStack(alignment: .leading, spacing: 1) {
-                    Text("灵枢")
+                    Text(state.appName)
                         .font(.system(size: 18, weight: .semibold))
                         .foregroundStyle(.white)
                     if !dense {
-                        Text("LINGSHU · GENERAL AGENT HUB")
+                        Text("NOUS · GENERAL AGENT HUB")
                             .font(.system(size: 8.5, weight: .bold, design: .monospaced))
                             .tracking(1.8)
                             .foregroundStyle(Color.lingHolo.opacity(0.6))
@@ -341,7 +341,7 @@ struct LingShuStableTopBar: View {
                                 if compact {
                                     Image(systemName: surface.icon)
                                 } else {
-                                    Label(surface.rawValue, systemImage: surface.icon)
+                                    Label(state.loc(surface.rawValue, surface.englishName), systemImage: surface.icon)
                                 }
                             }
                             .font(.system(size: compact ? 15 : 12.5, weight: .semibold))

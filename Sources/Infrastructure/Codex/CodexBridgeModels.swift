@@ -189,6 +189,13 @@ enum CodexPermissionMode: String, CaseIterable, Identifiable {
 
     var id: String { rawValue }
 
+    var englishName: String {
+        switch self {
+        case .sandbox: "Sandbox"
+        case .fullAccess: "Full access"
+        }
+    }
+
     var sandboxArgument: String {
         switch self {
         case .sandbox: "workspace-write"

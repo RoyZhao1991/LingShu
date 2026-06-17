@@ -22,6 +22,15 @@ struct LingShuSettingsHub: View {
             case .memory: "brain"
             }
         }
+        var englishName: String {
+            switch self {
+            case .model: "Models"
+            case .policy: "System"
+            case .residency: "Standby & Triggers"
+            case .skills: "Skills & Connectors"
+            case .memory: "Memory"
+            }
+        }
     }
 
     @State private var tab: Tab = .model
@@ -36,7 +45,7 @@ struct LingShuSettingsHub: View {
                         HStack(spacing: 6) {
                             Image(systemName: item.icon)
                                 .font(.system(size: 12, weight: .semibold))
-                            Text(item.rawValue)
+                            Text(state.loc(item.rawValue, item.englishName))
                                 .font(.system(size: 12.5, weight: .semibold))
                         }
                         .foregroundStyle(tab == item ? Color.lingVoid : .white.opacity(0.7))

@@ -7,7 +7,7 @@ extension LingShuState {
     }
 
     var autonomousRunDisplayStatus: String {
-        autonomousRun.phase == .idle ? "未启用" : autonomousRun.phase.rawValue
+        autonomousRun.phase == .idle ? loc("未启用", "Off") : loc(autonomousRun.phase.rawValue, autonomousRun.phase.englishName)
     }
 
     @discardableResult

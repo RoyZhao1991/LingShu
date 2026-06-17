@@ -33,26 +33,28 @@ extension LingShuState {
     }
 
     var coreStateDisplay: String {
-        // 跑任务时优先显示更细的 LOOP 环节(理解/规划/执行/验收中),让用户看得到当前在干什么、别干等。
+        // 跑任务时优先显示更细的 LOOP 环节(理解/规划/执行/验收中),让用户看得到当前在干什么、别干等。国际化:按当前语言。
+        let phaseName = loc(loopPhase.rawValue, loopPhase.englishName)
+        let stateName = loc(coreState.rawValue, coreState.englishName)
         if loopPhase.isActive {
             switch coreState {
-            case .thinking: return "\(loopPhase.rawValue) \(formatElapsed(thinkingElapsedSeconds))"
-            case .executing: return "\(loopPhase.rawValue) \(formatElapsed(executionElapsedSeconds))"
-            default: return loopPhase.rawValue
+            case .thinking: return "\(phaseName) \(formatElapsed(thinkingElapsedSeconds))"
+            case .executing: return "\(phaseName) \(formatElapsed(executionElapsedSeconds))"
+            default: return phaseName
             }
         }
         switch coreState {
         case .standby:
-            return coreState.rawValue
+            return stateName
         case .thinking:
-            return "\(coreState.rawValue) \(formatElapsed(thinkingElapsedSeconds))"
+            return "\(stateName) \(formatElapsed(thinkingElapsedSeconds))"
         case .executing:
             if isModelExecuting || runtimePhase != .idle {
-                return "\(coreState.rawValue) \(formatElapsed(executionElapsedSeconds))"
+                return "\(stateName) \(formatElapsed(executionElapsedSeconds))"
             }
-            return coreState.rawValue
+            return stateName
         case .abnormal:
-            return "\(coreState.rawValue) \(formatElapsed(max(thinkingElapsedSeconds, executionElapsedSeconds)))"
+            return "\(stateName) \(formatElapsed(max(thinkingElapsedSeconds, executionElapsedSeconds)))"
         }
     }
 

@@ -12,6 +12,19 @@ enum LingShuAutonomousRunPhase: String, Codable, CaseIterable, Identifiable {
 
     var id: String { rawValue }
 
+    var englishName: String {
+        switch self {
+        case .idle: "Off"
+        case .probing: "Probing"
+        case .planning: "Planning"
+        case .ready: "Ready"
+        case .running: "Running"
+        case .paused: "Paused"
+        case .completed: "Done"
+        case .blocked: "Blocked"
+        }
+    }
+
     var isActive: Bool {
         switch self {
         case .idle, .completed, .blocked:

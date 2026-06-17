@@ -358,7 +358,7 @@ struct LingShuInputDock: View {
                 // 输入框为空时，中心位置显示提示语；一旦开始输入即隐藏。
                 .overlay(alignment: .center) {
                     if state.prompt.isEmpty {
-                        Text("有什么需要我做的？")
+                        Text(state.loc("有什么需要我做的？", "What can I do for you?"))
                             .font(.system(size: 15.5, weight: .medium))
                             .foregroundStyle(.white.opacity(0.32))
                             .allowsHitTesting(false)
@@ -497,7 +497,7 @@ struct LingShuInputDock: View {
                 } label: {
                     HStack(spacing: 8) {
                         Image(systemName: "paperplane.fill")
-                        Text("交给灵枢")
+                        Text(state.loc("交给灵枢", "Send to \(state.appName)"))
                     }
                     .font(.system(size: 14.5, weight: .semibold))
                     .foregroundStyle(Color.lingVoid)
@@ -510,7 +510,7 @@ struct LingShuInputDock: View {
             .animation(.easeInOut(duration: 0.2), value: voice.isSpeaking)
 
             HStack(spacing: 12) {
-                Text("Return 发送")
+                Text(state.loc("Return 发送", "Return to send"))
                 Spacer(minLength: 8)
                 if !activeAlerts.isEmpty {
                     LingShuAlertTicker(alerts: activeAlerts)

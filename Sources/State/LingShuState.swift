@@ -52,6 +52,15 @@ final class LingShuState: ObservableObject {
     @Published var coreState: LingShuCoreState = .standby
     /// LOOP 内环节(理解/规划/执行/验收),实时显示给用户(本体浮窗 + 状态栏),免得干等。见 LingShuState+LoopPhase。
     @Published var loopPhase: LingShuLoopPhase = .idle
+    /// **界面语言**(国际化:中/英)——切它整个界面/状态/本体动态切语言,并同步语音子系统(ASR/TTS/回复语言)。
+    /// 持久化共用 "lingshu.voiceLanguage" 一个键(语言全局统一,不分 UI/语音两套)。见 LingShuState+Localization。
+    @Published var language: LingShuVoiceLanguage = VoiceIOManager.persistedVoiceLanguage {
+        didSet {
+            guard language != oldValue else { return }
+            UserDefaults.standard.set(language.rawValue, forKey: "lingshu.voiceLanguage")
+            voiceManager?.voiceLanguage = language
+        }
+    }
     // 每秒变化的计时量不做 @Published：它们只服务于超时判断与文案拼装，
     // 界面上的实时读数由 TimelineView 局部自刷新，避免每秒让全部观察者失效。
     var thinkingElapsedSeconds = 0

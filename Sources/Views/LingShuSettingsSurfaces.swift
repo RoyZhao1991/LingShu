@@ -327,53 +327,50 @@ struct LingShuExecutionPolicySurface: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            SectionHeader(icon: "gearshape", title: "系统配置", subtitle: "语言 · 工作目录 · 常规偏好 · 高风险边界")
+            SectionHeader(icon: "gearshape", title: state.loc("系统配置", "System"), subtitle: state.loc("语言 · 工作目录 · 常规偏好 · 高风险边界", "Language · Working dir · Preferences · High-risk limits"))
 
-            // 国际化:语音语言(中/英)。切换即改 ASR 识别 + TTS 嗓音(英文走本机英文嗓)。
+            // **国际化总开关**:切它整个界面/状态/本体 + 语音(ASR/TTS/回复语言)一起切。
             VStack(alignment: .leading, spacing: 6) {
-                Text("语音语言").font(.system(size: 12, weight: .semibold)).foregroundStyle(.white.opacity(0.7))
-                Picker("语音语言", selection: Binding(
-                    get: { state.voiceManager?.voiceLanguage ?? .chinese },
-                    set: { state.voiceManager?.voiceLanguage = $0 }
-                )) {
+                Text(state.loc("界面语言", "Language")).font(.system(size: 12, weight: .semibold)).foregroundStyle(.white.opacity(0.7))
+                Picker("Language", selection: $state.language) {
                     ForEach(LingShuVoiceLanguage.allCases) { Text($0.displayName).tag($0) }
                 }
                 .pickerStyle(.segmented).labelsHidden()
             }
 
-            LingShuConfigLine(title: "目标", value: state.codexWorkingDirectory)
-            TextField("目标项目目录", text: $state.codexWorkingDirectory).textFieldStyle(.roundedBorder)
+            LingShuConfigLine(title: state.loc("目标", "Working dir"), value: state.codexWorkingDirectory)
+            TextField(state.loc("目标项目目录", "Target project directory"), text: $state.codexWorkingDirectory).textFieldStyle(.roundedBorder)
 
             // 常规偏好(非高风险)。本地流式多轮是**固定模式**(按模型类型自动决定),不再做开关。
             HStack(spacing: 18) {
-                Toggle("语音朗读", isOn: $state.voiceOutputEnabled).toggleStyle(.switch)
+                Toggle(state.loc("语音朗读", "Speak aloud"), isOn: $state.voiceOutputEnabled).toggleStyle(.switch)
                 Spacer()
             }
             .font(.system(size: 12, weight: .semibold)).foregroundStyle(.white.opacity(0.76))
 
             VStack(alignment: .leading, spacing: 6) {
-                Text("随机性 \(String(format: "%.1f", state.temperature))").font(.system(size: 12, weight: .semibold)).foregroundStyle(.white.opacity(0.7))
+                Text("\(state.loc("随机性", "Temperature")) \(String(format: "%.1f", state.temperature))").font(.system(size: 12, weight: .semibold)).foregroundStyle(.white.opacity(0.7))
                 Slider(value: $state.temperature, in: 0...1, step: 0.1)
             }
 
             Divider().overlay(Color.white.opacity(0.08))
 
             // 高风险边界:权限模式 + 人工确认 + 计算机直接操作 归一组。
-            Text("高风险边界").font(.system(size: 11, weight: .bold)).foregroundStyle(.white.opacity(0.5))
+            Text(state.loc("高风险边界", "High-risk limits")).font(.system(size: 11, weight: .bold)).foregroundStyle(.white.opacity(0.5))
 
-            Picker("权限模式", selection: $state.codexPermissionMode) {
-                ForEach(CodexPermissionMode.allCases) { Text($0.rawValue).tag($0) }
+            Picker(state.loc("权限模式", "Permission mode"), selection: $state.codexPermissionMode) {
+                ForEach(CodexPermissionMode.allCases) { Text(state.loc($0.rawValue, $0.englishName)).tag($0) }
             }
             .pickerStyle(.segmented)
 
             HStack(spacing: 18) {
-                Toggle("高风险需人工确认", isOn: $state.requireHumanApproval).toggleStyle(.switch)
-                Toggle("计算机直接操作", isOn: $state.computerControlEnabled).toggleStyle(.switch)
+                Toggle(state.loc("高风险需人工确认", "Confirm high-risk"), isOn: $state.requireHumanApproval).toggleStyle(.switch)
+                Toggle(state.loc("计算机直接操作", "Direct computer control"), isOn: $state.computerControlEnabled).toggleStyle(.switch)
                 Spacer()
             }
             .font(.system(size: 12, weight: .semibold)).foregroundStyle(.white.opacity(0.76))
 
-            Text("计算机直接操作:开启后灵枢可直接看屏/点击/键入,会向系统申请辅助功能 + 屏幕录制授权。")
+            Text(state.loc("计算机直接操作:开启后灵枢可直接看屏/点击/键入,会向系统申请辅助功能 + 屏幕录制授权。", "Direct computer control: when on, \(state.appName) can view the screen / click / type, requesting Accessibility + Screen Recording permissions."))
                 .font(.system(size: 10.5, weight: .medium)).foregroundStyle(.white.opacity(0.42))
                 .fixedSize(horizontal: false, vertical: true)
         }
