@@ -130,7 +130,7 @@ extension LingShuState {
         }
         let tools = withPhaseTracking(withBatchRunner(   // 相位跟踪:每个工具调用前把 LOOP 阶段切到理解/规划/执行,本体实时显示
             agentBuiltinTools(recordIDProvider: { [weak self] in self?.currentAgentTurnRecordID })
-            + [Self.timeTool(), Self.webSearchTool(), findImagesTool(), acquireResourceTool(), discoverSkillTool(), updateTaskPlanTool(recordIDProvider: { [weak self] in self?.currentAgentTurnRecordID }), reviewDesignTool(recordIDProvider: { [weak self] in self?.currentAgentTurnRecordID }), recallMemoryTool(), perceiveTool(), pushNotificationTool(), rememberCredentialTool(), listCredentialsTool(), speakTool(), digitalHumanTool(), enterManagedModeTool(), Self.askUserTool(), spawnTaskTool(adapter: adapter)]
+            + [Self.timeTool(), Self.locationTool(), Self.webSearchTool(), findImagesTool(), acquireResourceTool(), discoverSkillTool(), updateTaskPlanTool(recordIDProvider: { [weak self] in self?.currentAgentTurnRecordID }), reviewDesignTool(recordIDProvider: { [weak self] in self?.currentAgentTurnRecordID }), recallMemoryTool(), perceiveTool(), pushNotificationTool(), rememberCredentialTool(), listCredentialsTool(), speakTool(), digitalHumanTool(), enterManagedModeTool(), Self.askUserTool(), spawnTaskTool(adapter: adapter)]
             + previewTools()
             + computerControlTools()   // 计算机直接操作四肢(授权在 call-time 判,计划 §9)
             + backgroundWatchTools()   // 后台守候 + 完成即续(自动识别需求→无人值守推进)
@@ -372,13 +372,7 @@ extension LingShuState {
 
     // 联网搜索子域(web_search 工具 + DuckDuckGo 抽取)已拆至 LingShuState+WebSearch.swift。
 
-    nonisolated static func timeTool() -> LingShuAgentTool {
-        LingShuAgentTool(
-            name: "get_current_time",
-            description: "返回当前本机日期时间(ISO8601)。需要知道现在几点/今天日期时调用。",
-            parametersJSON: "{\"type\":\"object\",\"properties\":{}}"
-        ) { _ in ISO8601DateFormatter().string(from: Date()) }
-    }
+    // 时间/定位工具(get_current_time / get_location)已拆至 LingShuState+InfoTools.swift。
 
     /// 阻塞工具:loop 截获,不真正执行(handler 仅占位)。
     nonisolated static func askUserTool() -> LingShuAgentTool {
@@ -415,7 +409,7 @@ extension LingShuState {
                 let builtin = self?.agentBuiltinTools(recordIDProvider: { [weak self] in self?.agentSubTaskRecords[subID] }) ?? []
                 let extras = self.map { me in [me.findImagesTool(), me.acquireResourceTool(), me.updateTaskPlanTool(recordIDProvider: { [weak me] in me?.agentSubTaskRecords[subID] }), me.reviewDesignTool(recordIDProvider: { [weak me] in me?.agentSubTaskRecords[subID] })] } ?? []
                 let bodyTools = self.map { [$0.speakTool(), $0.digitalHumanTool()] } ?? []
-                return builtin + [Self.timeTool(), Self.webSearchTool(), Self.askUserTool()] + bodyTools + extras
+                return builtin + [Self.timeTool(), Self.locationTool(), Self.webSearchTool(), Self.askUserTool()] + bodyTools + extras
             }
             let sub = LingShuAgentSession(
                 id: subID,
@@ -479,10 +473,12 @@ extension LingShuState {
     func recallMemoryText(for query: String) -> String {
         let q = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !q.isEmpty else { return "查询为空。" }
-        let tags = Set(LingShuMemoryTextToolkit.taskTags(from: q))
-        let cold = memoryService.searchColdMemory(for: q, tags: tags, shouldSearch: true).prefix(5)
-        guard !cold.isEmpty else { return "记忆中没找到与「\(q)」相关的内容。" }
-        return "记忆召回「\(q)」:\n" + cold.map { "- \($0.title):\($0.summary.prefix(120))" }.joined(separator: "\n")
+        // M3:事实/偏好/决定召回统一走 **v2 知识图谱**(单一前门);已退掉并行的冷记忆事实召回。
+        // 注:对话摘要(persistedConversationDigest)/任务去重(TaskMatch)/产出物(deliverableStore)是另外的子系统,各管各的,不在此路径。
+        guard let graphText = knowledgeGraph.recallText(q) else {
+            return "记忆中没找到与「\(q)」相关的内容。"
+        }
+        return graphText
     }
 
     nonisolated static func jsonField(_ json: String, _ key: String) -> String? {

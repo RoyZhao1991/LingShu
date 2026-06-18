@@ -141,6 +141,9 @@ final class LingShuState: ObservableObject {
     /// 非会议=声音触发进入,会议=唤醒词触发进入(见 LingShuPerceptionActions)。
     var voiceListeningArmed = false
     var lastVoiceActivityAt = Date.distantPast
+    /// 「我在听」聆听窗口时长（秒）：喊唤醒词/开口进入后，窗口内没识别到有效内容就回退待机
+    /// （状态机：我在听 →(无有效内容)→ 待机），下次唤醒/开口重新响铃。供状态机推导与 tick 复位共用。
+    let voiceListeningWindowSeconds: TimeInterval = 6
     var lastSpokenMessageID: UUID?
     /// 最近经 `speak` 念出口的话(环形缓冲,封顶 40 条)——供脚本核验演示文字稿对得上幻灯片。
     @Published var recentSpokenLines: [String] = []
@@ -254,6 +257,9 @@ final class LingShuState: ObservableObject {
     var recentDeliverables: [LingShuDeliverable] = []
     /// 增量记忆持久化(WAL 追加写 + 阈值/定时压缩;Phase 5)。
     let deliverableStore = LingShuIncrementalStore<LingShuDeliverable>(directory: LingShuState.memoryStoreDirectory, name: "deliverables")
+    /// 记忆 v2 知识图谱(吸收 Obsidian:原子笔记 + 别名归一 + 双链 + 园丁自维护)。懒加载,从 vault 恢复;
+    /// 召回 additive 进 recall_memory,dreaming 调 tend 自维护。详见 Sources/Memory/。
+    lazy var knowledgeGraph = LingShuKnowledgeGraph()
     /// 定时压缩(checkpoint)定时器。
     var memoryCompactionTimer: Timer?
 

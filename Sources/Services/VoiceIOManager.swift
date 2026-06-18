@@ -54,6 +54,10 @@ final class VoiceIOManager: ObservableObject {
             }
         }
     }
+    /// AEC(系统语音处理/VPIO)当前是否真生效。**这是能否在灵枢说话时听清主人插话(barge-in)的物理前提**:
+    /// 为 true 时麦克风里灵枢自己的 TTS 已被消掉,可放心做唤醒词/电平打断;为 false 时麦克风听到的全是自己,
+    /// 任何打断判据都分不清"自己"和"主人"(实测自我介绍念到"灵枢"会打断自己),必须半双工(发声中不听)。
+    var isVoiceProcessingActive: Bool { audioEngine.inputNode.isVoiceProcessingEnabled }
     /// 最近一次 TTS 发声结束的时刻;其后 `echoCooldownSeconds` 内的非唤醒词麦克风输入按回声忽略。
     var lastSpeechEndedAt: Date = .distantPast
     /// 发声结束后的回声冷却时长(秒):吃掉 TTS 尾音回声,避免被当成新输入。
@@ -85,13 +89,11 @@ final class VoiceIOManager: ObservableObject {
     var lastPartialAt: Date = .distantPast
     /// 静音收口阈值(秒);<=0 关闭。默认 2s = 说完停顿 2 秒即转入思考。
     var silenceFinalizeSeconds: TimeInterval = 2.0
-    private var micWatchdogTask: Task<Void, Never>?
-    /// 是否启用系统语音处理(AEC)。VPIO 在某些机器/设备组合下会把麦克风弄哑(引擎在跑却零进音);
-    /// 看门狗发现没进音会把它关掉重试一次(宁可没回声消除,也要麦克风能用)。
-    /// **持久**:一旦在本机判定 VPIO 坏麦,下次直接从一开始就不开它,省掉每次 3.5s 自愈延迟。
-    private var preferVoiceProcessing = !UserDefaults.standard.bool(forKey: "lingshu.voiceProcessingBroken")
-    /// 重开识别用(看门狗自愈时复用同一组回调,不必让上层重新调用)。
-    private var restartRecognition: (@MainActor () -> Void)?
+    /// 系统语音处理(AEC/VPIO)**强制常开**(用户定调 2026-06-18)。系统音(ScreenCaptureKit)与麦克风
+    /// (AVAudioEngine)是两条独立收音线路、互不冲突;AEC 是"灵枢说话时仍能听清主人插话(barge-in)"的
+    /// **物理必要条件**,绝不再自动关。已删除原"发现没进音就关 VPIO 自愈"的看门狗——它会误杀 AEC
+    /// (实测:VPIO 刚开的几秒还没开始出音频,就被判坏麦关掉,导致永远没有回声消除→灵枢自听自激)。
+    private let preferVoiceProcessing = true
 
     var outputMeterTask: Task<Void, Never>?
 
@@ -274,14 +276,29 @@ final class VoiceIOManager: ObservableObject {
         // 开启系统语音处理(AEC 回声消除):TTS 播放时麦克风**不再自听灵枢自己的声音**,
         // 从而可在灵枢说话时**持续收音**、随时听到主人插话并打断(barge-in)。
         // 失败/不支持则退回无 AEC(识别仍可用,只是说话时不宜常开麦)。必须在引擎启动前设、会改输入格式。
-        if preferVoiceProcessing, !inputNode.isVoiceProcessingEnabled {
-            try? inputNode.setVoiceProcessingEnabled(true)
-        } else if !preferVoiceProcessing, inputNode.isVoiceProcessingEnabled {
-            try? inputNode.setVoiceProcessingEnabled(false)   // 自愈:VPIO 把麦克风弄哑了,关掉 AEC 重来
+        if !inputNode.isVoiceProcessingEnabled {
+            try? inputNode.setVoiceProcessingEnabled(true)   // AEC 强制常开,绝不再自动关
         }
         let recordingFormat = inputNode.outputFormat(forBus: 0)
+        let hwInFormat = inputNode.inputFormat(forBus: 0)   // 硬件输入侧格式:0 声道/0Hz = VPIO 下硬件输入真死了
+        let inputDeviceID = inputNode.auAudioUnit.deviceID   // 输入设备 id(对比开/不开 VPIO 是否换了设备)
+        // 诊断:坐实"开 AEC 没麦克风音频"卡在哪——硬件输入格式是否有效 / 设备是否被换 / 引擎是否真在跑。
+        lingShuControlLog("voice/aec: actualVPIO=\(inputNode.isVoiceProcessingEnabled) dev=\(inputDeviceID) HWin=\(String(format: "%.0f", hwInFormat.sampleRate))/\(hwInFormat.channelCount)ch tapFmt=\(String(format: "%.0f", recordingFormat.sampleRate))/\(recordingFormat.channelCount)ch")
+        LingShuAudioRouting.logDeviceLandscape()   // 点名默认输入/输出+所有输入设备:坐实 dev 是不是聚合/虚拟设备
         guard recordingFormat.sampleRate > 0 else {
             throw LingShuVoiceError.audioInputUnavailable
+        }
+
+        // **VPIO 全双工接线(根治"开 AEC 就没麦克风音频")**:VoiceProcessing IO 输入与输出是同一个单元,
+        // 输入侧靠**输出侧的渲染循环**来抽取。本引擎只收音(TTS 走独立播放器),输出图为空 → 输出不渲染 →
+        // 单元不运转 → tap 一个缓冲都收不到(被误判"AEC 弄哑麦克风",实为接线缺输出驱动)。
+        // 修法:把输入接到主混音器、主混音器输出音量置 0(不外放、不反馈),给输出一条要渲染的信号路径,
+        // 单元就持续运转、麦克风输入正常流;AEC 的回声参考用**系统输出设备**(灵枢 TTS 在那播),与此无关。
+        // **必须在装 tap 之前接好**(规范顺序:先建图、再 tap、最后 start)。
+        if inputNode.isVoiceProcessingEnabled {
+            let mixer = audioEngine.mainMixerNode   // 访问即实化 mixer→outputNode 连接
+            mixer.outputVolume = 0                  // 静音:仅驱动渲染循环,绝不把麦克风外放(防啸叫)
+            audioEngine.connect(inputNode, to: mixer, format: recordingFormat)
         }
 
         // 引擎与 tap 只安装一次、全程常驻；tap 往 box 灌音频（每句只轮换请求，不动引擎）。
@@ -292,50 +309,19 @@ final class VoiceIOManager: ObservableObject {
             format: recordingFormat,
             block: makeRecognitionAudioTap(box: recognitionRequestBox, onAudioChunk: onAudioChunk)
         )
+
         audioEngine.prepare()
         try audioEngine.start()
+        lingShuControlLog("voice/engine: running=\(audioEngine.isRunning) mixerInputs=\(audioEngine.mainMixerNode.numberOfInputs)")
 
         speechCallbacks = VoiceSpeechCallbacks(onText: onText, onFinal: onFinal, onInterruption: onInterruption, onResult: onResult)
-        restartRecognition = { [weak self] in
-            try? self?.startRecognition(onText: onText, onFinal: onFinal, onAudioChunk: onAudioChunk, onInterruption: onInterruption, onResult: onResult)
-        }
         isRecording = true
         transcript = ""
         setInputStatus(speechRecognizer.supportsOnDeviceRecognition ? "正在听（本机）" : "正在听")
         armSpeechRecognition()
-        startMicAudioWatchdog()
-    }
-
-    /// 麦克风进音看门狗:引擎"启动成功"≠真有音频流(授权未真给/签名变了 TCC 失效/设备问题时,
-    /// 引擎在跑但 tap 一个缓冲都不回 → "语音无反应"还**静默无错**)。3.5s 内没收到任何音频缓冲就**浮出可见告警**,
-    /// 别让用户对着没反应的麦克风干等还不知道为什么。收到音频会自动清掉告警(见 tap)。
-    private func startMicAudioWatchdog() {
-        micWatchdogTask?.cancel()
-        let startedAt = Date()
-        micWatchdogTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(nanoseconds: 3_500_000_000)
-            guard let self, self.isRecording, !Task.isCancelled else { return }
-            guard self.lastInputBufferAt < startedAt else { return }   // 进音正常,无事
-            let speech = SFSpeechRecognizer.authorizationStatus().rawValue
-            let mic = AVCaptureDevice.authorizationStatus(for: .audio).rawValue
-            // **自愈**:权限都给了(mic/speech=3)却零进音,八成是 VPIO(AEC)把麦克风弄哑 → 关掉它重开一次。
-            if mic == 3, speech == 3, self.preferVoiceProcessing {
-                self.preferVoiceProcessing = false
-                UserDefaults.standard.set(true, forKey: "lingshu.voiceProcessingBroken")   // 持久:下次直接不开 VPIO
-                lingShuControlLog("voice/watchdog: 3.5s 无音频(mic=3 speech=3)→ 关 VPIO 重开识别自愈")
-                self.stopRecognition()
-                self.restartRecognition?()
-                return
-            }
-            // 关了 VPIO 还是没进音,或权限确实没给 → 浮出可见告警,别静默。
-            let denied = mic != 3 || speech != 3
-            let msg = denied
-                ? "麦克风/语音识别**没授权**(系统设置 › 隐私与安全性 › 麦克风 + 语音识别,把灵枢打开,再重开通话)"
-                : "麦克风收不到声音(已关回声消除仍无进音,可能输入设备异常/被别的录音 App 独占)"
-            self.micSilentWarning = msg
-            self.setInputStatus("⚠️ " + msg)
-            lingShuControlLog("voice/watchdog: 仍无音频,mic=\(mic) speech=\(speech) VPIO=\(self.preferVoiceProcessing) → 告警:\(msg)")
-        }
+        // 看门狗已删除(用户定调 2026-06-18):它会在 VPIO 刚开、还没出音频的几秒内误判"坏麦"、关掉 AEC 并持久化,
+        // 导致 AEC 永远开不起来→灵枢自听自激。AEC 是 barge-in 的物理必要条件,必须常开。
+        // 麦克风权限/进音诊断仍由 voice/perm、voice/aec、voice/mic 日志覆盖,不再做"自动关 AEC"的自愈。
     }
 
     /// 轮换识别请求：每句结束只换一个轻量请求/任务，引擎与 tap 不动——
@@ -398,6 +384,12 @@ final class VoiceIOManager: ObservableObject {
     /// 静音收口判定(由音频 tap 每 ~50ms 在主线程调):有未收口的转写、且 partial 静默超过阈值 → 强制收口。
     /// 这就是"说完停 2 秒就进入思考"——不傻等 SFSpeech 的 isFinal(连续识别下它常迟迟不来)。
     func evaluateUtteranceSilence(now: Date = Date()) {
+        // 发声中 / 刚发完的回声冷却窗口内,麦克风里几乎全是灵枢自己 TTS 的回声(AEC 没消干净时尤甚)。
+        // **绝不**把这段回声"静音收口"成一句提交——否则灵枢把自己的话当指令→无谓"转入思考/处理中",
+        // 播报一结束就卡在处理中(实测根因)。真正的主人插话由唤醒词/电平 barge-in 先掐掉 TTS,
+        // 之后 isSpeakingOrQueued 转 false、回声窗口过去,这里才会正常收口主人那句。
+        guard !isSpeakingOrQueued,
+              now.timeIntervalSince(lastSpeechEndedAt) >= echoCooldownSeconds else { return }
         guard isRecording, silenceFinalizeSeconds > 0,
               !transcript.isEmpty, lastPartialAt != .distantPast,
               now.timeIntervalSince(lastPartialAt) >= silenceFinalizeSeconds else { return }

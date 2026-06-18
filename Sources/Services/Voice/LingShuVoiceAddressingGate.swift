@@ -46,19 +46,24 @@ struct LingShuVoiceAddressingGate {
             return .respond(reason: "点名灵枢")
         }
 
+        // ③ 显式通话/在岗：用户已主动把这通"电话"拨给灵枢，默认每句都在对它说话，**不被"疑似多人"挡**。
+        //    现实里"疑似多人"绝大多数是灵枢自己的 TTS 被麦克风听到、声线画像出现假双簇造成的(AEC 没消干净);
+        //    真正的会议/多人旁听已由上层 ambientGated(会议中必须点名)拦过。若这里再用多人门挡，会把主人
+        //    正常的提问也静默吞掉（实测"问了不回"的直接原因：自激回声→伪多人→丢弃问题）。
+        if inputs.isExplicitCallMode {
+            return .respond(reason: "通话模式")
+        }
+
         let engaged = inputs.secondsSinceLastExchange.map { $0 <= inputs.engagementWindow } ?? false
 
-        // ③ 多人环境：未点名时只认对话延续，否则判定为人际交谈。
+        // ④ 多人环境（仅**被动聆听**态，非显式通话）：未点名时只认对话延续，否则判定为人际交谈。
         if inputs.multipleSpeakersDetected {
             return engaged
                 ? .respond(reason: "多人环境，但处于对话延续窗口内")
                 : .ignore(reason: "检测到多人对话且未点名灵枢，判定为人际交谈，不插话")
         }
 
-        // ④ 单人环境：显式通话/对话延续/显式开启的听写都默认在对灵枢说话。
-        if inputs.isExplicitCallMode {
-            return .respond(reason: "通话模式")
-        }
+        // ⑤ 单人被动聆听：对话延续/显式开启的听写都默认在对灵枢说话。
         if engaged {
             return .respond(reason: "对话延续窗口内")
         }

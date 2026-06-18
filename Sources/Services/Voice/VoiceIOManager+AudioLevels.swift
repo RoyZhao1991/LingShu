@@ -90,7 +90,10 @@ extension VoiceIOManager {
         // 不需要每缓冲一次）。真正的根治是把 DSP 移出主线程，这里先把洪泛掐掉。
         let throttle = AudioTapEmitThrottle()
         return { [weak self] buffer, _ in
-            box.append(buffer)   // 灌进"当前"请求；每句结束只轮换请求，引擎与 tap 不动
+            // SFSpeech 只认单声道:开 VPIO 后,输入是 macOS 拼的多声道聚合设备(VPAUAggregateAudioDevice,实测 9 声道,
+            // 含麦克风+扬声器回路+其它虚拟设备),直接灌 9 声道缓冲它一个字都识别不出(实测 buffers 正常但零转写)。
+            // 取第 0 道(=AEC 处理后的麦克风)降成单声道再喂识别器;单声道时零开销原样灌。
+            box.append(Self.monoForASR(from: buffer))
             let now = Date()
             let level = Self.normalizedRMS(from: buffer)   // 音频线程算,便宜
 
@@ -117,6 +120,21 @@ extension VoiceIOManager {
                 }
             }
         }
+    }
+
+    /// 把(可能是多声道聚合设备的)缓冲降成**单声道**供 SFSpeech 识别——取第 0 道(VPIO 输出的 AEC 后麦克风)。
+    /// 已是单声道则原样返回(零拷贝)。失败兜底返回原缓冲(至少不丢音)。仅处理 float 缓冲;非 float 原样返回。
+    nonisolated static func monoForASR(from buffer: AVAudioPCMBuffer) -> AVAudioPCMBuffer {
+        guard buffer.format.channelCount > 1, let src = buffer.floatChannelData else { return buffer }
+        guard let monoFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32,
+                                             sampleRate: buffer.format.sampleRate,
+                                             channels: 1, interleaved: false),
+              let mono = AVAudioPCMBuffer(pcmFormat: monoFormat, frameCapacity: buffer.frameCapacity),
+              let dst = mono.floatChannelData else { return buffer }
+        let frames = Int(buffer.frameLength)
+        mono.frameLength = buffer.frameLength
+        dst[0].update(from: src[0], count: frames)   // 第 0 道 = AEC 处理后的麦克风
+        return mono
     }
 
     /// 计算缓冲区的归一化 RMS（0...1），轻度压缩后用作波形高度。

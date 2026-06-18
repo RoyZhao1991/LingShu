@@ -63,9 +63,10 @@ final class LingShuGatewayAgentModel: LingShuAgentModel, @unchecked Sendable {
             if Task.isCancelled { return .text("（本轮已被取消）") }
             do {
                 let reply = try await client.send(request)
-                // 前缀缓存可观测:命中多少输入 token 写进诊断日志(验证缓存确实生效 + 省了多少)。
-                if let cached = reply.cachedTokens, cached > 0 {
-                    lingShuControlLog("prefix-cache hit=\(cached)/\(reply.promptTokens ?? -1) input tokens | provider=\(provider) model=\(model)")
+                // 前缀缓存可观测:本轮命中 + **累计命中率**(命中率掉=前缀被打乱,立刻看得见)。每次调用都记(含未命中,口径才准)。
+                if let prompt = reply.promptTokens {
+                    let snap = LingShuPrefixCacheMeter.shared.record(prompt: prompt, cached: reply.cachedTokens ?? 0)
+                    lingShuControlLog("prefix-cache: 本轮 hit=\(reply.cachedTokens ?? 0)/\(prompt) | 累计命中率 \(snap.ratePercent)% (\(snap.totalCached)/\(snap.totalPrompt), \(snap.calls)次) | \(provider) \(model)")
                 }
                 if !reply.toolCalls.isEmpty {
                     // 边做边想:把模型发起动作时的旁白上报(供执行流像 codex 一样显示「分析→动作」)。
@@ -111,8 +112,9 @@ final class LingShuGatewayAgentModel: LingShuAgentModel, @unchecked Sendable {
         )
         do {
             let reply = try await client.streamAgent(request, onContentDelta: onTextDelta)
-            if let cached = reply.cachedTokens, cached > 0 {
-                lingShuControlLog("prefix-cache hit=\(cached)/\(reply.promptTokens ?? -1) input tokens (stream) | provider=\(provider) model=\(model)")
+            if let prompt = reply.promptTokens {
+                let snap = LingShuPrefixCacheMeter.shared.record(prompt: prompt, cached: reply.cachedTokens ?? 0)
+                lingShuControlLog("prefix-cache: 本轮 hit=\(reply.cachedTokens ?? 0)/\(prompt) (stream) | 累计命中率 \(snap.ratePercent)% (\(snap.totalCached)/\(snap.totalPrompt), \(snap.calls)次) | \(provider) \(model)")
             }
             if !reply.toolCalls.isEmpty {
                 let aside = LingShuReasoningText.stripThinkTags(reply.text).trimmingCharacters(in: .whitespacesAndNewlines)

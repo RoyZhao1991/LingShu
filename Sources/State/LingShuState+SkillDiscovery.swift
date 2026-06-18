@@ -50,10 +50,15 @@ extension LingShuState {
             let namespaced = Self.forceFrontmatterID(markdown, to: forcedID)   // 命名空间隔离,绝不覆盖内置/策展 skill
             guard let (skill, kind) = LingShuSkillAcquisition.classify(markdown: namespaced, fallbackID: forcedID) else { continue }
 
+            // P1:解析声明式权限清单 + 风险评级(从 frontmatter),装时亮给用户、并参与隔离裁决。
+            let manifest = LingShuSkillLoader.parse(namespaced, fallbackID: forcedID)?.manifest
+            let declaredRisk = manifest.map { LingShuPluginPermissionChecker.riskLevel($0) } ?? .low
+            let scopeNote = manifest.map { "声明权限作用域:\($0.permissionSummary)(风险 \(LingShuPluginPermissionChecker.riskLevel($0).rawValue))" } ?? "未声明权限作用域"
+
             switch kind {
             case .promptOnly:
                 guard installDiscoveredSkill(markdown: namespaced, fileSlug: forcedID) else { continue }
-                return "已联网找到并安装**纯提示技能**「\(skill.profile.title)」(零执行风险,已热加载)。来源:\(url.host ?? "web")。现在用 apply_skill 按它推进。"
+                return "已联网找到并安装**纯提示技能**「\(skill.profile.title)」(零执行风险,已热加载)。\(scopeNote)。来源:\(url.host ?? "web")。现在用 apply_skill 按它推进。"
 
             case .scriptBlockedByGate(let violations):
                 blocked.append("「\(skill.profile.title)」含危险代码被静态门拦下(\(violations.joined(separator: "、")))")
@@ -63,11 +68,15 @@ extension LingShuState {
                 let verdict = await reviewScriptRisk(script)
                 guard installDiscoveredSkill(markdown: namespaced, fileSlug: forcedID) else { continue }
                 switch verdict {
+                case .safe where declaredRisk == .high:
+                    // 代码风险审没问题,但**声明的权限作用域偏高** → 仍隔离首次运行(P1 用 manifest 收紧最小权限)。
+                    LingShuSkillAcquisition.setQuarantine(skillID: skill.profile.id, riskNotes: ["声明权限作用域偏高:\(manifest?.permissionSummary ?? "")"])
+                    return "已安装**带脚本技能**「\(skill.profile.title)」:代码风险审无明显问题,但**它声明的权限作用域偏高** → 已隔离,**首次运行其脚本会弹审批让你裁决**。\(scopeNote)。来源:\(url.host ?? "web")。"
                 case .safe:
-                    return "已联网找到并安装**带脚本技能**「\(skill.profile.title)」(过静态安全门 + 风险审判定无明显风险,已热加载)。脚本执行仍会走常规授权。来源:\(url.host ?? "web")。"
+                    return "已联网找到并安装**带脚本技能**「\(skill.profile.title)」(过静态安全门 + 风险审判定无明显风险,已热加载)。脚本执行仍会走常规授权。\(scopeNote)。来源:\(url.host ?? "web")。"
                 case .risky(let points):
                     LingShuSkillAcquisition.setQuarantine(skillID: skill.profile.id, riskNotes: points)
-                    return "已联网找到并安装**带脚本技能**「\(skill.profile.title)」,但风险审标记了风险点,已隔离:**首次运行它的脚本时会弹审批让你裁决**(即便已选过完全授权)。风险点:\(points.joined(separator: "; "))。来源:\(url.host ?? "web")。可先用 apply_skill 取它的提示部分。"
+                    return "已联网找到并安装**带脚本技能**「\(skill.profile.title)」,但风险审标记了风险点,已隔离:**首次运行它的脚本时会弹审批让你裁决**(即便已选过完全授权)。风险点:\(points.joined(separator: "; "))。\(scopeNote)。来源:\(url.host ?? "web")。可先用 apply_skill 取它的提示部分。"
                 }
             }
         }
@@ -108,6 +117,7 @@ extension LingShuState {
         let fileURL = dir.appendingPathComponent("\(fileSlug).md")
         guard (try? markdown.write(to: fileURL, atomically: true, encoding: .utf8)) != nil else { return false }
         (expertProfileRegistry as? LingShuCompositeExpertRegistry)?.reloadUserSkills()
+        syncExtensionEnablement()
         LingShuResourceRegistry.shared.register(
             kind: "skill", name: fileSlug, tags: [fileSlug],
             localPath: fileURL.path, source: "discover_skill", license: "discovered(自发现,已过安全模型)")

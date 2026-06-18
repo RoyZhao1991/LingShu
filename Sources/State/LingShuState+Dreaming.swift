@@ -73,6 +73,10 @@ extension LingShuState {
     func runDreamingConsolidation() async {
         lastDreamConsolidationAt = Date()
 
+        // 0. 知识图谱轨(记忆 v2):从近期对话蒸馏原子事实并入图谱 + 园丁维护。放最前、独立于下面的技能/设计轨早返回,
+        //    保证每次 dreaming 都会维护知识图谱(衰减/补链/剪枝)。全程 guarded,失败只跳过。详见 +KnowledgeGraphDreaming。
+        await consolidateKnowledgeGraph()
+
         // 1. 回放样本:终态的交付型任务(完成=成功;未达标/异常=失败,用于算通过率)。热 + 冷一起看。
         let samples: [LingShuDreamingConsolidator.Sample] = taskExecutionRecordLookup.compactMap { record in
             // 用户点踩(👎)的输出不当成功样本——别从用户不满意的产出里学经验。
@@ -145,6 +149,7 @@ extension LingShuState {
         if !written.isEmpty {
             // 热重载:免重启即时生效——固化出来的 skill 当场并入组合注册表。
             (expertProfileRegistry as? LingShuCompositeExpertRegistry)?.reloadUserSkills()
+        syncExtensionEnablement()
             appendTrace(kind: .result, actor: "固化", title: "dreaming 完成",
                         detail: "自固化 skill(纯提示,已热加载即时生效):\(written.joined(separator: "、"))。")
         }

@@ -79,17 +79,19 @@ struct LingShuAutonomousOrbOnlyView: View {
     /// 串行管线状态(用户定调 2026-06-17),**以音频为准、不以文字回复为准**(TTS 有起播延迟):
     /// 待机中 → 听到进音→我在听 → 有效语音收口→处理中(持续到 TTS **真开始播**) → 回应中(音频播放中) → 播完→待机中。
     private func standingStateChip() -> (text: String, tint: Color, icon: String) {
-        // **回应中=音频真正在播**(`hasAudibleOutput`=输出电平真起来了);只有文字、TTS 还在取音/没出声 → 仍算处理中
-        // (`isSpeaking` 在"请求发声"时就置 true、早于真出声,故不能用它判回应中)。TTS 没开则永远不出声 → 跳过回应中。
-        let responding = voice.hasAudibleOutput
-        let speechPending = voice.isSpeakingOrQueued && !responding              // 已请求TTS但还没真出声 → 处理中
-        let processing = state.hasActiveModelCall || state.loopPhase.isActive || speechPending
-        let hearing = voice.isRecording && (!voice.transcript.isEmpty || voice.inputLevel >= 0.04)
         if paused { return ("已暂停", .orange, "pause.circle") }
-        if responding { return ("回应中", .green, "speaker.wave.2.fill") }
-        if processing { return ("处理中", .cyan, "brain") }
-        if hearing { return ("我在听", .green, "ear.fill") }
-        return ("待机中", .white.opacity(0.55), "moon.zzz")
+        // 单一权威状态机(LingShuVoicePhase):待机→我在听→处理中→回应中→待机。
+        // **回应中=音频真正在播**(`hasAudibleOutput`=输出电平真起来了);`isSpeaking` 在"请求发声"时就置 true、
+        // 早于真出声,故只用它判处理中(TTS 已请求待起播)而非回应中。我在听=明确聆听窗口内(喊唤醒词/开口触发)。
+        let phase = LingShuVoicePhase.derive(
+            audiblePlaying: voice.hasAudibleOutput,
+            modelOrLoopBusy: state.hasActiveModelCall || state.loopPhase.isActive,
+            ttsQueuedOrPending: voice.isSpeakingOrQueued,
+            listeningArmed: state.voiceListeningArmed,
+            secondsSinceVoiceActivity: Date().timeIntervalSince(state.lastVoiceActivityAt),
+            listeningWindow: state.voiceListeningWindowSeconds
+        )
+        return (phase.caption, phase.tint, phase.icon)
     }
 
     @ViewBuilder private var phaseLabel: some View {

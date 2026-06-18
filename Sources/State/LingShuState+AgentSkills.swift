@@ -9,6 +9,12 @@ import Foundation
 @MainActor
 extension LingShuState {
 
+    /// P4:把扩展面板的启停同步进专家注册表——**停用的 skill 不再被匹配/应用**(real enforcement)。
+    /// 启动 + reloadUserSkills + 面板切换后调。
+    func syncExtensionEnablement() {
+        (expertProfileRegistry as? LingShuCompositeExpertRegistry)?.setDisabledSkillIDs(LingShuExtensionRegistry.shared.disabledIDs)
+    }
+
     /// 把 skill 自带且已过安全门控的生成器脚本物化到目录,返回脚本绝对路径(无脚本/写失败返回 nil)。
     /// 旧协同管线与 agent apply_skill 共用此唯一落地点。
     @discardableResult

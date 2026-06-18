@@ -95,6 +95,8 @@ cat > "$CONTENTS/Info.plist" <<PLIST
     <key>NSHighResolutionCapable</key><true/>
     <key>NSPrincipalClass</key><string>NSApplication</string>
     <key>NSCameraUsageDescription</key><string>用于视觉解析，让灵枢读取摄像头画面并形成实时观察。</string>
+    <key>NSLocationUsageDescription</key><string>用于获取当前所在城市，让灵枢知道你在哪、提供本地相关信息（如本地时间/天气）。仅按需读取、不留存。</string>
+    <key>NSLocationWhenInUseUsageDescription</key><string>用于获取当前所在城市，让灵枢知道你在哪、提供本地相关信息（如本地时间/天气）。仅按需读取、不留存。</string>
     <key>NSMicrophoneUsageDescription</key><string>用于语音输入，将你的语音转换为文字指令。</string>
     <key>NSSpeechRecognitionUsageDescription</key><string>用于将语音识别为灵枢可处理的文字指令。</string>
     <key>NSBluetoothAlwaysUsageDescription</key><string>用于通过蓝牙读取已配对 iPhone 的系统通知(ANCS)，汇聚为灵枢的一种感知。仅本地、只读。</string>

@@ -124,6 +124,8 @@ struct LingShuRootView: View {
             // 把持久化的「本地模式」偏好应用到 voiceManager(didSet 不会为初始值触发,启动时手动应用一次)。
             state.applyASRLocalMode()
             state.applyTTSLocalMode()
+            // P4:把扩展面板的启停同步进专家注册表(停用的 skill 启动即不参与匹配)。
+            state.syncExtensionEnablement()
             // 外接设备感知:注入模型驱动蒸馏器 + 恢复上次开关偏好(默认关)。
             state.wireExternalSensory()
             // 系统通知中枢:设代理(前台也弹横幅)+ 查授权状态(配置页可主动授予)。

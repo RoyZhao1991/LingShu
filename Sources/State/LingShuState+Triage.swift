@@ -124,7 +124,7 @@ extension LingShuState {
         let recordProvider: @MainActor @Sendable () -> String? = { [weak self] in self?.agentSubTaskRecords[subID] }
         let tools = withPhaseTracking(   // 相位跟踪:派发任务也驱动本体显示理解/规划/执行/验收(光球随环节变色变脉动)
             agentBuiltinTools(recordIDProvider: recordProvider)
-            + [Self.timeTool(), Self.webSearchTool(), recallMemoryTool(), Self.askUserTool(),
+            + [Self.timeTool(), Self.locationTool(), Self.webSearchTool(), recallMemoryTool(), Self.askUserTool(),
                findImagesTool(), acquireResourceTool(),
                updateTaskPlanTool(recordIDProvider: recordProvider), reviewDesignTool(recordIDProvider: recordProvider), speakTool(), digitalHumanTool(), enterManagedModeTool()]
             + previewTools()

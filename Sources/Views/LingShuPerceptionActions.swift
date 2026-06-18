@@ -93,7 +93,9 @@ enum LingShuPerceptionActions {
             try voice.startRecognition(
                 onText: { _ in },
                 onAudioChunk: { packet in
-                    perceptionGateway.ingestAudioChunk(packet)
+                    // 灵枢自己正在发声时,不拿这段(含自家 TTS 回声的)音频做声线画像——否则自激回声被当成第二个人,
+                    // 假"多人对话"会让寻址闸门把主人的提问丢弃(实测"问了不回"根因)。
+                    perceptionGateway.ingestAudioChunk(packet, profileSpeaker: !voice.isSpeakingOrQueued)
                 },
                 onInterruption: {
                     scheduleRecognitionRestart(
@@ -166,10 +168,14 @@ enum LingShuPerceptionActions {
         let continuousMode = state.isMinimalVoiceMode || state.isStandingPersonOnDuty
 
         // 非连续态且灵枢正忙:维持原行为(等它说完),并让被吞的语音可见(可审计)。
-        if (voice.isSpeaking || state.hasActiveModelCall), !continuousMode {
+        // **例外:带目标的自主运行进行中**——那时麦克风是为"随时插话打断"常开的(系统提示里的人机讨论 LOOP),
+        // 绝不能在这里把含唤醒词的插话一并吞掉,否则带目标自主运行下"喊灵枢打断"永远到不了下面 ① 的判定
+        // (实测打断失灵的根因之一)。运行态放行,继续往下走唤醒词/打断判定。
+        if (voice.isSpeaking || state.hasActiveModelCall), !continuousMode, state.autonomousRun.phase != .running {
             state.missionStatus = voice.isSpeaking
                 ? "我正在说话，先不接收你的语音。"
                 : "我还在处理上一件事（模型调用进行中），这句语音暂未接收。"
+            if result.isFinal { lingShuControlLog("voice/barge: 早返回吞输入(非连续·非运行) speaking=\(voice.isSpeaking) model=\(state.hasActiveModelCall)「\(cleanedText.prefix(20))」") }
             return
         }
 
@@ -211,16 +217,51 @@ enum LingShuPerceptionActions {
         let busy = speaking || state.hasActiveModelCall || state.loopPhase.isActive || speechPending || echoCooldown
         let ambientGated = state.isStandingPersonOnDuty && state.meetingDetectionState.inMeeting
 
+        // 诊断打断:正在发声/忙或听到唤醒词时,把这条转写的全部判据记一笔——
+        // 定位"喊灵枢为何没打断"到底卡在哪:ASR 没识别出灵枢 / 被回声门吞 / busy 早返回 / 在等收口。
+        let echoWindowDiag = voice.isSpeaking || Date().timeIntervalSince(voice.lastSpeechEndedAt) < 5
+        if speaking || busy || containsWake {
+            lingShuControlLog("voice/barge: wake=\(containsWake) pure=\(pureWake) final=\(result.isFinal) speaking=\(speaking) busy=\(busy) aec=\(voice.isVoiceProcessingActive) echoWin=\(echoWindowDiag) cont=\(continuousMode) lvl=\(String(format: "%.2f", voice.inputLevel)) cmd「\(command.prefix(14))」all「\(cleanedText.prefix(28))」")
+        }
+
+        // **半双工硬闸(AEC 没生效时)**:灵枢正发声/刚发完的回声窗口内,麦克风听到的**全是它自己**——
+        // 没有 AEC 就分不清"自己"和"主人插话"(实测:念到"我是灵枢"被自己当唤醒词打断、把误识别的"林叔"当主人名)。
+        // 此时一律丢弃:不打断、不提交、不进我在听。等灵枢说完 + 回声冷却过去,再正常听。
+        // AEC 一旦真生效(isVoiceProcessingActive=true,自己的声音已被消掉),这道闸自动放开,恢复说话时也能被主人插话打断。
+        let selfEchoWindow = voice.isSpeakingOrQueued || Date().timeIntervalSince(voice.lastSpeechEndedAt) < voice.echoCooldownSeconds
+        if !voice.isVoiceProcessingActive, selfEchoWindow {
+            state.prompt = ""
+            if result.isFinal || containsWake {
+                lingShuControlLog("voice/barge: 半双工(AEC关·发声中)丢弃 wake=\(containsWake)「\(cleanedText.prefix(20))」")
+            }
+            return
+        }
+
+        // 唤醒词打断(barge-in):点名「灵枢」且此刻在说/在跑 → **立刻**掐掉正在播的语音 + 中止在飞回合,
+        // 不等收口(partial 即触发,小爱/小度式实时打断)、不要求纯唤醒。两道防自激护栏:
+        //  ① 唤醒词须**领头**且其后指令很短(command ≤ 8 字)——真插话「灵枢/灵枢停一下」如此,长回声里夹个同音字不会(它的 command 是整段长串);
+        //  ② 回声门兜底:这句若是灵枢自己刚说过的话的回声(AEC 没消干净)→ 不当插话,避免自激打断。
+        if containsWake, busy, !pureWake, command.count <= 8,
+           !(echoWindowDiag && LingShuEchoDetector.isEcho(cleanedText, recentOutputs: state.recentSpokenForEcho())) {
+            state.interruptSpeechOutput?()
+            voice.stopSpeaking()
+            lingShuControlLog("voice/barge: 唤醒词打断(非纯·partial即触发) final=\(result.isFinal)「\(cleanedText.prefix(24))」")
+        }
+
         // ① **纯唤醒词=进入聆听/打断的触发(最高优先,永不当回声、不被 busy 拦)**:不提交、不调模型。
         if pureWake {
-            if busy { state.interruptSpeechOutput?(); voice.stopSpeaking() }   // 喊「灵枢」打断当前
+            let interrupted = busy
+            if interrupted { state.interruptSpeechOutput?(); voice.stopSpeaking(); lingShuControlLog("voice/barge: 纯唤醒打断 final=\(result.isFinal)") }   // 喊「灵枢」打断当前
             state.prompt = ""
-            if !state.voiceListeningArmed {
+            voice.transcript = ""   // 清掉唤醒前累积的回声,开一个干净的「我在听」窗口(只等主人接下来真正的指令)
+            // 喊「灵枢」=进入/重置聆听窗口:**打断时一定给提示音 + 「我在听」反馈**(哪怕之前已 armed,
+            // 用户要的就是每次喊都听到"叮"并进入等待);只在已 armed 且非打断时不重复响,避免连环 chime。
+            if !state.voiceListeningArmed || interrupted {
                 state.voiceListeningArmed = true
                 state.lastVoiceActivityAt = Date()
                 state.missionStatus = "我在听,请说。"
                 LingShuCueSound.playWakeChime()
-                lingShuControlLog("voice: 唤醒词→进入我在听(触发,不当指令提交)")
+                lingShuControlLog("voice: 唤醒词→进入我在听(触发,不当指令提交) 打断=\(interrupted)")
             }
             return
         }
@@ -231,7 +272,8 @@ enum LingShuPerceptionActions {
         let echoWindow = voice.isSpeaking || Date().timeIntervalSince(voice.lastSpeechEndedAt) < 5
         if echoWindow, LingShuEchoDetector.isEcho(cleanedText, recentOutputs: state.recentSpokenForEcho()) {
             state.prompt = ""
-            if result.isFinal { lingShuControlLog("voice: 回声(灵枢自己说的话)忽略「\(cleanedText.prefix(24))」") }
+            // 含唤醒词却被回声门吞 = 打断失灵的关键现场(用户的插话和灵枢自己的话混在一句里),partial 也记。
+            if result.isFinal || containsWake { lingShuControlLog("voice/barge: 回声门吞掉(wake=\(containsWake) final=\(result.isFinal))「\(cleanedText.prefix(24))」") }
             return
         }
 
@@ -246,9 +288,9 @@ enum LingShuPerceptionActions {
             return
         }
 
-        // 「进入聆听模式」提示音:非会议靠声音、会议靠唤醒词;同段会话不重复响,静默 25s 后重置。
+        // 「进入聆听模式」提示音:非会议靠声音、会议靠唤醒词;同段会话不重复响,聆听窗口静默超时后重置(下次开口重新响)。
         let nowTS = Date()
-        if nowTS.timeIntervalSince(state.lastVoiceActivityAt) > 25 { state.voiceListeningArmed = false }
+        if nowTS.timeIntervalSince(state.lastVoiceActivityAt) > state.voiceListeningWindowSeconds { state.voiceListeningArmed = false }
         state.lastVoiceActivityAt = nowTS
         let entersListening = ambientGated ? containsWake : true
         if entersListening, !state.voiceListeningArmed {
@@ -288,6 +330,7 @@ enum LingShuPerceptionActions {
             // 连续 LOOP + 灵枢正说话/在跑:这是「中途插话」——先掐掉正在播的 TTS,再把整句交给中枢
             // (submitTextInput→在岗会话会把它注入正在跑的那条脑回路,答完再续)。
             if voice.isSpeaking || state.hasActiveModelCall { voice.stopSpeaking() }
+            state.voiceListeningArmed = false   // 有效内容已收口提交,关闭聆听窗口(状态机:我在听 → 处理中);下次开口重新响铃
             lingShuControlLog("voice: 闸门=respond callMode=\(state.isMinimalVoiceMode) standing=\(state.isStandingPersonOnDuty) → 提交「\(String(command.prefix(30)))」")
             _ = state.submitVoiceTranscript(command)
         case .ignore(let reason):

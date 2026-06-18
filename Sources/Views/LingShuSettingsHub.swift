@@ -84,7 +84,12 @@ struct LingShuSettingsHub: View {
                     }
                 case .skills:
                     ScrollView {
-                        LingShuSkillsPanel(state: state).padding(22)
+                        VStack(alignment: .leading, spacing: 24) {
+                            LingShuSkillsPanel(state: state)
+                            Divider()
+                            LingShuExtensionsPanel(state: state)   // P5 统一扩展管理(技能+连接器:启停/权限/效能)
+                        }
+                        .padding(22)
                     }
                 case .connectors:
                     LingShuConnectorsHub(state: state)

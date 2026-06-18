@@ -87,6 +87,13 @@ final class LingShuVoiceCallController: ObservableObject {
         let level = voice.inputLevel
         let now = Date()
 
+        // 状态机:「我在听」窗口内一直没有效语音活动 → 复位 armed,回到干净待机
+        // (下次喊唤醒词/开口会重新响铃、重开窗口)。这是"我在听 →(无有效内容)→ 待机"那条变体的落地。
+        if state.voiceListeningArmed,
+           now.timeIntervalSince(state.lastVoiceActivityAt) >= state.voiceListeningWindowSeconds {
+            state.voiceListeningArmed = false
+        }
+
         adaptiveVAD.observe(level: level, isCapturingSpeech: hasCapturedSpeech || voice.isSpeakingOrQueued)
 
         // 灵枢正在回应（TTS）：**不再停麦**——靠 AEC(setVoiceProcessingEnabled)消掉灵枢自己的声音,
@@ -97,10 +104,13 @@ final class LingShuVoiceCallController: ObservableObject {
             if !voice.isRecording {   // 保持麦克风常开(不停),以便边播边听
                 LingShuPerceptionActions.resumeListening(state: state, voice: voice, perceptionGateway: perceptionGateway)
             }
-            if level > adaptiveVAD.bargeInThreshold {
+            // 电平打断只在 AEC 真生效时做:没有 AEC 时灵枢自己 TTS 的回声电平就常超过打断门槛(实测 0.22~0.25 > 0.20),
+            // 会自己打断自己。半双工下不靠电平 barge-in(发声中根本不接受插话,见 handleVoiceTranscript 的硬闸)。
+            if voice.isVoiceProcessingActive, level > adaptiveVAD.bargeInThreshold {
                 if let started = bargeInStartedAt {
                     if now.timeIntervalSince(started) > 0.7 {
                         voice.stopSpeaking()   // 主人确实在说话 → 打断灵枢的 TTS,接住主人这句
+                        lingShuControlLog("voice/barge: VAD电平打断成功 lvl=\(String(format: "%.2f", level)) thr=\(String(format: "%.2f", adaptiveVAD.bargeInThreshold))")
                         bargeInStartedAt = nil
                         hasCapturedSpeech = true   // 已在捕获主人这句(不清空,收口后提交)
                         silenceStartedAt = nil
@@ -108,6 +118,9 @@ final class LingShuVoiceCallController: ObservableObject {
                     }
                 } else {
                     bargeInStartedAt = now
+                    // 诊断:电平已过打断门槛、开始计时(需持续 0.7s 才真打断)。看不到这行=电平根本没到门槛
+                    // (AEC 把声音连同回声一起压没了 / 门槛太高 / inputLevel 没更新)→ Path A 失灵。
+                    lingShuControlLog("voice/barge: VAD疑似插话起算 lvl=\(String(format: "%.2f", level)) thr=\(String(format: "%.2f", adaptiveVAD.bargeInThreshold)) noiseFloor=\(String(format: "%.2f", adaptiveVAD.noiseFloor))")
                 }
             } else {
                 bargeInStartedAt = nil

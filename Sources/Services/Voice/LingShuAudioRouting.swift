@@ -56,6 +56,70 @@ enum LingShuAudioRouting {
         return buffers.contains { $0.mNumberChannels > 0 }
     }
 
+    // MARK: - 诊断:设备全景(定位"开 VPIO 绑到怪设备导致没麦克风音频")
+
+    static func deviceName(_ id: AudioDeviceID) -> String { deviceString(id, kAudioDevicePropertyDeviceNameCFString) }
+
+    /// 系统当前默认**输入**设备 id。
+    static func defaultInputDeviceID() -> AudioDeviceID { defaultDeviceID(kAudioHardwarePropertyDefaultInputDevice) }
+    /// 系统当前默认**输出**设备 id。
+    static func defaultOutputDeviceID() -> AudioDeviceID { defaultDeviceID(kAudioHardwarePropertyDefaultOutputDevice) }
+
+    private static func defaultDeviceID(_ selector: AudioObjectPropertySelector) -> AudioDeviceID {
+        var id = AudioDeviceID(0)
+        var size = UInt32(MemoryLayout<AudioDeviceID>.size)
+        var addr = AudioObjectPropertyAddress(mSelector: selector, mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain)
+        _ = AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &addr, 0, nil, &size, &id)
+        return id
+    }
+
+    /// 某设备某 scope(输入/输出)的总声道数。
+    static func channelCount(_ id: AudioDeviceID, scope: AudioObjectPropertyScope) -> Int {
+        var addr = AudioObjectPropertyAddress(mSelector: kAudioDevicePropertyStreamConfiguration, mScope: scope, mElement: kAudioObjectPropertyElementMain)
+        var size: UInt32 = 0
+        guard AudioObjectGetPropertyDataSize(id, &addr, 0, nil, &size) == noErr, size > 0 else { return 0 }
+        let buf = UnsafeMutableRawPointer.allocate(byteCount: Int(size), alignment: MemoryLayout<AudioBufferList>.alignment)
+        defer { buf.deallocate() }
+        guard AudioObjectGetPropertyData(id, &addr, 0, nil, &size, buf) == noErr else { return 0 }
+        let buffers = UnsafeMutableAudioBufferListPointer(buf.assumingMemoryBound(to: AudioBufferList.self))
+        return buffers.reduce(0) { $0 + Int($1.mNumberChannels) }
+    }
+
+    /// 内建麦克风(传输类型=Built-in 且有输入声道)的设备 id;找不到返回 nil。
+    static func builtInInputDeviceID() -> AudioDeviceID? {
+        for id in allDeviceIDs() where channelCount(id, scope: kAudioDevicePropertyScopeInput) > 0 {
+            if transportType(id) == kAudioDeviceTransportTypeBuiltIn { return id }
+        }
+        return nil
+    }
+
+    private static func transportType(_ id: AudioDeviceID) -> UInt32 {
+        var t: UInt32 = 0
+        var size = UInt32(MemoryLayout<UInt32>.size)
+        var addr = AudioObjectPropertyAddress(mSelector: kAudioDevicePropertyTransportType, mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain)
+        _ = AudioObjectGetPropertyData(id, &addr, 0, nil, &size, &t)
+        return t
+    }
+
+    private static func allDeviceIDs() -> [AudioDeviceID] {
+        var size: UInt32 = 0
+        var addr = AudioObjectPropertyAddress(mSelector: kAudioHardwarePropertyDevices, mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain)
+        guard AudioObjectGetPropertyDataSize(AudioObjectID(kAudioObjectSystemObject), &addr, 0, nil, &size) == noErr else { return [] }
+        var ids = [AudioDeviceID](repeating: 0, count: Int(size) / MemoryLayout<AudioDeviceID>.size)
+        guard AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &addr, 0, nil, &size, &ids) == noErr else { return [] }
+        return ids
+    }
+
+    /// 把设备全景打进诊断日志:默认输入/输出是谁、各几声道、所有带输入的设备列表、内建麦 id。
+    /// 用来坐实"VPIO 绑到的 dev 是不是聚合/虚拟设备、真内建麦是哪个"。
+    static func logDeviceLandscape() {
+        let di = defaultInputDeviceID(), dor = defaultOutputDeviceID()
+        lingShuControlLog("voice/devices: 默认输入 id=\(di)「\(deviceName(di))」inCh=\(channelCount(di, scope: kAudioDevicePropertyScopeInput)) | 默认输出 id=\(dor)「\(deviceName(dor))」outCh=\(channelCount(dor, scope: kAudioDevicePropertyScopeOutput)) | 内建麦 id=\(builtInInputDeviceID().map(String.init) ?? "无")")
+        for id in allDeviceIDs() where channelCount(id, scope: kAudioDevicePropertyScopeInput) > 0 {
+            lingShuControlLog("voice/devices:   输入设备 id=\(id)「\(deviceName(id))」inCh=\(channelCount(id, scope: kAudioDevicePropertyScopeInput))")
+        }
+    }
+
     private static func deviceString(_ id: AudioDeviceID, _ selector: AudioObjectPropertySelector) -> String {
         var addr = AudioObjectPropertyAddress(mSelector: selector, mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain)
         var cf: CFString = "" as CFString

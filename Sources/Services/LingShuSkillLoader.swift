@@ -26,6 +26,8 @@ enum LingShuSkillLoader {
     struct LoadedSkill: Equatable, Sendable {
         let profile: LingShuExpertProfile
         let triggers: [String]
+        /// P1 声明式权限作用域(从 frontmatter 解析;没声明=最小权限)。
+        var manifest: LingShuPluginManifest = .init(id: "plugin", name: "未命名插件", version: "1.0", providedTools: [], permissions: .init(), source: .user)
     }
 
     /// 解析单个技能 Markdown。frontmatter 必填 title；缺小节用空集合兜底。
@@ -79,7 +81,8 @@ enum LingShuSkillLoader {
             bundledScript: bundledScript,
             bundledScriptName: bundledScriptName
         )
-        return .init(profile: profile, triggers: triggers)
+        let manifest = LingShuPluginManifest.from(frontmatter: frontmatter, source: .user)
+        return .init(profile: profile, triggers: triggers, manifest: manifest)
     }
 
     /// 暴露候选 skill markdown 里**原始**(未过安全门)的自带脚本——供自发现(`LingShuSkillAcquisition`)
@@ -160,10 +163,15 @@ final class LingShuCompositeExpertRegistry: LingShuExpertProfileProviding, @unch
     private let builtIn = LingShuExpertProfileRegistry()
     private let lock = NSLock()
     private var userSkills: [LingShuSkillLoader.LoadedSkill]
+    /// P4:被用户停用的 skill id(锁保护快照,非 actor 跨界)。state 在启动/切换时灌入 `LingShuExtensionRegistry.disabledIDs`。
+    private var disabledSkillIDs: Set<String> = []
 
     init(userSkills: [LingShuSkillLoader.LoadedSkill] = LingShuSkillLoader.loadSkills()) {
         self.userSkills = userSkills
     }
+
+    /// 更新停用集合(扩展面板切换/启动时调)。停用的 skill 不再被匹配/应用。
+    func setDisabledSkillIDs(_ ids: Set<String>) { lock.lock(); disabledSkillIDs = ids; lock.unlock() }
 
     /// 热重载:从磁盘重新读用户 Skills 目录(dreaming 固化 / 用户新增 .md 后调用,免重启即时生效)。
     /// `directory` 仅测试注入用;生产用默认目录。
@@ -174,7 +182,8 @@ final class LingShuCompositeExpertRegistry: LingShuExpertProfileProviding, @unch
 
     private var snapshotUserSkills: [LingShuSkillLoader.LoadedSkill] {
         lock.lock(); defer { lock.unlock() }
-        return userSkills
+        let disabled = disabledSkillIDs
+        return userSkills.filter { !disabled.contains($0.profile.id) }   // P4:停用的 skill 不参与匹配/应用
     }
 
     func profile(for taskText: String) -> LingShuExpertProfile {

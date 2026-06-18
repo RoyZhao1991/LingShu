@@ -45,6 +45,7 @@ extension LingShuState {
             }
             postOrchestratorChat(recordID: recordID, dispatched: "✅ \(summary)", spawned: "✅ 子任务「\(objective)」完成:\(summary)")
             briefMainThread("子任务「\(objective)」已完成:\(summary.prefix(200))")
+            promoteSubtaskKnowledge(objective: objective, summary: summary)   // M3:子线程知识蒸馏进常驻主脑(v2),事后主线程可召回
         case .blocked(let id, let objective, let question):
             let recordID = agentSubTaskRecords[id]
             if let recordID {
