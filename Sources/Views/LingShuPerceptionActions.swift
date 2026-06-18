@@ -237,6 +237,21 @@ enum LingShuPerceptionActions {
             return
         }
 
+        // **严格唤醒词模式(自主/在岗,完全照小爱/小度,用户定调 2026-06-18,覆盖"单人连续不唤醒")**:
+        // 必须先喊「灵枢」才进入聆听/才能打断;**没唤醒词、且不在"唤醒后的聆听窗口"内 → 一律忽略**(不听、不打断、不提交)。
+        // 喊「灵枢」→"叮"→ 进聆听窗口,窗口内说的下一句指令(可不带唤醒词)才被接收;窗口超时无指令 → 回待机(需重新喊)。
+        let strictWakeMode = state.isStandingPersonOnDuty
+        let armedWindowOpen = state.voiceListeningArmed
+            && Date().timeIntervalSince(state.lastVoiceActivityAt) < state.voiceListeningWindowSeconds
+        if strictWakeMode, !containsWake, !armedWindowOpen {
+            state.prompt = ""
+            if result.isFinal {
+                state.missionStatus = "喊一声「\(effectiveWakeWord(for: state))」再说。"
+                lingShuControlLog("voice/barge: 严格唤醒模式忽略(无唤醒词·未在聆听窗)「\(cleanedText.prefix(20))」")
+            }
+            return
+        }
+
         // 唤醒词打断(barge-in):点名「灵枢」且此刻在说/在跑 → **立刻**掐掉正在播的语音 + 中止在飞回合,
         // 不等收口(partial 即触发,小爱/小度式实时打断)、不要求纯唤醒。两道防自激护栏:
         //  ① 唤醒词须**领头**且其后指令很短(command ≤ 8 字)——真插话「灵枢/灵枢停一下」如此,长回声里夹个同音字不会(它的 command 是整段长串);
@@ -292,11 +307,13 @@ enum LingShuPerceptionActions {
         let nowTS = Date()
         if nowTS.timeIntervalSince(state.lastVoiceActivityAt) > state.voiceListeningWindowSeconds { state.voiceListeningArmed = false }
         state.lastVoiceActivityAt = nowTS
-        let entersListening = ambientGated ? containsWake : true
+        // 严格唤醒模式(自主/在岗)或会议:只有**唤醒词**才"叮"+进聆听;窗口内的后续指令(无唤醒词)不重复响。
+        // 非严格的极简通话(显式拨号 1:1):靠开口进入(连续对话)。
+        let entersListening = (strictWakeMode || ambientGated) ? containsWake : true
         if entersListening, !state.voiceListeningArmed {
             state.voiceListeningArmed = true
             LingShuCueSound.playWakeChime()
-            lingShuControlLog("voice: 进入聆听模式(\(ambientGated ? "唤醒词" : "声音"))→ 提示音")
+            lingShuControlLog("voice: 进入聆听模式(\((strictWakeMode || ambientGated) ? "唤醒词" : "声音"))→ 提示音")
         }
 
         // 连续模式即便对话态标志没置上也照收(显式上岗/通话);非连续模式仍需进对话态。
