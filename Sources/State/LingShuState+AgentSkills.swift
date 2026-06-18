@@ -22,12 +22,67 @@ extension LingShuState {
         guard let script = profile.bundledScript, let name = profile.bundledScriptName else { return nil }
         let url = URL(fileURLWithPath: directory).appendingPathComponent(name)
         guard (try? script.write(to: url, atomically: true, encoding: .utf8)) != nil else { return nil }
+        // P3:记录"物化脚本路径 → 该 skill 声明的权限",供 run_command 跑它时经 sandbox-exec confine(无声明=最小权限)。
+        let perms = (expertProfileRegistry as? LingShuCompositeExpertRegistry)?.permissions(forProfileID: profile.id) ?? LingShuPluginPermissions()
+        materializedSkillScripts[url.path] = perms
         // 自发现高风险 skill:其脚本被隔离时,把"路径→风险点"登记到运行期隔离表,
         // 首次 run_command 跑它会强制弹审批(把 LLM 风险点摆给用户裁决),即便会话已"完全授权"。
         if let notes = LingShuSkillAcquisition.quarantinedRiskNotes(forSkillID: profile.id) {
             quarantinedScriptPaths[url.path] = (skillID: profile.id, notes: notes)
         }
         return url.path
+    }
+
+    // MARK: - P2 动态工具:skill 的 provides 接成 live agent 工具
+
+    /// P2:把**启用**的用户 skill 声明的 `provides:` 工具接成真 `LingShuAgentTool`——每个工具调用时把入参 JSON
+    /// 经 stdin 灌进该 skill 的 runner 脚本(`<解释器> <脚本> <工具名>`),读 stdout 当结果,脚本经 P3 沙箱按声明权限跑。
+    /// 这才让"插件提供工具"真正生效(此前 `provides` 只被解析、从不成为可调用工具)。
+    /// 在主 agent 会话工具装配处并入;停用的 skill(P4)由 `providedToolSkills()` 自动排除。
+    func userSkillProvidedTools() -> [LingShuAgentTool] {
+        guard let registry = expertProfileRegistry as? LingShuCompositeExpertRegistry else { return [] }
+        var tools: [LingShuAgentTool] = []
+        for skill in registry.providedToolSkills() {
+            guard let script = skill.profile.bundledScript,
+                  let scriptName = skill.profile.bundledScriptName,
+                  let runnerPath = materializeRunner(script: script, name: scriptName, skillID: skill.profile.id)
+            else { continue }
+            let interpreter = Self.runnerInterpreter(forScriptNamed: scriptName)
+            let specs = skill.manifest.providedTools.map { name in
+                LingShuPluginToolProvider.ToolSpec(
+                    name: name,
+                    description: "由插件「\(skill.profile.title)」提供的工具;入参以 JSON 传入,返回脚本输出。"
+                )
+            }
+            tools += LingShuPluginToolProvider.makeTools(
+                manifest: skill.manifest, specs: specs,
+                runnerExecutable: interpreter, runnerArguments: [runnerPath], sandbox: true
+            )
+        }
+        return tools
+    }
+
+    /// 把 skill 的 runner 脚本物化到稳定目录(`~/Library/Application Support/LingShu/Skills/runners/<skillID>/`),
+    /// 供 P2 动态工具在任意回合调用(独立于 apply_skill 的工作目录物化)。返回脚本绝对路径,写失败返回 nil。
+    private func materializeRunner(script: String, name: String, skillID: String) -> String? {
+        let dir = LingShuSkillLoader.defaultDirectory
+            .appendingPathComponent("runners", isDirectory: true)
+            .appendingPathComponent(skillID, isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let url = dir.appendingPathComponent(name)
+        guard (try? script.write(to: url, atomically: true, encoding: .utf8)) != nil else { return nil }
+        return url.path
+    }
+
+    /// 按 runner 脚本扩展名选解释器(.py→python3 / .sh→zsh / .js→node);未知按 python3 兜底。
+    nonisolated static func runnerInterpreter(forScriptNamed name: String) -> String {
+        let lower = name.lowercased()
+        if lower.hasSuffix(".sh") { return "/bin/zsh" }
+        if lower.hasSuffix(".js") {
+            for p in ["/usr/local/bin/node", "/opt/homebrew/bin/node"] where FileManager.default.isExecutableFile(atPath: p) { return p }
+            return "/usr/bin/env"   // 兜底:env node(若 PATH 有)
+        }
+        return "/usr/bin/python3"
     }
 
     /// 当前输入确定性命中「真 skill」(用户/策展,排除内置兜底)时的回合提示语,供回合开头插入。

@@ -173,6 +173,18 @@ final class LingShuCompositeExpertRegistry: LingShuExpertProfileProviding, @unch
     /// 更新停用集合(扩展面板切换/启动时调)。停用的 skill 不再被匹配/应用。
     func setDisabledSkillIDs(_ ids: Set<String>) { lock.lock(); disabledSkillIDs = ids; lock.unlock() }
 
+    /// P3:按 profile.id 取该用户 skill 声明的权限(P1),供物化脚本经 sandbox-exec confine。非用户 skill 返回 nil。
+    func permissions(forProfileID id: String) -> LingShuPluginPermissions? {
+        lock.lock(); defer { lock.unlock() }
+        return userSkills.first(where: { $0.profile.id == id })?.manifest.permissions
+    }
+
+    /// P2:**启用**的、且声明了 `provides:` 动态工具 + 带 runner 脚本(bundledScript)的用户 skill。
+    /// 供把它们的 `provides` 工具接成 live agent 工具(经子进程 runner + P3 沙箱)。停用的(P4)自动排除。
+    func providedToolSkills() -> [LingShuSkillLoader.LoadedSkill] {
+        snapshotUserSkills.filter { !$0.manifest.providedTools.isEmpty && $0.profile.bundledScript != nil }
+    }
+
     /// 热重载:从磁盘重新读用户 Skills 目录(dreaming 固化 / 用户新增 .md 后调用,免重启即时生效)。
     /// `directory` 仅测试注入用;生产用默认目录。
     func reloadUserSkills(from directory: URL = LingShuSkillLoader.defaultDirectory) {

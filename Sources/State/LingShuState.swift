@@ -412,6 +412,9 @@ final class LingShuState: ObservableObject {
     /// 自发现高风险 skill 脚本的隔离表(运行期):materialize 时按 skillID 隔离清单填入,
     /// key=脚本绝对路径、value=skillID + 风险点;命令引用它时强制弹审批(即便已"完全授权")。
     var quarantinedScriptPaths: [String: (skillID: String, notes: [String])] = [:]
+    /// P3 沙箱:apply_skill 物化过的 skill 脚本路径 → 该 skill 声明的权限(P1)。run_command 跑到这些脚本时,
+    /// 按声明权限(+工作目录写,让生成器能产出)经 sandbox-exec 关进受限子进程,而非无沙箱裸跑。无声明=最小权限。
+    var materializedSkillScripts: [String: LingShuPluginPermissions] = [:]
     var isRestoringChatHistory = false
     var chatHistoryPersistTask: Task<Void, Never>?
     var persistedConversationDigest = ""
@@ -1059,9 +1062,15 @@ final class LingShuState: ObservableObject {
             let triage = await self.classifyDispatch(trimmedPrompt)
             switch triage.kind {
             case .reply:
-                if let rid = triage.replyRecordID, self.agentSubTaskRecords.values.contains(rid) {
+                // 只续接**仍在进行/等待**的派发任务。已完成(completed)/已直答(answered)的任务不该被"回复"再续跑——
+                // 否则会把已收尾的隔离会话再跑进垃圾态(如 demo 脚本子会话耗尽 → 泄出内部占位符"(脚本耗尽)")。
+                // 问一件**已完成**派发任务的后续 = 普通提问,留主线程(其结论已经记忆/子→主可召回)。通用,不限 demo。
+                let replyActive = triage.replyRecordID
+                    .flatMap { id in self.taskExecutionRecords.first(where: { $0.id == id }) }
+                    .map { $0.status != .completed && $0.status != .answered } ?? false
+                if let rid = triage.replyRecordID, self.agentSubTaskRecords.values.contains(rid), replyActive {
                     self.continueDispatchedThread(prompt: trimmedPrompt, recordID: rid)
-                } else {   // 兜底:线程没了 → 当对话留主线程
+                } else {   // 兜底:线程没了/已完成 → 当对话留主线程
                     _ = self.runMainAgentTurn(prompt: trimmedPrompt, taskRecordID: self.createTaskExecutionRecord(for: trimmedPrompt))
                 }
             case .task:

@@ -92,6 +92,17 @@ extension LingShuState {
                     effectiveAllowShell = (decision != .deny)
                 }
             }
+            // P3 沙箱接线:命令引用了 apply_skill 物化的 skill 脚本 → 按其声明权限(+工作目录写)经 sandbox-exec
+            // 关进受限子进程跑(未审脚本视为不可信:只放声明的写路径+工作目录,网络声明才放,读放宽)。
+            // 而非无沙箱裸跑。沙箱不可用(无 /usr/bin/sandbox-exec)则退回裸跑(诚实降级)。
+            if tool == "run_command", effectiveAllowShell, LingShuPluginSandbox.isAvailable,
+               let cmd = execArgs["command"],
+               let hit = materializedSkillScripts.first(where: { cmd.contains(($0.key as NSString).lastPathComponent) }),
+               let wrapped = Self.sandboxWrapCommand(cmd, permissions: hit.value, workingDirectory: workingDirectory) {
+                execArgs["command"] = wrapped
+                appendTrace(kind: .system, actor: "沙箱", title: "P3 受限执行",
+                            detail: "skill 脚本经 sandbox-exec 按声明权限 confine:写限工作目录+声明路径、\(hit.value.network.isEmpty ? "断网" : "放行声明域")、读放宽。")
+            }
             result = await toolExecutor.execute(
                 .init(tool: tool, arguments: execArgs),
                 workingDirectory: workingDirectory,
@@ -151,6 +162,20 @@ extension LingShuState {
     }
 
     /// 工具卡摘要 / 参数美化已拆为独立模块 → Sources/Support/LingShuTaskMessageFormatting.swift。
+
+    /// P3:把一条 shell 命令包成 `sandbox-exec` 受限执行。profile = skill 声明权限 + **工作目录写**(生成器要能产出),
+    /// 由 `LingShuPluginSandbox` 生成。SBPL 多行,内联进命令转义易错 → 写临时 profile 文件用 `-f` 引用;
+    /// 原命令单引号转义后交内层 zsh 跑。返回包好的命令字符串;写 profile 失败返回 nil(调用方退回裸跑)。
+    nonisolated static func sandboxWrapCommand(_ command: String, permissions: LingShuPluginPermissions, workingDirectory: String) -> String? {
+        var perms = permissions
+        perms.fileWrite.append(workingDirectory)   // 让 skill 生成器把产出写进工作目录(否则 deny-default 会挡住)
+        let profile = LingShuPluginSandbox.profile(for: perms)
+        let profileURL = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("lingshu-sbx-\(UUID().uuidString.prefix(8)).sb")
+        guard (try? profile.write(to: profileURL, atomically: true, encoding: .utf8)) != nil else { return nil }
+        let esc = command.replacingOccurrences(of: "'", with: "'\\''")   // 标准单引号转义
+        return "/usr/bin/sandbox-exec -f '\(profileURL.path)' /bin/zsh -c '\(esc)'"
+    }
 
     /// 解包 MCP 工具参数：原生 function-calling 把真实参数塞在 arguments_json 信封里，
     /// 这里解析回真实参数 dict 透传给外部 server；非信封形式（文本协议回退）原样返回。

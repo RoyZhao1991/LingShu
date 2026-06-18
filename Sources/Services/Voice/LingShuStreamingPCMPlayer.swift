@@ -52,6 +52,22 @@ final class LingShuStreamingPCMPlayer: @unchecked Sendable {
         // scheduleBuffer 在节点未播放时也能正常入队,play() 一调即无缝按序播出。
     }
 
+    /// 安全起播:`AVAudioPlayerNode.play()` 在引擎未运行时会抛 ObjC 异常(`required condition is false: IsRunning()`),
+    /// 直接 abort 整个进程,且 Swift try/catch 兜不住。这里在锁内先确认引擎在运行才 play——引擎被系统
+    /// (音频路由/设备变更触发 AVAudioEngineConfigurationChange、被拔设备)或并发 stop 停掉时,先尝试重启;
+    /// 重启不了就放弃本次起播(顶多这段不出声),绝不让未捕获异常把 App 崩掉。
+    /// 这是覆盖"所有令引擎停摆诱因"的通用防护,不针对任何具体场景。
+    private func safePlay() {
+        lock.lock()
+        defer { lock.unlock() }
+        guard started, !stopped else { return }
+        if !engine.isRunning {
+            do { try engine.start() } catch { return }   // 重启失败就放弃本次,不崩
+        }
+        guard engine.isRunning else { return }
+        node.play()
+    }
+
     /// 若设置了首选输出设备(如虚拟麦),把引擎输出单元定向到它;否则用系统默认。
     private func applyPreferredOutputDevice() {
         guard var deviceID = LingShuAudioRouting.preferredOutputDeviceID,
@@ -102,7 +118,7 @@ final class LingShuStreamingPCMPlayer: @unchecked Sendable {
         }
         emitLevel = nodePlaying
         lock.unlock()
-        if startNow { node.play() }
+        if startNow { safePlay() }
         if emitLevel { onOutputLevel?(level) }
     }
 
@@ -119,7 +135,7 @@ final class LingShuStreamingPCMPlayer: @unchecked Sendable {
         }
         lock.unlock()
         if startNow {
-            node.play()
+            safePlay()
             onOutputLevel?(level)
         }
     }

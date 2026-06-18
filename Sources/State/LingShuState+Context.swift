@@ -4,6 +4,21 @@ import Foundation
 /// 从 LingShuState 主文件拆出，守住单文件聚焦。
 @MainActor
 extension LingShuState {
+    /// 组装发给 agent 的一轮文本 = guidance + **每轮自动召回的长期记忆(v2 知识图谱)** + prompt。
+    /// 记忆 additive 注入本轮**动态后缀**(拼进新 user 消息,不碰系统前缀/历史那段缓存,前缀缓存安全);
+    /// 被动召回用 reinforceHits=false(不每轮强化 top-K → 否则置信虚高、园丁衰减失效)。
+    /// 根治"召回纯靠模型记得调 recall_memory、不调就漏"(招牌知识图谱被旁路):现在每轮必查图谱、把相关原子事实
+    /// 摆到模型眼前;模型仍可再调 recall_memory 深挖。主会话/自主运行共用的 driveAgentDelivery 走此组装。
+    func memoryAugmentedSendText(prompt: String, guidance: String?) -> String {
+        var blocks: [String] = []
+        if let guidance, !guidance.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { blocks.append(guidance) }
+        if let memory = knowledgeGraph.recallText(prompt, limit: 4, reinforceHits: false) {
+            blocks.append("【长期记忆·自动召回(相关就用,与本轮无关可忽略)】\n\(memory)")
+        }
+        blocks.append(prompt)
+        return blocks.joined(separator: "\n\n")
+    }
+
     /// 有有效感知信号时注入对话上下文；情境上下文（时间/时段/连续使用时长/后台任务）常驻注入。
     /// 怎么用这些情境（深夜提醒休息、结合环境打趣）由模型自行判断，不写死策略。
     func composedPromptHint(baseMemory: String) -> String {

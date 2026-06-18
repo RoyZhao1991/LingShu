@@ -11,8 +11,22 @@ struct LingShuToolResult: Equatable, Sendable {
     var success: Bool
     var output: String
 
+    /// 极简展示版(轨迹/旧日志用):砍到 400 字。**绝不能用它回模型**(见 modelText)。
     var journalText: String {
         "\(success ? "✓" : "✗") \(tool)：\(String(output.prefix(400)))"
+    }
+
+    /// 回给**模型**的工具结果:成败标记 + 输出。各工具已在 execute 内按需截断(run_command 8KB / read_file 按行 /
+    /// list_directory 120 项 / fetch_url 8KB),这里只加一道总封顶防单条结果撑爆上下文。
+    /// **历史 bug**:agent 工具桥曾用 `journalText`(400 字展示版)回模型 → 命令/文件输出超 400 字模型就看不全,
+    /// 于是反复换法重跑看全(过度迭代/空转/气泡久 loading 的根因)。模型必须拿到完整(按需截断后的)输出。
+    var modelText: String {
+        let marker = success ? "✓" : "✗"
+        let ceiling = 12000
+        if output.count > ceiling {
+            return "\(marker) \(tool)：\n\(String(output.prefix(ceiling)))\n…(输出较长,已截断到前 \(ceiling) 字;要看其余用 read_file 的 offset/limit 续读,或让命令只输出关键部分)"
+        }
+        return "\(marker) \(tool)：\n\(output)"
     }
 }
 

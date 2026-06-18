@@ -134,7 +134,7 @@ extension LingShuState {
             + previewTools()
             + computerControlTools()   // 计算机直接操作四肢(授权在 call-time 判,计划 §9)
             + backgroundWatchTools()   // 后台守候 + 完成即续(自动识别需求→无人值守推进)
-        ))
+        ))   // 注:P2 用户 skill 的 provides 工具已并入 agentBuiltinTools(全会话共享),此处不再单列
         let system = """
         你是灵枢(寓意"灵慧之中枢")。\(languageResponseRule())
         - **自我认知(最根本,先把自己当成一个"人"):你是一个能独立做事的灵枢,不是一问一答的聊天机器人。**
@@ -181,7 +181,8 @@ extension LingShuState {
     /// 通用交付驱动(主会话与自主运行共用):把 prompt 投给给定 agent 会话跑完循环,再过验收门。
     /// guidance(如命中的 skill 提示)只随本回合发给模型,不进验收门的 userRequest(保持核对口径干净)。
     func driveAgentDelivery(session: LingShuAgentSession, prompt: String, guidance: String? = nil, taskRecordID: String?) async -> LingShuAgentRunResult {
-        let sent = guidance.map { "\($0)\n\n\(prompt)" } ?? prompt
+        // 发给本轮的文本 = guidance + 每轮自动召回的长期记忆 + prompt(记忆注入组装见 LingShuState+Context)。
+        let sent = memoryAugmentedSendText(prompt: prompt, guidance: guidance)
         let initial = await session.send(sent)
         return await verifyAndContinue(session: session, result: initial, userRequest: prompt, taskRecordID: taskRecordID)
     }
@@ -324,7 +325,7 @@ extension LingShuState {
                 mcpToolNames: mcpToolNames,
                 baseAllowShell: allowShell
             )
-            return result.journalText
+            return result.modelText   // 回模型用完整输出(各工具已按需截断);绝不用 journalText 的 400 字展示版,否则模型看不全→反复重跑(过度迭代根因)
         }
         // 只读模式仅暴露读类原语(不含 write_file/run_command);其余模式暴露全部内建原语。
         let builtinDefs = executionPolicy == .readOnly
@@ -346,7 +347,11 @@ extension LingShuState {
         // 本地固化 skill(组合注册表:用户 > 策展 > 内置)经 apply_skill 暴露给所有 agent 会话;
         // 只读模式不挂(物化生成器=写盘)。详见 LingShuState+AgentSkills。
         let skillTools = executionPolicy == .readOnly ? [] : [applySkillTool()]
-        return builtinTools + externalTools + skillTools
+        // P2:启用的用户 skill 声明的 provides 工具(runner 子进程 + P3 沙箱)接成 live 工具。
+        // 放在 agentBuiltinTools 里 → 主会话/派发子任务/triage/自主运行**所有会话**都拿得到(子任务也能调插件工具)。
+        // 只读模式不挂(runner 跑脚本=副作用)。
+        let pluginTools = executionPolicy == .readOnly ? [] : userSkillProvidedTools()
+        return builtinTools + externalTools + skillTools + pluginTools
     }
 
 

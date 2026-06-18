@@ -47,12 +47,14 @@ final class LingShuKnowledgeGraph {
         }
     }
 
-    /// 召回成可读文本(非敏感才出);供 recall_memory 工具 additive 追加。无命中返回 nil。
-    /// **M2 召回反哺**:把召回到的 note 轻度强化(置信微增 + 刷新核验)——被用到的越用越稳,久不召回的随衰减沉底。
-    func recallText(_ query: String, limit: Int = 6) -> String? {
+    /// 召回成可读文本(非敏感才出);供 recall_memory 工具 + 每轮自动注入 additive 追加。无命中返回 nil。
+    /// **M2 召回反哺**(`reinforceHits`):把召回到的 note 轻度强化(置信微增 + 刷新核验)——被用到的越用越稳,久不召回的随衰减沉底。
+    /// 主动调用(recall_memory 工具)reinforce=true;**每轮被动自动注入用 reinforce=false**——否则每轮都强化 top-K
+    /// 会让置信虚高、lastVerified 永远新鲜、园丁衰减/剪枝失效。
+    func recallText(_ query: String, limit: Int = 6, reinforceHits: Bool = true) -> String? {
         let hits = recall(query, limit: limit).filter { !$0.sensitive }
         guard !hits.isEmpty else { return nil }
-        reinforce(ids: hits.map { $0.id })
+        if reinforceHits { reinforce(ids: hits.map { $0.id }) }
         return "知识图谱「\(query)」:\n" + hits.map { note in
             "- [\(note.kind.rawValue)] \(note.title):\(note.body.prefix(120))"
         }.joined(separator: "\n")
