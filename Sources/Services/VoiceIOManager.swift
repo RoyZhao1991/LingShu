@@ -84,6 +84,15 @@ final class VoiceIOManager: ObservableObject {
     @Published var micSilentWarning: String?
     /// 最近一次音频 tap 真收到缓冲的时刻(看门狗据此判"引擎在跑但麦克风没进音")。
     var lastInputBufferAt: Date = .distantPast
+    /// `AVAudioEngineConfigurationChange` 观察者:外接/虚拟音频设备变更会让引擎自动停(苹果要求 app 自行重启,
+    /// 否则就一直停=麦克风死)。监听到就有界自动重启,自愈"引擎启动后即死"。
+    private var configChangeObserver: NSObjectProtocol?
+    /// 配置变更自动重启的连续计数(有界,防虚拟音频软件持续churn时死循环重启)。
+    private var configRestartAttempts = 0
+    /// 静默检测任务:引擎在跑但 tap 长时间收不到缓冲 → 浮出可见告警(只提示,**绝不关 AEC**——
+    /// 旧看门狗就是误关 AEC 才被删的)。根治"麦克风被录屏/虚拟音频软件占用 / VPIO 绑到畸形聚合设备 →
+    /// 喊灵枢无反应却一直静默显示待机中"。
+    private var micSilenceMonitor: Task<Void, Never>?
     /// 静音收口:最近一次 ASR partial 更新的时刻。partial 文本静默超过 `silenceFinalizeSeconds`
     /// 就**强制把当前转写当一句收口提交**,不傻等 SFSpeech 的 isFinal(它常迟迟不来 → 卡在"我在听"不进思考)。
     var lastPartialAt: Date = .distantPast
@@ -279,6 +288,10 @@ final class VoiceIOManager: ObservableObject {
         if !inputNode.isVoiceProcessingEnabled {
             try? inputNode.setVoiceProcessingEnabled(true)   // AEC 强制常开,绝不再自动关
         }
+        // 注:实测 VPIO 无法从 App 侧控设备——钉内建麦(开前被重建聚合覆盖/开后把输入打死)、钉自建干净聚合
+        // (开前被 VPIO 覆盖回 7ch/开后属性锁死 st=-10851)四种都不行。VPIO 固定用它自建的 VPAUAggregate
+        // (从系统设备拼,会吸入 BlackHole/录屏等虚拟设备 → 畸形 7ch → 引擎死)。改靠下方"配置变更自动重启"
+        // 自愈 + 静默检测告警 + 用户清理虚拟音频设备。详见 [[voice-aec-mic-troubleshooting]]。
         let recordingFormat = inputNode.outputFormat(forBus: 0)
         let hwInFormat = inputNode.inputFormat(forBus: 0)   // 硬件输入侧格式:0 声道/0Hz = VPIO 下硬件输入真死了
         let inputDeviceID = inputNode.auAudioUnit.deviceID   // 输入设备 id(对比开/不开 VPIO 是否换了设备)
@@ -319,9 +332,63 @@ final class VoiceIOManager: ObservableObject {
         transcript = ""
         setInputStatus(speechRecognizer.supportsOnDeviceRecognition ? "正在听（本机）" : "正在听")
         armSpeechRecognition()
-        // 看门狗已删除(用户定调 2026-06-18):它会在 VPIO 刚开、还没出音频的几秒内误判"坏麦"、关掉 AEC 并持久化,
+        startMicSilenceMonitor()
+        observeEngineConfigChange()
+        // 旧看门狗已删除(用户定调 2026-06-18):它会在 VPIO 刚开、还没出音频的几秒内误判"坏麦"、**关掉 AEC** 并持久化,
         // 导致 AEC 永远开不起来→灵枢自听自激。AEC 是 barge-in 的物理必要条件,必须常开。
-        // 麦克风权限/进音诊断仍由 voice/perm、voice/aec、voice/mic 日志覆盖,不再做"自动关 AEC"的自愈。
+        // 新的静默检测(startMicSilenceMonitor)只**浮告警**、绝不动 AEC/设备,避开旧看门狗的坑。
+    }
+
+    /// 静默检测:引擎在跑但麦克风长时间(grace 期)收不到一帧 → 浮出可见告警,别让用户对着没反应的麦克风干等
+    /// (喊灵枢无反应却一直显示"待机中"的根因之一:麦克风被录屏/会议/虚拟音频软件占用,或 VPIO 绑到了畸形聚合设备)。
+    /// **只设告警,绝不关 AEC / 不动设备**(旧看门狗误关 AEC 才被删);进音后由 tap 回调清掉告警。
+    private func startMicSilenceMonitor() {
+        micSilenceMonitor?.cancel()
+        let graceSeconds: TimeInterval = 8   // ≥VPIO 预热时间,避免刚开还没出音频就误报
+        micSilenceMonitor = Task { @MainActor [weak self] in
+            // 起步先等满 grace 期(给 VPIO/首帧留足时间),之后每 4s 复检。
+            try? await Task.sleep(nanoseconds: UInt64(graceSeconds * 1_000_000_000))
+            while !Task.isCancelled {
+                guard let self, self.isRecording else { return }
+                let silentFor = Date().timeIntervalSince(self.lastInputBufferAt)
+                // 只要"自以为在录"却 grace 期内一帧没进 → 告警。**不 gate engine.isRunning**:
+                // 畸形聚合设备常让引擎 start 后立刻停(isRunning=false),那正是要告警的情况(否则被漏过)。
+                if silentFor > graceSeconds {
+                    let warning = "麦克风没在进音——可能被其他录音/录屏/会议/虚拟音频软件占用,或绑到了虚拟聚合设备。退出这些软件后,重新进入聆听/重启在岗。"
+                    if self.micSilentWarning != warning {
+                        self.micSilentWarning = warning
+                        lingShuControlLog("voice/mic-silent: 自以为在录但 \(String(format: "%.0f", silentFor))s 无进音(engineRunning=\(self.audioEngine.isRunning)) → 浮告警(未动 AEC)")
+                    }
+                }
+                try? await Task.sleep(nanoseconds: 4_000_000_000)
+            }
+        }
+    }
+
+    /// 监听 `AVAudioEngineConfigurationChange`:外接/虚拟音频设备变更(如录屏软件动态建/拆聚合设备)会让 AVAudioEngine
+    /// **自动停**——苹果要求 app 自行重启,否则引擎一直停=麦克风死("引擎启动后即死"的真因之一)。监听到就有界自动重启。
+    /// 有界(连续 5 次内)防虚拟音频软件持续 churn 时无限重启;超界就停手,交给静默检测告警 + 用户清理设备。
+    private func observeEngineConfigChange() {
+        if let obs = configChangeObserver { NotificationCenter.default.removeObserver(obs); configChangeObserver = nil }
+        configRestartAttempts = 0
+        configChangeObserver = NotificationCenter.default.addObserver(
+            forName: .AVAudioEngineConfigurationChange, object: audioEngine, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self, self.isRecording else { return }
+                let running = self.audioEngine.isRunning
+                lingShuControlLog("voice/engine-config-change: 设备配置变更 → 引擎running=\(running) attempts=\(self.configRestartAttempts)")
+                guard !running, self.configRestartAttempts < 5 else { return }
+                self.configRestartAttempts += 1
+                self.audioEngine.prepare()
+                do {
+                    try self.audioEngine.start()
+                    lingShuControlLog("voice/engine-config-change: 自动重启引擎成功 running=\(self.audioEngine.isRunning)")
+                } catch {
+                    lingShuControlLog("voice/engine-config-change: 自动重启失败 \(error.localizedDescription)")
+                }
+            }
+        }
     }
 
     /// 轮换识别请求：每句结束只换一个轻量请求/任务，引擎与 tap 不动——
@@ -628,6 +695,9 @@ final class VoiceIOManager: ObservableObject {
         recognitionRequest = nil
         recognitionTask = nil
         speechCallbacks = nil
+        micSilenceMonitor?.cancel()
+        micSilenceMonitor = nil
+        if let obs = configChangeObserver { NotificationCenter.default.removeObserver(obs); configChangeObserver = nil }
         isRecording = false
         setInputStatus(transcript.isEmpty ? "收音待机" : "语音已转写")
     }

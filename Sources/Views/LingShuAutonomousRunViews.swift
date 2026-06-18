@@ -79,6 +79,20 @@ struct LingShuAutonomousRunPanel: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
 
+            // 麦克风没在进音(被录屏/虚拟音频软件占用 / VPIO 绑到畸形聚合设备)→ 喊灵枢无反应却一直待机。
+            // 浮出醒目告警,别让用户对着没反应的麦克风干等(根因诊断见 voice/mic-silent 日志)。
+            if let warn = state.voiceManager?.micSilentWarning, !warn.isEmpty {
+                HStack(alignment: .top, spacing: 6) {
+                    Image(systemName: "mic.slash.fill").foregroundStyle(.orange)
+                    Text(warn)
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .padding(8)
+                .background(RoundedRectangle(cornerRadius: 8).fill(.orange.opacity(0.12)))
+            }
+
             if let environment = state.autonomousRun.environment {
                 compactChecks(title: "环境检测", report: environment.items)
             }
