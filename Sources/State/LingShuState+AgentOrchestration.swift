@@ -43,9 +43,10 @@ extension LingShuState {
                 finishTaskRecord(recordID, status: .completed, summary: summary)
                 recordDeliverable(recordID: recordID, title: objective, summary: summary)   // 登记产出物供"运行起来/继续"接上
             }
-            postOrchestratorChat(recordID: recordID, dispatched: "✅ \(summary)", spawned: "✅ 子任务「\(objective)」完成:\(summary)")
             briefMainThread("子任务「\(objective)」已完成:\(summary.prefix(200))")
             promoteSubtaskKnowledge(objective: objective, summary: summary)   // M3:子线程知识蒸馏进常驻主脑(v2),事后主线程可召回
+            // **完成汇报时机(用户定调 2026-06-19,通用):一律入待汇报队列,由 drain 择机发——互动中捎带下次主线程汇报、待机则主动出声。**
+            deliverOrQueueSubtaskReport(recordID: recordID, objective: objective, summary: summary)
         case .blocked(let id, let objective, let question):
             let recordID = agentSubTaskRecords[id]
             if let recordID {
@@ -92,6 +93,50 @@ extension LingShuState {
         } else {
             chatMessages.append(.init(speaker: "灵枢", text: spawned, isUser: false, taskRecordID: recordID))
         }
+    }
+
+    /// 此刻是否"在和主人互动/占屏中"(演示开着 / 在飞回合 / 正在朗读)——用于决定子任务完成汇报是**捎带**(别打断)还是**主动出声**。
+    var isEngagedInInteraction: Bool {
+        previewController.isPresented || hasActiveModelCall || autonomousRunTask != nil || (voiceManager?.isSpeakingOrQueued == true)
+    }
+
+    /// 子任务完成 → **一律入待汇报队列**(回填它的派发气泡作记录、并标记已念以抑制自动朗读=不在此刻打断互动)。
+    /// 真正的汇报由 drain 择机发:互动中捎带下次主线程回复(finishAutonomousRun)、待机时主动出声(deliverPendingReportsIfIdle)。
+    func deliverOrQueueSubtaskReport(recordID: String?, objective: String, summary: String) {
+        let report = "你交代的「\(objective)」我做好了:\(summary.trimmingCharacters(in: .whitespacesAndNewlines).prefix(140))"
+        if pendingSubtaskReports.isEmpty { firstPendingReportAt = Date() }   // 本批第一个完成,记起点(防抖上限用)
+        lastSubtaskReportEnqueuedAt = Date()                                 // 刷新"最近完成"时刻(防抖:接连完成的合并)
+        pendingSubtaskReports.append(String(report))
+        if let recordID, let bid = dispatchedTaskBubbles[recordID] {
+            fillDispatchedBubble(recordID, text: "✅ \(summary)")   // 回填,别让派发气泡空转
+            lastSpokenMessageID = bid                                // 标记已念→抑制自动朗读,汇报择机由 drain 统一发
+        }
+        appendTrace(kind: .system, actor: "灵枢", title: "子任务完成·入待汇报队列", detail: String(report.prefix(36)))
+    }
+
+    /// 取出并清空待汇报队列(供"捎带"拼进主线程回复)。多条**合并**成一条:单条直接;多条加序号,免零散乱。
+    func drainPendingSubtaskReports() -> String {
+        guard !pendingSubtaskReports.isEmpty else { return "" }
+        let items = pendingSubtaskReports
+        pendingSubtaskReports.removeAll()
+        firstPendingReportAt = nil
+        if items.count == 1 { return items[0] }
+        let numbered = items.enumerated().map { "\($0.offset + 1)、\($0.element)" }.joined(separator: " ")
+        return "刚才你交代的几件都办好了:\(numbered)"
+    }
+
+    /// 待机时主动汇报待汇报队列(贴气泡→自动朗读=主动出声)。在自主 1s 自驱循环里每拍调。
+    /// **单线程顺序 + 合并接连完成**:① 正在念报告/互动中(`isEngagedInInteraction` 含 isSpeakingOrQueued)→ 不发,攒着(下一条等当前念完);
+    /// ② **防抖合并**:最近一次完成后等 ~2.5s 稳定(其间又完成的一并并入)再一起报,免一个个零散刷;最长等 12s 兜底必发。
+    func deliverPendingReportsIfIdle() {
+        guard isStandingPersonOnDuty, !pendingSubtaskReports.isEmpty, !isEngagedInInteraction else { return }
+        let now = Date()
+        let stable = now.timeIntervalSince(lastSubtaskReportEnqueuedAt) >= 2.5    // 队列稳定(无新完成)= 这批接连完成的已到齐
+        let maxWaited = firstPendingReportAt.map { now.timeIntervalSince($0) >= 12 } ?? false   // 兜底:别因持续 trickle 永远不报
+        guard stable || maxWaited else { return }
+        let text = drainPendingSubtaskReports()
+        chatMessages.append(.init(speaker: "灵枢", text: "✅ \(text)", isUser: false))   // 末条灵枢气泡→ speakLatestReplyIfNeeded 自动朗读=主动汇报
+        appendTrace(kind: .result, actor: "灵枢", title: "主动汇报(待机)", detail: String(text.prefix(40)))
     }
 
     /// 子任务进展回灌主线程(信息同步,非完整上下文):只把**简报摘要**注入常驻主会话,

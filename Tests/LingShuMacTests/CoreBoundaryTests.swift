@@ -1736,4 +1736,69 @@ final class CoreBoundaryTests: XCTestCase {
             frameCount: 1024
         )
     }
+
+    // MARK: - commonParentDir 死循环回归(2026-06-19 真机卡死根因)
+
+    /// 跨不同顶层根的路径(/tmp/... 与 /Users/...)公共祖先只剩 "/",旧实现因
+    /// `("/" as NSString).deletingLastPathComponent == "/"` 而 while 永真空转(主线程 100% CPU 卡死)。
+    /// 本测试若回归会**直接挂起**(死循环),正常应秒返回 nil。
+    func testCommonParentDirCrossRootDoesNotInfiniteLoop() {
+        let paths = ["/tmp/lingshu-doctest/a.docx", "/Users/example/app/b.swift", "/private/var/x/c.txt"]
+        let result = LingShuState.commonParentDir(paths)
+        XCTAssertNil(result, "跨根无公共父目录(根 / 不算),应返回 nil 而非死循环")
+    }
+
+    func testCommonParentDirReturnsNearestCommonAncestor() {
+        XCTAssertEqual(LingShuState.commonParentDir(["/a/b/c/x.txt", "/a/b/d/y.txt"]), "/a/b")
+        XCTAssertEqual(LingShuState.commonParentDir(["/a/b/x.txt", "/a/b/y.txt"]), "/a/b")
+        XCTAssertEqual(LingShuState.commonParentDir(["/tmp/p/one.docx", "/tmp/p/two.docx"]), "/tmp/p")
+        XCTAssertNil(LingShuState.commonParentDir([]))
+    }
+
+    // MARK: - 主线程卡死看门狗纯判定逻辑
+
+    func testWatchdogRecoveryDecision() {
+        XCTAssertFalse(LingShuMainActorWatchdog.shouldRecover(consecutiveMisses: 2, threshold: 3, restartsThisEpisode: 0, maxRestarts: 3))
+        XCTAssertTrue(LingShuMainActorWatchdog.shouldRecover(consecutiveMisses: 3, threshold: 3, restartsThisEpisode: 0, maxRestarts: 3))
+        XCTAssertFalse(LingShuMainActorWatchdog.shouldRecover(consecutiveMisses: 5, threshold: 3, restartsThisEpisode: 3, maxRestarts: 3), "到重启上限不再重启,防循环")
+    }
+
+    func testWatchdogRestartCountDecaysAfterEpisodeWindow() {
+        let now = Date()
+        XCTAssertEqual(LingShuMainActorWatchdog.restartsAfterDecay(previousCount: 2, lastRestartAt: now.addingTimeInterval(-100), now: now, window: 600), 2)
+        XCTAssertEqual(LingShuMainActorWatchdog.restartsAfterDecay(previousCount: 2, lastRestartAt: now.addingTimeInterval(-700), now: now, window: 600), 0)
+        XCTAssertEqual(LingShuMainActorWatchdog.restartsAfterDecay(previousCount: 5, lastRestartAt: nil, now: now, window: 600), 0)
+    }
+
+    // MARK: - TTS 不念文件路径(2026-06-19 用户要求:任务交付只念关键内容)
+
+    func testStrippedOfFilePathsDropsPathBulletsKeepsSummary() {
+        let reply = """
+        ✅ 全部完成。3 个 .swift 文件已清空并重写：
+        - /tmp/lingshu-p2-proj/Account.swift — 账户模型 + 转账函数
+        - /tmp/lingshu-p2-proj/Ledger.swift — 账本类
+        - /tmp/lingshu-p2-proj/AccountTests.swift — 4 个测试用例
+        """
+        let spoken = LingShuState.strippedOfFilePaths(reply)
+        XCTAssertFalse(spoken.contains("/tmp/"), "朗读文本不应包含文件路径")
+        XCTAssertFalse(spoken.contains("Account.swift"), "纯路径条目整行应被删")
+        XCTAssertTrue(spoken.contains("全部完成"), "关键汇报应保留")
+        XCTAssertTrue(spoken.contains("3 个 .swift 文件已清空并重写"), "概述句(无绝对路径)应保留")
+    }
+
+    func testStrippedOfFilePathsKeepsCleanConversationalText() {
+        let reply = "现在是下午三点，今天没有特别的安排，要不要我帮你整理一下待办？"
+        XCTAssertEqual(LingShuState.strippedOfFilePaths(reply), reply, "无路径的对话文本应原样保留")
+    }
+
+    // MARK: - 破坏性覆盖护栏(选项B):覆盖前自动备份
+
+    func testBackupOverwrittenFileWritesOldContent() throws {
+        let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("ovw-\(UUID().uuidString).swift")
+        let backup = LingShuState.backupOverwrittenFile(path: tmp.path, oldContent: "OLD_CONTENT_保留这段")
+        XCTAssertNotNil(backup, "应生成备份")
+        let restored = try String(contentsOfFile: backup!, encoding: .utf8)
+        XCTAssertEqual(restored, "OLD_CONTENT_保留这段", "备份内容应等于覆盖前的原内容")
+        try? FileManager.default.removeItem(atPath: backup!)
+    }
 }

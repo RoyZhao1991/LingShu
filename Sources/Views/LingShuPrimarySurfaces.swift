@@ -45,16 +45,28 @@ struct LingShuRootView: View {
             active: previewSlideshow && !manualTakeover
         ) { manualTakeover = true })
         .onChange(of: manualTakeover) { _, on in
-            if on { _ = state.previewController.setSlideshow(false) }   // 先立刻退全屏,把屏幕还给用户(无论选是选否)
+            if on {
+                _ = state.previewController.setSlideshow(false)        // 先立刻退全屏,把屏幕还给用户
+                state.pauseActiveFlow(reason: "全屏演示中检测到手动操作(动鼠标/键盘)")  // 真停:批量+TTS 立即暂停(不只退全屏,不再后台偷偷推进)
+            }
         }
         .confirmationDialog("检测到你在手动操作", isPresented: $manualTakeover, titleVisibility: .visible) {
             Button("停止,回到正常界面", role: .destructive) {
-                _ = state.previewController.close()
-                if state.isStandingPersonOnDuty { state.stopAutonomousRun() } else { state.cancelCurrentCall() }
+                state.abortActiveFlow(reason: "演示中手动接管→选择停止")
+                if state.isStandingPersonOnDuty { state.stopAutonomousRun() }
             }
-            Button("继续演示", role: .cancel) { }
+            Button("继续演示", role: .cancel) {
+                _ = state.previewController.setSlideshow(true)         // 重进全屏
+                _ = state.submitVoiceTranscript("从当前这一页继续演示,接着往下讲")   // 让大脑从当前页续讲
+            }
         } message: {
-            Text("是否停止当前任务、退回正常界面?\n（已先退出全屏,把屏幕还给你）")
+            Text("已暂停并退出全屏。停止本任务,还是从当前页继续演示?")
+        }
+        .onAppear {
+            // 关任一演示窗 = 硬中断流程(防大脑下一步又把窗弹回来)。幂等设置,多次 onAppear 无碍。
+            state.previewController.onUserClosedWindow = { [weak state] in
+                state?.abortActiveFlow(reason: "用户手动关闭了演示窗")
+            }
         }
         // 注:进入「托管模式」确认改用 AppKit NSAlert(见 LingShuState.requestManagedMode)——
         // 它会把灵枢拉到前台、app-modal 一定可见,根治 SwiftUI confirmationDialog 在灵枢非前台时不弹的问题。
@@ -77,6 +89,7 @@ struct LingShuRootView: View {
         }
         .preferredColorScheme(.dark)
         .background(LingShuPreviewHost(controller: state.previewController))   // 大脑 open_preview → 弹出预览
+        .background(LingShuBrowserHost(controller: state.browserController))   // 大脑 browser_open → 弹出内置浏览器
         .sheet(item: $state.pendingShellApproval) { pending in
             LingShuPermissionApprovalView(pending: pending) { decision in
                 state.resolveShellApproval(decision)
@@ -164,6 +177,17 @@ struct LingShuRootView: View {
         }
         .onReceive(coreTimer) { _ in
             state.tickCoreTimers()
+            // 执行中忙音(前台 coreTimer 这条路;在岗/自主时 coreTimer 会被系统暂停,那边由自主感知 1s 自驱 Task 驱动,见 AutonomousPerception)。
+            // 处理中(模型/LOOP/在岗回合在跑)且不在朗读 → 每拍 busyTick(内部按 ~2.4s 节流真响),一旦朗读/空闲即 busyStop。
+            let processing = state.autonomousRunTask != nil || state.hasActiveModelCall || state.loopPhase.isActive
+            if processing, !voice.isSpeakingOrQueued {
+                LingShuCueSound.busyTick()
+            } else {
+                LingShuCueSound.busyStop()
+            }
+        }
+        .onChange(of: voice.isSpeaking) { _, speaking in
+            if speaking { LingShuCueSound.busyStop() }   // 一开口朗读立刻停忙音(不等下一拍驱动)
         }
         .onReceive(vision.$latestObservation) { observation in
             if let observation {

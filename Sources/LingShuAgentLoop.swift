@@ -93,7 +93,28 @@ enum LingShuAgentRunResult: Equatable, Sendable {
 }
 
 /// 一条隔离会话 = 一条任务线程的上下文与循环。多会话并发即多任务并行(配合有界并发管理器)。
-actor LingShuAgentSession {
+/// 核心循环变体(新旧循环热切换):`.classic`=经典连续循环;`.nested`=嵌套分阶段验收循环(大 LOOP 含多个子 LOOP/阶段,
+/// 任务阶段验交付物、互动阶段不验,阶段间断点续)。两者都实现 `LingShuAgentSessioning`,由 `makeAgentSession` 工厂按开关返回。
+/// String raw:持久化到 UserDefaults(跨重启保留所选引擎)。
+enum LingShuAgentLoopVariant: String, Sendable { case classic, nested }
+
+/// **核心循环的对外接口**(2026-06-19 抽出):把"驱动一段会话"的能力抽象成协议,便于**另起一个新循环、新旧热切换**
+/// (见 `makeAgentSession` 工厂 + 开关)。现有 `LingShuAgentSession` 是其一份实现(经典连续循环),将来"嵌套分阶段验收"的
+/// 新循环只要也实现本协议即可被工厂按开关返回、与旧的并存切换。actor 约束:存在体(any)按 actor 隔离、跨 actor 调用自动 async。
+protocol LingShuAgentSessioning: Actor {
+    var isBlocked: Bool { get }
+    var turnsUsed: Int { get }
+    var toolInvocations: [String] { get }
+    var messages: [LingShuAgentMessage] { get }
+    func setTextDeltaSink(_ sink: (@Sendable (String) async -> Void)?)
+    func send(_ userText: String) async -> LingShuAgentRunResult
+    func resume(_ answer: String) async -> LingShuAgentRunResult
+    func continueLoop() async -> LingShuAgentRunResult
+    func injectCorrection(_ text: String) -> Bool
+    func injectBriefing(_ text: String)
+}
+
+actor LingShuAgentSession: LingShuAgentSessioning {
     let id: String
     let tools: [LingShuAgentTool]
     let model: any LingShuAgentModel

@@ -98,6 +98,14 @@ final class VoiceIOManager: ObservableObject {
     var lastPartialAt: Date = .distantPast
     /// 静音收口阈值(秒);<=0 关闭。默认 2s = 说完停顿 2 秒即转入思考。
     var silenceFinalizeSeconds: TimeInterval = 2.0
+    /// 音频静默收口(2026-06-19,修"嘈杂/连续识别下指令永不收口"):最近一次"主人在出声"(电平过说话门槛)的时刻。
+    /// 与 `lastPartialAt` 互补——背景噪音会持续刷新 ASR partial 让 `lastPartialAt` 永不稳定、转写永不收口;
+    /// 而**主人一旦停止出声(电平降下来)持续 `audioSilenceFinalizeSeconds`**,就强制收口,不被噪音 partial 拖住。
+    var lastLoudInputAt: Date = .distantPast
+    /// 主人停止出声多久(秒)就音频静默收口。3s = 与语音端点容忍一致(中途停顿 ≤3s 不切)。
+    let audioSilenceFinalizeSeconds: TimeInterval = 3.0
+    /// 判"主人正在出声"的电平门槛(近场说话通常 >0.12,环境底噪通常 <0.06)。
+    let loudInputThreshold: Float = 0.10
     /// 系统语音处理(AEC/VPIO)**强制常开**(用户定调 2026-06-18)。系统音(ScreenCaptureKit)与麦克风
     /// (AVAudioEngine)是两条独立收音线路、互不冲突;AEC 是"灵枢说话时仍能听清主人插话(barge-in)"的
     /// **物理必要条件**,绝不再自动关。已删除原"发现没进音就关 VPIO 自愈"的看门狗——它会误杀 AEC
@@ -457,10 +465,28 @@ final class VoiceIOManager: ObservableObject {
         // 之后 isSpeakingOrQueued 转 false、回声窗口过去,这里才会正常收口主人那句。
         guard !isSpeakingOrQueued,
               now.timeIntervalSince(lastSpeechEndedAt) >= echoCooldownSeconds else { return }
-        guard isRecording, silenceFinalizeSeconds > 0,
-              !transcript.isEmpty, lastPartialAt != .distantPast,
-              now.timeIntervalSince(lastPartialAt) >= silenceFinalizeSeconds else { return }
+        guard isRecording, silenceFinalizeSeconds > 0, !transcript.isEmpty else { return }
+        // 收口判据(两条互补,任一满足即收口):
+        //  ① 转写稳定:ASR partial 静默超过 silenceFinalizeSeconds(干净环境下快)。
+        //  ② 音频静默:主人停止出声(电平降下)超过 audioSilenceFinalizeSeconds——背景噪音持续刷新 partial 让①永不满足时,
+        //     靠②兜底收口(嘈杂/连续识别下指令不再永远卡 partial)。
+        guard Self.shouldFinalizeUtterance(
+            now: now,
+            lastPartialAt: lastPartialAt, transcriptStableSeconds: silenceFinalizeSeconds,
+            lastLoudInputAt: lastLoudInputAt, audioQuietSeconds: audioSilenceFinalizeSeconds
+        ) else { return }
         forceFinalizeUtterance()
+    }
+
+    /// 纯函数(可单测):是否该收口当前转写——转写稳定够久 或 主人停止出声够久,任一即收口。
+    nonisolated static func shouldFinalizeUtterance(
+        now: Date,
+        lastPartialAt: Date, transcriptStableSeconds: TimeInterval,
+        lastLoudInputAt: Date, audioQuietSeconds: TimeInterval
+    ) -> Bool {
+        if lastPartialAt != .distantPast, now.timeIntervalSince(lastPartialAt) >= transcriptStableSeconds { return true }
+        if lastLoudInputAt != .distantPast, now.timeIntervalSince(lastLoudInputAt) >= audioQuietSeconds { return true }
+        return false
     }
 
     /// 强制把当前 partial 转写当一句 final 提交(走 onResult,isFinal=true → 主线程转入思考),并轮换识别接下一句。
@@ -469,7 +495,8 @@ final class VoiceIOManager: ObservableObject {
         guard !text.isEmpty, let callbacks = speechCallbacks else { return }
         transcript = ""
         lastPartialAt = .distantPast
-        lingShuControlLog("voice/asr: 静音 \(String(format: "%.0f", silenceFinalizeSeconds))s 强制收口「\(text.prefix(24))」→ 转入思考")
+        lastLoudInputAt = .distantPast   // 新一句从干净状态重新计音频静默
+        lingShuControlLog("voice/asr: 收口「\(text.prefix(24))」→ 转入思考(转写稳定或主人停声)")
         callbacks.onResult?(makeTranscriptionResult(text: text, isFinal: true))
         callbacks.onFinal?(text)
         armSpeechRecognition()

@@ -21,8 +21,14 @@ extension LingShuState {
                 description: "一次性读取当前预览文档**所有页**的文字(先理解全篇、再规划讲稿——做演示/讲解前先用它把整篇读完,而不是逐页翻着边读边讲)。返回每页 内容。配合 run_steps:读全 → 想好每页讲稿 → 批量顺滑播。",
                 parametersJSON: "{\"type\":\"object\",\"properties\":{}}"
             ) { [weak self] _ in
-                await MainActor.run {
-                    guard let self, self.previewController.pageCount > 0 else { return "还没打开任何预览,先 open_preview。" }
+                guard let self else { return "预览不可用" }
+                // HTML 富页面:取 document.body.innerText(一次拿整页正文照着讲,免逐屏 screen_capture)。
+                if await MainActor.run(body: { self.previewController.isHTML }) {
+                    let text = await self.previewController.htmlInnerText().trimmingCharacters(in: .whitespacesAndNewlines)
+                    return text.isEmpty ? "网页还在加载或没抽到正文,讲前可 screen_capture 看一眼画面。" : "【网页全文(照这个讲,配合 preview_scroll 逐屏往下)】\n\(String(text.prefix(9000)))"
+                }
+                return await MainActor.run {
+                    guard self.previewController.pageCount > 0 else { return "还没打开任何预览,先 open_preview。" }
                     var out = "【全文共 \(self.previewController.pageCount) 页】\n"
                     for i in 0..<self.previewController.pageCount {
                         let t = self.previewController.pageText(i).trimmingCharacters(in: .whitespacesAndNewlines)

@@ -32,12 +32,24 @@ final class LingShuVoiceCallController: ObservableObject {
     // VAD 阈值自适应：跟踪环境噪声底，嘈杂环境自动抬高说话/收口/打断门槛，
     // 屏蔽底噪对主人指令断句的干扰。
     private var adaptiveVAD = LingShuAdaptiveVAD()
-    private let silenceHold: TimeInterval = 1.0
+    // 收口窗口自适应(2026-06-19,修"喊灵枢后没说完就进处理中"):
+    // 刚打断/唤醒、还没说出实质指令时给**长窗口**(5s),让主人从容把话说完;
+    // 一旦说了实质指令(累计 ~1s 有效语音),改为说完静默 **3s** 才收口提交。
+    private let silenceHoldInitial: TimeInterval = 5.0      // 还没说实质内容(刚喊完唤醒词)→ 等 5s
+    private let silenceHoldAfterCommand: TimeInterval = 3.0 // 已说实质指令 → 命令结束 3s 后再收口
+    private let substantiveSpeechTicks = 12                 // ~1s 有效说话(12 × 80ms)才算"说了实质指令"
     private let tickInterval: UInt64 = 80_000_000 // 80ms ≈ 12.5Hz
 
     private var hasCapturedSpeech = false
+    private var speechTickCount = 0          // 本句累计"有效说话"的 tick 数,决定收口窗口长短
     private var silenceStartedAt: Date?
     private var bargeInStartedAt: Date?
+
+    /// 纯函数(可单测):据本句已累计的有效说话量决定静默收口窗口——没说实质内容给长窗口,说过了给短窗口。
+    nonisolated static func silenceHold(speechTicks: Int, substantiveThreshold: Int,
+                                        initialHold: TimeInterval, afterCommandHold: TimeInterval) -> TimeInterval {
+        speechTicks >= substantiveThreshold ? afterCommandHold : initialHold
+    }
 
     var isActive: Bool { loopTask != nil }
 
@@ -71,6 +83,7 @@ final class LingShuVoiceCallController: ObservableObject {
 
     private func resetUtterance() {
         hasCapturedSpeech = false
+        speechTickCount = 0
         silenceStartedAt = nil
         bargeInStartedAt = nil
     }
@@ -138,12 +151,16 @@ final class LingShuVoiceCallController: ObservableObject {
 
         if level >= adaptiveVAD.speakThreshold {
             hasCapturedSpeech = true
+            speechTickCount += 1          // 累计有效说话量,过阈值即视为"已说出实质指令"
             silenceStartedAt = nil
             phase = .capturing
         } else if hasCapturedSpeech, level < adaptiveVAD.silenceThreshold {
+            // 自适应收口窗口:还没说实质内容(刚喊完唤醒词)→ 等 5s 给主人开口;已说实质指令 → 命令结束静默 3s 才收口。
+            let hold = Self.silenceHold(speechTicks: speechTickCount, substantiveThreshold: substantiveSpeechTicks,
+                                        initialHold: silenceHoldInitial, afterCommandHold: silenceHoldAfterCommand)
             if let started = silenceStartedAt {
-                if now.timeIntervalSince(started) >= silenceHold {
-                    // 一句真话说完(已过 VAD 噪音门槛):若正在思考,先打断在飞回合,再收口提交新指令。
+                if now.timeIntervalSince(started) >= hold {
+                    // 一句真话说完(已过 VAD 噪音门槛 + 静默够久):若正在思考,先打断在飞回合,再收口提交新指令。
                     if thinking { state.interruptActiveModelCall() }
                     voice.finishCurrentUtterance()
                     resetUtterance()

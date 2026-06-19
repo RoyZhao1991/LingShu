@@ -154,6 +154,8 @@ struct LingShuMacApp: App {
             .task {
                 // 启动本机回环 MCP 控制服务(幂等),让外部测试/MCP 客户端可驱动灵枢内部动作。
                 LingShuControlServer.shared.start(state: state)
+                // 主线程卡死看门狗:独立后台探测 MainActor,卡死自动重启续作(不挂 MainActor,否则自身也被卡)。
+                LingShuMainActorWatchdog.shared.start(state: state)
                 // 后台预热主 agent 会话(含记忆蒸馏),消除首条消息的蒸馏延迟。
                 Task { _ = await state.mainAgentSession() }
             }

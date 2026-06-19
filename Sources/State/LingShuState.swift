@@ -224,7 +224,10 @@ final class LingShuState: ObservableObject {
     /// 主会话派生的并行子会话经此编排(隔离上下文 + 有界并发 + 统一账本 + 续接)。
     let agentOrchestrator = LingShuAgentOrchestrator(maxConcurrent: 3)
     /// 常驻主 agent 会话(对话连续性);懒构造,见 LingShuState+AgentBackbone。
-    var mainAgentSessionHolder: LingShuAgentSession?
+    /// 核心循环变体开关(新旧循环热切换):`.classic`=经典连续循环 / `.nested`=嵌套分阶段验收循环。
+    /// 持久化到 UserDefaults(跨重启保留所选引擎);经 `setAgentLoopVariant` 切换(默认常量/MCP 调试口)。
+    var agentLoopVariant: LingShuAgentLoopVariant = UserDefaults.standard.string(forKey: "lingshu.agentLoopVariant").flatMap(LingShuAgentLoopVariant.init(rawValue:)) ?? .classic
+    var mainAgentSessionHolder: (any LingShuAgentSessioning)?
     /// 编排器子会话 id → 任务执行记录 id(让每条并行子任务成为列表里独立任务号)。
     var agentSubTaskRecords: [String: String] = [:]
     /// 主线程分诊「派发」的任务:记录 id → 它在对话里的加载气泡 id(完成时回填这条气泡而非另起一条)。
@@ -305,8 +308,13 @@ final class LingShuState: ObservableObject {
     // 自主运行执行(统一 agent 循环驱动):在飞 Task / 本轮记录 id / 执行会话 / ask_user 待答问题。
     var autonomousRunTask: Task<Void, Never>?
     var autonomousRunRecordID: String?
-    var autonomousSessionHolder: LingShuAgentSession?
+    var autonomousSessionHolder: (any LingShuAgentSessioning)?
     var autonomousPendingQuestion: String?
+    /// 互动中派后台的子任务**完成后的待汇报队列**:在互动中完成则攒这里(不打断),择机捎带/待机时主动汇报。
+    var pendingSubtaskReports: [String] = []
+    /// 汇报防抖:最近一次有子任务完成入队的时刻 / 本批待汇报最早入队时刻——用于"接连完成的合并一起报",别零散刷屏。
+    var lastSubtaskReportEnqueuedAt = Date.distantPast
+    var firstPendingReportAt: Date?
     /// 复杂多交互任务(演示/讲解/会议/答疑)直接上岗时,把"上岗后第一件要做的事"暂存到这——
     /// 让上岗的开场白直接变成"做这件交互任务",而不是先寒暄。用完即清。详见 goLiveForInteractiveTask。
     var pendingStandingKickoff: String?
@@ -424,6 +432,8 @@ final class LingShuState: ObservableObject {
     @Published var meetingConversation = LingShuMeetingConversationController()
     /// 文件预览中枢(灵枢的"眼睛+手"):大脑用四肢工具打开 PPT/PDF/Word/Excel 并翻页/滚动(演示/阅读)。
     let previewController = LingShuPreviewController()
+    /// 内置多 tab 浏览器:大脑用 browser_* 四肢上网/做网页自动化测试(打开URL/多tab/JS执行/滚动/全屏)。
+    let browserController = LingShuBrowserController()
     /// 由根视图注入：返回当前实时态势感知上下文（无有效信号时返回空串）。
     var livePerceptionContextProvider: (() -> String)?
     /// 对话发生时按需刷新云端场景理解（根视图注册到感知网关）。
@@ -695,6 +705,7 @@ final class LingShuState: ObservableObject {
     func tickCoreTimers() {
         let now = Date()
         fireScheduledTriggersIfDue(now: now)
+        reapStaleLoadingBubbles(now: now)   // 自愈:收口"卡死的孤儿加载气泡"(无在飞驱动却永久转圈,实测过 W3 卡"理解需求 437s")
         if let heartbeat = mainThreadKernel.heartbeat(now: now) {
             mainThreadHeartbeatText = heartbeat.displayText
             if mainThreadSessionStatus != "主线程常驻运行中" {
@@ -756,6 +767,11 @@ final class LingShuState: ObservableObject {
     }
 
     func cancelCurrentCall() {
+        // 停止时若正在全屏演示:一并关预览 + 设防重弹窗(停止演示=别再让大脑下一步把它弹回来,与关窗硬中断一致)。
+        if previewController.slideshow {
+            previewController.suppressAutoReopenUntil = Date().addingTimeInterval(5)
+            _ = previewController.close()
+        }
         // **先停派发的隔离子任务**:它们不计入 hasActiveModelCall,旧逻辑(下面的 guard)根本停不掉——
         // 跑飞/卡死的 PPT 等隔离任务夺不回。cancelAllRunning 取消其驱动 Task,.failed 事件把记录收尾。
         let orchestrator = agentOrchestrator
@@ -765,7 +781,10 @@ final class LingShuState: ObservableObject {
             self.appendTrace(kind: .warning, actor: "用户", title: "停止派发任务", detail: "已取消 \(n) 条正在跑的隔离子任务。")
             if !self.hasActiveModelCall { self.missionTitle = "待机中"; self.enterCoreState(.standby, resetTimer: false) }
         }
-        guard hasActiveModelCall else { return }
+        guard hasActiveModelCall else {
+            reapStaleLoadingBubbles(force: true)   // 即便已无在飞调用,手动停止也要清掉卡住的孤儿加载气泡(否则永久转圈)
+            return
+        }
 
         // 若正卡在系统命令授权弹窗上：按拒绝收口，解除挂起的工具协程，别让弹窗悬着。
         if pendingShellApproval != nil {
@@ -805,6 +824,56 @@ final class LingShuState: ObservableObject {
         }
 
         logEvent("现在  用户停止了本轮模型调用。")
+    }
+
+    /// **物理硬中断**(用户要求 2026-06-19):关闭灵枢任一窗口(尤其演示窗)= 明确"我不要了" → 彻底中断当前流程,
+    /// 别再续跑、别再自己把窗弹回来。比脆弱的语音打断可靠——演示中喊"灵枢"常因 ASR 没把唤醒词识别进来、被 busy 门控丢弃。
+    /// 设防重弹抑制窗:挡住"关窗瞬间批量还有一步在飞又把预览拉起"的竞态(根治"手动退出后它又自己把 PPT 弹出来")。
+    func abortActiveFlow(reason: String) {
+        lingShuControlLog("flow/abort: \(reason)")
+        previewController.suppressAutoReopenUntil = Date().addingTimeInterval(5)  // 5s 内拒绝任何 open/进全屏
+        batchInterruptRequested = true          // run_steps 批量在下一步边界停,别再翻页/讲
+        interruptSpeechOutput?()                 // 立刻掐断当前 TTS 朗读
+        _ = previewController.close()            // 关预览(幂等)
+        appendTrace(kind: .warning, actor: "用户", title: "关窗中断流程", detail: reason)
+        cancelCurrentCall()                      // 停主回合 + 自主运行 + 派发隔离任务 + 收口加载气泡
+    }
+
+    /// **物理软暂停**(用户要求 2026-06-19):演示/占屏执行中检测到用户动鼠标/键盘 → 立刻停自动推进+朗读(可恢复)。
+    /// 不硬取消回合,停在当前页等用户「继续演示」或下一步指示。判定可靠的前提:演示期间灵枢不产生键鼠事件(翻页走内部),
+    /// 故全屏演示中任何输入=用户在夺回控制(计算机控制类占屏因灵枢自身会动鼠标,不走此暂停)。
+    func pauseActiveFlow(reason: String) {
+        lingShuControlLog("flow/pause: \(reason)")
+        batchInterruptRequested = true     // 停 run_steps 自动翻页/连续执行
+        interruptSpeechOutput?()            // 停当前朗读
+        missionStatus = "已暂停(检测到你在手动操作)。点「继续演示」接着讲,或直接下新指令。"
+        appendTrace(kind: .system, actor: "用户", title: "动鼠标→暂停演示", detail: reason)
+    }
+
+    /// 自愈:收口"卡住的孤儿加载气泡"。
+    /// 根因(实测 2026-06-19,W3 卡"理解需求 437s"):`runMainAgentTurn` 创建的加载气泡靠其 Task 体内 finalize 收口;
+    /// 若该回合被取消/串行等待上一轮而其 Task 没跑到 finalize,且 `cancelCurrentCall` 在 `!hasActiveModelCall` 时提前返回
+    /// 跳过清扫 → 气泡永久 loading。这里周期性兜底:无任何在飞回合/自主运行/派发任务驱动它、又转圈超时的加载气泡,自动收口。
+    /// - force=true(手动停止):立即收口所有非用户、非"正被派发任务驱动"的加载气泡(不等超时)。
+    func reapStaleLoadingBubbles(now: Date = Date(), force: Bool = false) {
+        let staleSeconds: TimeInterval = 150
+        let liveDispatchBubbleIDs = Set(dispatchedTaskBubbles.values)   // 派发任务还在跑→其气泡合法,别动(由编排器事件收口)
+        // 非强制时:有在飞模型调用或自主运行在跑,说明有合法回合可能正驱动加载气泡,整体不收割(避免误伤进行中)。
+        if !force, hasActiveModelCall || autonomousRunTask != nil { return }
+        var changed = false
+        for index in chatMessages.indices where chatMessages[index].isLoading && !chatMessages[index].isUser {
+            let msg = chatMessages[index]
+            if liveDispatchBubbleIDs.contains(msg.id) { continue }
+            if !force, now.timeIntervalSince(msg.createdAt) <= staleSeconds { continue }   // 还没卡够久,再等等
+            chatMessages[index].isLoading = false
+            if chatMessages[index].text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                chatMessages[index].text = "（这条没能正常收尾，已自动结束；需要的话重发一次。）"
+            }
+            changed = true
+        }
+        if changed, !hasActiveModelCall, autonomousRunTask == nil, missionTitle != "待机中" {
+            missionTitle = "待机中"
+        }
     }
 
     private func updateThinkingBubble() {

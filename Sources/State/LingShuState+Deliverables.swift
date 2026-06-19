@@ -70,14 +70,24 @@ extension LingShuState {
     }
 
     /// 取多个落盘文件的最浅公共父目录(就是"项目根",用作运行/继续时的 cwd)。
+    /// **防死循环铁律**:`("/" as NSString).deletingLastPathComponent` 仍返回 `"/"`(根目录自返回,不会变空),
+    /// 所以当多个路径跨不同顶层根(如 `/tmp/...` 与 `/Users/...`)、公共祖先只剩 `"/"` 时,旧实现的 while 会**永真空转**
+    /// (实测主线程 100% CPU 卡死,2026-06-19)。修法:每次缩短前比对 parent 是否与 common 相同(到顶=无法再缩)即终止,
+    /// 跨根无公共目录则返回 nil(根 `"/"` 当 cwd 也无意义)。
     nonisolated static func commonParentDir(_ paths: [String]) -> String? {
         let dirs = paths.map { ($0 as NSString).deletingLastPathComponent }.filter { !$0.isEmpty }
         guard var common = dirs.first else { return nil }
         for d in dirs.dropFirst() {
-            while !common.isEmpty, !(d == common || d.hasPrefix(common + "/")) {
-                common = (common as NSString).deletingLastPathComponent
+            while !(d == common || d.hasPrefix(common + "/")) {
+                let parent = (common as NSString).deletingLastPathComponent
+                if parent == common {   // 已到根("/")无法再缩 → 无公共父目录,别再循环
+                    common = ""
+                    break
+                }
+                common = parent
             }
+            if common.isEmpty { break }
         }
-        return common.isEmpty ? nil : common
+        return (common.isEmpty || common == "/") ? nil : common
     }
 }

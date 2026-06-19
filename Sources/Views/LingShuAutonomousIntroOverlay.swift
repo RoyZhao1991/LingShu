@@ -91,6 +91,11 @@ struct LingShuAutonomousOrbOnlyView: View {
             secondsSinceVoiceActivity: Date().timeIntervalSince(state.lastVoiceActivityAt),
             listeningWindow: state.voiceListeningWindowSeconds
         )
+        // 处理中:展示**当前 LOOP 阶段**(理解中/规划中/执行中/验收中,loopPhase.rawValue),让主人看得到此刻在哪一步,而非笼统"处理中";
+        // 纯文本回合(无工具→loopPhase idle)仍显"处理中"(确实没有子阶段)。
+        if phase == .processing, state.loopPhase.isActive {
+            return (state.loopPhase.rawValue, phase.tint, state.loopPhase.icon)
+        }
         return (phase.caption, phase.tint, phase.icon)
     }
 

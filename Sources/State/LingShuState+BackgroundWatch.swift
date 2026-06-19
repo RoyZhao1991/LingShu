@@ -22,6 +22,16 @@ extension LingShuState {
         sessionShellAlwaysAllowed || !requireHumanApproval || (autonomousRun.isActive && autonomousRun.permissionLevel == .full)
     }
 
+    /// **派发/派生的隔离子任务的执行策略**:继承父上下文的 shell 预授权。
+    /// 根因修复(2026-06-19 实测"演示卡在执行中:跑命令"):派发隔离任务/模型 spawn_task 原写死 `.standard`,
+    /// 其 allowShell 公式只认 `sessionShellAlwaysAllowed`,**不认在岗/自主的完整授权**——于是在岗时它跑第一条 shell
+    /// (大脑常以"先检查文件是否存在"开场)就 allowShell=false → 弹审批框,而框被全屏演示盖住/无人点 → 永久卡。
+    /// 在岗/自主完整授权 → 给 `.autoAllowShell`(与 autonomous 自身一致,危险删改仍走 forceConfirm 强制确认);
+    /// 普通模式 → 仍 `.standard`(前台有审批框可点,不会盖住)。
+    var dispatchedTaskExecutionPolicy: LingShuAgentExecutionPolicy {
+        shellPreauthorized ? .autoAllowShell : .standard
+    }
+
     /// 守候条件是否满足(纯函数可测):有 successWhen 则要命令成功且输出含它;否则以命令成功退出为准。
     nonisolated static func watchConditionMet(commandSucceeded: Bool, output: String, successWhen: String) -> Bool {
         if successWhen.isEmpty { return commandSucceeded }

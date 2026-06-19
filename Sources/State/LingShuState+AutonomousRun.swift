@@ -80,6 +80,10 @@ extension LingShuState {
         guard autonomousRun.phase == .running else { return }
         autonomousRunTask?.cancel()
         autonomousRunTask = nil
+        // **暂停=立刻安静(2026-06-20 修"已暂停但音频还在输出")**:cancel 任务只停模型循环,**正在播/排队的 TTS 不会因此停**;
+        // run_steps 批量(演示逐句念)也得停。暂停就该立刻静下来,否则状态机看着暂停、声音还在念=不一致。
+        batchInterruptRequested = true        // 停 run_steps 批量(别再翻页/念下一句)
+        interruptSpeechOutput?()              // 掐当前 TTS + 流式发声队列
         endAutonomousActivity()   // 暂停:释放 App Nap 抑制
         var run = autonomousRun
         run.phase = .paused
@@ -160,7 +164,7 @@ extension LingShuState {
         autonomousRunTask = Task { @MainActor [weak self] in
             await previous?.value
             guard let self, !Task.isCancelled else { return }
-            let session: LingShuAgentSession
+            let session: any LingShuAgentSessioning
             let kickoff: String
             if continuing, let held = self.autonomousSessionHolder {
                 session = held
@@ -228,26 +232,28 @@ extension LingShuState {
         objective: String,
         permissionLevel: LingShuAutonomousPermissionLevel,
         runbook: LingShuAutonomousRunbook?
-    ) async -> LingShuAgentSession {
+    ) async -> any LingShuAgentSessioning {
         let policy = autonomousExecutionPolicy(for: permissionLevel)
         let adapter = makeAgentModelAdapter()
         adapter.onReasoning = { [weak self] aside in   // 边做边想:每步旁白落进独立运行记录
             Task { @MainActor in self?.recordAgentReasoning(aside, recordID: self?.autonomousRunRecordID) }
         }
         var tools = agentBuiltinTools(recordIDProvider: { [weak self] in self?.autonomousRunRecordID }, executionPolicy: policy)
-        tools += [Self.timeTool(), Self.locationTool(), Self.webSearchTool(), recallMemoryTool(), perceiveTool(), pushNotificationTool(), rememberCredentialTool(), listCredentialsTool(), speakTool(), digitalHumanTool(), Self.askUserTool()] + previewTools()
+        tools += [Self.timeTool(), Self.locationTool(), Self.webSearchTool(), recallMemoryTool(), perceiveTool(), pushNotificationTool(), rememberCredentialTool(), listCredentialsTool(), speakTool(), digitalHumanTool(), Self.askUserTool()] + previewTools() + browserTools()
         if policy != .readOnly {
             tools.append(spawnTaskTool(adapter: adapter))   // 观察模式不派生可写子任务
             tools += computerControlTools()                  // 计算机直接操作四肢(完整授权档自动放行,计划 §9)
             tools += backgroundWatchTools()                  // 后台守候 + 完成即续
+            tools += scheduledTaskTools()                    // 定时调度(到时间点触发);在岗/自主主用模式必须有,否则又退回伪造 launchd
         }
-        return LingShuAgentSession(
+        return makeAgentSession(
             id: "autonomous-\(UUID().uuidString.prefix(6))",
             system: autonomousSystemPrompt(objective: objective, permissionLevel: permissionLevel, runbook: runbook),
             initialMessages: await seededDistilledMemory(),
             tools: withPhaseTracking(withBatchRunner(tools)),   // run_steps 批量跑 + 相位跟踪(本体显示理解/规划/执行)
             model: adapter,
-            maxTurns: 120   // 自主运行长程;安全天花板(防失控),非目标预算——撞顶由验收续跑恢复
+            maxTurns: 120,   // 自主运行长程;安全天花板(防失控),非目标预算——撞顶由验收续跑恢复
+            recordIDProvider: { [weak self] in self?.autonomousRunRecordID }   // .nested 阶段验收据此定位在岗/自主记录
         )
     }
 
@@ -260,50 +266,7 @@ extension LingShuState {
         }
     }
 
-    private func autonomousSystemPrompt(
-        objective: String,
-        permissionLevel: LingShuAutonomousPermissionLevel,
-        runbook: LingShuAutonomousRunbook?
-    ) -> String {
-        let policyLine: String
-        switch permissionLevel {
-        case .observe:
-            policyLine = "观察模式：只读分析与提醒，**不写文件、不执行命令、不调用外部工具**；给出发现和建议即可。"
-        case .delegated:
-            policyLine = "代理模式：可在工作目录内 write_file 生成产出物；run_command 等高风险动作在无人值守下会被安全拒绝，优先用文件类方式达成目标。"
-        case .full:
-            policyLine = "完整授权(完整电脑控制)：可自主 write_file/edit_file/run_command 真实执行，全程不必再请求授权，直到目标达成；只读命令(grep/find/ls…)我已为你免审批直放。**唯一例外**:删除或修改系统级敏感文件(/System、/usr、/etc、内核扩展等)仍会请你确认——别绕开它。"
-        }
-        // 常驻灵枢(无单一目标):上岗即"人"。**铁律:主人一开口就全力正面回应,绝不用"在岗待命"空话敷衍。**
-        if objective.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            return """
-            你是灵枢,由 Roy Zhao 打造。\(languageResponseRule())你已**上岗**进入**常驻在岗模式**:能听、能说、能思考、能动手。
-            **最重要的铁律:当主人对你说话、提问或下指令时,像一个能干的助手那样【完整、正面地回应】**——
-            · 是问题(如"介绍一下你自己""讲讲你能帮我做什么")就**如实把它答清楚答全**,该几句就几句,口语自然;
-            · 是任务(如"做个PPT""改下这段代码")就**用你的四肢真去做完**(读写/精确改代码/跑命令/联网/计算机操作/演示/`speak`)。
-            **绝对禁止**用"在岗待命""您动口我动手""随时吩咐""有需要随时说"这类**空话敷衍或代替真正的回答/行动**——那是答非所问、是失职。你不是一问一答的待命机器人,是真能做事的灵枢。
-            - "安静在岗、不臆造任务"**只**适用于**确实没有任何输入**的空闲时刻;主人一旦开口,就全力回应/动手,别端着、别重复"待命"。
-            - 权限级:\(permissionLevel.rawValue)。\(policyLine)
-            - 工作目录:\(codexWorkingDirectory)。
-            - **有产出物优先产出物**:需交付文件就真用 write_file/run_command 落盘并给绝对路径,绝不只口头说"已完成"(观察模式除外)。
-            - **有固化方案优先固化方案**:动手前先 apply_skill 看有没有匹配的专家技能,有就按它推进。
-            - 需要边做边讲(演示/汇报)就用 `speak` 出声;需要最新/实时事实用 web_search,别凭记忆瞎答。
-            - **演示 / 连续任务的人机讨论 LOOP(通用,不限 PPT)**:铁律——**先理解全篇、一次性规划好讲稿,再批量顺滑播,绝不逐页临场解析**。做演示=`open_preview` 打开 → `preview_document_text` **一次性读完整篇、把每页讲稿想好** → `present_fullscreen(true)` 进全屏放映(铺满屏)→ **`run_steps` 一次性排上 [speak 第1页讲稿 → preview_next → speak 第2页讲稿 → preview_next → … → speak 末页]批量播完**(逐页一步步往返会让每次翻页都卡顿,批量则一气呵成)→ `present_fullscreen(false)` 退。讲稿照【本页实际内容】写、和屏幕对得上,别凭记忆。主人随时可能**插话打断**(他一开口我掐掉正在播的语音 + **自动中止批量**,把他这句作为「主人中途插话」交给你):**先口头把他的问题/要求处理掉**,再**问一句「要继续吗」**,他说继续就**从断点那页 run_steps 续上**(绝不从头重来),他说停就停下待命。这套"读全→规划→批量播→被打断→答→问是否续→断点续"就是你的常态节奏。
-            - **屏幕只静默监测**:你能看到屏幕,但**不要主动播报屏幕变化**(主人正常切窗口/写代码/看网页都不用你说话);**只有发现真正的问题(报错、崩溃、卡死、危险操作)才出声提醒一句**。
-            - 只有触及不可逆且无法合理假设的关键岔路才用 ask_user,别动不动反复提问。
-            """
-        }
-        return """
-        你是灵枢,由 Roy Zhao 打造。**这是你的自主运行(Loop)模式:大脑是你自己的推理,四肢是你的各项能力(听/说/读/写/改代码/跑命令/联网/演示…)。** 目标交给你后,你自己分析→规划→推进→交付,像 codex 那样把事做完,**不要每步都等人确认、不要把该自己想的甩回来**;只有触及硬性网络/权限/物理限制才如实说明并指出需要什么组件。需要边做边讲(演示/汇报)就用 `speak` 出声。
-        - 权限级：\(permissionLevel.rawValue)。\(policyLine)
-        - 工作目录：\(codexWorkingDirectory)。
-        - **有产出物优先产出物**：凡需交付 PPT/文档/脚本/代码等，必须真用 write_file/run_command 落到工作目录并给出绝对路径，绝不只口头说“已完成”（观察模式除外）。
-        - **有固化方案优先固化方案**：动手前先调 apply_skill 看有没有匹配的专家技能（含设计系统与自带生成器），有就按它推进，别从零硬写（观察模式仅参考其要点，不落盘）。
-        - 自主模式尽量自行决断、按合理假设推进，**不要中途反复提问**；只有触及不可逆且无法假设的关键岔路才调用 ask_user。
-        - 目标含多个互不相关子目标时用 spawn_task 并行派生；相关步骤本会话顺序做。
-        - 需要最新/实时事实时调用 web_search，不要凭记忆瞎答。
-        """
-    }
+    /// 自主/在岗系统提示已拆至 [LingShuState+AutonomousPrompts.swift](LingShuState+AutonomousPrompts.swift)（守 ≤500 行架构守卫）。
 
     /// 收尾：按运行结果更新相位、runbook 步态、任务记录与对话。
     /// 注：非 private——常驻灵枢扩展（LingShuState+StandingPerson）的在岗续跑也复用它。
@@ -316,16 +279,19 @@ extension LingShuState {
                 updateAutonomousRun(phase: .running, statusLine: "在岗待命。")
                 autonomousPendingQuestion = nil
                 missionTitle = "灵枢在岗"
-                missionStatus = String(text.prefix(80))
-                appendTaskRecordMessage(recordID, actor: "灵枢", role: "在岗", kind: .result, text: text)
+                // **捎带汇报**:互动中完成的后台子任务攒在待汇报队列,趁这次主线程回复一起报给主人(开场招呼不捎带)。
+                let reports = isKickoffGreeting ? "" : drainPendingSubtaskReports()
+                let fullText = reports.isEmpty ? text : "\(text)\n\n另外,\(reports)"
+                missionStatus = String(fullText.prefix(80))
+                appendTaskRecordMessage(recordID, actor: "灵枢", role: "在岗", kind: .result, text: fullText)
                 if let idx = taskExecutionRecords.firstIndex(where: { $0.id == recordID }) { taskExecutionRecords[idx].status = .answered }
                 // 上岗开场白:先把**尾部残留的旧招呼**去掉(每次上岗只留一句,不让历史里的招呼越堆越多),再追加这句并标记。
                 if isKickoffGreeting {
                     while let last = chatMessages.last, last.isStandingGreeting == true { chatMessages.removeLast() }
                 }
-                chatMessages.append(.init(speaker: "灵枢", text: text, isUser: false, taskRecordID: recordID, isStandingGreeting: isKickoffGreeting ? true : nil))
+                chatMessages.append(.init(speaker: "灵枢", text: fullText, isUser: false, taskRecordID: recordID, isStandingGreeting: isKickoffGreeting ? true : nil))
                 enterCoreState(.standby, resetTimer: false)
-                appendTrace(kind: .result, actor: "灵枢", title: "在岗", detail: String(text.prefix(80)))
+                appendTrace(kind: .result, actor: "灵枢", title: "在岗", detail: String(fullText.prefix(80)))
                 return
             }
             endAutonomousActivity()   // 目标驱动运行已完成,释放 App Nap 抑制(常驻灵枢分支已在上方 return,仍保持)
@@ -350,6 +316,25 @@ extension LingShuState {
             enterCoreState(.standby, resetTimer: false)
             appendTrace(kind: .warning, actor: "独立运行", title: "卡住待答复", detail: question)
         case .maxTurnsReached(let text):
+            // **在岗(空 objective)特例(2026-06-19 修"问天气撞顶后退岗+无回复"):**在岗的一句对话/查询若没在限定步数内
+            // 收尾(如外部数据源不可用反复重试),**绝不退岗、绝不当"独立运行失败"**——把已有的最好结果当回复贴给主人,保持在岗待命。
+            // 原 bug:无此分支→走下面目标驱动处理→`endAutonomousActivity()` 把在岗停了(standing=False)+ 该给的答复成了"⚠️步数上限",
+            // 主人遂"听到 TTS(回合内 speak 的)却看不到聊天回复、且灵枢悄悄下岗"。
+            if autonomousRun.objective.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                updateAutonomousRun(phase: .running, statusLine: "在岗待命。")
+                autonomousPendingQuestion = nil
+                missionTitle = "灵枢在岗"
+                let reply = text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    ? "这件事我没能在几步内拿下(可能外部数据源暂时不可用),先停一下——要我换个方式再试吗?"
+                    : text
+                missionStatus = String(reply.prefix(80))
+                appendTaskRecordMessage(recordID, actor: "灵枢", role: "在岗", kind: .warning, text: reply)
+                if let idx = taskExecutionRecords.firstIndex(where: { $0.id == recordID }) { taskExecutionRecords[idx].status = .answered }
+                chatMessages.append(.init(speaker: "灵枢", text: reply, isUser: false, taskRecordID: recordID))
+                enterCoreState(.standby, resetTimer: false)
+                appendTrace(kind: .warning, actor: "灵枢", title: "在岗(未在步数内收尾)", detail: String(reply.prefix(80)))
+                return
+            }
             endAutonomousActivity()   // 撞步数上限收尾,释放 App Nap 抑制
             updateAutonomousRun(phase: .blocked, statusLine: "未能在限定步数内收尾。")
             autonomousPendingQuestion = nil

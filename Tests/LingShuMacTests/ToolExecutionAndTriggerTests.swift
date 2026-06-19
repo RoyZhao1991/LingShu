@@ -212,4 +212,61 @@ final class ScheduledTriggerTests: XCTestCase {
         service.add(title: "", prompt: "   ", hour: 9, minute: 0, repeatsDaily: true)
         XCTAssertTrue(service.triggers.isEmpty)
     }
+
+    /// 关键回归：定时器被后台暂停错过了精确的那一分钟，进入追赶窗口后仍能补触发（不再永久错过）。
+    func testCatchUpFiresAfterMissedExactMinute() {
+        let service = makeService()
+        service.add(title: "喝水", prompt: "提醒我喝水", hour: 9, minute: 30, repeatsDaily: true)
+        // 9:30 那一分钟没人 tick（UI 定时器被后台暂停），下一次 tick 落在 9:33。
+        let fired = service.fireDueTriggers(now: date(hour: 9, minute: 33))
+        XCTAssertEqual(fired.count, 1, "错过精确分钟后应在追赶窗口内补触发")
+        // 同一次「当天到点」不重复触发。
+        XCTAssertTrue(service.fireDueTriggers(now: date(hour: 9, minute: 34)).isEmpty)
+        XCTAssertTrue(service.triggers.first!.enabled, "每日任务仍启用")
+    }
+
+    /// 追赶窗口外（关机一整天后开机等）不再补触发，避免「上午 9 点的提醒」在晚上离谱地弹出来。
+    func testCatchUpWindowStopsStaleFire() {
+        let service = makeService()
+        service.add(title: "晨会", prompt: "提醒开晨会", hour: 9, minute: 0, repeatsDaily: true)
+        // 距离 9:00 已过去约 11 小时，远超默认 1 小时追赶窗口。
+        XCTAssertTrue(service.fireDueTriggers(now: date(hour: 20, minute: 0)).isEmpty)
+    }
+
+    /// fireAfter 下界：一次性任务在「最早允许时间」之前不触发，到了之后才触发。
+    func testFireAfterDefersOneShotUntilAllowed() {
+        let service = makeService()
+        let tomorrowTen = Calendar.current.date(byAdding: .day, value: 1, to: date(hour: 10, minute: 0))!
+        service.add(title: "明天汇报", prompt: "汇总进展", hour: 10, minute: 0, repeatsDaily: false, fireAfter: tomorrowTen)
+        // 今天 10:00 到点了，但 fireAfter 是明天 → 不触发。
+        XCTAssertTrue(service.fireDueTriggers(now: date(hour: 10, minute: 0)).isEmpty, "未到 fireAfter 不触发")
+        // 明天 10:00 之后 → 触发并停用。
+        let fired = service.fireDueTriggers(now: tomorrowTen.addingTimeInterval(10))
+        XCTAssertEqual(fired.count, 1)
+        XCTAssertFalse(service.triggers.first!.enabled, "一次性触发后停用")
+    }
+
+    /// 纯函数：下一次该时刻 = 今天若还没到则今天，否则明天。
+    func testNextOccurrencePureFunction() {
+        let cal = Calendar.current
+        let now = date(hour: 8, minute: 0)
+        let ahead = LingShuState.nextOccurrence(hour: 9, minute: 0, from: now, calendar: cal)
+        XCTAssertEqual(cal.component(.day, from: ahead), cal.component(.day, from: now), "9:00 还没到 → 今天")
+        let behindNow = date(hour: 10, minute: 0)
+        let behind = LingShuState.nextOccurrence(hour: 9, minute: 0, from: behindNow, calendar: cal)
+        XCTAssertGreaterThan(behind, behindNow, "9:00 已过 → 明天")
+    }
+
+    /// 纯函数：fireAfter 解析——每日重复=nil；指定日期=那天该时刻；一次性无日期=下一次该时刻。
+    func testScheduledFireAfterParsing() {
+        let cal = Calendar.current
+        let now = date(hour: 8, minute: 0)
+        XCTAssertNil(LingShuState.scheduledFireAfter(dateString: nil, hour: 9, minute: 0, now: now, calendar: cal, repeatsDaily: true))
+        let dated = LingShuState.scheduledFireAfter(dateString: "2030-01-15", hour: 10, minute: 30, now: now, calendar: cal, repeatsDaily: false)
+        XCTAssertNotNil(dated)
+        XCTAssertEqual(cal.component(.year, from: dated!), 2030)
+        XCTAssertEqual(cal.component(.hour, from: dated!), 10)
+        let oneShot = LingShuState.scheduledFireAfter(dateString: nil, hour: 9, minute: 0, now: now, calendar: cal, repeatsDaily: false)
+        XCTAssertEqual(oneShot, LingShuState.nextOccurrence(hour: 9, minute: 0, from: now, calendar: cal))
+    }
 }

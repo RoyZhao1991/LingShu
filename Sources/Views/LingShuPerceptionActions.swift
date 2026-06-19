@@ -163,6 +163,14 @@ enum LingShuPerceptionActions {
         let cleanedText = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cleanedText.isEmpty else { return }
 
+        // **暂停态:语音一律不响应(2026-06-20 用户要求:暂停了不手动「继续」,唤醒词也别生效)**。
+        // 暂停=明确"全停下、等我点继续",此时即便麦克风还开着,唤醒词/指令也不该拉起新回合(那等于绕过暂停)。
+        if state.autonomousRun.phase == .paused {
+            state.prompt = ""
+            if result.isFinal { lingShuControlLog("voice/barge: 已暂停·忽略语音「\(cleanedText.prefix(16))」(点继续才恢复)") }
+            return
+        }
+
         // **连续对话态** = 极简通话模式 或 灵枢在岗(完全接管)。这两种都是用户**显式开启**的"通话"——
         // 像打电话一样**不要求先喊唤醒词**,随时能说话;且灵枢正说话/在跑长回合时,新整句当作**中途插话**接住(LOOP 人机讨论)。
         let continuousMode = state.isMinimalVoiceMode || state.isStandingPersonOnDuty
@@ -260,13 +268,18 @@ enum LingShuPerceptionActions {
            !(echoWindowDiag && LingShuEchoDetector.isEcho(cleanedText, recentOutputs: state.recentSpokenForEcho())) {
             state.interruptSpeechOutput?()
             voice.stopSpeaking()
+            // **关键(修"打断时PPT疯狂翻页")**:打断在 partial 就触发并掐 TTS,但 batchInterruptRequested 原只在 final 收口才置位。
+            // 那个间隙里 run_steps 的 speak 步因 TTS 被掐而瞬间返回→连发 preview_next 狂翻页。这里**立刻**置位,让批量在下一步边界停。
+            state.batchInterruptRequested = true
             lingShuControlLog("voice/barge: 唤醒词打断(非纯·partial即触发) final=\(result.isFinal)「\(cleanedText.prefix(24))」")
         }
 
         // ① **纯唤醒词=进入聆听/打断的触发(最高优先,永不当回声、不被 busy 拦)**:不提交、不调模型。
         if pureWake {
             let interrupted = busy
-            if interrupted { state.interruptSpeechOutput?(); voice.stopSpeaking(); lingShuControlLog("voice/barge: 纯唤醒打断 final=\(result.isFinal)") }   // 喊「灵枢」打断当前
+            // 喊「灵枢」打断当前:掐 TTS + **真 cancel 在飞回合**(主+自主回合,停得了 screen_capture/scroll 模型循环)+ 停批量。
+            // 修"有'叮'声却打不断理解中":原来只置 batchInterruptRequested(只停批量),模型调用循环停不下来。
+            if interrupted { state.interruptSpeechOutput?(); voice.stopSpeaking(); state.interruptInFlightForWakeWord(); lingShuControlLog("voice/barge: 纯唤醒打断 final=\(result.isFinal)") }
             state.prompt = ""
             voice.transcript = ""   // 清掉唤醒前累积的回声,开一个干净的「我在听」窗口(只等主人接下来真正的指令)
             // 喊「灵枢」=进入/重置聆听窗口:**打断时一定给提示音 + 「我在听」反馈**(哪怕之前已 armed,
@@ -348,6 +361,7 @@ enum LingShuPerceptionActions {
             // (submitTextInput→在岗会话会把它注入正在跑的那条脑回路,答完再续)。
             if voice.isSpeaking || state.hasActiveModelCall { voice.stopSpeaking() }
             state.voiceListeningArmed = false   // 有效内容已收口提交,关闭聆听窗口(状态机:我在听 → 处理中);下次开口重新响铃
+            LingShuCueSound.playAcknowledgeChime()   // 受令提示音:让主人听到"指令已收到、进入处理中"(与唤醒音 Glass 区分)
             lingShuControlLog("voice: 闸门=respond callMode=\(state.isMinimalVoiceMode) standing=\(state.isStandingPersonOnDuty) → 提交「\(String(command.prefix(30)))」")
             _ = state.submitVoiceTranscript(command)
         case .ignore(let reason):

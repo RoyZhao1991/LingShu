@@ -119,6 +119,20 @@ extension LingShuState {
         autonomousPerceptionDriverTask = Task { [weak self] in
             while !Task.isCancelled {
                 guard let self else { return }
+                // 定时触发器也搭这趟**后台安全**的车:在岗/自主时 UI 的 coreTimer(Timer.publish)会被系统暂停(与周期感知同因),
+                // 单靠它定时任务到点不触发。这里每拍(1s)在主线程廉价检查一次到点触发器(配合 fireDueTriggers 的追赶窗口,健壮)。
+                await MainActor.run {
+                    self.fireScheduledTriggersIfDue(now: Date())
+                    // 执行中忙音也搭这趟**后台安全**车(UI coreTimer 在岗/自主被系统暂停,靠不住):处理中且不在朗读 → 每拍 busyTick(内部节流真响)。
+                    let processing = self.autonomousRunTask != nil || self.hasActiveModelCall || self.loopPhase.isActive
+                    if processing, self.voiceManager?.isSpeakingOrQueued != true {
+                        LingShuCueSound.busyTick()
+                    } else {
+                        LingShuCueSound.busyStop()
+                    }
+                    // 待机主动汇报:互动结束、空闲下来后,把攒着的后台子任务完成情况主动出声报给主人(也搭这趟后台安全车)。
+                    self.deliverPendingReportsIfIdle()
+                }
                 let token = await self.perceptionHeartbeatOnMain()   // 主线程廉价:守门+采音频+判到点
                 if let token {
                     // 到点了:AX 签名在**后台线程**算(慢,可能阻塞数十 ms,绝不放主线程)

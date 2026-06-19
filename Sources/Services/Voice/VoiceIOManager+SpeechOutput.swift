@@ -37,6 +37,10 @@ extension VoiceIOManager {
             if t.isEmpty { continue }
             var line = t.replacingOccurrences(of: "^[#>\\-*+\\s]+", with: "", options: .regularExpression)
             for marker in ["**", "`", "#"] { line = line.replacingOccurrences(of: marker, with: "") }
+            // 破折号转停顿:口语里念"破折号"很怪,换成逗号(自然停顿)。
+            line = line.replacingOccurrences(of: "——", with: ",").replacingOccurrences(of: "—", with: ",")
+            // 剥装饰性 emoji / 变体选择符:朗读出来是"白色对勾、警告标志"等,很怪;ASCII(数字/#/*)阈值之下不动。
+            line = String(String.UnicodeScalarView(line.unicodeScalars.filter { !(($0.properties.isEmoji && $0.value > 0x238C) || $0.value == 0xFE0F) }))
             line = line.trimmingCharacters(in: .whitespaces)
             if !line.isEmpty { lines.append(line) }
         }

@@ -104,11 +104,12 @@ extension VoiceIOManager {
             }
 
             if throttle.shouldEmitLevel(at: now) {
-                Task { @MainActor in
+                Task { @MainActor [level] in
                     self?.inputLevel = level
                     self?.lastInputBufferAt = now   // 看门狗据此判断麦克风是否真在进音
                     self?.micSilentWarning = nil     // 进音了→清掉"没进音"告警
-                    self?.evaluateUtteranceSilence(now: now)   // 说完静默 2s → 强制收口转入思考(不傻等 isFinal)
+                    if let self, level >= self.loudInputThreshold { self.lastLoudInputAt = now }   // 主人在出声→记一笔(音频静默收口判据)
+                    self?.evaluateUtteranceSilence(now: now)   // 转写稳定 或 主人停止出声 → 强制收口(不傻等 isFinal,且不被噪音 partial 拖住)
                 }
             }
 

@@ -397,7 +397,8 @@ struct TaskArtifactFileCard: View {
                     artifactActionButton("打开", icon: "arrow.up.forward.app") {
                         NSWorkspace.shared.open(url)
                     }
-                    artifactActionButton("访达", icon: "folder") {
+                    artifactActionButton("打开目录", icon: "folder") {
+                        // 在访达里打开该文件所在目录并选中它(reveal in Finder)。
                         NSWorkspace.shared.activateFileViewerSelecting([url])
                     }
                 }

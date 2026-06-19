@@ -162,7 +162,12 @@ if security find-identity -v -p codesigning 2>/dev/null | grep -q "$SIGN_IDENTIT
     --options runtime \
     "$APP_DIR"
 else
-  echo "==> code signing (ad-hoc 回退；未找到身份「$SIGN_IDENTITY」)"
+  echo "════════════════════════════════════════════════════════════════"
+  echo "⚠️  警告:未找到稳定签名身份「$SIGN_IDENTITY」→ 回退 ad-hoc 签名!"
+  echo "⚠️  ad-hoc 的 designated requirement 是 cdhash、每次重建都变 → 系统的"
+  echo "⚠️  辅助功能/屏幕录制等授权会失效(列表里 checkbox 看着开着、实际无效)。"
+  echo "⚠️  修复:确保钥匙串里有「$SIGN_IDENTITY」证书,或用 LINGSHU_SIGN_IDENTITY 指定稳定证书后重建。"
+  echo "════════════════════════════════════════════════════════════════"
   [ -d "$DRIVER_BUNDLE" ] && codesign --force --sign - --options runtime "$DRIVER_BUNDLE" 2>/dev/null || true
   codesign --force --deep --sign - \
     --entitlements "$ROOT_DIR/LingShu.entitlements" \

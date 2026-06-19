@@ -122,6 +122,16 @@ extension LingShuState {
                 : ((try? String(contentsOfFile: path, encoding: .utf8)) ?? "")
             let diff = LingShuLineDiff.compute(old: writeOldContent ?? "", new: newContent)
             let op: LingShuArtifactOperation = writeTargetExisted ? .modified : .created
+            // 破坏性覆盖护栏(选项 B,2026-06-19):write_file 整体覆盖已存在文件 → 先把改前内容存一份带时间戳的
+            // 文件级备份 + 醒目日志。**不阻塞**(保住无人值守自主),但可回滚(任务窗 undo 之外多一层独立备份,
+            // 防"清空所有源码重写"这类批量破坏性覆盖造成不可逆损失)。edit_file 是局部替换、diff 卡足够,不另备份。
+            if result.tool == "write_file", op == .modified, let old = writeOldContent, !old.isEmpty {
+                if let backup = Self.backupOverwrittenFile(path: path, oldContent: old) {
+                    appendTrace(kind: .warning, actor: "护栏", title: "覆盖前已自动备份",
+                                detail: "覆盖 \((path as NSString).lastPathComponent) 的原内容已备份到 \(backup)(可回滚)")
+                    lingShuControlLog("guard/overwrite: 覆盖 \(path) → 旧内容已备份 \(backup)")
+                }
+            }
             appendTaskRecordMessage(
                 taskRecordID, actor: "工具", role: "文件改动", kind: .agent,
                 text: "\(op.rawValue) \((path as NSString).lastPathComponent) (+\(diff.added) -\(diff.removed))",
@@ -186,5 +196,24 @@ extension LingShuState {
             return object
         }
         return arguments
+    }
+
+    /// 破坏性覆盖护栏(选项 B):把被覆盖文件的**改前内容**存一份带时间戳备份到
+    /// `~/Library/Application Support/LingShu/backups/<时间>_<文件名>.bak`,返回备份路径(失败返 nil)。
+    /// 不阻塞执行,纯为可回滚兜底。纯函数(只碰文件系统),可单测。
+    nonisolated static func backupOverwrittenFile(path: String, oldContent: String) -> String? {
+        let dir = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Application Support/LingShu/backups", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let stamp = DateFormatter()
+        stamp.dateFormat = "yyyyMMdd-HHmmss-SSS"
+        let backupName = "\(stamp.string(from: Date()))_\((path as NSString).lastPathComponent).bak"
+        let url = dir.appendingPathComponent(backupName)
+        do {
+            try oldContent.write(to: url, atomically: true, encoding: .utf8)
+            return url.path
+        } catch {
+            return nil
+        }
     }
 }

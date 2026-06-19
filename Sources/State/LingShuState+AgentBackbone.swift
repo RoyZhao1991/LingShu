@@ -8,9 +8,7 @@ enum LingShuAgentExecutionPolicy: Equatable {
     case autoAllowShell  // 直接放行:全工具,run_command 不再弹审批(完整授权)
 }
 
-/// 范式骨干接线(A+B):把统一 agent 循环接到真模型,并设为常规对话主入口。
-/// - A:主会话带 spawn_task 工具,真模型可自主派生**真并行隔离子会话**(经编排器+账本)。
-/// - B:`agentBackbonePrimary` 开启时,常规输入走 `runMainAgentTurn`,取代旧启发式前置门。
+/// 范式骨干接线:把统一 agent 循环接到真模型、设为常规对话主入口;主会话带 spawn_task 可自主派生真并行隔离子会话(经编排器+账本)。
 @MainActor
 extension LingShuState {
 
@@ -57,8 +55,7 @@ extension LingShuState {
 
     // 验收门 verifyAgentDeliverable 已移至 LingShuState+DeliveryReview.swift(与看图/取文同处一个子域)。
 
-    /// 记忆归一:跨会话只喂【蒸馏摘要】,不原样回放历史助手输出——从根上断掉
-    /// "历史里的旧错误自述/假完成声明被模型模仿"这类 seed 污染。会话内当轮仍走正常 verbatim 上下文。
+    /// 记忆归一:跨会话只喂【蒸馏摘要】、不原样回放历史助手输出(断"旧错误自述被模仿"的 seed 污染);会话内当轮仍走 verbatim 上下文。
     func seededDistilledMemory() async -> [LingShuAgentMessage] {
         var seed: [LingShuAgentMessage] = []
         // 跨 app 重启:确保最近产出物从增量存储恢复到内存,主会话首轮即知悉(让重启后"运行起来"也接得上)。
@@ -120,7 +117,7 @@ extension LingShuState {
     // 编排器事件桥接 + 子任务→主线程简报已拆为独立模块 → LingShuState+AgentOrchestration.swift。
 
     /// 常驻主 agent 会话(懒构造,保对话连续)。首次构造时蒸馏跨会话记忆做 seed。
-    func mainAgentSession() async -> LingShuAgentSession {
+    func mainAgentSession() async -> any LingShuAgentSessioning {
         installAgentEventSinkIfNeeded()
         if let existing = mainAgentSessionHolder { return existing }
         let adapter = makeAgentModelAdapter()
@@ -132,8 +129,10 @@ extension LingShuState {
             agentBuiltinTools(recordIDProvider: { [weak self] in self?.currentAgentTurnRecordID })
             + [Self.timeTool(), Self.locationTool(), Self.webSearchTool(), findImagesTool(), acquireResourceTool(), discoverSkillTool(), updateTaskPlanTool(recordIDProvider: { [weak self] in self?.currentAgentTurnRecordID }), reviewDesignTool(recordIDProvider: { [weak self] in self?.currentAgentTurnRecordID }), recallMemoryTool(), perceiveTool(), pushNotificationTool(), rememberCredentialTool(), listCredentialsTool(), speakTool(), digitalHumanTool(), enterManagedModeTool(), Self.askUserTool(), spawnTaskTool(adapter: adapter)]
             + previewTools()
+            + browserTools()           // 内置多 tab 浏览器(上网/网页自动化测试)
             + computerControlTools()   // 计算机直接操作四肢(授权在 call-time 判,计划 §9)
             + backgroundWatchTools()   // 后台守候 + 完成即续(自动识别需求→无人值守推进)
+            + scheduledTaskTools()     // 定时调度四肢(到时间点把指令交给 agent 循环;接 LingShuScheduledTriggerService 真持久化,根治"伪造 plist 假装设了定时")
         ))   // 注:P2 用户 skill 的 provides 工具已并入 agentBuiltinTools(全会话共享),此处不再单列
         let system = """
         你是灵枢(寓意"灵慧之中枢")。\(languageResponseRule())
@@ -157,6 +156,7 @@ extension LingShuState {
         - **写代码/改工程的正确手法**:① 先 `read_file`(带行号,大文件用 offset/limit 分段读全)看清现状,别凭空改;② **改已有文件的局部用 `edit_file`**(唯一匹配 old_string→new_string,不重写整文件)——新建或整体重写才用 `write_file`;③ 用 `run_command` 跑 grep 定位、装依赖、编译、跑测试,据结果迭代;④ **写代码必须配测试用例并跑通(全绿)——这是硬步骤,不是可选项**:用 write_file 写测试文件(用例数随复杂度增多)、用 run_command 跑测试框架(swift test / pytest / npm test / go test…)直到全部通过,测试文件也算产出物。**代码任务的验收门会确定性检查"有测试且全绿"+"程序真正构建/运行起来不崩",没测试、没跑通、或运行期崩溃一律打回。** ⑤ **可运行的程序(app/服务/CLI/游戏)还要真的把它跑起来验证不崩**——run_command 真构建+真运行,**跑崩了/编译错/抛异常都是要修复的观测,绝不拿异常当交付收尾**,一路修到真跑通;一段推进用满预算也别停,接着干到目标达成。大型多文件工程也按"读→改→搜→测→运行→验收"循环逐文件推进。
         - **有固化方案优先固化方案**:做 PPT、汇报等可能有现成专家技能(含打磨好的设计系统和自带生成器)。动手前先调 **apply_skill** 看有没有匹配技能,有就按它的模板/生成器推进,别从零硬写。**apply_skill 没有匹配、又遇到不擅长的新领域时,可调 discover_skill 联网找现成高质量技能自动安装**(纯提示技能直接装、带脚本技能过安全审核;装好再 apply_skill 用)。
         - **遇到长耗时的外部等待(公证/构建/下载/部署/审批…)别傻等也别甩回用户**:用 `watch_until` 挂个后台守候(给检查命令 + 满足标志 + 满足后要做的事),它不阻塞当前对话,条件一满足我会**自动把后续动作接上跑完**——这就是"自动识别需求 → 无人值守推进"。
+        - **"到某时间点 / 每天定时 / 过一会儿提醒我"这类定时需求,一律用 `schedule_task`(这是你的原生定时四肢)——绝不要去写 launchd plist / crontab / shell 脚本来"假装设了定时"(那只是写个文件、根本没真正接到能把活干起来的系统,是假象)**。`schedule_task` 把指令真正登记进我自己的调度系统(JSON 持久化、跨重启、关窗也在),到点会把那条指令当成**新输入交给完整的我**处理——是提醒就开口、是任务就动手做完(能查日历、能用全部四肢),远胜一个只弹静态通知的 plist。用 `list_scheduled_tasks` 查、`cancel_scheduled_task` 取消。**区分**:等"外部条件满足"才继续 → `watch_until`;到"时间点"触发 → `schedule_task`。
         - 需要实时信息(如当前时间)时调用对应工具。
         - **边做边想(像资深工程师)**:每次发起工具调用前,先用**一句话**说清你观察到了什么、这一步要做什么、为什么(例:"上一步生成失败是因为缺 python-pptx,我先装依赖再重跑")。这句话会显示在执行流里,别省。
         - **高效核查,别空耗**:要查实时/不确定的事实就用 **web_search** 工具(一两次即可),**不要手写一长串 curl|grep 反复抓网页、跟 shell 正则较劲**;已经确定的常识不用反复查。
@@ -165,14 +165,15 @@ extension LingShuState {
         - 上文「历史对话」是你与该用户之前(含重启前)的真实记录,要据此保持连续,别说"没做过/记混了"。
         - **只做当前这件事,别把历史里出现过的、与本次无关的旧任务/旧产出物(别的 PPT、测试文件、过往交付的文件路径与体积等)当成本次的素材塞进交付物**——历史只用于延续对话语境,不是当前交付内容的来源。
         """
-        let session = LingShuAgentSession(
+        let session = makeAgentSession(
             id: "main",
             system: system,
             initialMessages: await seededDistilledMemory(),
             tools: tools,
             model: adapter,
             maxTurns: 80,   // 安全天花板(防失控,非预算);复杂工程单段推进可超 40 步,撞顶由 verifyAndContinue 续跑恢复
-            maxHistoryMessages: 80   // 常驻会话:每回合边界裁剪旧上下文,杜绝旧任务无限堆积污染新请求
+            maxHistoryMessages: 80,   // 常驻会话:每回合边界裁剪旧上下文,杜绝旧任务无限堆积污染新请求
+            recordIDProvider: { [weak self] in self?.currentAgentTurnRecordID }   // .nested 阶段验收据此定位本回合记录
         )
         mainAgentSessionHolder = session
         return session
@@ -180,11 +181,15 @@ extension LingShuState {
 
     /// 通用交付驱动(主会话与自主运行共用):把 prompt 投给给定 agent 会话跑完循环,再过验收门。
     /// guidance(如命中的 skill 提示)只随本回合发给模型,不进验收门的 userRequest(保持核对口径干净)。
-    func driveAgentDelivery(session: LingShuAgentSession, prompt: String, guidance: String? = nil, taskRecordID: String?) async -> LingShuAgentRunResult {
-        // 发给本轮的文本 = guidance + 每轮自动召回的长期记忆 + prompt(记忆注入组装见 LingShuState+Context)。
-        let sent = memoryAugmentedSendText(prompt: prompt, guidance: guidance)
+    /// `trustReplyClaim`:见 verifyAndContinue。主会话/常驻=false(编排器,重活派发出去、回复提到既有文件别误进验收);
+    /// 自主运行 kickoff=true(执行路径,run_command 产出的真文件靠它兜底触发验收)。
+    func driveAgentDelivery(session: any LingShuAgentSessioning, prompt: String, guidance: String? = nil, taskRecordID: String?, trustReplyClaim: Bool = true) async -> LingShuAgentRunResult {
+        // 发给本轮的文本 = guidance + 每轮自动召回的长期记忆 + prompt。**`.nested` 例外**:见 `nestedPlanningSendText`
+        // (规划器把整段当待拆解请求→不能混进记忆召回块,否则把召回到的旧 PPT 误当本次任务凭空重做,2026-06-19 修)。
+        let sent = agentLoopVariant == .nested ? nestedPlanningSendText(prompt: prompt, guidance: guidance)
+                                               : memoryAugmentedSendText(prompt: prompt, guidance: guidance)
         let initial = await session.send(sent)
-        return await verifyAndContinue(session: session, result: initial, userRequest: prompt, taskRecordID: taskRecordID)
+        return await verifyAndContinue(session: session, result: initial, userRequest: prompt, taskRecordID: taskRecordID, trustReplyClaim: trustReplyClaim)
     }
 
     // 验收门 + 执行恢复力(verifyAndContinue / 撞顶恢复 / 验收主循环)已拆至 LingShuState+AgentAcceptance.swift。
@@ -247,8 +252,8 @@ extension LingShuState {
             let guidance = self.isMinimalVoiceMode
                 ? "【对话模式】当前是语音对话,请像聊天一样直接、口语化、简洁地回答。不要派生子任务、不要写文件或跑命令、不要套用 PPT/文档等交付模板——这只是对话。"
                 : self.matchedSkillHint(for: prompt)
-            // 验收门(maker≠checker)与主会话/自主运行共用 driveAgentDelivery。
-            let result = await self.driveAgentDelivery(session: session, prompt: prompt, guidance: guidance, taskRecordID: taskRecordID)
+            // 主会话=编排器(重活派发各自验收),自己回复提到既有文件别误进验收空转(trustReplyClaim:false,同常驻路径)。
+            let result = await self.driveAgentDelivery(session: session, prompt: prompt, guidance: guidance, taskRecordID: taskRecordID, trustReplyClaim: false)
             // 网络中断:**不收尾**——挂起本回合(气泡显示已暂停),保存续跑上下文,联网后 resumeSuspendedMainTurnIfNeeded 从中断处续跑。
             if case .interrupted(let reason) = result {
                 self.suspendedMainTurn = (bubbleID: pendingID, recordID: taskRecordID, prompt: prompt, startedAt: turnStartedAt)
@@ -289,7 +294,6 @@ extension LingShuState {
     }
 
     // MARK: - 工具
-
     /// 通用工具桥(非补丁):把既有 5 个通用原语(read_file/write_file/list_directory/fetch_url/run_command,
     /// 经 LingShuToolExecutor 带权限门控)一次性映射成 agent 工具。模型用它们组合产出任何产出物——
     /// 做 PPT=写 HTML/脚本跑出来,做爬虫=写 .py 跑出来,不再按能力加专用工具。
@@ -354,7 +358,6 @@ extension LingShuState {
         return builtinTools + externalTools + skillTools + pluginTools
     }
 
-
     nonisolated static func schemaJSON(for def: LingShuToolDefinition) -> String {
         var props: [String: Any] = [:]
         for property in def.properties {
@@ -375,10 +378,7 @@ extension LingShuState {
         }
     }
 
-    // 联网搜索子域(web_search 工具 + DuckDuckGo 抽取)已拆至 LingShuState+WebSearch.swift。
-
-    // 时间/定位工具(get_current_time / get_location)已拆至 LingShuState+InfoTools.swift。
-
+    // 联网搜索子域已拆至 LingShuState+WebSearch.swift;时间/定位工具已拆至 LingShuState+InfoTools.swift。
     /// 阻塞工具:loop 截获,不真正执行(handler 仅占位)。
     nonisolated static func askUserTool() -> LingShuAgentTool {
         LingShuAgentTool(
@@ -411,18 +411,25 @@ extension LingShuState {
             let subID = "sub-\(UUID().uuidString.prefix(6))"
             // 子会话工具用"该子会话自己的记录 id"登记产出物(产出物各归各的任务号)。
             let subTools = await MainActor.run { [weak self] () -> [LingShuAgentTool] in
-                let builtin = self?.agentBuiltinTools(recordIDProvider: { [weak self] in self?.agentSubTaskRecords[subID] }) ?? []
+                // 子会话继承父上下文 shell 预授权(同派发隔离任务):在岗/自主完整授权时给 autoAllowShell,否则跑 shell 会卡在审批框。
+                let policy = self?.dispatchedTaskExecutionPolicy ?? .standard
+                let builtin = self?.agentBuiltinTools(recordIDProvider: { [weak self] in self?.agentSubTaskRecords[subID] }, executionPolicy: policy) ?? []
                 let extras = self.map { me in [me.findImagesTool(), me.acquireResourceTool(), me.updateTaskPlanTool(recordIDProvider: { [weak me] in me?.agentSubTaskRecords[subID] }), me.reviewDesignTool(recordIDProvider: { [weak me] in me?.agentSubTaskRecords[subID] })] } ?? []
                 let bodyTools = self.map { [$0.speakTool(), $0.digitalHumanTool()] } ?? []
-                return builtin + [Self.timeTool(), Self.locationTool(), Self.webSearchTool(), Self.askUserTool()] + bodyTools + extras
+                let asyncTools = self.map { $0.backgroundWatchTools() + $0.scheduledTaskTools() } ?? []  // 子任务也带"等条件续/挂定时"四肢(同派发隔离任务,免伪造 launchd)
+                return builtin + [Self.timeTool(), Self.locationTool(), Self.webSearchTool(), Self.askUserTool()] + bodyTools + extras + asyncTools
             }
-            let sub = LingShuAgentSession(
-                id: subID,
-                system: "你是子任务执行者,完成给定目标。**有产出物的必须用 write_file/run_command 真把文件落到工作目录并汇报路径,不要只口头说完成**;写代码必须真构建+运行不崩+测试全绿,跑崩了/报错是要修复的观测、不是交付;信息确实不足才调用 ask_user。",
-                tools: subTools,
-                model: adapter,
-                maxTurns: 80   // 安全天花板(防失控,非预算);撞顶由验收续跑恢复,不当失败
-            )
+            let sub: (any LingShuAgentSessioning)? = await MainActor.run { [weak self] in
+                self?.makeAgentSession(   // 经工厂创建,使核心循环开关对 spawn 子任务也生效
+                    id: subID,
+                    system: "你是子任务执行者,完成给定目标。**有产出物的必须用 write_file/run_command 真把文件落到工作目录并汇报路径,不要只口头说完成**;写代码必须真构建+运行不崩+测试全绿,跑崩了/报错是要修复的观测、不是交付;信息确实不足才调用 ask_user。",
+                    tools: subTools,
+                    model: adapter,
+                    maxTurns: 80,   // 安全天花板(防失控,非预算);撞顶由验收续跑恢复,不当失败
+                    recordIDProvider: { [weak self] in self?.agentSubTaskRecords[subID] }
+                )
+            }
+            guard let sub else { return "（执行环境已释放,本次未派生「\(objective)」。）" }
             let admitted = await orchestrator.spawnDetached(id: subID, objective: objective, session: sub)
             guard admitted else {
                 // 极少数竞态:检查后刚好被其它派生占满。如实回报背压。
@@ -455,13 +462,7 @@ extension LingShuState {
         }
     }
 
-    /// 记录最近念出口的话(环形缓冲,封顶 40 条):供 MCP 核验"演示文字稿"是否对得上幻灯片内容。
-    func recordSpokenLine(_ text: String) {
-        recentSpokenLines.append(text)
-        if recentSpokenLines.count > 40 { recentSpokenLines.removeFirst(recentSpokenLines.count - 40) }
-    }
-
-
+    // recordSpokenLine 已移至 LingShuState+SpokenReply.swift(属"朗读内容"职责 + 守 ≤500 行架构守卫)。
     func recallMemoryTool() -> LingShuAgentTool {
         LingShuAgentTool(
             name: "recall_memory",

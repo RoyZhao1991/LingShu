@@ -125,8 +125,20 @@ struct LingShuDigitalHumanSnapshot: Equatable {
     var intensity: Double
     var activeSignals: Set<LingShuDigitalHumanSignal>
     var isDirectiveDriven: Bool
+    /// 处理中忙音脉冲序号(非 nil=正处理中):本体据它在调色板里切色,与"嘟"声同频;nil=用表情本色。
+    /// 用 Int 而非 Color,好让状态逻辑文件(只 import Foundation)无需引入 SwiftUI。
+    var pulseIndex: Int? = nil
 
-    var accent: Color { expression.accent }
+    var accent: Color {
+        if let i = pulseIndex {
+            let n = Self.busyPulsePalette.count
+            return Self.busyPulsePalette[((i % n) + n) % n]
+        }
+        return expression.accent
+    }
+
+    /// 处理中本体在这几种颜色间切换(青→蓝→紫,都在全息冷色系内,切换醒目但不突兀)。
+    static let busyPulsePalette: [Color] = [.lingHolo, .lingHoloAlt, Color(red: 0.62, green: 0.42, blue: 1.0)]
 
     func signalIsActive(_ signal: LingShuDigitalHumanSignal) -> Bool {
         activeSignals.contains(signal)

@@ -29,6 +29,22 @@ final class WakeWordMatcherTests: XCTestCase {
         XCTAssertTrue(LingShuWakeWordMatcher.contains("您输一下", wakeWord: wake))
     }
 
+    /// 韵母放宽(治"喊灵枢唤不醒":ASR 把"枢"听成"说/硕"=shuo→suo,严格相等会 miss)。
+    func testLooseFinalMatchesShuVsShuo() {
+        // su ↔ suo（声母相同+首元音相同)近似同音。
+        XCTAssertTrue(LingShuWakeWordMatcher.syllableLooseEqual("su", "suo"))
+        XCTAssertTrue(LingShuWakeWordMatcher.syllableLooseEqual("lin", "lin"))
+        XCTAssertFalse(LingShuWakeWordMatcher.syllableLooseEqual("su", "sa"), "首元音不同不该近似")
+        XCTAssertFalse(LingShuWakeWordMatcher.syllableLooseEqual("su", "lu"), "声母不同不该近似")
+        // 整句:ASR 把灵枢转成"灵说/您说/灵硕"→ 现在能命中。
+        for v in ["灵说一下", "您说在吗", "灵硕你好"] {
+            XCTAssertTrue(LingShuWakeWordMatcher.contains(v, wakeWord: wake), "应命中近音：\(v)")
+        }
+        // 但"灵感/玲珑"第二音节(gan/long)与 su 差远,仍不误命中。
+        XCTAssertFalse(LingShuWakeWordMatcher.contains("灵感来了", wakeWord: wake))
+        XCTAssertFalse(LingShuWakeWordMatcher.contains("玲珑塔", wakeWord: wake))
+    }
+
     func testUnrelatedDoesNotMatch() {
         for t in ["今天天气不错", "帮我打开文件", "玲珑塔有几层", "你好世界", "灵感来了写代码"] {
             XCTAssertFalse(LingShuWakeWordMatcher.contains(t, wakeWord: wake), "不该误命中：\(t)")

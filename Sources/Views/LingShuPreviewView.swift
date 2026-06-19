@@ -1,6 +1,7 @@
 import SwiftUI
 import PDFKit
 import AppKit
+import WebKit
 
 /// 预览面板挂到**独立窗口**(不再是主窗口上的 sheet)——用户定调 2026-06-17:演示 PPT 另开一个窗,
 /// 灵枢本体浮窗**全程在位**(右上角),可实时看到灵枢状态;演示窗与主窗/本体互不干扰(根治"无边框小窗+sheet+全屏=黑屏卡死")。
@@ -34,6 +35,11 @@ struct LingShuPreviewHost: NSViewRepresentable {
                 w.delegate = self
                 w.center()
                 w.makeKeyAndOrderFront(nil)
+                // 自主/在岗模式下 app 在后台(化身右上角 orb),`makeKeyAndOrderFront` 只在 app 是活动应用时才把窗提到
+                // 全屏最前——后台时演示窗开了却被压在别的 app 后面(用户实测:PPT 没自动置于最前端)。演示材料**必须显示出来**
+                // 才有意义:强制激活 app + 越过其它 app 置顶。
+                NSApp.activate(ignoringOtherApps: true)
+                w.orderFrontRegardless()
                 window = w
             } else if !controller.isPresented, let w = window {
                 w.delegate = nil
@@ -42,10 +48,14 @@ struct LingShuPreviewHost: NSViewRepresentable {
             }
         }
 
-        /// 用户手动关演示窗 → 同步 controller(大脑/状态据此知道演示结束;自主演示时这等于"夺回控制"信号之一)。
+        /// 用户手动关演示窗 → 彻底中断流程(用户要求 2026-06-19:关任一窗口=硬中断,别再续/重弹)。
+        /// 判定"是用户关的"靠 `isPresented==true`:大脑/代码主动 close() 会先把它置 false(那条分支不触发中断,避免误伤正常收尾)。
         func windowWillClose(_ notification: Notification) {
             window = nil
-            if controller?.isPresented == true { _ = controller?.close() }
+            if controller?.isPresented == true {
+                controller?.onUserClosedWindow?()       // → abortActiveFlow(停批量+回合+掐 TTS+设防重弹窗)
+                _ = controller?.close()
+            }
         }
     }
 }
@@ -65,7 +75,7 @@ struct LingShuPreviewSheet: View {
                         .foregroundStyle(.white)
                         .lineLimit(1)
                     Spacer()
-                    if controller.pageCount > 0 {
+                    if controller.pageCount > 0, !controller.isHTML {
                         Text("\(controller.pageIndex + 1) / \(controller.pageCount)")
                             .font(.system(size: 11.5, weight: .bold, design: .monospaced))
                             .foregroundStyle(Color.lingHolo)
@@ -84,13 +94,19 @@ struct LingShuPreviewSheet: View {
             }
 
             ZStack(alignment: .bottom) {
-                LingShuPDFView(controller: controller)
+                if controller.isHTML {
+                    LingShuWebPreviewView(controller: controller)   // HTML 富页面:WKWebView 原样渲染(CSS/JS),JS 滚动
+                } else {
+                    LingShuPDFView(controller: controller)
+                }
                 if controller.slideshow {   // 全屏演示底部极简控制条(WPS 式)
                     HStack(spacing: 18) {
-                        Button { _ = controller.prev() } label: { Image(systemName: "chevron.left.circle.fill") }.buttonStyle(.plain)
-                        Text("\(controller.pageIndex + 1) / \(controller.pageCount)")
-                            .font(.system(size: 12, weight: .bold, design: .monospaced))
-                        Button { _ = controller.next() } label: { Image(systemName: "chevron.right.circle.fill") }.buttonStyle(.plain)
+                        Button { _ = controller.prev() } label: { Image(systemName: controller.isHTML ? "chevron.up.circle.fill" : "chevron.left.circle.fill") }.buttonStyle(.plain)
+                        if !controller.isHTML {
+                            Text("\(controller.pageIndex + 1) / \(controller.pageCount)")
+                                .font(.system(size: 12, weight: .bold, design: .monospaced))
+                        }
+                        Button { _ = controller.next() } label: { Image(systemName: controller.isHTML ? "chevron.down.circle.fill" : "chevron.right.circle.fill") }.buttonStyle(.plain)
                         Button { _ = controller.setSlideshow(false) } label: { Label("退出", systemImage: "xmark").font(.system(size: 11, weight: .bold)) }.buttonStyle(.plain)
                     }
                     .foregroundStyle(.white.opacity(0.85))
@@ -125,6 +141,11 @@ private struct WindowFullscreenToggler: NSViewRepresentable {
                 if let screen = window.screen ?? NSScreen.main {
                     window.setFrame(screen.visibleFrame, display: true, animate: true)   // 撑满可见区(让本体仍可浮其上)
                 }
+                // 进全屏放映=占屏演示:必须把演示窗提到所有 app 最前(自主模式 app 在后台时尤其重要),
+                // 否则铺满了也压在别的窗后面、用户看不到(用户实测:没全屏置顶)。
+                NSApp.activate(ignoringOtherApps: true)
+                window.makeKeyAndOrderFront(nil)
+                window.orderFrontRegardless()
             } else if let saved = coordinator.savedFrame {
                 window.setFrame(saved, display: true, animate: true)   // 还原退出全屏前的窗口大小
                 coordinator.savedFrame = nil
@@ -162,6 +183,31 @@ private struct LingShuPDFView: NSViewRepresentable {
         }
         if let doc = view.document, let page = doc.page(at: controller.pageIndex), view.currentPage != page {
             view.go(to: page)
+        }
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+    final class Coordinator { var loadedRevision = -1 }
+}
+
+/// HTML 富页面预览:WKWebView 原样渲染(保住 CSS/JS/粒子背景),声明式按 revision 重载,弱引用回灌 controller 供 JS 滚动/取文。
+/// 用 app 内 web 视图替代"丢去浏览器+计算机控制滚"——滚动确定性、免辅助功能、免浏览器焦点被 orb 挡的问题。
+private struct LingShuWebPreviewView: NSViewRepresentable {
+    @ObservedObject var controller: LingShuPreviewController
+
+    func makeNSView(context: Context) -> WKWebView {
+        let view = WKWebView(frame: .zero)
+        view.setValue(false, forKey: "drawsBackground")   // 透出深色底,富页面深色主题更贴
+        controller.webView = view
+        context.coordinator.loadedRevision = -1
+        return view
+    }
+
+    func updateNSView(_ view: WKWebView, context: Context) {
+        controller.webView = view
+        if context.coordinator.loadedRevision != controller.revision, let url = controller.htmlURL {
+            context.coordinator.loadedRevision = controller.revision
+            view.loadFileURL(url, allowingReadAccessTo: url.deletingLastPathComponent())   // 本地 html + 同目录素材(图/css/js)
         }
     }
 

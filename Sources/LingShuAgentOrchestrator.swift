@@ -41,7 +41,7 @@ enum LingShuOrchestratorEvent: Sendable {
 /// 隔离的是「完整上下文」,共享的是「账本薄摘要」——既真并行又不路由模糊。
 actor LingShuAgentOrchestrator {
     private var concurrency: LingShuConcurrencyManager
-    private var sessions: [String: LingShuAgentSession] = [:]
+    private var sessions: [String: any LingShuAgentSessioning] = [:]
     private var entries: [String: LingShuLedgerEntry] = [:]
     private var order: [String] = []
     /// 正在后台跑的子任务驱动 Task(供"停止并夺回"真正取消跑飞的隔离子任务——它们不计入主状态 hasActiveModelCall,
@@ -57,7 +57,7 @@ actor LingShuAgentOrchestrator {
     /// 子任务**验收 + 恢复**钩子(maker≠checker):(subID, 目标, 子会话, 初始结果) → 驱动到验收通过/恢复后的最终结果。
     /// 由 LingShuState 注入,内部委托主状态统一的 `verifyAndContinue`(撞顶恢复 + 多轮验收 + 测试/运行门 + 停滞交还),
     /// 让子任务与主线程**同一套执行恢复力**,杜绝「主强子弱:复杂工程崩了直接判异常」。
-    private var acceptanceHook: (@MainActor @Sendable (String, String, LingShuAgentSession, LingShuAgentRunResult) async -> LingShuAgentRunResult)?
+    private var acceptanceHook: (@MainActor @Sendable (String, String, any LingShuAgentSessioning, LingShuAgentRunResult) async -> LingShuAgentRunResult)?
 
     init(maxConcurrent: Int = 3) {
         concurrency = LingShuConcurrencyManager(maxConcurrent: maxConcurrent)
@@ -67,7 +67,7 @@ actor LingShuAgentOrchestrator {
         onEvent = sink
     }
 
-    func setAcceptanceHook(_ hook: @escaping @MainActor @Sendable (String, String, LingShuAgentSession, LingShuAgentRunResult) async -> LingShuAgentRunResult) {
+    func setAcceptanceHook(_ hook: @escaping @MainActor @Sendable (String, String, any LingShuAgentSessioning, LingShuAgentRunResult) async -> LingShuAgentRunResult) {
         acceptanceHook = hook
     }
 
@@ -88,7 +88,7 @@ actor LingShuAgentOrchestrator {
     /// 派生一条隔离子会话并跑到第一个停止点(完成/卡住/失败),把摘要事件落账本 + 推送。
     /// 真并行 = 并发调用本方法(每条子会话是独立 actor)。
     @discardableResult
-    func spawn(id: String, objective: String, session: LingShuAgentSession) async -> LingShuAgentRunResult {
+    func spawn(id: String, objective: String, session: any LingShuAgentSessioning) async -> LingShuAgentRunResult {
         sessions[id] = session
         let admitted = concurrency.requestAdmission(threadID: id, summary: objective)
         upsert(id: id, objective: objective, status: .running, summary: admitted ? "已开始" : "排队中(超并发上限)")
@@ -105,7 +105,7 @@ actor LingShuAgentOrchestrator {
     /// spawn_task 把"已满,稍后再派/本会话顺序做"如实回报给模型。这样杜绝无界排队堆积(模型一次
     /// 甩出几十个子任务排队空耗),把"最多 3 条正在运行"做成派生点的硬闸,而非仅靠内部队列兜。
     @discardableResult
-    func spawnDetached(id: String, objective: String, session: LingShuAgentSession) async -> Bool {
+    func spawnDetached(id: String, objective: String, session: any LingShuAgentSessioning) async -> Bool {
         guard concurrency.hasCapacity else { return false }   // 满 3 → 拒绝(背压),不排队
         sessions[id] = session
         objectives[id] = objective
@@ -236,7 +236,7 @@ actor LingShuAgentOrchestrator {
     }
 
     /// 续跑驱动:从中断处 continueLoop()(重发中断那步模型调用),再过统一验收。
-    private func driveContinue(id: String, objective: String, session: LingShuAgentSession) async {
+    private func driveContinue(id: String, objective: String, session: any LingShuAgentSessioning) async {
         var result = await session.continueLoop()
         if let hook = acceptanceHook { result = await hook(id, objective, session, result) }
         record(id: id, objective: objective, result: result)

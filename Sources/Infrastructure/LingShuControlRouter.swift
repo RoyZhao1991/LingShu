@@ -81,6 +81,15 @@ final class LingShuControlRouter {
             ]
         ],
         [
+            "name": "lingshu_voice_text",
+            "description": "**模拟一句语音指令转写收口后的完整下游处理**(post-STT 入口):无法直接灌音频时,从『音频转文字之后』这一点注入——会先掐掉正在播的 TTS(等价 barge-in 打断),再把这句当语音输入交给大脑(在岗/演示中=自动当『中途插话』注入正在跑的会话/批量,先答再问是否续)。用于完整测试『演示中打断、让它翻到第N页/换内容』这类语音交互。args: text。",
+            "inputSchema": [
+                "type": "object",
+                "properties": ["text": ["type": "string", "description": "已转写成文字的那句语音指令"]],
+                "required": ["text"]
+            ]
+        ],
+        [
             "name": "lingshu_get_chat",
             "description": "读取最近若干条对话消息(含说话人、是否用户、是否加载中)。",
             "inputSchema": [
@@ -225,6 +234,15 @@ final class LingShuControlRouter {
             "inputSchema": ["type": "object", "properties": ["limit": ["type": "integer", "description": "返回条数,默认 12"]]]
         ],
         [
+            "name": "lingshu_set_loop_variant",
+            "description": "切换核心 agent 循环引擎(新旧热切换,调试用):classic=经典连续循环 / nested=嵌套分阶段验收循环(大LOOP含多阶段,任务阶段验交付物、互动阶段不验、阶段间断点续)。持久化跨重启,下回合生效。一键切回 classic 同此。状态见 lingshu_status 的 loopVariant。args: variant(classic|nested)。",
+            "inputSchema": [
+                "type": "object",
+                "properties": ["variant": ["type": "string", "description": "classic 或 nested"]],
+                "required": ["variant"]
+            ]
+        ],
+        [
             "name": "lingshu_get_trace",
             "description": "读取最近若干条执行轨迹事件(路由/模型调用/工具输出等),用于核验内部流转。",
             "inputSchema": [
@@ -309,6 +327,17 @@ final class LingShuControlRouter {
             // 带上待发附件(与 UI sendPrompt 同口径)——修"MCP 发送时附件没一并带出"的 bug。
             let reply = state.submitTextWithAttachments(text, source: source)
             return (jsonText(["submitted": text, "immediateReply": reply]), false)
+        case "lingshu_voice_text":
+            // post-STT 入口:模拟"一句语音指令已转写收口"的完整下游——先掐 TTS(等价 barge-in),再走 submitVoiceTranscript
+            // (=submitTextInput(.voice);在岗/演示中会自动当『中途插话』注入正在跑的会话/批量)。供无音频时完整测语音打断/翻页。
+            guard let text = (arguments["text"] as? String), !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                return ("缺少参数 text", true)
+            }
+            let wasSpeaking = state.voiceManager?.isSpeakingOrQueued ?? false
+            let wasActive = state.hasActiveModelCall
+            if wasSpeaking || wasActive { state.interruptSpeechOutput?() }   // 掐正在播的 TTS,与真实 barge-in 同
+            let vReply = state.submitVoiceTranscript(text)
+            return (jsonText(["voiceSubmitted": text, "bargedInTTS": wasSpeaking, "wasActive": wasActive, "immediateReply": vReply]), false)
         case "lingshu_interject":
             // 流程纠正(干预):把纠正注入正在跑的会话,看到 agent 跑偏时即时纠偏(回合边界采纳)。
             guard let text = (arguments["text"] as? String), !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
@@ -439,6 +468,14 @@ final class LingShuControlRouter {
                 "endpoint": state.endpoint,
                 "keyConfigured": !state.apiKey.isEmpty
             ]), false)
+        case "lingshu_set_loop_variant":
+            // 切换核心循环引擎(classic|nested),持久化跨重启 + 清会话 holder 让下回合用新引擎重建。
+            guard let raw = (arguments["variant"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  let variant = LingShuAgentLoopVariant(rawValue: raw) else {
+                return ("缺少/非法参数 variant(应为 classic 或 nested)", true)
+            }
+            state.setAgentLoopVariant(variant)
+            return (jsonText(["ok": state.agentLoopVariant == variant, "loopVariant": state.agentLoopVariant.rawValue]), false)
         case "lingshu_main_session":
             // 读常驻主会话上下文尾部(验证子任务简报/纠正是否注入)。args: limit。
             let limit = (arguments["limit"] as? Int) ?? 12
@@ -571,6 +608,7 @@ final class LingShuControlRouter {
         [
             "coreState": state.coreStateDisplay,
             "loopPhase": state.loopPhase.rawValue,   // 理解中/规划中/执行中/验收中(空=空闲)
+            "loopVariant": state.agentLoopVariant.rawValue,   // classic=经典连续 / nested=嵌套分阶段
             "missionTitle": state.missionTitle,
             "missionStatus": state.missionStatus,
             "autonomousPhase": state.autonomousRun.phase.rawValue,

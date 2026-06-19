@@ -124,21 +124,46 @@ extension LingShuState {
     /// - 在岗会话**空闲**（上一段已收尾）→ 起一条新回合续跑（resume）。
     func handleStandingPersonInputIfNeeded(prompt: String, taskRecordID: String?) -> String? {
         guard isStandingPersonOnDuty, let session = autonomousSessionHolder else { return nil }
+        // **暂停态:任何输入都不起回合(2026-06-20)**:暂停 = 全停下等手动「继续」(`resumeAutonomousRun` 按钮),
+        // 语音/唤醒词/文字都不该绕过暂停拉起新处理。给一句提示、消费掉这条输入(返回 "" = 已接管不再下发)。
+        if autonomousRun.phase == .paused {
+            missionStatus = "已暂停,点「继续」我才接着听你说。"
+            appendTrace(kind: .system, actor: "灵枢", title: "暂停中·忽略输入", detail: String(prompt.prefix(24)))
+            return ""
+        }
+        // **"退出演示/关闭演示"= 确定性关掉演示窗(2026-06-19 修"说退出演示却没退")**:实测 DeepSeek 口头答应却不调
+        // present_fullscreen(false),故命中显式退出命令 + 预览正开着 → 不走大脑,直接停批量/掐TTS/关预览/抑制重弹 + 出声确认。
+        if previewController.isPresented, LingShuNestedStagePlanner.isExitPresentationCommand(prompt) {
+            return exitPresentationDeterministically(prompt: prompt)
+        }
         let recordID = autonomousRunRecordID ?? createTaskExecutionRecord(for: "灵枢在岗")
         autonomousRunRecordID = recordID
         appendTaskRecordMessage(recordID, actor: "主人", role: "指令", kind: .core, text: prompt)
 
-        // 正在跑长回合 → 中途插话注入(通用 LOOP),不重启那条脑回路。
+        // **互动 vs 执行,对新输入处理不同(用户定调 2026-06-19,通用"像一个人"逻辑)**:
         if autonomousRunTask != nil {
-            batchInterruptRequested = true   // 若正在 run_steps 批量演示/连续执行,让它在下一步边界停下交还大脑
-            appendTrace(kind: .system, actor: "灵枢", title: "在岗插话", detail: String(prompt.prefix(40)))
-            missionStatus = "收到插话，正在回应…"
-            Task { @MainActor [weak self] in
-                guard let self else { return }
-                let caught = await session.injectCorrection(self.liveInterjectionFraming(prompt))
-                // 没接住(回合刚好收尾)→ 退回常规续跑,别把这句吞了。
-                if !caught { self.resumeStandingSession(session: session, prompt: prompt, recordID: recordID) }
+            // ── 互动中(演示/预览开着)= 接收任务的场合 ──:不放弃当前互动,**注入让大脑判断**:
+            //   控制(继续/翻页)当场做;"放下一切马上做"的紧急任务→当场做;其余新任务→ spawn_task 派后台、接着演示。
+            //   先停批量+掐 TTS 让大脑有机会在回合边界采纳这次注入。
+            if previewController.isPresented {
+                batchInterruptRequested = true
+                interruptSpeechOutput?()
+                appendTrace(kind: .system, actor: "灵枢", title: "互动中收到输入", detail: String(prompt.prefix(40)))
+                missionStatus = "收到,正在判断…"
+                let framed = interactionInputFraming(prompt)
+                Task { @MainActor [weak self] in
+                    guard let self else { return }
+                    let caught = await session.injectCorrection(framed)
+                    if !caught { self.resumeStandingSession(session: session, prompt: prompt, recordID: recordID, sentText: framed) }
+                }
+                return ""
             }
+            // ── 执行任务中(非互动)= 单线程·打断即放弃 ──:直接放弃执行中的工作,起全新回合处理新指示("继续"交大脑据上下文判)。
+            batchInterruptRequested = true
+            interruptSpeechOutput?()
+            appendTrace(kind: .system, actor: "灵枢", title: "打断·放弃执行中", detail: String(prompt.prefix(40)))
+            missionStatus = "收到,放下手头的事,正在回应…"
+            resumeStandingSession(session: session, prompt: prompt, recordID: recordID, sentText: interruptedResumeFraming(prompt))
             return ""
         }
 
@@ -146,9 +171,22 @@ extension LingShuState {
         return ""   // 已接管：真实回复由 finishAutonomousRun 的在岗分支回灌
     }
 
+    /// 「互动中收到新输入」给大脑的判断措辞(通用"像一个人":互动=接收任务的场合)。
+    func interactionInputFraming(_ prompt: String) -> String {
+        """
+        [主人在互动(演示/答疑)中对你说话 · 最高优先级] \(prompt)
+        像一个正在做演示的人那样判断这句是什么、并据此处理:
+        · **控制当前互动**(继续/下一页/上一页/跳到第X页/这页讲细点/停下)→ 当场照做,处理完**从当前进度接着演示**,不重头。
+        · **要你"放下手里一切、马上去做"的紧急任务**→ 停下当前互动,马上做。
+        · **其余只是顺手安排的新任务**(非紧急,如"顺便帮我做个X")→ **别打断演示**:用 `spawn_task` 把它派到后台并行做,口头一句"好,记下了,我后台做完汇报你",然后**从当前进度接着演示**。后台任务完成后系统会择机汇报,你不用守着它。
+        不要把这次说话当成把整件事从头重来。
+        """
+    }
+
     /// 在岗空闲时起一条新回合续跑（与插话注入区分）。**不再前置感知态势**——
     /// 直接问的问题就干净地答(屏幕变化只静默监测,要看屏自己 screen_capture),避免"介绍一下你自己"被态势前缀污染成"在岗待命"。
-    func resumeStandingSession(session: LingShuAgentSession, prompt: String, recordID: String) {
+    /// `sentText`:真正发给模型的文本(默认=prompt);打断续接时传"打断措辞"包装版,而 trace/状态仍用 prompt 原文,不污染界面。
+    func resumeStandingSession(session: any LingShuAgentSessioning, prompt: String, recordID: String, sentText: String? = nil) {
         enterAutonomousRunningState(statusLine: "在岗处理：\(String(prompt.prefix(20)))")
         missionTitle = "灵枢在岗"
         appendTrace(kind: .runtime, actor: "灵枢", title: "在岗接令", detail: String(prompt.prefix(40)))
@@ -157,23 +195,55 @@ extension LingShuState {
         let previous = autonomousRunTask
         autonomousRunTask?.cancel()
         autonomousRunTask = Task { @MainActor [weak self] in
-            await previous?.value
+            await previous?.value   // 单线程:等被取消的上一条回合真停下(在回合边界退出,历史良构),新回合才接手
             guard let self, !Task.isCancelled else { return }
-            let initial = await session.resume(prompt)
-            let result = await self.verifyAndContinue(session: session, result: initial, userRequest: prompt, taskRecordID: recordID, artifactBaseline: baseline)
+            let initial = await session.resume(sentText ?? prompt)
+            // 常驻在岗路径关掉"回复文本声称产文件"的验收触发(trustReplyClaim:false):在岗轻量/对话/演示回合
+            // 重活都派发给隔离 session 各自验收、自己几乎不直接产交付物,其回复一提到既有文件就误进验收→空转停滞("讲解完卡处理中")。
+            let result = await self.verifyAndContinue(session: session, result: initial, userRequest: prompt, taskRecordID: recordID, artifactBaseline: baseline, trustReplyClaim: false)
             guard !Task.isCancelled else { return }
             self.finishAutonomousRun(result: result, recordID: recordID)
         }
     }
 
-    /// 「主人中途插话」的注入措辞（通用 LOOP）：先口头回应,该停就停、该改就改;答完若在连续任务/演示中,
-    /// 简短问一句是否继续,再**从当前进度**接着推进(断点续演,不重头)。
-    func liveInterjectionFraming(_ prompt: String) -> String {
+    /// 确定性退出演示:停批量 + 掐 TTS + 关预览(抑制重弹)+ 停在飞回合 + 出声确认。不靠大脑(它常口头答应却不真关)。
+    /// 出声确认走 chatMessages 追加(根视图 speakLatestReplyIfNeeded 念全文,自主模式主人听得到);保持在岗待命。
+    private func exitPresentationDeterministically(prompt: String) -> String {
+        batchInterruptRequested = true                                            // run_steps 批量在下一步边界停
+        interruptSpeechOutput?()                                                  // 立刻掐当前 TTS
+        previewController.suppressAutoReopenUntil = Date().addingTimeInterval(5)  // 5s 内拒绝任何 open/进全屏(防重弹)
+        _ = previewController.close()                                             // 关演示窗(幂等,isPresented=false)
+        autonomousRunTask?.cancel(); autonomousRunTask = nil                       // 停在飞的演示回合(若还在跑批量)
+        appendTrace(kind: .system, actor: "灵枢", title: "退出演示", detail: String(prompt.prefix(30)))
+        lingShuControlLog("flow/exit-present: 确定性退出演示 cmd「\(prompt.prefix(20))」")
+        let ack = "好的,演示已退出,我在岗待命,有需要随时说。"
+        chatMessages.append(.init(speaker: "灵枢", text: ack, isUser: false, taskRecordID: autonomousRunRecordID))
+        missionStatus = "演示已退出,在岗待命。"
+        enterCoreState(.standby, resetTimer: false)
+        return ""
+    }
+
+    /// 纯唤醒词("灵枢")打断:**真停掉在飞的处理**(主回合 + 自主/在岗回合),回到聆听。保持在岗(不下岗)。
+    /// 修"喊灵枢有'叮'声却打不断理解中"(2026-06-20):原纯唤醒打断只置 `batchInterruptRequested`,而那只停 run_steps 批量;
+    /// screen_capture/scroll 这类**模型调用循环**靠 `Task.isCancelled` 才退 → 没 cancel 任务就停不下来。这里把在飞 Task 真取消。
+    func interruptInFlightForWakeWord() {
+        activeAgentTurnTask?.cancel(); activeAgentTurnTask = nil
+        autonomousRunTask?.cancel(); autonomousRunTask = nil
+        isModelReplying = false
+        batchInterruptRequested = true     // 同时停 run_steps 批量(演示翻页)
+        setLoopPhase(.idle)
+        missionTitle = "灵枢在岗"
+        lingShuControlLog("voice/barge: 纯唤醒打断·已 cancel 在飞回合(主+自主),回到聆听")
+    }
+
+    /// 「执行中被打断 → 放弃当前工作、起新回合」时给大脑的措辞(单线程语义):让它据会话上下文决定继续还是改做新指示。
+    func interruptedResumeFraming(_ prompt: String) -> String {
         """
-        [主人中途插话/提问 · 最高优先级] \(prompt)
-        先用一两句话**口头回应**（用 `speak` 出声）：是提问就当场答清楚；是让你停下/换个方式就照做。
-        回应完，如果你正在做演示或连续任务：用一句话问主人「要继续吗」，得到肯定再**从当前这一页/这一步接着往下**（断点续演，别从头来）；如果主人让停就停下待命。
-        不要把这次插话当成重新开始整件事。
+        [主人在你执行中打断了你 · 最高优先级] 新指示:\(prompt)
+        你刚才手头的事**已经停下**了。先看这条新指示:
+        · 若是"继续/接着讲/接着做"这类——回到刚才的进度,**从断点接着做**(会话历史里有你刚才在做什么、做到哪)。
+        · 否则——**放下刚才的事**,按这条新指示来。
+        不要把它当成把整件事从头重做。
         """
     }
 }

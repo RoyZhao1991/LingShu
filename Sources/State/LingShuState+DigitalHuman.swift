@@ -43,6 +43,10 @@ extension LingShuState {
         if isModelExecuting || runtimePhase != .idle { signals.insert(.hand) }
         if perceptionGateway.isOwnerIdentityLocked { signals.insert(.owner) }
 
+        // 处理中(与忙音同口径:在岗回合/模型/LOOP 在跑且不在朗读)→ 本体随忙音"嘟"声在几种颜色间切换,等待不无聊。
+        let pulsing = (autonomousRunTask != nil || hasActiveModelCall || loopPhase.isActive) && !voice.isSpeakingOrQueued
+        let pulseIndex: Int? = pulsing ? LingShuCueSound.busyPulseIndex : nil
+
         if let directive = digitalHumanDirective, !directive.isExpired(at: Date()) {
             let effectiveIntensity = directive.expression == .speaking
                 ? max(directive.intensity, Double(voice.outputLevel))
@@ -70,7 +74,7 @@ extension LingShuState {
             case .understanding: expression = .thinking;   text = "理解中"; phaseIntensity = 0.42
             case .planning:      expression = .thinking;   text = "规划中"; phaseIntensity = 0.58
             case .executing:     expression = .executing;  text = audibleOutput ? "演示中" : "执行中"; phaseIntensity = 0.82
-            case .verifying:     expression = .confirming; text = "验收中"; phaseIntensity = 0.64
+            case .verifying:     expression = .confirming; text = "结果验证"; phaseIntensity = 0.64
             case .idle:          expression = .executing;  text = missionTitle
             }
             if audibleOutput { phaseIntensity = min(1, (phaseIntensity ?? 0.6) + Double(voice.outputLevel) * 0.35) }
@@ -110,7 +114,8 @@ extension LingShuState {
             // 发声时强度 = 基线 + 真实音量加成(随 outputLevel 提升,封顶 1)。LOOP 环节用各自的脉动强度(phaseIntensity)区分快慢。
             intensity: expression == .speaking ? min(1, expression.baseIntensity + Double(voice.outputLevel) * 0.3) : (phaseIntensity ?? expression.baseIntensity),
             activeSignals: signals,
-            isDirectiveDriven: false
+            isDirectiveDriven: false,
+            pulseIndex: pulseIndex   // 处理中随忙音切色
         )
     }
 

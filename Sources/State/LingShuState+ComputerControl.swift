@@ -1,5 +1,6 @@
 import Foundation
 import CoreGraphics
+import AppKit
 
 /// 计算机直接操作四肢的工具桥(计划 §9):把 LingShuComputerControl 能力暴露成 agent 工具。
 /// **加工具不加控制器**——截屏/列元素/点击/键入/滚动都是大脑可调的手段,要不要用、怎么用由大脑决定。
@@ -37,9 +38,21 @@ extension LingShuState {
         }
         if requiresAccessibility, !LingShuComputerControl.isAccessibilityTrusted() {
             _ = LingShuComputerControl.requestAccessibilityTrust()
-            return "需要『辅助功能(Accessibility)』授权才能控制鼠标键盘。我已弹出系统提示——请到『系统设置 > 隐私与安全性 > 辅助功能』勾选\"灵枢\"后让我重试。"
+            openAccessibilitySettingsPane()   // 确定性带主人到那一页(比让大脑去截屏找按钮可靠)
+            return """
+            【终止当前尝试,别再循环】我**没有**辅助功能权限,所以**点不了任何界面元素、也点不了那个系统授权弹窗本身**——
+            点系统授权弹窗本来就需要这个权限,我去点=鸡生蛋蛋生鸡的死循环。**绝不要再 screen_capture / list_ui_elements / click 去找那个弹窗自己点**。
+            正确做法只有一个:**口头让主人手动授权**——我已弹出系统提示并打开了『系统设置 > 隐私与安全性 > 辅助功能』,请主人在那里把"灵枢"勾上(若已勾上却仍无效=开发期重打包导致旧签名失配:把"灵枢"那行**关掉再打开**,或减号删掉再加号把 \(Bundle.main.bundlePath) 加回来,然后重启灵枢)。勾好后跟我说一声我再试。**这一步交给主人,我做不了,现在就把这话告诉主人、停下别再试。**
+            """
         }
         return nil
+    }
+
+    /// 确定性打开『系统设置 > 隐私与安全性 > 辅助功能』面板(被要求授权时带主人直达,免大脑徒劳截屏找)。
+    func openAccessibilitySettingsPane() {
+        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
+            NSWorkspace.shared.open(url)
+        }
     }
 
     /// 全部计算机操作工具。始终挂在会话上(授权在 call-time 判,开关即时生效),纯对话/只读模式不挂。

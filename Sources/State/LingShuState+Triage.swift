@@ -123,16 +123,20 @@ extension LingShuState {
         }
         let recordProvider: @MainActor @Sendable () -> String? = { [weak self] in self?.agentSubTaskRecords[subID] }
         let tools = withPhaseTracking(   // 相位跟踪:派发任务也驱动本体显示理解/规划/执行/验收(光球随环节变色变脉动)
-            agentBuiltinTools(recordIDProvider: recordProvider)
+            // 继承父上下文的 shell 预授权:在岗/自主完整授权时给 autoAllowShell,否则派发任务跑 shell 会卡在审批框(见 dispatchedTaskExecutionPolicy)。
+            agentBuiltinTools(recordIDProvider: recordProvider, executionPolicy: dispatchedTaskExecutionPolicy)
             + [Self.timeTool(), Self.locationTool(), Self.webSearchTool(), recallMemoryTool(), Self.askUserTool(),
                findImagesTool(), acquireResourceTool(),
                updateTaskPlanTool(recordIDProvider: recordProvider), reviewDesignTool(recordIDProvider: recordProvider), speakTool(), digitalHumanTool(), enterManagedModeTool()]
             + previewTools()
+            + browserTools()           // 内置浏览器(网页演示/自动化)
+            + backgroundWatchTools()   // 派发的长任务正是"等外部条件(构建/部署/下载)再续"的主场,必须有 watch_until
+            + scheduledTaskTools()     // 派发任务也能挂定时(如"建好后明天提醒我部署"),接真调度系统,不再伪造 launchd/crontab
         )
         // 注入"最近产出物"上下文:让"运行起来/继续/改一下"这类派发任务接得上(知道刚做了什么、在哪、怎么跑),
         // 不再重新扫工作目录瞎猜(根治"超级玛丽做完了却问我要运行哪个项目")。
         let deliverCtx = recentDeliverablesContext()
-        let sub = LingShuAgentSession(
+        let sub = makeAgentSession(
             id: subID,
             system: Self.dispatchedTaskSystemPrompt(workingDir: codexWorkingDirectory),
             initialMessages: deliverCtx.isEmpty ? [] : [.init(role: .system, content: deliverCtx)],
@@ -141,14 +145,22 @@ extension LingShuState {
             // 安全天花板(防失控),非目标预算——复杂工程的「读→改→构建→测试→修」单段推进
             // 真能远超 40 步(超级玛丽暴露:40 太低,撞顶就被当失败/异常收尾)。抬到 120 让它纯做防失控用;
             // 真停止位仍是目标达成/停滞(5 次重复)/撞顶后由 verifyAndContinue 续跑恢复(见编排器委托)。
-            maxTurns: 120
+            maxTurns: 120,
+            recordIDProvider: recordProvider   // .nested 阶段验收据此定位本派发任务记录
         )
         let orchestrator = agentOrchestrator
         Task { @MainActor [weak self] in
-            let admitted = await orchestrator.spawnDetached(id: subID, objective: prompt, session: sub)
-            guard let self, !admitted else { return }
-            // 满 3 条并行(背压):如实回填,不无限 loading。
-            self.fillDispatchedBubble(taskRecordID, text: "当前已有 3 个任务在并行(上限),这条先没派出去——等一条完成或重发一次。")
+            if await orchestrator.spawnDetached(id: subID, objective: prompt, session: sub) { return }   // 有空位,直接派出
+            // 满并发上限(N=3)→ **不直接拒绝用户任务,改排队**:轮询等空位再自动派出(bubble 保持加载=排队中)。
+            // 老练度补齐(2026-06-19):用户快速连发几条任务时旧逻辑直接拒"重发一次"体验差;改为自动排队续派。
+            // (注:模型自己 spawn_task 的路径仍保持硬背压不变——那是防模型一次甩几十个子任务 runaway,与用户连发不同。)
+            for _ in 0..<300 {   // 最长约 10 分钟(每 2s 查一次空位)
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
+                guard let self, self.agentSubTaskRecords[subID] != nil else { return }   // 已被取消/清掉 → 停止排队
+                if await orchestrator.spawnDetached(id: subID, objective: prompt, session: sub) { return }   // 轮到了,编排器事件接管 bubble
+            }
+            guard let self else { return }
+            self.fillDispatchedBubble(taskRecordID, text: "前面任务排队较久仍没轮到,先没派出去——稍后重发即可。")
             self.agentSubTaskRecords[subID] = nil
         }
         return pending.text
@@ -186,6 +198,7 @@ extension LingShuState {
         - 写代码配测试并 run_command 跑通(全绿)再交付;改已有文件用 edit_file,新建/整体重写才用 write_file。
         - **代码任务=构建通过 + 程序真正运行不崩 + 测试全绿,三者缺一不可**:跑崩了/编译错/报错/抛异常都是**要修复的观测**,不是交付——别拿异常收尾甩给用户,一路修到真跑通。推进用满一段也别停,接着干到目标达成。
         - 需要实时/不确定的事实调 web_search;信息确实不足才 ask_user。
+        - **定时/提醒/"每天X点"/"过一会儿提醒我"这类时间点触发,用 `schedule_task`(原生定时四肢,真持久化、到点把指令交回完整的我处理)——绝不写 launchd plist / crontab / shell 脚本假装设了定时(那是只写文件没接到系统的假象)。等"外部条件满足"才继续则用 `watch_until`。`list_scheduled_tasks`/`cancel_scheduled_task` 管理。
         - **要当面占屏实时演示 / 与主人实时互动答疑 / 接管屏幕操作时**:别自己直接 present_fullscreen 占屏——**先调 `enter_managed_mode`**(写清要实时做什么 + 文件绝对路径),它会弹窗征主人同意;同意后由托管会话接手实时演示/互动,你这条到此交接。普通做事(生成 PPT/写文件/查资料)不必调它。
         - 完成后用一句话给结果 + 关键产出物绝对路径。不暴露内部工具名/机制词。
         """

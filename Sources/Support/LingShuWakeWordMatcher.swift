@@ -52,11 +52,18 @@ enum LingShuWakeWordMatcher {
             keys.append(contentsOf: chKeys)
             consumed += 1
         }
-        if keys.count >= wakeKeys.count, Array(keys.prefix(wakeKeys.count)) == wakeKeys {
+        if keys.count >= wakeKeys.count, keysLooseEqual(Array(keys.prefix(wakeKeys.count)), wakeKeys) {
             let after = trimmed.index(trimmed.startIndex, offsetBy: consumed)
             return tail(of: trimmed, after: after)
         }
         return trimmed
+    }
+
+    /// 两段模糊拼音键序列是否逐音节近似同音(长度相等 + 每位 `syllableLooseEqual`)。
+    static func keysLooseEqual(_ a: [String], _ b: [String]) -> Bool {
+        guard a.count == b.count else { return false }
+        for i in a.indices where !syllableLooseEqual(a[i], b[i]) { return false }
+        return true
     }
 
     /// 剥掉唤醒词后返回**纯指令体**;若整句就是唤醒词(纯触发、没带指令)→ 返回**空串**。
@@ -86,7 +93,7 @@ enum LingShuWakeWordMatcher {
             keys.append(contentsOf: chKeys)
             consumed += 1
         }
-        if keys.count >= wakeKeys.count, Array(keys.prefix(wakeKeys.count)) == wakeKeys {
+        if keys.count >= wakeKeys.count, keysLooseEqual(Array(keys.prefix(wakeKeys.count)), wakeKeys) {
             let after = trimmed.index(trimmed.startIndex, offsetBy: consumed)
             return String(trimmed[after...]).trimmingCharacters(in: cut)
         }
@@ -146,13 +153,40 @@ enum LingShuWakeWordMatcher {
         text.lowercased().filter { !$0.isWhitespace && !$0.isPunctuation }
     }
 
-    /// haystack 是否包含 needle 作为**连续**子序列。
+    /// haystack 是否包含 needle 作为**连续**子序列(**逐音节近似同音**:不要求键完全相等)。
+    /// 放宽原因(实测"喊灵枢唤不醒"高发):严格相等下 ASR 把"枢(shu→su)"听成"说(shuo→suo)""硕(suo)"就整体 miss。
+    /// 改用 `syllableLooseEqual`(声母相同 + 韵母首元音相同即算同音)→ su/suo、jie/jue 这类常见韵母偏差也命中。
     private static func containsConsecutive(_ haystack: [String], _ needle: [String]) -> Bool {
         guard !needle.isEmpty, haystack.count >= needle.count else { return false }
         for start in 0...(haystack.count - needle.count) {
-            if Array(haystack[start..<(start + needle.count)]) == needle { return true }
+            var allMatch = true
+            for k in 0..<needle.count where !syllableLooseEqual(haystack[start + k], needle[k]) { allMatch = false; break }
+            if allMatch { return true }
         }
         return false
+    }
+
+    /// 两个模糊拼音键是否"近似同音":① 完全相等;② **声母相同 且 韵母首元音相同**(治 su↔suo、jie↔jue、xu↔xue 这类 ASR 韵母偏差)。
+    static func syllableLooseEqual(_ a: String, _ b: String) -> Bool {
+        if a == b { return true }
+        let fa = firstVowel(a), fb = firstVowel(b)
+        guard !fa.isEmpty, fa == fb else { return false }            // 韵母首元音必须相同(避免过松)
+        return initialConsonant(a) == initialConsonant(b)            // 且声母相同
+    }
+
+    /// 取声母(首元音之前的辅音串;无辅音返回空)。
+    static func initialConsonant(_ s: String) -> String {
+        let vowels = Set("aeiouü")
+        var out = ""
+        for c in s { if vowels.contains(c) { break }; out.append(c) }
+        return out
+    }
+
+    /// 取韵母首元音(第一个元音字符;无则空)。
+    static func firstVowel(_ s: String) -> String {
+        let vowels = Set("aeiouü")
+        for c in s where vowels.contains(c) { return String(c) }
+        return ""
     }
 
     private static func tail(of text: String, after index: String.Index) -> String {
