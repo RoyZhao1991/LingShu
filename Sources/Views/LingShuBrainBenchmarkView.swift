@@ -125,6 +125,23 @@ struct LingShuBrainBenchmarkResultView: View {
                 Text("通过 \(result.passedCount)/\(result.totalCount)").font(.system(size: 13, weight: .semibold)).foregroundStyle(.white.opacity(0.8))
             }
 
+            // 按难度档的能力水位(易/中/难/极难 各档加权得分)——真正看出模型差距在哪一层
+            if !result.tiers.isEmpty {
+                HStack(spacing: 8) {
+                    ForEach(result.tiers, id: \.label) { tier in
+                        VStack(spacing: 2) {
+                            Text(tier.label).font(.system(size: 10)).foregroundStyle(.white.opacity(0.5))
+                            Text("\(tier.pct)%").font(.system(size: 15, weight: .bold))
+                                .foregroundStyle(tier.pct >= 90 ? Color.lingHolo : (tier.pct >= 60 ? .yellow : .orange))
+                            Text("\(tier.passed)/\(tier.total)").font(.system(size: 9)).foregroundStyle(.white.opacity(0.4))
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 6)
+                        .background(Color.white.opacity(0.04), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+                    }
+                }
+            }
+
             Divider().overlay(Color.white.opacity(0.1))
 
             ScrollView {

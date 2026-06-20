@@ -66,7 +66,8 @@ extension LingShuState {
         let score = LingShuBrainBenchmark.compositeWeighted(fractions)
         let out = LingShuBrainBenchmarkResult(
             brainID: currentBrainID, score: score,
-            passedCount: passedCount, totalCount: LingShuBrainBenchmark.items.count, rows: rows)
+            passedCount: passedCount, totalCount: LingShuBrainBenchmark.items.count, rows: rows,
+            tiers: LingShuBrainBenchmark.tierBreakdown(fractions))
         brainBenchmarkResult = out   // 非 nil → 弹窗
         appendTrace(kind: .result, actor: "脑力测试", title: "完成 · \(score)分(\(out.grade))", detail: "全过 \(passedCount)/\(LingShuBrainBenchmark.items.count) · 脑 \(currentBrainID)")
     }
@@ -97,8 +98,9 @@ extension LingShuState {
         await runBrainBenchmark()
         let r = brainBenchmarkResult
         let rows = r?.rows.map { ["title": $0.title, "difficulty": $0.difficulty, "passed": $0.passed, "score": $0.scoreText] as [String: Any] } ?? []
+        let tiers = r?.tiers.map { ["tier": $0.label, "pct": $0.pct, "passed": $0.passed, "total": $0.total, "weight": $0.weight] as [String: Any] } ?? []
         let obj: [String: Any] = ["score": r?.score ?? 0, "passed": r?.passedCount ?? 0, "total": r?.totalCount ?? 0,
-                                  "grade": r?.grade ?? "", "brain": r?.brainID ?? currentBrainID, "rows": rows]
+                                  "grade": r?.grade ?? "", "brain": r?.brainID ?? currentBrainID, "tiers": tiers, "rows": rows]
         let data = (try? JSONSerialization.data(withJSONObject: obj, options: [.prettyPrinted])) ?? Data("{}".utf8)
         return (String(data: data, encoding: .utf8) ?? "{}", false)
     }

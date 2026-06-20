@@ -86,6 +86,25 @@ final class BrainBenchmarkTests: XCTestCase {
         XCTAssertEqual(LingShuBrainBenchmark.compositeWeighted(["p_inventory": 2.0]), 9, "fraction 截断到 1.0(18/190≈9)")
     }
 
+    func testTierBreakdownShowsWaterline() {
+        // 全过 → 每档 100%
+        let allFull = Dictionary(uniqueKeysWithValues: LingShuBrainBenchmark.items.map { ($0.id, 1.0) })
+        let full = LingShuBrainBenchmark.tierBreakdown(allFull)
+        XCTAssertEqual(full.count, 4, "易/中/难/极难 四档")
+        XCTAssertTrue(full.allSatisfy { $0.pct == 100 })
+        // 典型"弱脑水位":易/中满、难/极难掉 → 分档照出差距(易100 中100 难低 极难0)
+        var weak: [String: Double] = [:]
+        for it in LingShuBrainBenchmark.items where it.difficulty == .easy || it.difficulty == .medium { weak[it.id] = 1.0 }
+        let tb = LingShuBrainBenchmark.tierBreakdown(weak)
+        func tier(_ l: String) -> LingShuBrainBenchmark.TierScore { tb.first { $0.label == l }! }
+        XCTAssertEqual(tier("易").pct, 100)
+        XCTAssertEqual(tier("中").pct, 100)
+        XCTAssertEqual(tier("难").pct, 0, "难档全没过 → 0%,水位差异立现")
+        XCTAssertEqual(tier("极难").pct, 0)
+        // 难题分值确实更高:极难档总权重 > 易档总权重 ×10
+        XCTAssertGreaterThan(tier("极难").weight, tier("易").weight * 10)
+    }
+
     func testBatteryShapeWideSpread() {
         XCTAssertGreaterThanOrEqual(LingShuBrainBenchmark.items.count, 30, "至少 30 题")
         XCTAssertEqual(LingShuBrainBenchmark.items.count, 49)

@@ -230,6 +230,28 @@ enum LingShuBrainBenchmark {
         guard totalWeight > 0 else { return 0 }
         return Int((earned / Double(totalWeight) * 100).rounded())
     }
+
+    /// 单一难度档的得分(加权 %)+ 全过题数 + 题数 + 该档总权重。用来**照出模型能力水位**:
+    /// 易/中通常人人满分,真正拉开差距的是难/极难档——分档看才看得清不同脑卡在哪一层。
+    struct TierScore: Equatable, Sendable, Codable {
+        var label: String   // 易/中/难/极难
+        var pct: Int        // 该档加权得分(0~100)
+        var passed: Int     // 该档全过题数
+        var total: Int      // 该档题数
+        var weight: Int     // 该档总权重(占全局比重)
+    }
+
+    /// 按难度分档给分(让"难题分值高、看水位差异"显式化)。
+    static func tierBreakdown(_ fractions: [String: Double]) -> [TierScore] {
+        Difficulty.allCases.map { d in
+            let its = items.filter { $0.difficulty == d }
+            let w = its.reduce(0) { $0 + $1.weight }
+            let earned = its.reduce(0.0) { $0 + Double($1.weight) * max(0, min(1, fractions[$1.id] ?? 0)) }
+            let passed = its.filter { (fractions[$0.id] ?? 0) >= 0.999 }.count
+            return TierScore(label: d.label, pct: w > 0 ? Int((earned / Double(w) * 100).rounded()) : 0,
+                             passed: passed, total: its.count, weight: w)
+        }
+    }
 }
 
 /// 一次脑力测评的结果(供弹窗 + 持久/上报)。
@@ -240,6 +262,7 @@ struct LingShuBrainBenchmarkResult: Identifiable, Equatable, Sendable {
     var passedCount: Int
     var totalCount: Int
     var rows: [Row]
+    var tiers: [LingShuBrainBenchmark.TierScore] = []   // 按难度档的水位拆解(易/中/难/极难)
     var ranAt: Date = Date()
 
     struct Row: Equatable, Sendable, Identifiable {
