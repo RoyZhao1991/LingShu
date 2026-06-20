@@ -30,8 +30,9 @@ final class LingShuExternalSensoryHub: ObservableObject {
     /// 注入的模型驱动蒸馏器（由 State 设置；nil 时用纯启发式兜底）。
     var todoDistiller: (@MainActor @Sendable ([LingShuExternalSensoryReading]) async -> [LingShuPhoneTodo])?
 
-    private let sources: [String: any LingShuExternalSensorySource]
-    private let descriptors: [LingShuExternalSensoryDescriptor]
+    // var(非 let):支持**运行时动态注册**自编传感器型外围(M2)——内核不变,源随接入生长。
+    private var sources: [String: any LingShuExternalSensorySource]
+    private var descriptors: [LingShuExternalSensoryDescriptor]
     private var consumers: [String: Task<Void, Never>] = [:]
     private var distillTask: Task<Void, Never>?
     private let maxReadings: Int
@@ -56,6 +57,32 @@ final class LingShuExternalSensoryHub: ObservableObject {
     }
 
     var availableSources: [LingShuExternalSensoryDescriptor] { descriptors }
+
+    // MARK: - 动态注册(M2:自编传感器型外围热载上线)
+
+    /// 运行时注册一个新感知源(自编传感器型外围上线即调)。已存在同 id → 先停旧再换新(热替换)。
+    /// `autoEnable` 为 true 时随即启用(开始采集,会自动开主开关)。**内核协议不变,源可插拔生长。**
+    func registerSource(_ source: any LingShuExternalSensorySource, autoEnable: Bool = false) {
+        let id = source.descriptor.id
+        if sources[id] != nil { disableSource(id) }
+        sources[id] = source
+        if let idx = descriptors.firstIndex(where: { $0.id == id }) { descriptors[idx] = source.descriptor }
+        else { descriptors.append(source.descriptor) }
+        if statuses[id] == nil { statuses[id] = .disabled }
+        if autoEnable { enableSource(id) }
+    }
+
+    /// 注销一个动态注册的源(停采集 + 清读数 + 从注册表移除)。
+    func unregisterSource(_ id: String) {
+        if enabledSourceIDs.contains(id) { disableSource(id) }
+        sources[id] = nil
+        descriptors.removeAll { $0.id == id }
+        statuses[id] = nil
+        recentReadings.removeAll { $0.sourceID == id }
+    }
+
+    /// 某 id 是否已注册(供避免重复注册)。
+    func isRegistered(_ id: String) -> Bool { sources[id] != nil }
 
     /// 设置对外广播的蓝牙名(i18n:中文「灵枢」/ 英文「Nous」)。转发给所有蓝牙类源。
     func setBluetoothLocalName(_ name: String) {
@@ -209,11 +236,14 @@ final class LingShuExternalSensoryHub: ObservableObject {
     /// 汇聚成的"一套标准输入"摘要：交给 `LingShuSituationContext` 与视觉/听觉并列注入大脑。
     func situationContribution() -> String? {
         guard hasLiveSignals else { return nil }
+        // 待办 + 近期读数**都呈现**:否则有手机/日历待办时,传感器型外围(自编 source)的读数会被待办挡住、进不了感知链。
+        var parts: [String] = []
         if let todoSummary = LingShuPhoneTodoDistiller.situationSummary(todos: phoneTodos) {
-            return todoSummary
+            parts.append(todoSummary)
         }
         let recent = recentReadings.prefix(3).map { "・\($0.headline)" }.joined(separator: "\n")
-        return recent.isEmpty ? nil : "外接设备感知 · 近期信号：\n\(recent)"
+        if !recent.isEmpty { parts.append("外接设备感知 · 近期信号：\n\(recent)") }
+        return parts.isEmpty ? nil : parts.joined(separator: "\n")
     }
 
     /// 测试/调试注入读数（不经真设备）。

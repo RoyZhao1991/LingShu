@@ -45,6 +45,11 @@ enum LingShuMemoryGardener {
         if candidate.sensitive { return .skip("敏感内容拒入(隐私红线)") }
         let title = candidate.title.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !title.isEmpty else { return .skip("空标题") }
+        // 知识纪律(陈述非祈使):祈使/步骤型候选拒入——知识库只收事实/教训,不收替大脑定步骤的框架
+        // (见 `Docs/能力分层与知识驱动架构方案.md` §3.3;这道闸保证"知识不退化成框架")。
+        if case .imperative(let reason) = LingShuKnowledgeDiscipline.classify(candidate.body) {
+            return .skip("祈使/步骤型不入库(知识须陈述事实/教训):\(reason)")
+        }
 
         // —— 归一:标题或任一别名命中已有 note ——
         let hitID = LingShuMemoryGraph.resolve(name: title, in: notes)

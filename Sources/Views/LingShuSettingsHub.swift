@@ -114,18 +114,21 @@ struct LingShuConnectorsHub: View {
 
     enum Sub: String, CaseIterable, Identifiable {
         case mcp = "MCP 连接器"
-        case peripheral = "外设连接器"
+        case peripheral = "感知连接器"
+        case home = "已连接外设"
         var id: String { rawValue }
         var icon: String {
             switch self {
             case .mcp: "app.connected.to.app.below.fill"
             case .peripheral: "sensor.tag.radiowaves.forward"
+            case .home: "cpu"
             }
         }
         var englishName: String {
             switch self {
             case .mcp: "MCP"
-            case .peripheral: "Peripherals"
+            case .peripheral: "Sensing"
+            case .home: "Peripherals"
             }
         }
     }
@@ -167,6 +170,8 @@ struct LingShuConnectorsHub: View {
                     LingShuConnectorsPanel(registry: state.connectorRegistry).padding(22)
                 case .peripheral:
                     LingShuExternalSensoryView(state: state, hub: state.externalSensory).padding(22)
+                case .home:
+                    LingShuPeripheralsView(state: state, hub: state.peripheralHub).padding(22)
                 }
             }
         }

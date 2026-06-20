@@ -48,23 +48,86 @@ extension LingShuState {
                   let runnerPath = materializeRunner(script: script, name: scriptName, skillID: skill.profile.id)
             else { continue }
             let interpreter = Self.runnerInterpreter(forScriptNamed: scriptName)
+            // 自编/自发现组件的隔离状态:被隔离的(高风险/权限偏高)→ 工具仍可见,但首次运行强制人工审批。
+            let quarantineNotes = LingShuSkillAcquisition.quarantinedRiskNotes(forSkillID: skill.profile.id)
+            // 描述用组件自述职责(mission)优先,让模型知道这条四肢是干什么的、怎么传参。
+            let role = skill.profile.mission.isEmpty ? "由插件提供的工具" : skill.profile.mission
             let specs = skill.manifest.providedTools.map { name in
                 LingShuPluginToolProvider.ToolSpec(
                     name: name,
-                    description: "由插件「\(skill.profile.title)」提供的工具;入参以 JSON 传入,返回脚本输出。"
+                    description: "\(role)(由外围组件「\(skill.profile.title)」提供;入参以 JSON 经 stdin 传入,返回脚本 stdout 输出)"
                 )
             }
-            tools += LingShuPluginToolProvider.makeTools(
+            let made = LingShuPluginToolProvider.makeTools(
                 manifest: skill.manifest, specs: specs,
                 runnerExecutable: interpreter, runnerArguments: [runnerPath], sandbox: true
             )
+            // M4:执行器型(frontmatter 带 actuator_risk)→ physical 每次执行确认;reversible 同工具型(隔离则首次审批)。
+            let actuatorRisk = skill.frontmatter["actuator_risk"].map { LingShuActuatorSafety.Risk.from($0) }
+            let actuatorTarget = skill.frontmatter["actuator_target"] ?? ""
+            tools += made.map { base in
+                if actuatorRisk == .physical {
+                    return actuatorGatedTool(base, name: skill.profile.title, target: actuatorTarget)
+                }
+                if let notes = quarantineNotes {
+                    // **安全红线**:隔离组件的 runner 绝不静默执行——首次调用强制走人工审批(复用 run_command 隔离闸)。
+                    return quarantineGatedTool(base, runnerPath: runnerPath, skillID: skill.profile.id, notes: notes)
+                }
+                return base
+            }
         }
         return tools
     }
 
+    /// M4:执行器物理/不可逆动作的**每次执行确认门**(比首次审批更强:每一次调用都让主人确认,即便会话完整授权)。
+    /// 非交互(自主/无头)安全拒绝、绝不静默触发。复用 run_command 审批基础设施(`forceConfirm`)。
+    private func actuatorGatedTool(_ base: LingShuAgentTool, name: String, target: String) -> LingShuAgentTool {
+        LingShuAgentTool(
+            name: base.name,
+            description: base.description + "(⚠️ 物理/不可逆动作:每次执行都需主人确认)",
+            parametersJSON: base.parametersJSON
+        ) { [weak self] args in
+            guard let self else { return "执行环境不可用。" }
+            let wd = await MainActor.run { self.codexWorkingDirectory }
+            let prompt = LingShuActuatorSafety.confirmationPrompt(actuatorName: name, target: target, command: args)
+            let decision = await self.requestShellApproval(command: prompt, workingDirectory: wd, taskRecordID: nil, forceConfirm: true)
+            guard decision != .deny else {
+                return "⛔ 执行器「\(name)」的物理/对外动作未获主人确认,已拒绝执行(不可逆/对外动作每次都需确认)。"
+            }
+            return await base.handler(args)
+        }
+    }
+
+    /// 把一个隔离组件的 live 工具包成"首次运行强制人工审批"的门(绝不静默执行未审/高风险 runner)。
+    /// 复用既有隔离闸:把 runner 路径登记进 `quarantinedScriptPaths` 再请求审批 → 命中即便会话完整授权也强制弹窗;
+    /// 用户首肯后 `resolveShellApproval` 自动解除隔离,此后该工具正常调用。非交互(自主/无头)按安全默认拒绝、不卡死。
+    private func quarantineGatedTool(_ base: LingShuAgentTool, runnerPath: String, skillID: String, notes: [String]) -> LingShuAgentTool {
+        LingShuAgentTool(
+            name: base.name,
+            description: base.description + "(⚠️ 隔离中:首次运行需主人审批)",
+            parametersJSON: base.parametersJSON
+        ) { [weak self] args in
+            guard let self else { return "执行环境不可用。" }
+            // 仍处隔离 → 先过审批门;已解除 → 直接跑。
+            let stillQuarantined = LingShuSkillAcquisition.quarantinedRiskNotes(forSkillID: skillID) != nil
+            if stillQuarantined {
+                let wd = await MainActor.run { () -> String in
+                    self.quarantinedScriptPaths[runnerPath] = (skillID: skillID, notes: notes)
+                    return self.codexWorkingDirectory
+                }
+                let decision = await self.requestShellApproval(
+                    command: "首次运行自编外围组件 runner:\(runnerPath)", workingDirectory: wd, taskRecordID: nil)
+                guard decision != .deny else {
+                    return "⛔ 外围组件「\(base.name)」处于隔离状态(风险点:\(notes.joined(separator: "; ")));首次运行未获授权,已拒绝执行。"
+                }
+            }
+            return await base.handler(args)
+        }
+    }
+
     /// 把 skill 的 runner 脚本物化到稳定目录(`~/Library/Application Support/LingShu/Skills/runners/<skillID>/`),
     /// 供 P2 动态工具在任意回合调用(独立于 apply_skill 的工作目录物化)。返回脚本绝对路径,写失败返回 nil。
-    private func materializeRunner(script: String, name: String, skillID: String) -> String? {
+    func materializeRunner(script: String, name: String, skillID: String) -> String? {
         let dir = LingShuSkillLoader.defaultDirectory
             .appendingPathComponent("runners", isDirectory: true)
             .appendingPathComponent(skillID, isDirectory: true)

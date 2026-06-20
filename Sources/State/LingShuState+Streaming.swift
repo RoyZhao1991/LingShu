@@ -29,7 +29,12 @@ extension LingShuState {
         guard let index = chatMessages.firstIndex(where: { $0.id == messageID }),
               chatMessages[index].resolvedChoice == nil else { return }
         chatMessages[index].resolvedChoice = option.label
-        _ = submitTextInput(option.label, source: .typed)
+        // ask_choice:有在飞的循环挂起等点选 → 直接唤醒它继续(不另起新输入);否则走旧 route-choice 路径。
+        if let resolver = pendingChoiceResolvers.removeValue(forKey: messageID) {
+            resolver(option.label)
+        } else {
+            _ = submitTextInput(option.label, source: .typed)
+        }
     }
 
     func recordRemoteStreamRetryDiagnostic(_ line: String, actor: String) {

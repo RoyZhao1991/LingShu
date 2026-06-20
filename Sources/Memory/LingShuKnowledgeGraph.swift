@@ -55,7 +55,8 @@ final class LingShuKnowledgeGraph {
         let hits = recall(query, limit: limit).filter { !$0.sensitive }
         guard !hits.isEmpty else { return nil }
         if reinforceHits { reinforce(ids: hits.map { $0.id }) }
-        return "知识图谱「\(query)」:\n" + hits.map { note in
+        // 召回措辞永远"供参考,自行判断"——知识是决策参考,绝不写成规则/必须(知识纪律,见方案 §3.2/§3.3)。
+        return "知识图谱「\(query)」(\(LingShuKnowledgeDiscipline.recallDisclaimer)):\n" + hits.map { note in
             "- [\(note.kind.rawValue)] \(note.title):\(note.body.prefix(120))"
         }.joined(separator: "\n")
     }
@@ -85,6 +86,19 @@ final class LingShuKnowledgeGraph {
             break
         }
         return action
+    }
+
+    /// 决策知识种子(方案 P0②):首启把第一个知识包种进图谱(陈述性事实/教训)。幂等——有标记笔记即跳过。
+    /// 返回本次新种条数(0 = 已种过)。每条仍走 `remember`(过纪律闸 + 园丁去重),所以重复调用安全。
+    @discardableResult
+    func seedDecisionKnowledgeIfNeeded(now: Date = Date()) -> Int {
+        if notes.contains(where: { $0.title == LingShuSeedKnowledge.markerTitle }) { return 0 }
+        var seeded = 0
+        for candidate in LingShuSeedKnowledge.candidates {
+            if case .create = remember(candidate, now: now) { seeded += 1 }
+        }
+        _ = remember(LingShuSeedKnowledge.markerCandidate, now: now)   // 落幂等标记
+        return seeded
     }
 
     // MARK: - 维护(由 dreaming 调:衰减 → 补链 → 剪枝归档,带上限护栏)

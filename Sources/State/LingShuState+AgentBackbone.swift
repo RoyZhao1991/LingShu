@@ -127,7 +127,7 @@ extension LingShuState {
         }
         let tools = withPhaseTracking(withBatchRunner(   // 相位跟踪:每个工具调用前把 LOOP 阶段切到理解/规划/执行,本体实时显示
             agentBuiltinTools(recordIDProvider: { [weak self] in self?.currentAgentTurnRecordID })
-            + [Self.timeTool(), Self.locationTool(), Self.webSearchTool(), findImagesTool(), acquireResourceTool(), discoverSkillTool(), updateTaskPlanTool(recordIDProvider: { [weak self] in self?.currentAgentTurnRecordID }), reviewDesignTool(recordIDProvider: { [weak self] in self?.currentAgentTurnRecordID }), recallMemoryTool(), perceiveTool(), pushNotificationTool(), rememberCredentialTool(), listCredentialsTool(), speakTool(), digitalHumanTool(), enterManagedModeTool(), Self.askUserTool(), spawnTaskTool(adapter: adapter)]
+            + [Self.timeTool(), Self.locationTool(), Self.webSearchTool(), findImagesTool(), acquireResourceTool(), discoverSkillTool(), authorComponentTool(), discoverDevicesTool(), peripheralsTool(), labelPeripheralTool(), askChoiceTool(), updateTaskPlanTool(recordIDProvider: { [weak self] in self?.currentAgentTurnRecordID }), reviewDesignTool(recordIDProvider: { [weak self] in self?.currentAgentTurnRecordID }), recallMemoryTool(), perceiveTool(), pushNotificationTool(), rememberCredentialTool(), listCredentialsTool(), speakTool(), digitalHumanTool(), enterManagedModeTool(), Self.askUserTool(), spawnTaskTool(adapter: adapter)]
             + previewTools()
             + browserTools()           // 内置多 tab 浏览器(上网/网页自动化测试)
             + computerControlTools()   // 计算机直接操作四肢(授权在 call-time 判,计划 §9)
@@ -152,9 +152,10 @@ extension LingShuState {
         - 工作目录:\(codexWorkingDirectory)。
         - **先计划后执行(LOOP 标准,决不能省)**:落地任何**多步任务**(凡要写文件/跑命令/做交付物的都算),**你的第一个动作必须是真的调用 `update_plan` 工具**——**这是一次工具调用,不是在分析/正文里口头说一句"我的计划是…"就算**(口头说不算数,必须 update_plan)。调用时给出:**① `goal`=一句话总目标**(高度抽象概括,如「构建一个清分结算系统」「给课程通知做一份汇报 PPT」,**不是复述需求原文**);**② `steps`=3–7 步抽象计划**(每步是**阶段性里程碑/分步目标,不绑定具体实现路径**——具体用什么方式做、走哪条路是你在推进中自己摸索的,可随时换法)。之后严格按计划逐步执行:每开始一步标 in_progress、做完标 completed(再调 update_plan)。让全程"先有计划、再逐步推进、状态可见"。只有简单一问一答 / 纯对话才跳过 plan。
         - **想好的连贯序列就批量执行(通用,不止演示)**:当你已把接下来一串动作都想清楚了(逐页讲、逐条念、连续点几下界面…),用 `run_steps` 把它们一次性按序排上跑完,**别一步一个回合地来回往返**——逐步往返既慢又会在节点间卡顿,批量则一气呵成。批量随时可被主人插话/取消打断(停在当前步交还给你)。这就是"先理解、再规划、然后顺滑执行"。
-        - **有产出物优先产出物**:凡是"做/写/生成 PPT、文档、脚本、爬虫、代码…"这类有交付物的请求,必须**真的用 write_file/run_command 把文件落到工作目录**,并在回复里给出文件绝对路径;**绝不允许只口头说"已完成"而没有真文件**。做 PPT 可写 HTML 或用脚本生成 pptx;做爬虫写 .py 并按需运行。
+        - **有产出物优先产出物**:凡是"做/写/生成 PPT、文档、脚本、爬虫、代码…"这类有交付物的请求,必须**真的用 write_file/run_command 把文件落到工作目录**,并在回复里给出文件绝对路径;**绝不允许只口头说"已完成"而没有真文件**。做 PPT 可写 HTML 或用脚本生成 pptx;做爬虫写 .py 并按需运行。**但反过来:动作/控制型任务(接入设备、开关灯、操作电脑、调音量、控外设…)的交付是【真实效果】不是文件**——把设备真控到位/动作真生效才算完成;写一篇"怎么接入/怎么用"的说明文档 ≠ 完成,绝不用产出物冒充本该亲手做到的动作。
         - **写代码/改工程的正确手法**:① 先 `read_file`(带行号,大文件用 offset/limit 分段读全)看清现状,别凭空改;② **改已有文件的局部用 `edit_file`**(唯一匹配 old_string→new_string,不重写整文件)——新建或整体重写才用 `write_file`;③ 用 `run_command` 跑 grep 定位、装依赖、编译、跑测试,据结果迭代;④ **写代码必须配测试用例并跑通(全绿)——这是硬步骤,不是可选项**:用 write_file 写测试文件(用例数随复杂度增多)、用 run_command 跑测试框架(swift test / pytest / npm test / go test…)直到全部通过,测试文件也算产出物。**代码任务的验收门会确定性检查"有测试且全绿"+"程序真正构建/运行起来不崩",没测试、没跑通、或运行期崩溃一律打回。** ⑤ **可运行的程序(app/服务/CLI/游戏)还要真的把它跑起来验证不崩**——run_command 真构建+真运行,**跑崩了/编译错/抛异常都是要修复的观测,绝不拿异常当交付收尾**,一路修到真跑通;一段推进用满预算也别停,接着干到目标达成。大型多文件工程也按"读→改→搜→测→运行→验收"循环逐文件推进。
         - **有固化方案优先固化方案**:做 PPT、汇报等可能有现成专家技能(含打磨好的设计系统和自带生成器)。动手前先调 **apply_skill** 看有没有匹配技能,有就按它的模板/生成器推进,别从零硬写。**apply_skill 没有匹配、又遇到不擅长的新领域时,可调 discover_skill 联网找现成高质量技能自动安装**(纯提示技能直接装、带脚本技能过安全审核;装好再 apply_skill 用)。
+        - **现有四肢都做不到、但一段脚本能搞定的能力,就自己给自己造一条新四肢——调 `author_component`(自我编程外围组件)**:你提供组件名、要暴露的工具名、职责与入参说明、runner 语言与脚本代码(从 stdin 读 JSON 入参、把结果打到 stdout)、声明的最小权限(只声明真要碰的,如某个公开 API 的域名)、一个沙箱试跑用的 test_input。系统会自动:静态安全门 → P3 沙箱里用 test_input 真跑一遍 → 风险审 → 无风险才上线(**新工具下一回合即可调用**;有风险则隔离、首次运行需主人审批)。用于"用户要一个我现在没有的、可脚本化的能力"(如查某公开 API 并解析、某种本地数据处理)。**三类**:工具型(tool,纯计算/查询)、传感器型(sensor,新增感知源,runner 周期产读数汇入感知链、`perceive` 可拉)、执行器型(actuator,控制真实设备,给 actuator_target+actuator_risk;physical 不可逆/对外动作每次执行都需主人确认)。先用 `discover_devices` 看有什么硬件可接,再对没驱动的设备写传感器/执行器。**这是真正的可插拔自我进化——能力随需求自己生长,内核不变。** 安全红线:危险代码会被门拦下、绝不静默上线。
         - **遇到长耗时的外部等待(公证/构建/下载/部署/审批…)别傻等也别甩回用户**:用 `watch_until` 挂个后台守候(给检查命令 + 满足标志 + 满足后要做的事),它不阻塞当前对话,条件一满足我会**自动把后续动作接上跑完**——这就是"自动识别需求 → 无人值守推进"。
         - **"到某时间点 / 每天定时 / 过一会儿提醒我"这类定时需求,一律用 `schedule_task`(这是你的原生定时四肢)——绝不要去写 launchd plist / crontab / shell 脚本来"假装设了定时"(那只是写个文件、根本没真正接到能把活干起来的系统,是假象)**。`schedule_task` 把指令真正登记进我自己的调度系统(JSON 持久化、跨重启、关窗也在),到点会把那条指令当成**新输入交给完整的我**处理——是提醒就开口、是任务就动手做完(能查日历、能用全部四肢),远胜一个只弹静态通知的 plist。用 `list_scheduled_tasks` 查、`cancel_scheduled_task` 取消。**区分**:等"外部条件满足"才继续 → `watch_until`;到"时间点"触发 → `schedule_task`。
         - 需要实时信息(如当前时间)时调用对应工具。
@@ -191,8 +192,6 @@ extension LingShuState {
         let initial = await session.send(sent)
         return await verifyAndContinue(session: session, result: initial, userRequest: prompt, taskRecordID: taskRecordID, trustReplyClaim: trustReplyClaim)
     }
-
-    // 验收门 + 执行恢复力(verifyAndContinue / 撞顶恢复 / 验收主循环)已拆至 LingShuState+AgentAcceptance.swift。
 
     /// 边做边想:把模型每步动作前的自然语言旁白落进任务记录(执行流像 codex 一样「分析→动作」可读),
     /// 并把简短版同步到主气泡状态,让主线程也瞥得见在想什么。
@@ -283,6 +282,7 @@ extension LingShuState {
             concludeStreamedSpeech(for: bubbleID, streamedText: chatMessages[index].text)
             chatMessages[index].text = displayText
             chatMessages[index].isLoading = false
+            if case .blocked = result { chatMessages[index].choices = LingShuChoiceParsing.parse(text) }   // 卡住+枚举→壳渲染可点击
         }
         lingShuControlLog("agent: 回合完成 bubbleID=\(bubbleID.uuidString.prefix(8)) prompt「\(prompt.prefix(20))」→ reply「\(String(text.prefix(40)))」")
         // 把最终答复也落进任务记录时间线(codex 式:执行流末尾就是答复;窗口内追问续跑读起来才连贯)。
@@ -414,7 +414,8 @@ extension LingShuState {
                 // 子会话继承父上下文 shell 预授权(同派发隔离任务):在岗/自主完整授权时给 autoAllowShell,否则跑 shell 会卡在审批框。
                 let policy = self?.dispatchedTaskExecutionPolicy ?? .standard
                 let builtin = self?.agentBuiltinTools(recordIDProvider: { [weak self] in self?.agentSubTaskRecords[subID] }, executionPolicy: policy) ?? []
-                let extras = self.map { me in [me.findImagesTool(), me.acquireResourceTool(), me.updateTaskPlanTool(recordIDProvider: { [weak me] in me?.agentSubTaskRecords[subID] }), me.reviewDesignTool(recordIDProvider: { [weak me] in me?.agentSubTaskRecords[subID] })] } ?? []
+                // 自我进化(author_component/discover_skill)对派发子任务同样开放:执行型请求常被分诊派发成隔离子任务,缺了它们子任务会答"没有这个工具"(实测根因)。
+                let extras = self.map { me in [me.findImagesTool(), me.acquireResourceTool(), me.authorComponentTool(), me.discoverSkillTool(), me.discoverDevicesTool(), me.peripheralsTool(), me.labelPeripheralTool(), me.askChoiceTool(), me.updateTaskPlanTool(recordIDProvider: { [weak me] in me?.agentSubTaskRecords[subID] }), me.reviewDesignTool(recordIDProvider: { [weak me] in me?.agentSubTaskRecords[subID] })] } ?? []
                 let bodyTools = self.map { [$0.speakTool(), $0.digitalHumanTool()] } ?? []
                 let asyncTools = self.map { $0.backgroundWatchTools() + $0.scheduledTaskTools() } ?? []  // 子任务也带"等条件续/挂定时"四肢(同派发隔离任务,免伪造 launchd)
                 return builtin + [Self.timeTool(), Self.locationTool(), Self.webSearchTool(), Self.askUserTool()] + bodyTools + extras + asyncTools

@@ -376,6 +376,8 @@ final class LingShuState: ObservableObject {
     let autonomousEnvironmentProbe = LingShuAutonomousEnvironmentProbe()
     /// 外接设备感知中枢（手机通知/日历…独立模块汇聚成标准输入）。详见 LingShuState+ExternalSensory。
     let externalSensory = LingShuExternalSensoryHub.makeDefault()
+    /// 统一外设中枢(一个已连接外设列表:mDNS + 串口/USB/蓝牙/电源/传感器/组件 + 本机可控;分类分组由大脑判)。面板见 LingShuPeripheralsView。
+    let peripheralHub = LingShuPeripheralHub()
     /// 感知链:各感官独立采集 → ~1s 高频融合进一条有界缓冲;大脑按时间窗瞬时拉取(感知节奏与大脑节奏解耦)。
     let perceptionChain = LingShuPerceptionChain()
     /// 根视图注入:返回此刻摄像头/麦克风等"活感官"的采样(感知网关持有,故经闭包取)。
@@ -420,6 +422,9 @@ final class LingShuState: ObservableObject {
     /// 自发现高风险 skill 脚本的隔离表(运行期):materialize 时按 skillID 隔离清单填入,
     /// key=脚本绝对路径、value=skillID + 风险点;命令引用它时强制弹审批(即便已"完全授权")。
     var quarantinedScriptPaths: [String: (skillID: String, notes: [String])] = [:]
+    /// ask_choice 待解析的点选(气泡 id → 续接器):大脑用 ask_choice 弹可点选项时,handler 挂起在此等用户点击;
+    /// 用户在选项卡片上点选 → selectRouteChoice 唤醒它、把所选项喂回在飞的循环(不另起输入)。
+    var pendingChoiceResolvers: [UUID: (String) -> Void] = [:]
     /// P3 沙箱:apply_skill 物化过的 skill 脚本路径 → 该 skill 声明的权限(P1)。run_command 跑到这些脚本时,
     /// 按声明权限(+工作目录写,让生成器能产出)经 sandbox-exec 关进受限子进程,而非无沙箱裸跑。无声明=最小权限。
     var materializedSkillScripts: [String: LingShuPluginPermissions] = [:]

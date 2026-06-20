@@ -312,7 +312,7 @@ extension LingShuState {
             missionTitle = "独立运行待答复"
             missionStatus = question
             appendTaskRecordMessage(recordID, actor: "独立运行", role: "待答复", kind: .warning, text: question)
-            chatMessages.append(.init(speaker: "灵枢", text: "⏸ 独立运行需要你定一下：\(question)\n（直接在对话里回复，我就继续推进）", isUser: false, taskRecordID: recordID))
+            chatMessages.append(.init(speaker: "灵枢", text: "⏸ 独立运行需要你定一下：\(question)\n（直接在对话里回复，我就继续推进）", isUser: false, taskRecordID: recordID, choices: LingShuChoiceParsing.parse(question)))
             enterCoreState(.standby, resetTimer: false)
             appendTrace(kind: .warning, actor: "独立运行", title: "卡住待答复", detail: question)
         case .maxTurnsReached(let text):

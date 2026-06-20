@@ -179,12 +179,14 @@ extension LingShuState {
 
     /// 回填某条派发任务的加载气泡(完成/失败/背压时用);找不到就追加一条。回填后清掉映射。
     func fillDispatchedBubble(_ recordID: String, text: String) {
+        let choices = LingShuChoiceParsing.parse(text)   // 卡住要你定+枚举选项 → 壳渲染成可点击;否则 nil
         if let bubbleID = dispatchedTaskBubbles[recordID],
            let idx = chatMessages.firstIndex(where: { $0.id == bubbleID }) {
             chatMessages[idx].text = text
             chatMessages[idx].isLoading = false
+            chatMessages[idx].choices = choices
         } else {
-            chatMessages.append(.init(speaker: "灵枢", text: text, isUser: false, taskRecordID: recordID))
+            chatMessages.append(.init(speaker: "灵枢", text: text, isUser: false, taskRecordID: recordID, choices: choices))
         }
         dispatchedTaskBubbles[recordID] = nil
     }

@@ -15,6 +15,15 @@ extension LingShuState {
         // 对外广播的蓝牙名按当前语言(中文「灵枢」/ 英文「Nous」),语言切换时在 language didSet 同步。
         externalSensory.setBluetoothLocalName(appName)
         externalSensory.restorePersistedPreferences()
+        // M2:把已安装的**自编传感器型外围**重新注册进感知中枢(跨重启持续可用;隔离的不自动启用)。
+        loadAndRegisterSensorComponents()
+        // P0②:首启把第一个决策知识包种进知识图谱(陈述性事实/教训)。后台跑、不阻塞启动(知识图谱懒加载,
+        // 含本地向量重建,别压在启动关键路径上);幂等,有标记即跳过。
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            let n = self.knowledgeGraph.seedDecisionKnowledgeIfNeeded()
+            if n > 0 { self.appendTrace(kind: .system, actor: "记忆", title: "决策知识种子", detail: "首启种入 \(n) 条陈述性事实/教训") }
+        }
     }
 
     /// 感知链高频采样驱动:每 ~1s 把各通道**此刻**的内容投进感知链(视觉/听觉来自感知网关采样器、

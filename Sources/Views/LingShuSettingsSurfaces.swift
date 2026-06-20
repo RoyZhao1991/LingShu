@@ -137,6 +137,9 @@ struct LingShuModelGatewaySurface: View {
             VStack(alignment: .leading, spacing: 16) {
                 SectionHeader(icon: "antenna.radiowaves.left.and.right", title: "模型通道", subtitle: "中枢/眼/耳/口各能力通道在此配置 + 校验;只有校验通过的才会被各模态和子线程切换用")
 
+                // 配置加密导入/导出(换机/分享试用/开源安全):口令加密整包导出,一键导入即用。
+                LingShuModelConfigPortabilityBar(state: state)
+
                 // 子 tab:不同通道类型分页(中枢/语音/感知)
                 HStack(spacing: 6) {
                     ForEach(ChannelTab.allCases) { item in

@@ -68,6 +68,25 @@ final class LingShuCredentialStore: @unchecked Sendable {
         return cache.filter { !$0.value.isEmpty }.keys.sorted()
     }
 
+    /// **全部已存凭据(含明文值)**。仅供「加密配置导出」整体打包用——导出后立刻经口令 AES-GCM 加密,
+    /// 绝不以明文落盘/回显。其它任何场景都用 `providerIDs()`(只名不值)。
+    func allCredentials() -> [String: String] {
+        lock.lock()
+        defer { lock.unlock() }
+        return cache.filter { !$0.value.isEmpty }
+    }
+
+    /// 批量写入凭据(供「加密配置导入」一次性恢复)。落盘仍走本机绑定 AES-GCM(导入即变成本机加密态)。
+    func bulkSet(_ entries: [String: String]) {
+        lock.lock()
+        defer { lock.unlock() }
+        for (id, value) in entries {
+            let v = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !v.isEmpty { cache[id] = v }
+        }
+        persist()
+    }
+
     static func environmentKey(forProvider providerID: String) -> String {
         "LINGSHU_TOKEN_" + providerID.uppercased().replacingOccurrences(of: "-", with: "_")
     }

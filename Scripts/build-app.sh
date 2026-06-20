@@ -104,6 +104,20 @@ cat > "$CONTENTS/Info.plist" <<PLIST
     <key>NSCalendarsFullAccessUsageDescription</key><string>用于读取日历事件并汇聚为灵枢的待办感知。仅本地、只读。</string>
     <key>NSRemindersUsageDescription</key><string>用于读取提醒事项并汇聚为灵枢的待办感知。仅本地、只读。</string>
     <key>NSRemindersFullAccessUsageDescription</key><string>用于读取提醒事项并汇聚为灵枢的待办感知。仅本地、只读。</string>
+    <key>NSLocalNetworkUsageDescription</key><string>用于发现局域网内的智能家居设备(HomeKit/AirPlay/Matter/Shelly 等)，让灵枢统一呈现并接入控制。仅本地。</string>
+    <key>NSBonjourServices</key>
+    <array>
+        <string>_hap._tcp</string>
+        <string>_airplay._tcp</string>
+        <string>_raop._tcp</string>
+        <string>_matter._tcp</string>
+        <string>_matterc._udp</string>
+        <string>_hue._tcp</string>
+        <string>_shelly._tcp</string>
+        <string>_http._tcp</string>
+        <string>_googlecast._tcp</string>
+        <string>_miio._udp</string>
+    </array>
 </dict>
 </plist>
 PLIST

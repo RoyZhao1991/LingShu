@@ -44,10 +44,10 @@ extension LingShuState {
         }
         // 先确定性剥掉文件路径(行 + 行内),所有回复都不念路径。
         let pathFree = Self.strippedOfFilePaths(message.text)
-        guard isTaskDeliveryReply(message) else { return pathFree }   // 对话/汇报 → 全文(已去路径)
-        // 任务交付:去路径后若已足够简短(典型"✅ 完成 + 路径清单"剥完只剩一句汇报),直接念这句、不必再调模型;
-        // 仍很长(大段叙述)才走模型口播摘要。
-        if pathFree.count <= 140 { return pathFree }
+        // 带格式的内容(列表/编号/**/代码/表格)→ 念概要、不念格式(用户要求):前导散文 + "详情看屏幕",剥掉所有标记。
+        guard isTaskDeliveryReply(message) else { return LingShuSpokenText.concise(pathFree) }   // 对话/汇报 → 概要化(已去路径)
+        // 任务交付:去路径后若已足够简短,概要化后直接念;仍很长才走模型口播摘要。
+        if pathFree.count <= 140 { return LingShuSpokenText.concise(pathFree) }
         return await briefSpokenSummary(for: message)
     }
 

@@ -41,6 +41,16 @@ extension LingShuState {
                 : "代码门:❌ 未通过。测试门:\(testLine) 运行门:\(runLine) 代码交付必须:写测试用例并跑到全绿、且程序真正构建/运行起来不崩——跑崩了/报错是要修复的观测,不是交付。"
         }
 
+        // 真实结果后置校验(verifyOutcome,方案 §6):动作型任务交付是**真实效果不是文件**。
+        // 确定性事实:本回合**唯一产出是文档/指南**且**无任何真实动作工具成功执行** → "写文档冒充"高危信号。
+        // 是否动作型由评审官据用户意图判(壳不写意图关键词);这里只给确定性事实。
+        let artifactExts = realFiles.map { ($0 as NSString).pathExtension }
+        let hadAction = taskHadActionToolSuccess(taskRecordID: taskRecordID)
+        let docImpersonation = LingShuOutcomeVerification.isDocumentImpersonationSignal(artifactExtensions: artifactExts, hadActionToolSuccess: hadAction)
+        let outcomeBlock = docImpersonation
+            ? "真实结果信号:⚠️ 本回合**唯一交付是文档/指南、且没有任何真实动作工具成功执行**。**若用户要的是真实效果(接入设备/开关灯/操作电脑/控外设这类动作型请求),写一篇说明文档≠做到 → 判未达标、不收**(动作型任务的交付是真实效果,不是文件)。若用户要的本就是一篇文档/资料,则此信号无关、按文档正常评审。"
+            : "真实结果信号:本回合\(hadAction ? "有真实动作工具成功执行" : "无'仅文档冒充'风险")。"
+
         // 看 + 核:抽产出物正文(事实核查)+ 渲染图像交云端 VL 审版式(重叠/截断/空白)。只看一个主产出物以控成本。
         var contentBlock = ""
         var visualBlock = "版式视觉评审:未启用(无渲染器或视觉通道)"
@@ -57,6 +67,7 @@ extension LingShuState {
         用户要求:\(userRequest)
         交付答复:\(reply)
         \(filesBlock)
+        \(outcomeBlock)
         \(contentBlock)
         \(visualBlock)
         \(testGateBlock)
@@ -94,6 +105,19 @@ extension LingShuState {
             return (false, appended)
         }
         return (verdict.allPassed, critique)
+    }
+
+    /// 本任务记录里是否**有真实动作工具成功执行**(自编执行器/计算机操作/外设控制… 即非产出读取元工具)。
+    /// 供真实结果后置校验:动作型任务"真做到"的确定性证据(配对 toolResult 的 success)。零关键词,据 `nonActionKernelTools` 反推。
+    func taskHadActionToolSuccess(taskRecordID: String?) -> Bool {
+        guard let record = taskExecutionRecords.first(where: { $0.id == taskRecordID }) else { return false }
+        for message in record.messages {
+            if case let .toolResult(tool, success, _) = message.detail,
+               success, LingShuOutcomeVerification.isActionTool(tool) {
+                return true
+            }
+        }
+        return false
     }
 
     /// 是否**需要测试门**的编程源码文件(真程序文件,排除 .md/.txt/.csv/.json/媒体——`isCodeLikePath` 太宽,这里收窄)。

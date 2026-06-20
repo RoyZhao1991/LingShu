@@ -1,0 +1,148 @@
+import SwiftUI
+
+/// 「已连接外设」面板——**薄壳**:只呈现给人看/确认的信息(灵枢发现了什么、是什么、接没接),**不放动作按钮**。
+/// 灵枢是"人",接入/探测/控制都**直接对它说**(回到对话);这里只是一扇"发现 + 状态"的只读窗口。
+struct LingShuPeripheralsView: View {
+    @ObservedObject var state: LingShuState
+    @ObservedObject var hub: LingShuPeripheralHub
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            SectionHeader(
+                icon: "cpu",
+                title: state.loc("已连接外设", "Connected Peripherals"),
+                subtitle: state.loc(
+                    "灵枢自动发现并识别的设备一览。要接入/控制某个设备,直接对灵枢说(如「把床头灯接入」「开床头灯」)",
+                    "What LingShu discovered. To integrate or control one, just tell LingShu in chat"
+                )
+            )
+            scanBar
+            if !hub.hint.isEmpty { hintRow }
+            groupedList
+        }
+        .padding(14)
+        .background(Color.white.opacity(0.045), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .overlay { RoundedRectangle(cornerRadius: 10, style: .continuous).stroke(Color.lingHolo.opacity(0.14)) }
+        .onAppear { if hub.peripherals.count <= 1 { Task { await state.refreshPeripherals() } } }
+    }
+
+    private var scanBar: some View {
+        HStack(spacing: 10) {
+            Image(systemName: hub.scanning ? "dot.radiowaves.left.and.right" : "sensor.tag.radiowaves.forward")
+                .foregroundStyle(hub.scanning ? Color.lingHolo : .white.opacity(0.5))
+            Text(hub.scanning ? state.loc("正在发现外设…", "Discovering…")
+                              : state.loc("\(deviceCount) 台外设 · 大脑已识别", "\(deviceCount) peripherals · identified"))
+                .font(.system(size: 12.5, weight: .semibold)).foregroundStyle(.white.opacity(0.85))
+            Spacer()
+            Button { Task { await state.refreshPeripherals() } } label: {
+                Image(systemName: "arrow.clockwise").font(.system(size: 11.5, weight: .bold))
+                    .foregroundStyle(.white.opacity(0.7)).padding(6)
+                    .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+            }
+            .buttonStyle(.plain).help(state.loc("重新发现", "Rescan"))
+        }
+        .padding(.vertical, 8).padding(.horizontal, 12)
+        .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+
+    private var hintRow: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange).font(.system(size: 11))
+            Text(hub.hint).font(.system(size: 11, weight: .medium)).foregroundStyle(.orange.opacity(0.9))
+            Spacer()
+            Button { state.openLocalNetworkSettings() } label: {
+                Text(state.loc("去开启", "Open Settings"))
+                    .font(.system(size: 10.5, weight: .bold)).foregroundStyle(Color.lingVoid)
+                    .padding(.horizontal, 10).padding(.vertical, 4)
+                    .background(Color.orange, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.vertical, 7).padding(.horizontal, 11)
+        .background(Color.orange.opacity(0.1), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+
+    /// 按归一键合并同一物理设备的多通道,能力取并集。
+    private var devices: [LingShuPeripheral] {
+        Dictionary(grouping: hub.peripherals) { $0.canonicalKey }.values.map { group -> LingShuPeripheral in
+            var rep = group.first { $0.classification != nil } ?? group[0]
+            let caps = Set(group.flatMap { $0.classification?.capabilities ?? [] })
+            if !caps.isEmpty { rep.classification?.capabilities = Array(caps).sorted() }
+            if group.contains(where: { $0.integrated }) { rep.integrated = true }
+            return rep
+        }
+    }
+
+    private var deviceCount: Int { devices.count }
+
+    private var grouped: [(String, [LingShuPeripheral])] {
+        Dictionary(grouping: devices) { $0.displayGroup }
+            .map { ($0.key, $0.value.sorted { $0.displayName < $1.displayName }) }
+            .sorted { $0.0 < $1.0 }
+    }
+
+    private var groupedList: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            ForEach(grouped, id: \.0) { group, items in
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(group).font(.system(size: 11.5, weight: .bold)).foregroundStyle(.white.opacity(0.55))
+                    ForEach(items) { row($0) }
+                }
+            }
+        }
+    }
+
+    /// 只读行:图标 + 别名(+原始名)+ 用途 + 能力 chips + 状态(无任何动作按钮)。
+    private func row(_ p: LingShuPeripheral) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: icon(p)).foregroundStyle(.white.opacity(0.6)).frame(width: 16)
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 6) {
+                    Text(p.displayName).font(.system(size: 12.5, weight: .semibold)).foregroundStyle(.white.opacity(0.9))
+                    if p.displayName != p.name {
+                        Text(p.name).font(.system(size: 10)).foregroundStyle(.white.opacity(0.35))
+                    }
+                }
+                Text((p.classification?.what).flatMap { $0.isEmpty ? nil : $0 } ?? p.statusLine)
+                    .font(.system(size: 10.5)).foregroundStyle(.white.opacity(0.45)).lineLimit(2)
+                if let caps = p.classification?.capabilities, !caps.isEmpty {
+                    HStack(spacing: 4) { ForEach(caps.prefix(5), id: \.self) { chip($0) } }
+                }
+            }
+            Spacer()
+            statusPill(p)
+        }
+        .padding(.vertical, 9).padding(.horizontal, 12)
+        .background(Color.white.opacity(0.045), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+
+    private func chip(_ text: String) -> some View {
+        Text(text).font(.system(size: 8.5, weight: .semibold)).foregroundStyle(.white.opacity(0.6))
+            .padding(.horizontal, 5).padding(.vertical, 2)
+            .background(Color.white.opacity(0.08), in: Capsule())
+    }
+
+    private func statusPill(_ p: LingShuPeripheral) -> some View {
+        let (text, color): (String, Color) =
+            p.isControllable ? (state.loc("已接入", "Integrated"), .lingHolo)
+            : p.classification == nil ? (state.loc("待识别", "—"), .white.opacity(0.45))
+            : (p.classification!.integratable ? (state.loc("可接入", "Ready"), .lingHolo) : (state.loc("暂不可接入", "N/A"), .orange))
+        return Text(text)
+            .font(.system(size: 9, weight: .bold)).foregroundStyle(color)
+            .padding(.horizontal, 7).padding(.vertical, 3)
+            .background(color.opacity(0.14), in: Capsule())
+    }
+
+    private func icon(_ p: LingShuPeripheral) -> String {
+        switch p.transport {
+        case .network: "network"
+        case .serial: "cable.connector"
+        case .usb: "cable.connector.horizontal"
+        case .bluetooth: "antenna.radiowaves.left.and.right"
+        case .power: "bolt.fill"
+        case .sensor: "sensor.tag.radiowaves.forward"
+        case .component: "puzzlepiece.extension.fill"
+        case .local: "desktopcomputer"
+        }
+    }
+}

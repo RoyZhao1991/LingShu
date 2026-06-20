@@ -91,7 +91,7 @@ extension LingShuState {
         if let recordID, dispatchedTaskBubbles[recordID] != nil {
             fillDispatchedBubble(recordID, text: dispatched)
         } else {
-            chatMessages.append(.init(speaker: "灵枢", text: spawned, isUser: false, taskRecordID: recordID))
+            chatMessages.append(.init(speaker: "灵枢", text: spawned, isUser: false, taskRecordID: recordID, choices: LingShuChoiceParsing.parse(spawned)))
         }
     }
 

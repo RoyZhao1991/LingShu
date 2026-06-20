@@ -155,11 +155,13 @@ extension LingShuState {
                 appendTrace(kind: .warning, actor: "验收", title: "停滞交还", detail: "连续未通过且无新进展,交还用户。")
                 return .maxTurnsReached(lastText: Self.runResultText(result) + "\n\n（验收一直没通过且我已无新进展:\(critique.prefix(160))。先停下交还——需要你的判断或补充信息。）")
             }
+            appendTrace(kind: .warning, actor: "验收", title: "未通过(第\(round + 1)轮,继续修)", detail: String(critique.prefix(80)))
+            // 升级阶梯并入验收门(方案 §2):验收不过不再"原样重试",而是按返工轮次**逐级加厚脚手架**
+            // (Rung0 原样意见 → Rung1 结构化引导 → Rung2 切确定性兜底)。强脑通常 round 0 就过。
+            result = await session.resume(LingShuCapabilityEscalation.revisionGuidance(round: round, critique: critique))
             round += 1
             lastArtifactCount = artifactCount
             lastCritique = critique
-            appendTrace(kind: .warning, actor: "验收", title: "未通过(第\(round)轮,继续修)", detail: String(critique.prefix(80)))
-            result = await session.resume("验收未通过,逐条意见如下:\n\(critique)\n请真正用 write_file/run_command 修正,确保你声称的产出物在硬盘真实存在,再重新交付。")
             // 修复轮里网络中断:别在断网时空转验证,原样上抛 .interrupted 让上层挂起、等重连续跑。
             if case .interrupted = result { return result }
         }

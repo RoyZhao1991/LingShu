@@ -28,6 +28,8 @@ enum LingShuSkillLoader {
         let triggers: [String]
         /// P1 声明式权限作用域(从 frontmatter 解析;没声明=最小权限)。
         var manifest: LingShuPluginManifest = .init(id: "plugin", name: "未命名插件", version: "1.0", providedTools: [], permissions: .init(), source: .user)
+        /// 原始 frontmatter 键值(供加载侧识别 sensor_channel / actuator_risk 等扩展元数据,不污染内核 manifest)。
+        var frontmatter: [String: String] = [:]
     }
 
     /// 解析单个技能 Markdown。frontmatter 必填 title；缺小节用空集合兜底。
@@ -82,7 +84,7 @@ enum LingShuSkillLoader {
             bundledScriptName: bundledScriptName
         )
         let manifest = LingShuPluginManifest.from(frontmatter: frontmatter, source: .user)
-        return .init(profile: profile, triggers: triggers, manifest: manifest)
+        return .init(profile: profile, triggers: triggers, manifest: manifest, frontmatter: frontmatter)
     }
 
     /// 暴露候选 skill markdown 里**原始**(未过安全门)的自带脚本——供自发现(`LingShuSkillAcquisition`)

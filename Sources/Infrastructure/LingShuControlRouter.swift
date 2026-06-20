@@ -443,8 +443,7 @@ final class LingShuControlRouter {
             }
             let outcome = await LingShuState.acquireResource(kind: kind, query: query)
             return (jsonText(["result": outcome, "registryCount": LingShuResourceRegistry.shared.count]), false)
-        case "lingshu_set_credential":
-            // 把凭据(如数据网关 VL token)写入灵枢配置数据库(AES-GCM 加密落盘,durable)。args: provider, token。
+        case "lingshu_set_credential":   // 凭据写入加密库(AES-GCM 落盘,durable)。args: provider, token
             guard let provider = arguments["provider"] as? String,
                   let token = (arguments["token"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !token.isEmpty else {
                 return ("缺少参数 provider / token", true)
@@ -468,24 +467,25 @@ final class LingShuControlRouter {
                 "endpoint": state.endpoint,
                 "keyConfigured": !state.apiKey.isEmpty
             ]), false)
-        case "lingshu_set_loop_variant":
-            // 切换核心循环引擎(classic|nested),持久化跨重启 + 清会话 holder 让下回合用新引擎重建。
+        case "lingshu_export_model_config":   // 口令加密导出脑/通道/密钥(换机/分享/开源安全);args: passphrase, path
+            return state.controlExportModelConfig(passphrase: arguments["passphrase"] as? String, path: arguments["path"] as? String)
+        case "lingshu_import_model_config":   // 一键导入口令加密配置 → 恢复并立即可用;args: passphrase, path
+            return state.controlImportModelConfig(passphrase: arguments["passphrase"] as? String, path: arguments["path"] as? String)
+        case "lingshu_set_loop_variant":   // 切换核心循环引擎(classic|nested),持久化 + 清会话 holder 让下回合重建
             guard let raw = (arguments["variant"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
                   let variant = LingShuAgentLoopVariant(rawValue: raw) else {
                 return ("缺少/非法参数 variant(应为 classic 或 nested)", true)
             }
             state.setAgentLoopVariant(variant)
             return (jsonText(["ok": state.agentLoopVariant == variant, "loopVariant": state.agentLoopVariant.rawValue]), false)
-        case "lingshu_main_session":
-            // 读常驻主会话上下文尾部(验证子任务简报/纠正是否注入)。args: limit。
+        case "lingshu_main_session":   // 读常驻主会话上下文尾部(验证子任务简报/纠正是否注入)。args: limit
             let limit = (arguments["limit"] as? Int) ?? 12
             let messages = await state.mainAgentSessionHolder?.messages ?? []
             let tail = messages.suffix(max(1, limit)).map { m -> [String: Any] in
                 ["role": String(describing: m.role), "content": String(m.content.prefix(220)), "toolCalls": m.toolCalls.map(\.name)]
             }
             return (jsonText(["exists": state.mainAgentSessionHolder != nil, "messageCount": messages.count, "tail": tail]), false)
-        case "meeting_start_capture":
-            // 采集帧直接喂 ASR:听会议 → 实时转写。
+        case "meeting_start_capture":   // 采集帧直接喂 ASR:听会议 → 实时转写
             LingShuSystemAudioCapture.shared.onPCMChunk = { samples, sampleRate in
                 LingShuMeetingASR.shared.appendPCM(samples, sampleRate: sampleRate)
             }
@@ -525,6 +525,73 @@ final class LingShuControlRouter {
                 return ("缺少参数 prompt", true)
             }
             return (jsonText(await runRealModelAgent(prompt: prompt)), false)
+        case "lingshu_author_component":   // 调试:直接驱动真实自编外围流水线(不经模型选工具);args 即 author_component 入参
+            let argsJSON = (try? JSONSerialization.data(withJSONObject: arguments)).flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
+            let report = await state.authorComponent(argsJSON: argsJSON)
+            return (jsonText(["report": report]), false)
+        case "lingshu_call_authored_tool":   // 调试:直接调一条已上线 live 外围工具(证明真调通);args: tool, arguments
+            guard let toolName = arguments["tool"] as? String else { return ("缺少参数 tool", true) }
+            let toolArgs: String
+            if let s = arguments["arguments"] as? String { toolArgs = s }
+            else if let o = arguments["arguments"], let d = try? JSONSerialization.data(withJSONObject: o) { toolArgs = String(data: d, encoding: .utf8) ?? "{}" }
+            else { toolArgs = "{}" }
+            let liveTools = state.userSkillProvidedTools()
+            guard let tool = liveTools.first(where: { $0.name == toolName }) else {
+                return (jsonText(["found": false, "availableLiveTools": liveTools.map(\.name)]), false)
+            }
+            let out = await tool.handler(toolArgs)
+            return (jsonText(["found": true, "output": out]), false)
+        case "lingshu_approve_component":
+            // 调试入口:主人审核通过一个隔离的工具/执行器组件(解除隔离=首肯首次运行)。args: id(组件id,如 actuator-xxx / authored-xxx)。
+            guard let id = arguments["id"] as? String else { return ("缺少参数 id", true) }
+            LingShuSkillAcquisition.clearQuarantine(skillID: "skill-\(id)")
+            let ledgered = await state.recordIntegrationForApprovedComponent(componentID: id)   // §5:批准执行器=接入生效,记进知识图谱台账
+            return (jsonText(["approved": true, "id": id, "integrationLedgered": ledgered]), false)
+        case "lingshu_discover_devices":   // 调试:真实硬件枚举 + 驱动缺口分析
+            return (jsonText(["report": await state.discoverDevices()]), false)
+        case "lingshu_select_choice":   // 调试:模拟点选最新选项卡片(验证可点击→续接);args: label 可选
+            guard let msg = state.chatMessages.last(where: { $0.choices != nil && $0.resolvedChoice == nil }),
+                  let opts = msg.choices?.options, !opts.isEmpty else {
+                return (jsonText(["selected": false, "reason": "无待选选项卡片"]), false)
+            }
+            let label = arguments["label"] as? String
+            let opt = (label.flatMap { l in opts.first { $0.label == l } }) ?? opts[0]
+            state.selectRouteChoice(opt, for: msg.id)
+            return (jsonText(["selected": true, "label": opt.label]), false)
+        case "lingshu_peripherals_scan":
+            // 调试入口:刷新统一外设列表(汇集所有来源 + mDNS + 大脑自动归类),返回分组结果。
+            await state.refreshPeripherals(autoClassify: (arguments["classify"] as? Bool) ?? true)
+            let ps = state.peripheralHub.peripherals.map { p -> [String: Any] in
+                ["id": p.id, "name": p.name, "transport": p.transport.rawValue, "group": p.displayGroup,
+                 "controllable": p.isControllable, "access": p.classification?.access ?? "",
+                 "note": p.classification?.note ?? p.statusLine]
+            }
+            return (jsonText(["count": ps.count, "localVolume": state.peripheralHub.localVolume, "hint": state.peripheralHub.hint, "summary": state.peripheralsSummary(), "peripherals": ps]), false)
+        case "lingshu_peripheral_control":
+            // 调试入口:控制一台本机可控外设。args: id(如 local.volume), action(mute/vol_up/vol_down/数字)。
+            guard let id = arguments["id"] as? String, let action = arguments["action"] as? String else { return ("缺少参数 id/action", true) }
+            let r = await state.peripheralHub.controlLocal(id, action)
+            return (jsonText(["result": r, "localVolume": state.peripheralHub.localVolume]), false)
+        case "lingshu_enable_sensor":
+            // 调试入口:主人审核通过隔离的传感器型外围后启用它(解除隔离→注册/启用→进感知链)。args: id(组件id,如 sensor-xxx)。
+            guard let id = arguments["id"] as? String else { return ("缺少参数 id", true) }
+            let ok = state.approveAndEnableSensor(componentID: id)
+            return (jsonText(["enabled": ok, "id": id]), false)
+        case "lingshu_perceive":   // 调试:验证传感器数据进感知链、perceive 拉得到(采一拍后返回时间窗+外接信号+读数)
+            let seconds = (arguments["seconds"] as? Double) ?? Double((arguments["seconds"] as? Int) ?? 10)
+            state.samplePerceptionChainOnce()
+            let window = state.perceptionChain.formattedWindow(seconds: max(1, min(60, seconds)))
+            let readings = state.externalSensory.recentReadings.prefix(8).map { r -> [String: Any] in
+                ["headline": r.headline, "sourceID": r.sourceID, "salience": r.salience, "detail": r.detail ?? ""]
+            }
+            return (jsonText([
+                "perceiveWindow": window,
+                "externalSignals": state.externalSignalsBrainInput(),
+                "recentReadings": Array(readings),
+                "masterEnabled": state.externalSensory.masterEnabled,
+                "enabledSources": Array(state.externalSensory.enabledSourceIDs),
+                "registeredSources": state.externalSensory.availableSources.map { ["id": $0.id, "name": $0.displayName, "channel": $0.channel.rawValue] }
+            ]), false)
         default:
             return ("未知工具：\(name)", true)
         }
@@ -687,6 +754,7 @@ final class LingShuControlRouter {
                 "text": message.text,
                 "isUser": message.isUser,
                 "isLoading": message.isLoading,
+                "choices": message.choices?.options.map(\.label) ?? [],
                 "createdAt": ISO8601DateFormatter().string(from: message.createdAt)
             ]
         }
