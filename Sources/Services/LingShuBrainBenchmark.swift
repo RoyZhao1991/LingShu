@@ -10,8 +10,16 @@ import Foundation
 enum LingShuBrainBenchmark {
 
     enum Difficulty: Int, Codable, Sendable, CaseIterable {
-        case easy = 1, medium = 2, hard = 3
-        var label: String { switch self { case .easy: "易"; case .medium: "中"; case .hard: "难" } }
+        case easy = 1, medium = 2, hard = 3, expert = 4
+        var label: String { switch self { case .easy: "易"; case .medium: "中"; case .hard: "难"; case .expert: "极难" } }
+    }
+
+    /// 长链编码任务的**隐藏用例判分**(由 runner 跑真代码,不看回复、不靠 LLM 评分)。
+    /// 模型把解写到 benchDir 里(prompt 用 `{DIR}` 占位,runner 替换成真路径);runner 跑 `harness` 隐藏用例,
+    /// 输出含 `BENCH_PASS` 才算过。`preWrite` 预置文件(如待修 bug 的文件,用于"调试"题)。
+    struct CodeCheck: Sendable {
+        var preWrite: [String: String] = [:]   // relpath → content(任务开始前预置)
+        var harness: String                    // python 隐藏用例:全过 print("BENCH_PASS")
     }
 
     struct Item: Sendable, Identifiable {
@@ -21,6 +29,8 @@ enum LingShuBrainBenchmark {
         let difficulty: Difficulty
         let agentic: Bool
         let maxTurns: Int
+        let weight: Int                        // 计分权重(默认=难度;长链编码题显式给高权重,让分差由难题主导)
+        let codeCheck: CodeCheck?              // 非 nil → runner 跑隐藏用例判分(忽略下面的 grade)
         let grade: @Sendable (_ reply: String, _ usedTools: Bool) -> Bool
     }
 
@@ -92,20 +102,34 @@ enum LingShuBrainBenchmark {
         item("a_primes", "工具·质数计数", "用工具**写脚本并运行**,统计 100 以内(含)质数有几个,把运行结果告诉我。必须真运行。", .hard, agentic: true, maxTurns: 14) { r, u in has(r, "25") && u },
         item("a_multistep", "工具·多步", "分步用工具:① 先写一个文件,每行一个数,内容 1 到 20;② 再写脚本读它求和并运行;③ 把求和结果告诉我。必须真建文件真运行。", .hard, agentic: true, maxTurns: 18) { r, u in has(r, "210") && u },
         item("a_factorial", "工具·大数阶乘", "用工具写脚本并运行,算出 20 的阶乘(20!),把完整结果数值告诉我。这个数很大,必须真运行、别口算。", .hard, agentic: true, maxTurns: 14) { r, u in has(r, "2432902008176640000") && u },
-        item("a_bigmult", "工具·大数乘法", "用工具写脚本并运行,算出 123456789 × 987654321,把完整结果告诉我。必须真运行。", .hard, agentic: true, maxTurns: 14) { r, u in has(r, "121932631112635269") && u }
+        item("a_bigmult", "工具·大数乘法", "用工具写脚本并运行,算出 123456789 × 987654321,把完整结果告诉我。必须真运行。", .hard, agentic: true, maxTurns: 14) { r, u in has(r, "121932631112635269") && u },
+
+        // ===== 极难·长链编码(隐藏用例跑真代码判分;写得出但写错/写一半摆烂=0 分,照前沿差距)=====
+        item("c_balanced", "编码·括号匹配", "用工具在 {DIR}/solution.py 写函数 is_balanced(s):判断字符串里的括号 ()[]{} 是否正确匹配且嵌套正确,返回 True/False(忽略非括号字符)。写完自己跑几个用例验证再回复。", .expert, agentic: true, maxTurns: 20, weight: 5,
+             codeCheck: .init(harness: "import solution\ncs=[('',True),('()',True),('([{}])',True),('([)]',False),('(()',False),('}{',False),('a(b)c[d]',True),('(]',False)]\nprint('BENCH_PASS' if all(solution.is_balanced(s)==e for s,e in cs) else 'BENCH_FAIL')")),
+        item("c_roman", "编码·罗马数字", "用工具在 {DIR}/solution.py 写函数 roman_to_int(s):把罗马数字字符串转整数,要支持减法记法(IV/IX/XL/XC/CD/CM)。自测后回复。", .expert, agentic: true, maxTurns: 20, weight: 5,
+             codeCheck: .init(harness: "import solution\ncs=[('III',3),('IV',4),('IX',9),('LVIII',58),('MCMXCIV',1994),('XL',40),('XCIX',99)]\nprint('BENCH_PASS' if all(solution.roman_to_int(s)==e for s,e in cs) else 'BENCH_FAIL')")),
+        item("c_calc", "编码·表达式求值", "用工具在 {DIR}/solution.py 写函数 calc(expr):对含非负整数、+ - * / 和小括号的算术表达式求值,遵守优先级,/ 用整数除法(向下取整),返回整数。自测含括号和优先级的用例。", .expert, agentic: true, maxTurns: 24, weight: 6,
+             codeCheck: .init(harness: "import solution\ncs=[('2+3*4',14),('(2+3)*4',20),('10-2*3',4),('2*(3+4)-5',9),('100/3',33),('(1+2)*(3+4)',21)]\nprint('BENCH_PASS' if all(solution.calc(e)==v for e,v in cs) else 'BENCH_FAIL')")),
+        item("c_debug", "编码·调试", "{DIR}/solution.py 里的函数 median(nums) 想算中位数但有 bug(偶数长度时不对)。用工具修复它,让奇偶长度都正确(偶数取中间两数平均)。自测确认。", .expert, agentic: true, maxTurns: 20, weight: 6,
+             codeCheck: .init(preWrite: ["solution.py": "def median(nums):\n    s=sorted(nums); n=len(s); return s[n//2]\n"],
+                              harness: "import solution\ncs=[([1,2,3],2),([1,2,3,4],2.5),([5],5),([4,1,3,2],2.5),([7,7,7],7)]\nprint('BENCH_PASS' if all(abs(solution.median(n)-v)<1e-9 for n,v in cs) else 'BENCH_FAIL')")),
+        item("c_project", "编码·多文件工程", "用工具在 {DIR} 下分步真建文件真跑:① mathutils.py 含 gcd(a,b)、lcm(a,b);② stats.py(import mathutils)含 mean(nums) 返回浮点平均、median(nums) 返回中位数;③ test_all.py 用 assert 各测 2 个用例;④ 运行 test_all.py 确认全过。必须真建这 3 个文件并把测试跑到全过。", .expert, agentic: true, maxTurns: 30, weight: 8,
+             codeCheck: .init(harness: "import mathutils, stats\nok=(mathutils.gcd(12,18)==6 and mathutils.lcm(4,6)==12 and abs(stats.mean([1,2,3,4])-2.5)<1e-9 and abs(stats.median([1,2,3])-2)<1e-9 and abs(stats.median([1,2,3,4])-2.5)<1e-9)\nprint('BENCH_PASS' if ok else 'BENCH_FAIL')"))
     ]
 
     private static func item(_ id: String, _ title: String, _ prompt: String, _ difficulty: Difficulty,
-                             agentic: Bool = false, maxTurns: Int = 2,
-                             _ grade: @escaping @Sendable (String, Bool) -> Bool) -> Item {
-        Item(id: id, title: title, prompt: prompt, difficulty: difficulty, agentic: agentic, maxTurns: maxTurns, grade: grade)
+                             agentic: Bool = false, maxTurns: Int = 2, weight: Int? = nil, codeCheck: CodeCheck? = nil,
+                             _ grade: @escaping @Sendable (String, Bool) -> Bool = { _, _ in false }) -> Item {
+        Item(id: id, title: title, prompt: prompt, difficulty: difficulty, agentic: agentic, maxTurns: maxTurns,
+             weight: weight ?? difficulty.rawValue, codeCheck: codeCheck, grade: grade)
     }
 
-    static var totalWeight: Int { items.reduce(0) { $0 + $1.difficulty.rawValue } }
+    static var totalWeight: Int { items.reduce(0) { $0 + $1.weight } }
 
-    /// 综合评分(0–100):通过题难度权重之和 / 总权重 × 100。
+    /// 综合评分(0–100):通过题权重之和 / 总权重 × 100。
     static func composite(passedIDs: Set<String>) -> Int {
-        let earned = items.filter { passedIDs.contains($0.id) }.reduce(0) { $0 + $1.difficulty.rawValue }
+        let earned = items.filter { passedIDs.contains($0.id) }.reduce(0) { $0 + $1.weight }
         guard totalWeight > 0 else { return 0 }
         return Int((Double(earned) / Double(totalWeight) * 100).rounded())
     }
