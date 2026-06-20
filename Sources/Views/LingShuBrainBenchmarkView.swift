@@ -131,11 +131,11 @@ struct LingShuBrainBenchmarkResultView: View {
                 VStack(alignment: .leading, spacing: 8) {
                     ForEach(result.rows) { row in
                         HStack(alignment: .top, spacing: 8) {
-                            Image(systemName: row.passed ? "checkmark.circle.fill" : "xmark.circle.fill")
-                                .foregroundStyle(row.passed ? .green : .orange)
+                            Image(systemName: row.passed ? "checkmark.circle.fill" : (row.scoreText.isEmpty ? "xmark.circle.fill" : "circle.lefthalf.filled"))
+                                .foregroundStyle(row.passed ? .green : (row.scoreText.isEmpty ? .orange : .yellow))
                                 .font(.system(size: 13))
                             VStack(alignment: .leading, spacing: 2) {
-                                Text("\(row.title) · 难度\(row.difficulty)\(row.agentic ? " · 多步工具" : "")").font(.system(size: 12.5, weight: .semibold)).foregroundStyle(.white.opacity(0.9))
+                                Text("\(row.title) · 难度\(row.difficulty)\(row.agentic ? " · 多步工具" : "")\(row.scoreText.isEmpty ? "" : " · \(row.scoreText)")").font(.system(size: 12.5, weight: .semibold)).foregroundStyle(.white.opacity(0.9))
                                 Text(row.replyExcerpt).font(.system(size: 11)).foregroundStyle(.white.opacity(0.45)).lineLimit(2)
                             }
                             Spacer(minLength: 0)

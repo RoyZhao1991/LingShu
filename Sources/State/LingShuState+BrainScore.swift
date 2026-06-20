@@ -37,6 +37,22 @@ extension LingShuState {
         if let data = try? JSONEncoder().encode(s) { UserDefaults.standard.set(data, forKey: Self.brainScoreKey) }
     }
 
+    /// 脑当前是否"已证明足够强"(脑力旋钮的判据):**优先用生产/真编码主导的测评分**(≥85),
+    /// 否则看运行累计分(≥12 次净正)。测评分是产线能力的真实度量,故据它放权不会被有界谜题刷高误判。
+    var brainProvenStrong: Bool {
+        if let b = brainBenchmarkResult?.score { return b >= 85 }
+        return brainScore.score >= 12
+    }
+
+    /// 脑力旋钮(方案"框架随脑力可调"):脑被证明强 → 在系统提示最前面**放权**(自行决定是否 update_plan、
+    /// 验收从简、按最优路径高效推进,别被流程束缚);弱脑则保留厚脚手架(返回空串=不改原提示)。
+    /// **安全红线不随旋钮放松**(不可逆/对外先确认、危险代码不静默执行)。这让"强脑→薄 harness"真正生效。
+    func harnessKnobPrefix() -> String {
+        guard brainProvenStrong else { return "" }
+        let tag = brainBenchmarkResult.map { "脑力测评 \($0.score) 分" } ?? "运行表现稳定"
+        return "【能力旋钮·已放权】你已被评为高能力脑(\(tag)):多步任务**可自行判断**是否先调 update_plan(不强制)、验收从简,放手按你最优路径高效推进,别被流程细则束缚。**唯一不放松的是安全红线**:不可逆/对外动作仍先确认,危险/未审代码绝不静默执行。\n\n"
+    }
+
     nonisolated static func loadBrainScore() -> LingShuBrainScore {
         guard let data = UserDefaults.standard.data(forKey: brainScoreKey),
               let s = try? JSONDecoder().decode(LingShuBrainScore.self, from: data) else {

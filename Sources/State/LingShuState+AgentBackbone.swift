@@ -127,7 +127,7 @@ extension LingShuState {
         }
         let tools = withPhaseTracking(withBatchRunner(   // 相位跟踪:每个工具调用前把 LOOP 阶段切到理解/规划/执行,本体实时显示
             agentBuiltinTools(recordIDProvider: { [weak self] in self?.currentAgentTurnRecordID })
-            + [Self.timeTool(), Self.locationTool(), Self.webSearchTool(), findImagesTool(), acquireResourceTool(), discoverSkillTool(), authorComponentTool(), discoverDevicesTool(), peripheralsTool(), labelPeripheralTool(), askChoiceTool(), updateTaskPlanTool(recordIDProvider: { [weak self] in self?.currentAgentTurnRecordID }), reviewDesignTool(recordIDProvider: { [weak self] in self?.currentAgentTurnRecordID }), recallMemoryTool(), perceiveTool(), pushNotificationTool(), rememberCredentialTool(), listCredentialsTool(), speakTool(), digitalHumanTool(), enterManagedModeTool(), Self.askUserTool(), spawnTaskTool(adapter: adapter)]
+            + [Self.timeTool(), Self.locationTool(), Self.webSearchTool(), searchTextTool(), findImagesTool(), acquireResourceTool(), discoverSkillTool(), authorComponentTool(), discoverDevicesTool(), peripheralsTool(), labelPeripheralTool(), askChoiceTool(), updateTaskPlanTool(recordIDProvider: { [weak self] in self?.currentAgentTurnRecordID }), reviewDesignTool(recordIDProvider: { [weak self] in self?.currentAgentTurnRecordID }), recallMemoryTool(), perceiveTool(), pushNotificationTool(), rememberCredentialTool(), listCredentialsTool(), speakTool(), digitalHumanTool(), enterManagedModeTool(), Self.askUserTool(), spawnTaskTool(adapter: adapter)]
             + previewTools()
             + browserTools()           // 内置多 tab 浏览器(上网/网页自动化测试)
             + computerControlTools()   // 计算机直接操作四肢(授权在 call-time 判,计划 §9)
@@ -168,7 +168,7 @@ extension LingShuState {
         """
         let session = makeAgentSession(
             id: "main",
-            system: system,
+            system: harnessKnobPrefix() + system,
             initialMessages: await seededDistilledMemory(),
             tools: tools,
             model: adapter,
@@ -415,7 +415,7 @@ extension LingShuState {
                 let policy = self?.dispatchedTaskExecutionPolicy ?? .standard
                 let builtin = self?.agentBuiltinTools(recordIDProvider: { [weak self] in self?.agentSubTaskRecords[subID] }, executionPolicy: policy) ?? []
                 // 自我进化(author_component/discover_skill)对派发子任务同样开放:执行型请求常被分诊派发成隔离子任务,缺了它们子任务会答"没有这个工具"(实测根因)。
-                let extras = self.map { me in [me.findImagesTool(), me.acquireResourceTool(), me.authorComponentTool(), me.discoverSkillTool(), me.discoverDevicesTool(), me.peripheralsTool(), me.labelPeripheralTool(), me.askChoiceTool(), me.updateTaskPlanTool(recordIDProvider: { [weak me] in me?.agentSubTaskRecords[subID] }), me.reviewDesignTool(recordIDProvider: { [weak me] in me?.agentSubTaskRecords[subID] })] } ?? []
+                let extras = self.map { me in [me.searchTextTool(), me.findImagesTool(), me.acquireResourceTool(), me.authorComponentTool(), me.discoverSkillTool(), me.discoverDevicesTool(), me.peripheralsTool(), me.labelPeripheralTool(), me.askChoiceTool(), me.updateTaskPlanTool(recordIDProvider: { [weak me] in me?.agentSubTaskRecords[subID] }), me.reviewDesignTool(recordIDProvider: { [weak me] in me?.agentSubTaskRecords[subID] })] } ?? []
                 let bodyTools = self.map { [$0.speakTool(), $0.digitalHumanTool()] } ?? []
                 let asyncTools = self.map { $0.backgroundWatchTools() + $0.scheduledTaskTools() } ?? []  // 子任务也带"等条件续/挂定时"四肢(同派发隔离任务,免伪造 launchd)
                 return builtin + [Self.timeTool(), Self.locationTool(), Self.webSearchTool(), Self.askUserTool()] + bodyTools + extras + asyncTools

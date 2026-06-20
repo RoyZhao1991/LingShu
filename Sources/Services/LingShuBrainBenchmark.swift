@@ -137,6 +137,73 @@ enum LingShuBrainBenchmark {
              import solution
              cs=[("999","1","1000"),("123456789123456789","987654321987654321","1111111111111111110"),("0","0","0"),("1","9999999999","10000000000")]
              print("BENCH_PASS" if all(solution.str_add(a,b)==e for a,b,e in cs) else "BENCH_FAIL")
+             """)),
+
+        // ===== 生产/长任务(多需求·多文件·扩存量代码;隐藏用例**逐项打分**=部分给分,照真实生产能力,占最高权重)=====
+        // 这层是关键:有界谜题强弱难分,**真实生产任务**才区分得开——做一半/漏需求会按比例丢分,弱脑在此现形。
+        item("p_inventory", "生产·库存系统", "用工具在 {DIR}/inventory.py 写一个 Inventory 类(完整可用):add_item(name,qty,price)(同名累加数量、更新单价)、remove(name,qty)(数量不足要抛异常)、total_value()(库存总价值,保留2位)、low_stock(threshold)(返回数量<阈值的名字列表,升序)、save(path)/load(path)(JSON 持久化)。把它做完整、自测各方法。", .expert, agentic: true, maxTurns: 30, weight: 18,
+             codeCheck: .init(harness: """
+             import os; D=os.path.dirname(os.path.abspath(__file__))
+             import inventory
+             Inv=inventory.Inventory; p=0; t=0
+             def ck(c):
+                 global p,t; t+=1
+                 try:
+                     if c(): p+=1
+                 except Exception: pass
+             inv=Inv(); inv.add_item("a",10,2.0)
+             ck(lambda: inv.total_value()==20.0)
+             inv.add_item("a",5,2.0); ck(lambda: inv.total_value()==30.0)
+             inv.remove("a",3); ck(lambda: inv.total_value()==24.0)
+             def od():
+                 try: inv.remove("a",999); return False
+                 except Exception: return True
+             ck(od)
+             inv.add_item("b",1,5.0); ck(lambda: inv.low_stock(5)==["b"])
+             inv.add_item("c",2,1.0); ck(lambda: inv.low_stock(3)==["b","c"])
+             ck(lambda: round(inv.total_value(),2)==31.0)
+             sp=os.path.join(D,"inv_saved.json"); inv.save(sp); ck(lambda: os.path.exists(sp))
+             inv2=Inv(); inv2.load(sp); ck(lambda: inv2.total_value()==31.0)
+             print(f"BENCH_SCORE {p} {t}")
+             """)),
+        item("p_extend", "生产·扩展存量代码", "{DIR}/library.py 已有一个 Library 类(add_book(title,author) / find_by_author(author))。用工具**在不破坏现有功能**的前提下扩展它:加 borrow(title)(借出,成功返 True;书不存在或已借出返 False)、return_book(title)(归还,成功 True 否则 False)、is_available(title)(在馆且未借出才 True)。自测,并确认 find_by_author 仍正常。", .expert, agentic: true, maxTurns: 28, weight: 14,
+             codeCheck: .init(preWrite: ["library.py": "class Library:\n    def __init__(self): self.books=[]\n    def add_book(self, title, author): self.books.append({\"title\":title,\"author\":author})\n    def find_by_author(self, author): return [b[\"title\"] for b in self.books if b[\"author\"]==author]\n"],
+                              harness: """
+             import library
+             L=library.Library; p=0;t=0
+             def ck(c):
+                 global p,t;t+=1
+                 try:
+                     if c(): p+=1
+                 except Exception: pass
+             lib=L(); lib.add_book("A","x"); lib.add_book("B","x"); lib.add_book("C","y")
+             ck(lambda: sorted(lib.find_by_author("x"))==["A","B"])
+             ck(lambda: lib.borrow("A")==True)
+             ck(lambda: lib.borrow("A")==False)
+             ck(lambda: lib.is_available("A")==False)
+             ck(lambda: lib.is_available("B")==True)
+             ck(lambda: lib.return_book("A")==True and lib.is_available("A")==True)
+             ck(lambda: lib.borrow("ZZZ")==False)
+             print(f"BENCH_SCORE {p} {t}")
+             """)),
+        item("p_pipeline", "生产·多需求数据流", "用工具在 {DIR}/pipeline.py 写函数 process(records)(records 是 dict 列表,字段 status/dept/salary):① 只保留 status=='active';② 按 dept 分组;③ 算每组 salary 平均(保留2位);④ **剔除人数<2 的组**;⑤ 返回 [{'dept','avg','count'}] 列表,按 avg 降序、avg 相同按 dept 升序。自测覆盖每条需求。", .expert, agentic: true, maxTurns: 26, weight: 14,
+             codeCheck: .init(harness: """
+             import pipeline
+             process=pipeline.process; p=0;t=0
+             def ck(c):
+                 global p,t;t+=1
+                 try:
+                     if c(): p+=1
+                 except Exception: pass
+             recs=[{"status":"active","dept":"eng","salary":100},{"status":"active","dept":"eng","salary":200},{"status":"inactive","dept":"eng","salary":999},{"status":"active","dept":"sales","salary":150},{"status":"active","dept":"sales","salary":150},{"status":"active","dept":"solo","salary":500},{"status":"active","dept":"hr","salary":120},{"status":"active","dept":"hr","salary":120}]
+             r=process(recs)
+             ck(lambda: all(d["dept"]!="solo" for d in r))
+             ck(lambda: next(d for d in r if d["dept"]=="eng")["avg"]==150.0)
+             ck(lambda: next(d for d in r if d["dept"]=="sales")["avg"]==150.0)
+             ck(lambda: [d["dept"] for d in r]==["eng","sales","hr"])
+             ck(lambda: next(d for d in r if d["dept"]=="eng")["count"]==2)
+             ck(lambda: len(r)==3)
+             print(f"BENCH_SCORE {p} {t}")
              """))
     ]
 
@@ -149,11 +216,19 @@ enum LingShuBrainBenchmark {
 
     static var totalWeight: Int { items.reduce(0) { $0 + $1.weight } }
 
-    /// 综合评分(0–100):通过题权重之和 / 总权重 × 100。
+    /// 综合评分(0–100):通过题权重之和 / 总权重 × 100(全过/全不过的二元题用)。
     static func composite(passedIDs: Set<String>) -> Int {
         let earned = items.filter { passedIDs.contains($0.id) }.reduce(0) { $0 + $1.weight }
         guard totalWeight > 0 else { return 0 }
         return Int((Double(earned) / Double(totalWeight) * 100).rounded())
+    }
+
+    /// **部分给分**综合评分:每题给一个完成度 fraction(0~1,生产/长任务按隐藏用例通过比例),
+    /// 加权 = Σ(weight × fraction) / 总权重 × 100。这是真实评分入口(二元题 fraction=0 或 1)。
+    static func compositeWeighted(_ fractions: [String: Double]) -> Int {
+        let earned = items.reduce(0.0) { $0 + Double($1.weight) * max(0, min(1, fractions[$1.id] ?? 0)) }
+        guard totalWeight > 0 else { return 0 }
+        return Int((earned / Double(totalWeight) * 100).rounded())
     }
 }
 
@@ -174,6 +249,7 @@ struct LingShuBrainBenchmarkResult: Identifiable, Equatable, Sendable {
         var difficulty: String
         var agentic: Bool
         var passed: Bool
+        var scoreText: String = ""   // 部分给分题显示 "7/9";二元题空
         var replyExcerpt: String
     }
 

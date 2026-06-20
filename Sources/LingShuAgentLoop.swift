@@ -171,7 +171,7 @@ actor LingShuAgentSession: LingShuAgentSessioning {
     func send(_ userText: String) async -> LingShuAgentRunResult {
         pendingCorrection = nil   // 新回合不带上一回合可能残留的纠正
         consumePendingBriefings() // 子任务简报先入上下文(在用户新输入之前)——主线程信息同步
-        trimHistoryIfNeeded()     // 在回合边界(无挂起工具调用)裁剪旧上下文,新输入永远保留
+        await compactHistoryIfNeeded()   // 回合边界:超窗口的早段**语义压缩成前情提要**(对标 CC auto-compaction),失败回退硬裁剪
         messages.append(.init(role: .user, content: userText))
         return await runLoop()
     }
@@ -225,6 +225,31 @@ actor LingShuAgentSession: LingShuAgentSessioning {
         var kept = Array(body.suffix(maxHistoryMessages))
         while let first = kept.first, first.role == .tool { kept.removeFirst() }   // 不留孤儿 tool 结果
         messages = Array(messages[..<systemCount]) + kept
+    }
+
+    /// 回合边界**语义压缩**:历史超窗口时,把要丢弃的早段用模型蒸馏成一条「前情提要」,替代硬丢弃——
+    /// 长会话不丢早先的决策/产物路径/已确认信息(对标 Claude Code 的 auto-compaction,补"硬丢中段"短板)。
+    /// 提要作为 body 首条流转,下次溢出会被连同新内容再压缩=**滚动摘要**。蒸馏失败/为空 → 回退硬裁剪,绝不卡住。
+    private func compactHistoryIfNeeded() async {
+        guard maxHistoryMessages > 0 else { return }
+        let systemCount = messages.prefix { $0.role == .system }.count
+        let body = Array(messages[systemCount...])
+        guard body.count > maxHistoryMessages else { return }
+        let keepRecent = max(1, maxHistoryMessages - 1)        // 留一格给提要
+        let dropCount = body.count - keepRecent
+        guard dropCount >= 2 else { trimHistoryIfNeeded(); return }
+        let dropped = Array(body.prefix(dropCount))
+        let transcript = dropped.map { "[\($0.role)] " + String($0.content.prefix(1200)) }.joined(separator: "\n")
+        let sys = LingShuAgentMessage(role: .system, content: "你是对话压缩器。把下面这段较早的 agent 对话压成简洁【前情提要】:只留对后续推进有用的——关键决策/已产出文件的绝对路径/已确认事实/未决问题/约束。要点式,别复述客套和中间废话。只输出提要正文。")
+        let usr = LingShuAgentMessage(role: .user, content: transcript)
+        let resp = await model.respond(messages: [sys, usr], tools: [])
+        var summary = ""
+        if case .text(let s) = resp { summary = s.trimmingCharacters(in: .whitespacesAndNewlines) }
+        guard !summary.isEmpty else { trimHistoryIfNeeded(); return }   // 蒸馏失败 → 回退硬裁剪
+        var kept = Array(body.suffix(keepRecent))
+        while let first = kept.first, first.role == .tool { kept.removeFirst() }
+        let summaryMsg = LingShuAgentMessage(role: .user, content: "【前情提要(早前对话已压缩,供你延续)】\n\(summary)")
+        messages = Array(messages[..<systemCount]) + [summaryMsg] + kept
     }
 
     /// 续接:把外部给的答案回填到卡住的阻塞工具调用上,继续跑循环。
