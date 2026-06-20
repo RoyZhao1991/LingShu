@@ -101,9 +101,10 @@ struct LingShuBrainBenchmarkBar: View {
     }
 }
 
-/// 脑力测评结果弹窗:大字综合分 + 评级 + 逐题通过情况。
+/// 脑力测评结果弹窗:大字综合分 + 评级 + 逐题通过情况 + 跨脑对比。
 struct LingShuBrainBenchmarkResultView: View {
     let result: LingShuBrainBenchmarkResult
+    var history: [LingShuBrainBenchmarkSnapshot] = []
     let onClose: () -> Void
 
     var body: some View {
@@ -140,6 +141,33 @@ struct LingShuBrainBenchmarkResultView: View {
                         .background(Color.white.opacity(0.04), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
                     }
                 }
+            }
+
+            // 跨脑对比:测过多颗脑时并排比各档水位,差距在哪一层一目了然(换脑重测即累积)。
+            if history.count >= 2 {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("跨脑对比(各档水位)").font(.system(size: 12, weight: .bold)).foregroundStyle(.white.opacity(0.85))
+                    HStack(spacing: 0) {
+                        Text("脑").frame(maxWidth: .infinity, alignment: .leading)
+                        ForEach(["综合","易","中","难","极难"], id: \.self) { h in Text(h).frame(width: 44) }
+                    }.font(.system(size: 9)).foregroundStyle(.white.opacity(0.4))
+                    ForEach(history) { s in
+                        HStack(spacing: 0) {
+                            Text(s.brainID.split(separator: "|").first.map(String.init) ?? s.brainID)
+                                .lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
+                                .foregroundStyle(s.brainID == result.brainID ? Color.lingHolo : .white.opacity(0.7))
+                            Text("\(s.score)").frame(width: 44).foregroundStyle(.white)
+                            ForEach(["易","中","难","极难"], id: \.self) { tier in
+                                let pct = s.tierPct(tier)
+                                Text("\(pct)").frame(width: 44)
+                                    .foregroundStyle(pct >= 90 ? Color.lingHolo : (pct >= 60 ? .yellow : .orange))
+                            }
+                        }.font(.system(size: 11, weight: .semibold))
+                        .padding(.vertical, 3)
+                    }
+                }
+                .padding(8)
+                .background(Color.white.opacity(0.04), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
             }
 
             Divider().overlay(Color.white.opacity(0.1))

@@ -285,4 +285,22 @@ struct LingShuBrainBenchmarkResult: Identifiable, Equatable, Sendable {
         default: "偏弱"
         }
     }
+
+    var snapshot: LingShuBrainBenchmarkSnapshot {
+        .init(brainID: brainID, score: score, grade: grade, passed: passedCount, total: totalCount, tiers: tiers, ranAt: ranAt)
+    }
+}
+
+/// 一次测评的**紧凑快照**(持久化用,不存逐题 rows):供「跨脑对比」——每颗测过的脑存一份,弹窗并排比各档水位。
+struct LingShuBrainBenchmarkSnapshot: Codable, Equatable, Sendable, Identifiable {
+    var id: String { brainID }
+    var brainID: String
+    var score: Int
+    var grade: String
+    var passed: Int
+    var total: Int
+    var tiers: [LingShuBrainBenchmark.TierScore]
+    var ranAt: Date
+
+    func tierPct(_ label: String) -> Int { tiers.first { $0.label == label }?.pct ?? 0 }
 }

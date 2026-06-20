@@ -55,6 +55,8 @@ final class LingShuState: ObservableObject {
     /// 内置脑力测试:运行中标志 + 结果(非 nil → 弹窗展示)。见 LingShuState+BrainBenchmark.swift。
     @Published var isRunningBrainBenchmark = false
     @Published var brainBenchmarkResult: LingShuBrainBenchmarkResult?
+    /// 跨脑对比:每颗测过的脑存一份快照(最新),弹窗并排比各档水位。
+    @Published var brainBenchmarkHistory: [LingShuBrainBenchmarkSnapshot] = LingShuState.loadBenchmarkHistory()
     @Published var coreState: LingShuCoreState = .standby
     /// LOOP 内环节(理解/规划/执行/验收),实时显示给用户(本体浮窗 + 状态栏),免得干等。见 LingShuState+LoopPhase。
     @Published var loopPhase: LingShuLoopPhase = .idle

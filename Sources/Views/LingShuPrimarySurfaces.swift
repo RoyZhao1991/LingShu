@@ -96,8 +96,8 @@ struct LingShuRootView: View {
             }
         }
         .sheet(item: $state.brainBenchmarkResult) { result in   // 脑力测试跑完 → 弹窗显示综合分(在哪个界面都弹)
-            LingShuBrainBenchmarkResultView(result: result) { state.brainBenchmarkResult = nil }
-                .frame(minWidth: 520, minHeight: 460)
+            LingShuBrainBenchmarkResultView(result: result, history: state.brainBenchmarkHistory) { state.brainBenchmarkResult = nil }
+                .frame(minWidth: 560, minHeight: 480)
         }
         .onChange(of: state.isMinimalVoiceMode) { _, minimal in
             LingShuWindowPlacement.applyMinimalVoiceWindow(minimal)

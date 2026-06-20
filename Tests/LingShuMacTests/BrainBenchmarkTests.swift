@@ -130,6 +130,20 @@ final class BrainBenchmarkTests: XCTestCase {
         }
     }
 
+    func testSnapshotCodableAndTierLookup() {
+        let snap = LingShuBrainBenchmarkSnapshot(
+            brainID: "DeepSeek|deepseek-chat", score: 98, grade: "卓越", passed: 48, total: 49,
+            tiers: [.init(label: "易", pct: 100, passed: 7, total: 7, weight: 7),
+                    .init(label: "极难", pct: 100, passed: 12, total: 12, weight: 108)],
+            ranAt: Date())
+        XCTAssertEqual(snap.tierPct("易"), 100)
+        XCTAssertEqual(snap.tierPct("极难"), 100)
+        XCTAssertEqual(snap.tierPct("不存在"), 0)
+        let data = try! JSONEncoder().encode(snap)   // 跨脑对比要持久化
+        let back = try! JSONDecoder().decode(LingShuBrainBenchmarkSnapshot.self, from: data)
+        XCTAssertEqual(back, snap)
+    }
+
     func testResultGradeBands() {
         func g(_ s: Int) -> String { LingShuBrainBenchmarkResult(brainID: "x", score: s, passedCount: 0, totalCount: 37, rows: []).grade }
         XCTAssertEqual(g(95), "卓越"); XCTAssertEqual(g(80), "优秀"); XCTAssertEqual(g(65), "良好")

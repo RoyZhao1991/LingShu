@@ -69,6 +69,7 @@ extension LingShuState {
             passedCount: passedCount, totalCount: LingShuBrainBenchmark.items.count, rows: rows,
             tiers: LingShuBrainBenchmark.tierBreakdown(fractions))
         brainBenchmarkResult = out   // 非 nil → 弹窗
+        upsertBenchmarkSnapshot(out.snapshot)   // 存进跨脑对比历史(同脑覆盖最新)
         appendTrace(kind: .result, actor: "脑力测试", title: "完成 · \(score)分(\(out.grade))", detail: "全过 \(passedCount)/\(LingShuBrainBenchmark.items.count) · 脑 \(currentBrainID)")
     }
 
@@ -92,6 +93,26 @@ extension LingShuState {
 
     /// python 字符串字面量(给路径加引号转义,防特殊字符)。
     private func pyStr(_ s: String) -> String { "\"" + s.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"") + "\"" }
+
+    // MARK: - 跨脑对比历史(持久化)
+
+    nonisolated static let benchHistoryKey = "lingshu.brainBenchmarkHistory"
+
+    /// 存一份测评快照(同 brainID 覆盖最新),供弹窗并排对比不同脑的各档水位。
+    func upsertBenchmarkSnapshot(_ snap: LingShuBrainBenchmarkSnapshot) {
+        brainBenchmarkHistory.removeAll { $0.brainID == snap.brainID }
+        brainBenchmarkHistory.append(snap)
+        brainBenchmarkHistory.sort { $0.score > $1.score }   // 高分在前,差距一目了然
+        if let data = try? JSONEncoder().encode(brainBenchmarkHistory) {
+            UserDefaults.standard.set(data, forKey: Self.benchHistoryKey)
+        }
+    }
+
+    nonisolated static func loadBenchmarkHistory() -> [LingShuBrainBenchmarkSnapshot] {
+        guard let data = UserDefaults.standard.data(forKey: benchHistoryKey),
+              let h = try? JSONDecoder().decode([LingShuBrainBenchmarkSnapshot].self, from: data) else { return [] }
+        return h
+    }
 
     /// MCP 控制口子:跑脑力测试并返回综合分 JSON(供脚本化 E2E)。
     func controlRunBrainBenchmark() async -> (text: String, isError: Bool) {
