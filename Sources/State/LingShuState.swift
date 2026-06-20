@@ -49,6 +49,12 @@ final class LingShuState: ObservableObject {
     @Published var missionTitle = "待机中"
     @Published var missionStatus = "我在。能力池已注册，随时待命，等你开口。"
     // trustScore（顶栏/核心区 TRUST）现为**真实计算的就绪度**，不再写死——见 LingShuState+RuntimeStatus.swift。
+    /// 「大脑」评分(顶栏 HUD,替代 TRUST):自主完成任务 +1 / 触发兜底 −1 / 换脑归零。见 LingShuState+BrainScore.swift。
+    /// 只读语义靠约定(只有 LingShuState+BrainScore 的 setBrainScore 改它);跨文件扩展需要可写,故不用 private(set)。
+    @Published var brainScore: LingShuBrainScore = LingShuState.loadBrainScore()
+    /// 内置脑力测试:运行中标志 + 结果(非 nil → 弹窗展示)。见 LingShuState+BrainBenchmark.swift。
+    @Published var isRunningBrainBenchmark = false
+    @Published var brainBenchmarkResult: LingShuBrainBenchmarkResult?
     @Published var coreState: LingShuCoreState = .standby
     /// LOOP 内环节(理解/规划/执行/验收),实时显示给用户(本体浮窗 + 状态栏),免得干等。见 LingShuState+LoopPhase。
     @Published var loopPhase: LingShuLoopPhase = .idle
@@ -958,6 +964,8 @@ final class LingShuState: ObservableObject {
         if preset.name == "Codex Auth" {
             codexCLIPath = CodexBridge.bundledCLIPath
         }
+
+        resetBrainScoreForCurrentBrain()   // 换大模型 → 大脑评分归零(评分只属于某一颗脑)
 
         // 换脑即时生效 + 记忆延续:重建常驻会话(主/自主),下次回合用新模型重新构造 adapter,
         // 并经 seededDistilledMemory 重新 seed(蒸馏对话记忆 + 最近产出物)——换的是大脑,记忆接着用。

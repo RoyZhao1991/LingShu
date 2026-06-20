@@ -71,6 +71,7 @@ extension LingShuState {
             if lastText.contains("反复尝试") { break }            // 原地打转的诚实交还,不补预算
             guard taskHasInProgressWork(taskRecordID) else { break } // 无在制品(纯对话耗尽等)不恢复
             recovered += 1
+            recordBrainFallback("撞顶续跑(框架补预算兜底)")   // 大脑评分:触发兜底 −1
             appendTrace(kind: .warning, actor: "执行恢复", title: "撞顶续跑(第\(recovered)次)", detail: "推进用满一段预算未收尾,补预算继续完成/修复,不当失败。")
             result = await session.resume("你这一段推进用满了预算但还没给出最终结果——这不是失败,继续干。请把没做完的部分做完;如果程序还报错/崩溃,就一路修到它能正常构建、运行、跑通(测试全绿、运行不崩),然后用一句话交付结果 + 产出物绝对路径。")
         }
@@ -152,9 +153,11 @@ extension LingShuState {
                 return .completed(text: delivery)
             }
             if round > 0, artifactCount <= lastArtifactCount, critique.prefix(120) == lastCritique.prefix(120) {
+                recordBrainFallback("验收停滞交还(脑没救回来)")   // 大脑评分:触发兜底 −1
                 appendTrace(kind: .warning, actor: "验收", title: "停滞交还", detail: "连续未通过且无新进展,交还用户。")
                 return .maxTurnsReached(lastText: Self.runResultText(result) + "\n\n（验收一直没通过且我已无新进展:\(critique.prefix(160))。先停下交还——需要你的判断或补充信息。）")
             }
+            if round == 3 { recordBrainFallback("验收升级到确定性兜底(Rung2)") }   // 大脑评分:升到最重脚手架=触发兜底 −1
             appendTrace(kind: .warning, actor: "验收", title: "未通过(第\(round + 1)轮,继续修)", detail: String(critique.prefix(80)))
             // 升级阶梯并入验收门(方案 §2):验收不过不再"原样重试",而是按返工轮次**逐级加厚脚手架**
             // (Rung0 原样意见 → Rung1 结构化引导 → Rung2 切确定性兜底)。强脑通常 round 0 就过。

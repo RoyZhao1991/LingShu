@@ -95,6 +95,10 @@ struct LingShuRootView: View {
                 state.resolveShellApproval(decision)
             }
         }
+        .sheet(item: $state.brainBenchmarkResult) { result in   // 脑力测试跑完 → 弹窗显示综合分(在哪个界面都弹)
+            LingShuBrainBenchmarkResultView(result: result) { state.brainBenchmarkResult = nil }
+                .frame(minWidth: 520, minHeight: 460)
+        }
         .onChange(of: state.isMinimalVoiceMode) { _, minimal in
             LingShuWindowPlacement.applyMinimalVoiceWindow(minimal)
             // 极简模式有自己的通话控制器:进极简就停在岗收听(避免双麦),退出极简且仍在岗则恢复。
@@ -406,13 +410,13 @@ struct LingShuStableTopBar: View {
                 }
             }
 
-            // STATE/AUTO/TRUST 是运行状态，始终显示（不随窗口变窄隐藏）。
+            // STATE/AUTO/脑力 是运行状态，始终显示（不随窗口变窄隐藏）。
             TimelineView(.periodic(from: .now, by: 1)) { _ in
                 LingShuHUDReadout(label: "STATE", value: state.coreStateDisplay, color: state.coreState.color)
             }
             LingShuHUDReadout(label: "AUTO", value: state.autonomousRunDisplayStatus, color: state.autonomousRun.isActive ? .orange : .lingFaint)
-            LingShuHUDReadout(label: "TRUST", value: "\(state.trustScore)%", color: .lingHolo)
-                .help(state.trustBreakdown)
+            LingShuHUDReadout(label: "脑力", value: "\(state.brainScore.score)", color: .lingHolo)
+                .help(state.brainScore.summary)
 
             Button {
                 // 右上角闪电=一键进/出自主模式(化身右上角悬浮本体)。在岗→退出夺回;否则→直接上岗(常驻灵枢,无需目标)。

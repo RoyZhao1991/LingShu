@@ -217,8 +217,8 @@ struct LingShuCoreHeader: View {
             VStack(alignment: .trailing, spacing: 10) {
                 LingShuHUDReadout(label: "CHANNEL", value: state.modelProvider, color: state.isModelConnected ? .lingHolo : .orange)
                 LingShuHUDReadout(label: "SESSIONS", value: state.remoteSessionStatus)
-                LingShuHUDReadout(label: "TRUST", value: "\(state.trustScore)%", color: .lingHolo)
-                    .help(state.trustBreakdown)
+                LingShuHUDReadout(label: "脑力", value: "\(state.brainScore.score)", color: .lingHolo)
+                    .help(state.brainScore.summary)
             }
             .frame(maxWidth: .infinity, alignment: .trailing)
         }

@@ -140,6 +140,9 @@ struct LingShuModelGatewaySurface: View {
                 // 配置加密导入/导出(换机/分享试用/开源安全):口令加密整包导出,一键导入即用。
                 LingShuModelConfigPortabilityBar(state: state)
 
+                // 脑力测试:跑一套难度不等的硬编码题测当前脑,出综合分(弹窗)。
+                LingShuBrainBenchmarkBar(state: state)
+
                 // 子 tab:不同通道类型分页(中枢/语音/感知)
                 HStack(spacing: 6) {
                     ForEach(ChannelTab.allCases) { item in

@@ -70,6 +70,7 @@ extension LingShuState {
 
         taskExecutionRecords[index].finish(status: status, summary: summary)
         persistTaskExecutionRecords()
+        if status == .completed { recordBrainTaskCompleted() }   // 大脑评分:自主完成一个任务 +1
         if status == .answered || status == .completed || status == .blocked {
             markTaskSegmentFinished(recordID: recordID, blocked: status == .blocked)
             captureCodeChanges(recordID: recordID)   // 代码任务:抓分支+未提交改动文件,落进记录供右侧面板展示

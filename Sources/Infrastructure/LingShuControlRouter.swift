@@ -355,13 +355,11 @@ final class LingShuControlRouter {
             let limit = (arguments["limit"] as? Int) ?? 30
             return (jsonText(["trace": tracePayload(limit: limit)]), false)
         case "lingshu_stop":
-            // 停止在飞回合 + **正在跑的派发隔离子任务**(等价任务窗口"停止"按钮 / 接管态"停止并夺回")。
             let wasActive = state.hasActiveModelCall
             let dispatched = await state.agentOrchestrator.activeDriveCount()
             state.cancelCurrentCall()
             return (jsonText(["stopped": wasActive || dispatched > 0, "mainTurn": wasActive, "dispatchedStopped": dispatched]), false)
-        case "lingshu_autonomous":
-            // 驱动自主模式/常驻灵枢(等价独立运行面板按钮),供脚本化验证完全接管态。args: action。
+        case "lingshu_autonomous":   // 驱动自主模式/常驻灵枢(等价独立运行面板)。args: action
             guard let action = (arguments["action"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) else {
                 return ("缺少参数 action(go_live|stop|pause|resume|arm|disarm)", true)
             }
@@ -383,7 +381,6 @@ final class LingShuControlRouter {
                 "statusLine": state.autonomousRun.statusLine
             ]), false)
         case "lingshu_task_records":
-            // 列任务记录(热+冷),供挑选/inspect。
             let limit = (arguments["limit"] as? Int) ?? 15
             let records = state.taskExecutionRecordLookup.prefix(max(1, limit)).map { r -> [String: Any] in
                 [
@@ -393,8 +390,7 @@ final class LingShuControlRouter {
                 ]
             }
             return (jsonText(["records": Array(records)]), false)
-        case "lingshu_task_detail":
-            // 取一条任务的 codex 式执行时间线(消息 + 结构化 detail:toolCall/toolResult/fileEdit+diff)+ 产出物。
+        case "lingshu_task_detail":   // 取任务的 codex 式时间线(toolCall/toolResult/fileEdit+diff)+ 产出物
             guard let id = arguments["recordId"] as? String, let payload = taskDetailPayload(recordID: id) else {
                 return ("缺少/无效参数 recordId", true)
             }
@@ -471,6 +467,8 @@ final class LingShuControlRouter {
             return state.controlExportModelConfig(passphrase: arguments["passphrase"] as? String, path: arguments["path"] as? String)
         case "lingshu_import_model_config":   // 一键导入口令加密配置 → 恢复并立即可用;args: passphrase, path
             return state.controlImportModelConfig(passphrase: arguments["passphrase"] as? String, path: arguments["path"] as? String)
+        case "lingshu_run_brain_benchmark":   // 跑内置脑力测试,返回综合分(供脚本化 E2E)
+            return await state.controlRunBrainBenchmark()
         case "lingshu_set_loop_variant":   // 切换核心循环引擎(classic|nested),持久化 + 清会话 holder 让下回合重建
             guard let raw = (arguments["variant"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
                   let variant = LingShuAgentLoopVariant(rawValue: raw) else {
@@ -676,6 +674,8 @@ final class LingShuControlRouter {
             "coreState": state.coreStateDisplay,
             "loopPhase": state.loopPhase.rawValue,   // 理解中/规划中/执行中/验收中(空=空闲)
             "loopVariant": state.agentLoopVariant.rawValue,   // classic=经典连续 / nested=嵌套分阶段
+            "trustScore": state.trustScore,             // 系统就绪度(模型连通/通道就绪/近期验收合成)
+            "brainScore": ["score": state.brainScore.score, "completed": state.brainScore.completed, "fallbacks": state.brainScore.fallbacks, "brain": state.brainScore.brainID],   // 顶栏「脑力」:自主完成+1/兜底−1/换脑归零
             "missionTitle": state.missionTitle,
             "missionStatus": state.missionStatus,
             "autonomousPhase": state.autonomousRun.phase.rawValue,

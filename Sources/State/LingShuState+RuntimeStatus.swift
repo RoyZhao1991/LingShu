@@ -210,34 +210,29 @@ extension LingShuState {
 
     // MARK: - 系统就绪度 / 置信度（TRUST）：真实信号合成，不再是写死的 91
 
-    /// 评估就绪度时纳入的能力通道：中枢（当前脑）、视觉、听觉、当前语音口。
-    private var trustChannelKeys: [String] {
-        var keys = [Self.brainChannelKey(modelProvider), Self.visionChannelKey, Self.asrChannelKey]
-        if let ttsID = voiceManager?.speechOutputProvider.id { keys.append(Self.ttsChannelKey(ttsID)) }
-        return keys
-    }
-
-    /// 真实信号：① 模型是否连通 ② 能力通道校验通过比例 ③ 近期任务验收通过率（有数据才计入）。
+    /// 真实信号：① 模型是否连通 ② 能力通道(脑/眼/耳/口)就绪比例 ③ 近期任务验收通过率（有数据才计入）。
+    /// **耳/口的就绪由 `LingShuTrustScore.channelReadiness` 统一判**：本地 ASR/TTS 始终可用即就绪——
+    /// 根治"ASR 写死查 `asr:datanet`、本地 ASR(默认)永不计入 → 通道恒 3/4 → 分数钉死 91%"的 bug。
     var trustSignals: (modelConnected: Bool, channelsValidated: Int, channelsTotal: Int, tasksPassed: Int, tasksFinished: Int) {
-        let keys = trustChannelKeys
-        let validated = keys.filter { isChannelValidated($0) }.count
+        let r = LingShuTrustScore.channelReadiness(
+            brainValidated: isChannelValidated(Self.brainChannelKey(modelProvider)),
+            visionValidated: isChannelValidated(Self.visionChannelKey),
+            asrLocalMode: asrLocalModeEnabled,
+            asrCloudValidated: isChannelValidated(Self.asrChannelKey) || isChannelValidated(Self.asrCustomKey),
+            ttsLocalMode: ttsLocalModeEnabled,
+            ttsActiveValidated: voiceManager.map { isChannelValidated(Self.ttsChannelKey($0.speechOutputProvider.id)) } ?? false)
         let recent = taskExecutionRecords.suffix(20)
         let terminal: [LingShuTaskExecutionStatus] = [.completed, .answered, .blocked, .needsRevision]
         let finished = recent.filter { terminal.contains($0.status) }
         let passed = finished.filter { $0.status == .completed || $0.status == .answered }.count
-        return (isModelConnected, validated, keys.count, passed, finished.count)
+        return (isModelConnected, r.ready, r.total, passed, finished.count)
     }
 
-    /// 置信度分数（0–100）：各维度按权重合成（连通 0.40 / 通道校验 0.35 / 近期验收 0.25），
-    /// 无数据的维度自动从权重里剔除——不凭空拉高也不无故压低。
+    /// 置信度分数（0–100）：连通 0.40 / 通道就绪 0.35 / 近期验收 0.25（纯逻辑见 `LingShuTrustScore.score`）。
     var trustScore: Int {
         let s = trustSignals
-        var weighted = 0.0, total = 0.0
-        weighted += (s.modelConnected ? 1.0 : 0.0) * 0.40; total += 0.40
-        if s.channelsTotal > 0 { weighted += Double(s.channelsValidated) / Double(s.channelsTotal) * 0.35; total += 0.35 }
-        if s.tasksFinished > 0 { weighted += Double(s.tasksPassed) / Double(s.tasksFinished) * 0.25; total += 0.25 }
-        guard total > 0 else { return 0 }
-        return Int((weighted / total * 100).rounded())
+        return LingShuTrustScore.score(modelConnected: s.modelConnected, channelsReady: s.channelsValidated,
+                                       channelsTotal: s.channelsTotal, tasksPassed: s.tasksPassed, tasksFinished: s.tasksFinished)
     }
 
     /// 置信度的可解释拆解（给顶栏 / 核心区 tooltip——把"这 91% 到底怎么来的"说清楚）。

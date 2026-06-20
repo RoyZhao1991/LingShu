@@ -60,6 +60,7 @@ extension LingShuState {
         } else if let k = credentialStore.apiKey(forProvider: bundle.provider), !k.isEmpty {
             apiKey = k
         }
+        resetBrainScoreForCurrentBrain()   // 导入新配置=可能换脑 → 评分归零
         // 换脑即时生效:清掉常驻会话(主/自主),下一回合用新脑重建 adapter。
         mainAgentSessionHolder = nil
         autonomousSessionHolder = nil

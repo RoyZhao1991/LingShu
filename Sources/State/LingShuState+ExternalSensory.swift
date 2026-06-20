@@ -17,6 +17,7 @@ extension LingShuState {
         externalSensory.restorePersistedPreferences()
         // M2:把已安装的**自编传感器型外围**重新注册进感知中枢(跨重启持续可用;隔离的不自动启用)。
         loadAndRegisterSensorComponents()
+        rebaseBrainScoreToCurrentBrain()   // 顶栏脑力分对齐当前脑(持久分若属别的脑→归零)
         // P0②:首启把第一个决策知识包种进知识图谱(陈述性事实/教训)。后台跑、不阻塞启动(知识图谱懒加载,
         // 含本地向量重建,别压在启动关键路径上);幂等,有标记即跳过。
         Task { @MainActor [weak self] in
