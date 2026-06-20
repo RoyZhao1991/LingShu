@@ -415,8 +415,7 @@ struct LingShuStableTopBar: View {
                 LingShuHUDReadout(label: "STATE", value: state.coreStateDisplay, color: state.coreState.color)
             }
             LingShuHUDReadout(label: "AUTO", value: state.autonomousRunDisplayStatus, color: state.autonomousRun.isActive ? .orange : .lingFaint)
-            LingShuHUDReadout(label: "脑力", value: "\(state.brainScore.score)", color: .lingHolo)
-                .help(state.brainScore.summary)
+            LingShuBrainScoreChip(state: state)   // 可点:看具体评分 + 一键检测脑力分
 
             Button {
                 // 右上角闪电=一键进/出自主模式(化身右上角悬浮本体)。在岗→退出夺回;否则→直接上岗(常驻灵枢,无需目标)。
@@ -438,18 +437,6 @@ struct LingShuStableTopBar: View {
             .buttonStyle(.plain)
             .help(state.isStandingPersonOnDuty ? "退出自主模式" : "进入自主模式（灵枢上岗，化身右上角悬浮本体）")
 
-            Button {
-                state.isMinimalVoiceMode = true
-            } label: {
-                Image(systemName: "waveform")
-                    .font(.system(size: 14, weight: .bold))
-                    .foregroundStyle(Color.lingVoid)
-                    .frame(width: 34, height: 30)
-                    .background(Color.lingHolo, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .help("进入极简语音模式（双波形纯语音对话）")
         }
         .padding(.horizontal, 22)
         .padding(.vertical, 10)

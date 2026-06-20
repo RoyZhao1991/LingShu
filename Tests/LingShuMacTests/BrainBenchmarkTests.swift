@@ -68,22 +68,21 @@ final class BrainBenchmarkTests: XCTestCase {
     }
 
     func testCompositeWeightsByDifficulty() {
-        // 总权重 112(易 7×1 + 中 15×2 + 难 15×3 + 极难 5 题权重 5/5/6/6/8=30)。
+        // 总权重 144(易 7×1 + 中 15×2 + 难 15×3 + 极难 9 题=62:5 长链编码 30 + 4 前沿 32)。
         let easyIDs = Set(LingShuBrainBenchmark.items.filter { $0.difficulty == .easy }.map(\.id))
-        XCTAssertEqual(LingShuBrainBenchmark.composite(passedIDs: easyIDs), 6, "7/112≈6")
+        XCTAssertEqual(LingShuBrainBenchmark.composite(passedIDs: easyIDs), 5, "7/144≈5")
         let hardIDs = Set(LingShuBrainBenchmark.items.filter { $0.difficulty == .hard }.map(\.id))
-        XCTAssertEqual(LingShuBrainBenchmark.composite(passedIDs: hardIDs), 40, "45/112≈40")
+        XCTAssertEqual(LingShuBrainBenchmark.composite(passedIDs: hardIDs), 31, "45/144≈31")
         let expertIDs = Set(LingShuBrainBenchmark.items.filter { $0.difficulty == .expert }.map(\.id))
-        XCTAssertEqual(LingShuBrainBenchmark.composite(passedIDs: expertIDs), 27, "30/112≈27 — 极难长链编码题占 1/4 权重")
+        XCTAssertEqual(LingShuBrainBenchmark.composite(passedIDs: expertIDs), 43, "62/144≈43 — 极难/前沿编码题占 ~43% 权重,差距由它主导")
     }
 
     func testBatteryShapeWideSpread() {
         XCTAssertGreaterThanOrEqual(LingShuBrainBenchmark.items.count, 30, "至少 30 题")
-        XCTAssertEqual(LingShuBrainBenchmark.items.count, 42)
-        XCTAssertEqual(LingShuBrainBenchmark.totalWeight, 112)
+        XCTAssertEqual(LingShuBrainBenchmark.items.count, 46)
+        XCTAssertEqual(LingShuBrainBenchmark.totalWeight, 144)
         XCTAssertEqual(Set(LingShuBrainBenchmark.items.map(\.id)).count, LingShuBrainBenchmark.items.count, "题 id 不重复")
-        XCTAssertEqual(LingShuBrainBenchmark.items.filter(\.agentic).count, 10, "10 道 agentic(5 计算 + 5 长链编码)")
-        // 难度全谱:易/中/难/极难都有
+        XCTAssertEqual(LingShuBrainBenchmark.items.filter(\.agentic).count, 14, "14 道 agentic(5 计算 + 5 长链编码 + 4 前沿)")
         for d in LingShuBrainBenchmark.Difficulty.allCases {
             XCTAssertGreaterThan(LingShuBrainBenchmark.items.filter { $0.difficulty == d }.count, 0, "难度 \(d) 应有题")
         }
@@ -91,7 +90,7 @@ final class BrainBenchmarkTests: XCTestCase {
 
     func testCodeTasksHaveHiddenHarness() {
         let coded = LingShuBrainBenchmark.items.filter { $0.codeCheck != nil }
-        XCTAssertEqual(coded.count, 5, "5 道隐藏用例判分的长链编码题")
+        XCTAssertEqual(coded.count, 9, "9 道隐藏用例判分的编码题(5 长链 + 4 前沿)")
         for it in coded {
             XCTAssertTrue(it.codeCheck!.harness.contains("BENCH_PASS"), "\(it.id) 的 harness 应以 BENCH_PASS 判过")
             XCTAssertTrue(it.prompt.contains("{DIR}"), "\(it.id) 的 prompt 应含 {DIR} 占位(runner 替换成隔离目录)")

@@ -1,5 +1,70 @@
 import SwiftUI
 
+/// 顶栏「脑力」可点 chip:点击弹出**具体评分** + 一键检测按钮(取代原来只读的 HUD readout)。
+struct LingShuBrainScoreChip: View {
+    @ObservedObject var state: LingShuState
+    @State private var show = false
+    var body: some View {
+        Button { show.toggle() } label: {
+            LingShuHUDReadout(label: "脑力", value: "\(state.brainScore.score)", color: .lingHolo)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help("点击看具体评分 / 一键检测脑力分")
+        .popover(isPresented: $show, arrowEdge: .bottom) {
+            LingShuBrainScoreDetail(state: state).frame(width: 300)
+        }
+    }
+}
+
+/// 「脑力」点击后的具体评分浮层:当前脑 + 运行累计分拆解 + 上次测评分 + 一键检测按钮。
+struct LingShuBrainScoreDetail: View {
+    @ObservedObject var state: LingShuState
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("大脑评分").font(.system(size: 14, weight: .bold)).foregroundStyle(.white)
+            Text("当前脑 \(state.brainScore.brainID)").font(.system(size: 11)).foregroundStyle(.white.opacity(0.55))
+
+            HStack(spacing: 10) {
+                Text("\(state.brainScore.score)").font(.system(size: 30, weight: .heavy, design: .rounded)).foregroundStyle(Color.lingHolo)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("运行累计分").font(.system(size: 10)).foregroundStyle(.white.opacity(0.4))
+                    Text("自主完成 +\(state.brainScore.completed) / 触发兜底 −\(state.brainScore.fallbacks)").font(.system(size: 11)).foregroundStyle(.white.opacity(0.75))
+                }
+            }
+            if let b = state.brainBenchmarkResult {
+                Divider().overlay(Color.white.opacity(0.1))
+                HStack(spacing: 8) {
+                    Text("上次测评").font(.system(size: 11)).foregroundStyle(.white.opacity(0.5))
+                    Text("\(b.score) 分(\(b.grade))").font(.system(size: 13, weight: .bold)).foregroundStyle(Color.lingHolo)
+                    Text("通过 \(b.passedCount)/\(b.totalCount)").font(.system(size: 11)).foregroundStyle(.white.opacity(0.6))
+                }
+            }
+            Button {
+                Task { await state.runBrainBenchmark() }
+            } label: {
+                HStack(spacing: 6) {
+                    if state.isRunningBrainBenchmark {
+                        ProgressView().controlSize(.small).tint(Color.lingVoid)
+                        Text("检测中…(跑真题,稍等)").font(.system(size: 12, weight: .semibold))
+                    } else {
+                        Image(systemName: "brain.head.profile").font(.system(size: 12, weight: .semibold))
+                        Text("一键检测脑力分").font(.system(size: 12, weight: .semibold))
+                    }
+                }
+                .foregroundStyle(Color.lingVoid)
+                .frame(maxWidth: .infinity).padding(.vertical, 7)
+                .background(Color.lingHolo, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+            }
+            .buttonStyle(.plain).disabled(state.isRunningBrainBenchmark)
+            Text("检测=拿内置题库真考当前脑,出综合分(含真编码隐藏用例,较慢)。换大脑后可重测。")
+                .font(.system(size: 10)).foregroundStyle(.white.opacity(0.4)).fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(16)
+        .background(Color.lingVoid)
+    }
+}
+
 /// 「脑力测试」入口条 + 结果弹窗:跑一套硬编码难度不等的题 → 综合评分 → 弹窗展示当前脑的脑力分。
 struct LingShuBrainBenchmarkBar: View {
     @ObservedObject var state: LingShuState

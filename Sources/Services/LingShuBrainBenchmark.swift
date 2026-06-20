@@ -115,7 +115,29 @@ enum LingShuBrainBenchmark {
              codeCheck: .init(preWrite: ["solution.py": "def median(nums):\n    s=sorted(nums); n=len(s); return s[n//2]\n"],
                               harness: "import solution\ncs=[([1,2,3],2),([1,2,3,4],2.5),([5],5),([4,1,3,2],2.5),([7,7,7],7)]\nprint('BENCH_PASS' if all(abs(solution.median(n)-v)<1e-9 for n,v in cs) else 'BENCH_FAIL')")),
         item("c_project", "编码·多文件工程", "用工具在 {DIR} 下分步真建文件真跑:① mathutils.py 含 gcd(a,b)、lcm(a,b);② stats.py(import mathutils)含 mean(nums) 返回浮点平均、median(nums) 返回中位数;③ test_all.py 用 assert 各测 2 个用例;④ 运行 test_all.py 确认全过。必须真建这 3 个文件并把测试跑到全过。", .expert, agentic: true, maxTurns: 30, weight: 8,
-             codeCheck: .init(harness: "import mathutils, stats\nok=(mathutils.gcd(12,18)==6 and mathutils.lcm(4,6)==12 and abs(stats.mean([1,2,3,4])-2.5)<1e-9 and abs(stats.median([1,2,3])-2)<1e-9 and abs(stats.median([1,2,3,4])-2.5)<1e-9)\nprint('BENCH_PASS' if ok else 'BENCH_FAIL')"))
+             codeCheck: .init(harness: "import mathutils, stats\nok=(mathutils.gcd(12,18)==6 and mathutils.lcm(4,6)==12 and abs(stats.mean([1,2,3,4])-2.5)<1e-9 and abs(stats.median([1,2,3])-2)<1e-9 and abs(stats.median([1,2,3,4])-2.5)<1e-9)\nprint('BENCH_PASS' if ok else 'BENCH_FAIL')")),
+
+        // ===== 前沿·只有强脑能稳过的硬核题(LeetCode Hard 级,隐藏用例真验;高权重,差距在此显)=====
+        item("f_regex", "前沿·正则匹配", "用工具在 {DIR}/solution.py 写函数 is_match(s, p):实现支持 '.'(匹配任意单字符)和 '*'(匹配前一字符 0 次或多次)的正则,p 必须**完整匹配**整个 s,返回 True/False。自测含 * 的用例。", .expert, agentic: true, maxTurns: 26, weight: 8,
+             codeCheck: .init(harness: """
+             import solution
+             cs=[("aa","a",False),("aa","a*",True),("ab",".*",True),("aab","c*a*b",True),("mississippi","mis*is*p*.",False),("","",True),("a","",False),("","a*",True)]
+             print("BENCH_PASS" if all(solution.is_match(s,p)==e for s,p,e in cs) else "BENCH_FAIL")
+             """)),
+        item("f_json", "前沿·手写JSON解析", "用工具在 {DIR}/solution.py 写函数 parse_json(s):**不要用 json 模块**,手写解析 JSON 字符串(对象/数组/字符串/整数/true/false/null/任意嵌套),返回对应 Python 对象(dict/list/str/int/bool/None)。自测嵌套用例。", .expert, agentic: true, maxTurns: 28, weight: 8,
+             codeCheck: .init(harness: """
+             import solution
+             cs=[('{"a":1,"b":[2,3],"c":{"d":true}}', {"a":1,"b":[2,3],"c":{"d":True}}), ('[1,2,3]',[1,2,3]), ('{"x":null,"y":false}',{"x":None,"y":False}), ('{"name":"张三","age":28}',{"name":"张三","age":28}), ('42',42)]
+             print("BENCH_PASS" if all(solution.parse_json(a)==b for a,b in cs) else "BENCH_FAIL")
+             """)),
+        item("f_nqueens", "前沿·N皇后", "用工具在 {DIR}/solution.py 写函数 nqueens(n):返回 n 皇后问题解的数量(n 个皇后放 n×n 棋盘、互不攻击)。自测 n=8 应为 92。", .expert, agentic: true, maxTurns: 24, weight: 8,
+             codeCheck: .init(harness: "import solution\nprint('BENCH_PASS' if solution.nqueens(1)==1 and solution.nqueens(4)==2 and solution.nqueens(6)==4 and solution.nqueens(8)==92 else 'BENCH_FAIL')")),
+        item("f_stradd", "前沿·大数字符串加法", "用工具在 {DIR}/solution.py 写函数 str_add(a, b):a、b 是十进制非负整数字符串,**不许转成 int 再加**,手工逐位相加处理进位,返回和的字符串。自测大数。", .expert, agentic: true, maxTurns: 24, weight: 8,
+             codeCheck: .init(harness: """
+             import solution
+             cs=[("999","1","1000"),("123456789123456789","987654321987654321","1111111111111111110"),("0","0","0"),("1","9999999999","10000000000")]
+             print("BENCH_PASS" if all(solution.str_add(a,b)==e for a,b,e in cs) else "BENCH_FAIL")
+             """))
     ]
 
     private static func item(_ id: String, _ title: String, _ prompt: String, _ difficulty: Difficulty,
