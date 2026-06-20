@@ -1,48 +1,66 @@
 import XCTest
 @testable import LingShuMac
 
-/// # 内置脑力测试 题库判分 + 综合评分 测试
+/// # 内置脑力测试(37 题)判分 + 综合评分 测试
 final class BrainBenchmarkTests: XCTestCase {
 
-    private func grade(_ id: String, _ reply: String) -> Bool {
+    private func grade(_ id: String, _ reply: String, usedTools: Bool = false) -> Bool {
         guard let item = LingShuBrainBenchmark.items.first(where: { $0.id == id }) else {
             XCTFail("无此题 \(id)"); return false
         }
-        return item.grade(reply)
+        return item.grade(reply, usedTools)
     }
 
-    // MARK: - 逐题判分(正确答案过 / 错误答案不过)
+    // MARK: - reasoning 正确答案过
 
-    func testGradersAcceptCorrectAnswers() {
+    func testReasoningAcceptsCorrect() {
         XCTAssertTrue(grade("e_arith", "115"))
-        XCTAssertTrue(grade("e_arith", "答案是 115。"))
-        XCTAssertTrue(grade("e_chem", "H2O"))
-        XCTAssertTrue(grade("e_chem", "水的分子式是 H₂O"))
-        XCTAssertTrue(grade("e_instr", "收到"))
+        XCTAssertTrue(grade("e_chem", "H₂O"))
+        XCTAssertTrue(grade("e_capital", "北京"))
+        XCTAssertTrue(grade("e_apple", "apple"))
         XCTAssertTrue(grade("m_animals", "5"))
-        XCTAssertTrue(grade("m_weekday", "星期六"))
+        XCTAssertTrue(grade("m_race", "乙"))
+        XCTAssertTrue(grade("m_batball", "0.05 元"))
+        XCTAssertTrue(grade("m_decimal", "后者"))
+        XCTAssertTrue(grade("m_strawberry", "3"))
+        XCTAssertTrue(grade("m_machines", "5"))
+        XCTAssertTrue(grade("m_sort", "9,6,5,4,3,2,1,1"))
         XCTAssertTrue(grade("m_json", "{\"name\":\"张三\",\"age\":28,\"job\":\"工程师\"}"))
-        XCTAssertTrue(grade("m_json", "```json\n{\"name\": \"张三\", \"age\": \"28\", \"job\": \"工程师\"}\n```"))
-        XCTAssertTrue(grade("h_logic", "乙"))
-        XCTAssertTrue(grade("h_sum", "1683"))
+        XCTAssertTrue(grade("h_lilypad", "47"))
+        XCTAssertTrue(grade("h_syllogism", "无效"))
+        XCTAssertTrue(grade("h_clock", "7.5"))
+        XCTAssertTrue(grade("h_reverse", "keeSpeeD"))
+        XCTAssertTrue(grade("h_percent", "96"))
     }
 
-    func testGradersRejectWrongAnswers() {
+    // MARK: - reasoning 已知失误答案不过(区分点)
+
+    func testReasoningRejectsWrong() {
         XCTAssertFalse(grade("e_arith", "116"))
-        XCTAssertFalse(grade("e_chem", "CO2"))
-        XCTAssertFalse(grade("e_instr", "收到!这是一段很长的多余解释说明文字啰嗦"))  // 没遵循"只两个字"
-        XCTAssertFalse(grade("m_animals", "鸡有3只"))
-        XCTAssertFalse(grade("m_weekday", "星期五"))
-        XCTAssertFalse(grade("m_json", "{\"name\":\"李四\",\"age\":28,\"job\":\"工程师\"}"))
-        XCTAssertFalse(grade("h_logic", "甲是第一名"))
-        XCTAssertFalse(grade("h_sum", "1530"))
+        XCTAssertFalse(grade("m_batball", "0.10 元"), "认知反射陷阱:0.10 是错的")
+        XCTAssertFalse(grade("m_decimal", "前者"), "9.11>9.9 是错的")
+        XCTAssertFalse(grade("m_strawberry", "2"), "strawberry 里有 3 个 r,不是 2")
+        XCTAssertFalse(grade("m_machines", "100 分钟"), "认知反射陷阱:不是 100")
+        XCTAssertFalse(grade("h_lilypad", "24"), "翻倍题:半湖是第 47 天不是 24")
+        XCTAssertFalse(grade("h_syllogism", "有效"), "这是无效三段论")
+        XCTAssertFalse(grade("h_mult", "411"))
+    }
+
+    // MARK: - agentic:答案对 **且** 真调过工具才过
+
+    func testAgenticRequiresAnswerAndTools() {
+        XCTAssertTrue(grade("a_sum", "运行得到 500500", usedTools: true))
+        XCTAssertTrue(grade("a_factorial", "20! = 2432902008176640000", usedTools: true))
+        XCTAssertTrue(grade("a_bigmult", "结果是 121932631112635269", usedTools: true))
+        XCTAssertFalse(grade("a_sum", "结果是 500500", usedTools: false), "没调工具(口算/摆烂)不算")
+        XCTAssertFalse(grade("a_factorial", "2432902008176640000", usedTools: false))
+        XCTAssertFalse(grade("a_bigmult", "121932631112635269", usedTools: false))
     }
 
     // MARK: - 综合评分
 
     func testCompositeAllPassedIs100() {
-        let all = Set(LingShuBrainBenchmark.items.map(\.id))
-        XCTAssertEqual(LingShuBrainBenchmark.composite(passedIDs: all), 100)
+        XCTAssertEqual(LingShuBrainBenchmark.composite(passedIDs: Set(LingShuBrainBenchmark.items.map(\.id))), 100)
     }
 
     func testCompositeNonePassedIsZero() {
@@ -50,26 +68,28 @@ final class BrainBenchmarkTests: XCTestCase {
     }
 
     func testCompositeWeightsByDifficulty() {
-        // 只过 3 道易题(权重各 1,总权重 15)→ 3/15 = 20。
+        // 总权重 82(易 7×1 + 中 15×2 + 难 15×3,难含 10 reasoning + 5 agentic)。
         let easyIDs = Set(LingShuBrainBenchmark.items.filter { $0.difficulty == .easy }.map(\.id))
-        XCTAssertEqual(LingShuBrainBenchmark.composite(passedIDs: easyIDs), 20)
-        // 只过 2 道难题(权重各 3)→ 6/15 = 40。
+        XCTAssertEqual(LingShuBrainBenchmark.composite(passedIDs: easyIDs), 9, "7/82≈9")
         let hardIDs = Set(LingShuBrainBenchmark.items.filter { $0.difficulty == .hard }.map(\.id))
-        XCTAssertEqual(LingShuBrainBenchmark.composite(passedIDs: hardIDs), 40)
+        XCTAssertEqual(LingShuBrainBenchmark.composite(passedIDs: hardIDs), 55, "45/82≈55")
     }
 
-    func testBatteryShape() {
-        XCTAssertEqual(LingShuBrainBenchmark.items.count, 8)
-        XCTAssertEqual(LingShuBrainBenchmark.totalWeight, 15)
-        XCTAssertEqual(Set(LingShuBrainBenchmark.items.map(\.id)).count, 8, "题 id 不重复")
+    func testBatteryShapeWideSpread() {
+        XCTAssertGreaterThanOrEqual(LingShuBrainBenchmark.items.count, 30, "至少 30 题")
+        XCTAssertEqual(LingShuBrainBenchmark.items.count, 37)
+        XCTAssertEqual(LingShuBrainBenchmark.totalWeight, 82)
+        XCTAssertEqual(Set(LingShuBrainBenchmark.items.map(\.id)).count, LingShuBrainBenchmark.items.count, "题 id 不重复")
+        XCTAssertEqual(LingShuBrainBenchmark.items.filter(\.agentic).count, 5, "5 道 agentic 工具题")
+        // 难度全谱:易/中/难都有
+        for d in LingShuBrainBenchmark.Difficulty.allCases {
+            XCTAssertGreaterThan(LingShuBrainBenchmark.items.filter { $0.difficulty == d }.count, 0, "难度 \(d) 应有题")
+        }
     }
 
     func testResultGradeBands() {
-        func g(_ s: Int) -> String { LingShuBrainBenchmarkResult(brainID: "x", score: s, passedCount: 0, totalCount: 8, rows: []).grade }
-        XCTAssertEqual(g(95), "卓越")
-        XCTAssertEqual(g(80), "优秀")
-        XCTAssertEqual(g(65), "良好")
-        XCTAssertEqual(g(50), "及格")
-        XCTAssertEqual(g(20), "偏弱")
+        func g(_ s: Int) -> String { LingShuBrainBenchmarkResult(brainID: "x", score: s, passedCount: 0, totalCount: 37, rows: []).grade }
+        XCTAssertEqual(g(95), "卓越"); XCTAssertEqual(g(80), "优秀"); XCTAssertEqual(g(65), "良好")
+        XCTAssertEqual(g(50), "及格"); XCTAssertEqual(g(20), "偏弱")
     }
 }

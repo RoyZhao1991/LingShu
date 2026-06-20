@@ -19,16 +19,19 @@ extension LingShuState {
         var rows: [LingShuBrainBenchmarkResult.Row] = []
         for item in LingShuBrainBenchmark.items {
             if Task.isCancelled { break }
+            // agentic 题给**真工具**(autoAllowShell 免审批弹窗)+ 更多轮,逼它真驱动工具循环;reasoning 题无工具单轮。
+            let tools = item.agentic ? agentBuiltinTools(recordIDProvider: { nil }, executionPolicy: .autoAllowShell) : []
             let session = LingShuAgentSession(
                 id: "bench-\(item.id)-\(UUID().uuidString.prefix(4))",
-                system: Self.benchSystem, tools: [],
-                model: makeAgentModelAdapter(), maxTurns: 2)
+                system: Self.benchSystem, tools: tools,
+                model: makeAgentModelAdapter(), maxTurns: item.maxTurns)
             let result = await session.send(item.prompt)
             let reply = LingShuReasoningText.stripThinkTags(Self.runResultText(result)).trimmingCharacters(in: .whitespacesAndNewlines)
-            let ok = item.grade(reply)
+            let usedTools = await !session.toolInvocations.isEmpty   // 真调过工具吗(agentic 判分要求它=真,治"摆烂/口算")
+            let ok = item.grade(reply, usedTools)
             if ok { passed.insert(item.id) }
-            rows.append(.init(itemID: item.id, title: item.title, difficulty: item.difficulty.label, passed: ok, replyExcerpt: String(reply.prefix(60))))
-            appendTrace(kind: ok ? .result : .warning, actor: "脑力测试", title: "\(item.title)[\(item.difficulty.label)] \(ok ? "✓" : "✗")", detail: String(reply.prefix(40)))
+            rows.append(.init(itemID: item.id, title: item.title, difficulty: item.difficulty.label, agentic: item.agentic, passed: ok, replyExcerpt: String(reply.prefix(60))))
+            appendTrace(kind: ok ? .result : .warning, actor: "脑力测试", title: "\(item.title)[\(item.difficulty.label)\(item.agentic ? "·工具" : "")] \(ok ? "✓" : "✗")", detail: "\(item.agentic ? "调工具\(usedTools ? "是" : "否") · " : "")\(reply.prefix(36))")
         }
 
         let score = LingShuBrainBenchmark.composite(passedIDs: passed)
