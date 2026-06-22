@@ -85,12 +85,12 @@ extension LingShuState {
             // 用户点踩(👎)的输出不当成功样本——别从用户不满意的产出里学经验。
             let disliked = taskRecordFeedback[record.id] == false
             switch record.status {
-            case .completed:
+            case .completed, .verified:
                 return .init(prompt: record.prompt, summary: record.summary, succeeded: !disliked)
-            case .needsRevision, .blocked:
+            case .needsRevision, .blocked, .failed:
                 return .init(prompt: record.prompt, summary: record.summary, succeeded: false)
             default:
-                return nil   // 排队/执行中/直接回答(无交付物)不进固化样本
+                return nil   // 排队/执行中/直接回答/部分完成/待用户(无干净成败样本)不进固化样本
             }
         }
         guard samples.count >= 3 else { return }

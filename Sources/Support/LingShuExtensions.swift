@@ -153,6 +153,14 @@ extension LingShuTaskExecutionStatus {
         case .needsRevision: .orange
         case .blocked: .red
         case .suspended: .yellow   // 网络中断暂停:黄色(区别于红色"异常"——它会自动续)
+        // 通用中枢 P2 真闭环·新增状态配色。
+        case .analyzing: .purple
+        case .acquiringCapability: .lingHolo
+        case .waitingForUser: .yellow   // 等用户提供前提(凭据/授权…),非失败
+        case .ready: .cyan
+        case .partial: .orange          // 部分完成:橙色提示"没全成"
+        case .verified: .green
+        case .failed: .red
         }
     }
 }

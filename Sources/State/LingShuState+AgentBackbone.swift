@@ -187,10 +187,14 @@ extension LingShuState {
     /// 自主运行 kickoff=true(执行路径,run_command 产出的真文件靠它兜底触发验收)。
     func driveAgentDelivery(session: any LingShuAgentSessioning, prompt: String, guidance: String? = nil, taskRecordID: String?, trustReplyClaim: Bool = true) async -> LingShuAgentRunResult {
         batchInterruptRequested = false   // 打断标志粘滞泄漏修复(经典引擎,见 [[verify-gate-bypass-batchinterrupt-leak]]):新驱动入口复位,杜绝上回合打断泄漏旁路本回合验收门(复位在 send 前→本回合自身打断照常生效)
+        // P1 目标认知消费:记录里有 typed GoalSpec(含重启后从盘加载的)则注入执行引导(据目标/约束/边界/风险/成功标准推进,别跑偏)。
+        // P2 能力缺口消费:有缺口分析则在目标引导之上再叠加"缺口与补齐计划"(先按补齐路径取得能力再推进,真补不了如实告知)。
+        let goalGuidance = goalSpec(for: taskRecordID)?.executionGuidance(base: guidance) ?? guidance
+        let effectiveGuidance = gapAnalysis(for: taskRecordID)?.executionGuidance(base: goalGuidance) ?? goalGuidance
         // 发给本轮的文本 = guidance + 每轮自动召回的长期记忆 + prompt。**`.nested` 例外**:见 `nestedPlanningSendText`
         // (规划器把整段当待拆解请求→不能混进记忆召回块,否则把召回到的旧 PPT 误当本次任务凭空重做,2026-06-19 修)。
-        let sent = agentLoopVariant == .nested ? nestedPlanningSendText(prompt: prompt, guidance: guidance)
-                                               : memoryAugmentedSendText(prompt: prompt, guidance: guidance)
+        let sent = agentLoopVariant == .nested ? nestedPlanningSendText(prompt: prompt, guidance: effectiveGuidance)
+                                               : memoryAugmentedSendText(prompt: prompt, guidance: effectiveGuidance)
         let initial = await session.send(sent)
         return await verifyAndContinue(session: session, result: initial, userRequest: prompt, taskRecordID: taskRecordID, trustReplyClaim: trustReplyClaim)
     }
@@ -290,7 +294,12 @@ extension LingShuState {
         // 把最终答复也落进任务记录时间线(codex 式:执行流末尾就是答复;窗口内追问续跑读起来才连贯)。
         appendTaskRecordMessage(recordID, actor: "灵枢", role: "答复", kind: .result, text: text)
         appendTrace(kind: .result, actor: "Agent循环", title: "主会话答复", detail: String(text.prefix(60)))
-        finishTaskRecord(recordID, status: .answered, summary: text)
+        // P2 真闭环:终态由完成闸定(防伪完成)——partial/waitingForUser/blocked 不再硬当 answered。
+        let outcome = taskExecutionRecords.first { $0.id == recordID }?.taskOutcome
+        finishTaskRecord(recordID, status: Self.finishStatus(for: outcome, fallback: .answered), summary: text)
+        // 主会话用 ask_user/ask_form 提了问、在等回答 → 记下这条记录:下条用户消息续到它(把答复接回主会话),
+        // 不被重新分诊成新任务(根治"答复被当新请求丢了原目标")。非 .blocked 则清掉。
+        if case .blocked = result { pendingMainQuestionRecordID = recordID } else { pendingMainQuestionRecordID = nil }
         recordDeliverable(recordID: recordID, title: prompt, summary: text)   // 主线程任务也登记产出物
         rememberMainThreadTurn(prompt: prompt, reply: text)
     }
@@ -356,7 +365,8 @@ extension LingShuState {
         // P2:启用的用户 skill 的 provides 工具(runner 子进程 + P3 沙箱);放这里 → 所有会话共享;只读不挂(脚本=副作用)。
         let pluginTools = executionPolicy == .readOnly ? [] : userSkillProvidedTools()
         // 末尾 localKnowledgeTools():本机知识检索四肢(recall_local/index_local_knowledge,全本地零上传),所有会话共享。
-        return builtinTools + externalTools + skillTools + pluginTools + localKnowledgeTools()
+        // list_capabilities(#6 能力注册表接线):只读枚举可调度扩展能力,所有会话/模式可用(无副作用)。
+        return builtinTools + externalTools + skillTools + pluginTools + localKnowledgeTools() + [listCapabilitiesTool()]
     }
 
     nonisolated static func schemaJSON(for def: LingShuToolDefinition) -> String {
@@ -389,58 +399,6 @@ extension LingShuState {
         ) { _ in "" }
     }
 
-    /// spawn_task:真模型据此自主派生并行隔离子会话(经编排器,后台真并行,账本回报)。
-    func spawnTaskTool(adapter: LingShuGatewayAgentModel) -> LingShuAgentTool {
-        let orchestrator = agentOrchestrator
-        return LingShuAgentTool(
-            name: "spawn_task",
-            description: "为一个独立任务派生并行子任务(后台推进,完成/卡住会回报)。用于一句话里多个互不相关的目标。**同时最多 3 条子任务并行**,已满会被拒绝——届时请等其中一条完成再派,或在本会话顺序处理。",
-            parametersJSON: "{\"type\":\"object\",\"properties\":{\"objective\":{\"type\":\"string\",\"description\":\"该子任务要达成的自足目标\"}},\"required\":[\"objective\"]}"
-        ) { [weak self] argumentsJSON in
-            let objective = Self.jsonField(argumentsJSON, "objective") ?? argumentsJSON
-            // 极简对话模式:纯聊天,**绝不派生子任务**(用户硬性要求)——直接在本对话顺序作答。
-            let conversationOnly = await MainActor.run { [weak self] in self?.isMinimalVoiceMode ?? false }
-            if conversationOnly {
-                return "当前是极简对话模式(纯对话),不派生子任务。请直接在本对话里简洁回答用户,不要拆子任务、不要写文件。"
-            }
-            // 硬上限背压:已有 3 条子任务在跑时不再派生,如实告知模型(避免无界堆积/runaway)。
-            let running = await orchestrator.runningCount()
-            let cap = await orchestrator.capacity()
-            guard running < cap else {
-                return "⛔ 已有 \(running) 个子任务在并行运行(上限 \(cap) 条),本次未派生「\(objective)」。请等其中一条完成后再派生,或在本会话顺序处理该目标。"
-            }
-            let subID = "sub-\(UUID().uuidString.prefix(6))"
-            // 子会话工具用"该子会话自己的记录 id"登记产出物(产出物各归各的任务号)。
-            let subTools = await MainActor.run { [weak self] () -> [LingShuAgentTool] in
-                // 子会话继承父上下文 shell 预授权(同派发隔离任务):在岗/自主完整授权时给 autoAllowShell,否则跑 shell 会卡在审批框。
-                let policy = self?.dispatchedTaskExecutionPolicy ?? .standard
-                let builtin = self?.agentBuiltinTools(recordIDProvider: { [weak self] in self?.agentSubTaskRecords[subID] }, executionPolicy: policy) ?? []
-                // 自我进化(author_component/discover_skill)对派发子任务同样开放:执行型请求常被分诊派发成隔离子任务,缺了它们子任务会答"没有这个工具"(实测根因)。
-                let extras = self.map { me in [me.searchTextTool(), me.findImagesTool(), me.acquireResourceTool(), me.authorComponentTool(), me.discoverSkillTool(), me.discoverDevicesTool(), me.peripheralsTool(), me.labelPeripheralTool(), me.askChoiceTool(), me.askFormTool(), me.updateTaskPlanTool(recordIDProvider: { [weak me] in me?.agentSubTaskRecords[subID] }), me.reviewDesignTool(recordIDProvider: { [weak me] in me?.agentSubTaskRecords[subID] })] } ?? []
-                let bodyTools = self.map { [$0.speakTool(), $0.digitalHumanTool()] } ?? []
-                let asyncTools = self.map { $0.backgroundWatchTools() + $0.scheduledTaskTools() } ?? []  // 子任务也带"等条件续/挂定时"四肢(同派发隔离任务,免伪造 launchd)
-                return builtin + [Self.timeTool(), Self.locationTool(), Self.webSearchTool(), Self.askUserTool()] + bodyTools + extras + asyncTools
-            }
-            let sub: (any LingShuAgentSessioning)? = await MainActor.run { [weak self] in
-                self?.makeAgentSession(   // 经工厂创建,使核心循环开关对 spawn 子任务也生效
-                    id: subID,
-                    system: "你是子任务执行者,完成给定目标。**有产出物的必须用 write_file/run_command 真把文件落到工作目录并汇报路径,不要只口头说完成**;写代码必须真构建+运行不崩+测试全绿,跑崩了/报错是要修复的观测、不是交付;信息确实不足才调用 ask_user。",
-                    tools: subTools,
-                    model: adapter,
-                    maxTurns: 80,   // 安全天花板(防失控,非预算);撞顶由验收续跑恢复,不当失败
-                    recordIDProvider: { [weak self] in self?.agentSubTaskRecords[subID] }
-                )
-            }
-            guard let sub else { return "（执行环境已释放,本次未派生「\(objective)」。）" }
-            let admitted = await orchestrator.spawnDetached(id: subID, objective: objective, session: sub)
-            guard admitted else {
-                // 极少数竞态:检查后刚好被其它派生占满。如实回报背压。
-                return "⛔ 子任务并发刚好达到上限(\(cap) 条),本次未派生「\(objective)」。请稍后再派或顺序处理。"
-            }
-            return "已派生并行子任务[\(subID)]:\(objective)。它在后台推进,完成或卡住会汇报到账本。"
-        }
-    }
-
     /// recall_memory:让模型主动从长期记忆召回相关历史事实/任务/偏好(超出当前 seed 时用)。
     /// "嘴"这条四肢:让大脑在执行中**主动出声**(立即 TTS 播报),用于演示/汇报/会议里逐句讲、实时应答——
     /// 不必等回合最终答复才被动朗读。会议模式配虚拟麦时,这就是灵枢"说话给对方听"。
@@ -465,29 +423,7 @@ extension LingShuState {
     }
 
     // recordSpokenLine 已移至 LingShuState+SpokenReply.swift(属"朗读内容"职责 + 守 ≤500 行架构守卫)。
-    func recallMemoryTool() -> LingShuAgentTool {
-        LingShuAgentTool(
-            name: "recall_memory",
-            description: "从灵枢长期记忆召回与某主题相关的历史事实/任务/偏好(当前对话上下文里没有、但你怀疑以前发生过时用)。",
-            parametersJSON: "{\"type\":\"object\",\"properties\":{\"query\":{\"type\":\"string\",\"description\":\"要召回的主题/关键词\"}},\"required\":[\"query\"]}"
-        ) { [weak self] argumentsJSON in
-            let query = Self.jsonField(argumentsJSON, "query") ?? argumentsJSON
-            return await MainActor.run { [weak self] in
-                self?.recallMemoryText(for: query) ?? "记忆不可用"
-            }
-        }
-    }
-
-    func recallMemoryText(for query: String) -> String {
-        let q = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !q.isEmpty else { return "查询为空。" }
-        // M3:事实/偏好/决定召回统一走 **v2 知识图谱**(单一前门);已退掉并行的冷记忆事实召回。
-        // 注:对话摘要(persistedConversationDigest)/任务去重(TaskMatch)/产出物(deliverableStore)是另外的子系统,各管各的,不在此路径。
-        guard let graphText = knowledgeGraph.recallText(q) else {
-            return "记忆中没找到与「\(q)」相关的内容。"
-        }
-        return graphText
-    }
+    // recall_memory 工具 + recallMemoryText 已移至 LingShuState+Recall.swift(#4 多源召回门面 + 守 ≤500 行架构守卫)。
 
     nonisolated static func jsonField(_ json: String, _ key: String) -> String? {
         guard

@@ -31,13 +31,16 @@ extension LingShuState {
         // **收尾兜底(2026-06-21,清分系统实测根因)**:模型最后一步若是个静默 `run_command`(输出写进文件、stdout 为空),
         // 收尾回复会退化成「✓ run_command:（无输出，退出码 0）」——任务真做完了、产出物也在,却把"无输出"丢给用户。
         // 检测到这种占位收尾 + 任务确有产出物 → 用 `composeDeliveryMessage` 据产出物补一段像样的交付说明。
+        var settled = verified
         if case .completed(let text) = verified,
            Self.isPlaceholderDelivery(text),
            currentArtifactCount(taskRecordID) > 0 {
             let composed = await composeDeliveryMessage(userRequest: userRequest, makerText: text, taskRecordID: taskRecordID)
-            return .completed(text: composed)
+            settled = .completed(text: composed)
         }
-        return verified
+        // 通用中枢 P2 真闭环·**防伪完成闸**(根因修复):据能力缺口/获取结果/承认无能力/成功标准判最终状态,
+        // 可自补未试→驱动获取;需用户→waitingForUser;部分→partial;仍卡→blocked。模型口头「完成」推不翻。
+        return await runCompletionGate(session: session, result: settled, userRequest: userRequest, taskRecordID: taskRecordID)
     }
 
     /// 本回合是否在"给主人看/演示"(互动):**预览正开着** 或 本回合**调过 `open_preview`/`present_fullscreen`**。

@@ -153,6 +153,16 @@ results = []
 baseline = invariants()
 print(f"[基线] loopInvariantViolations={baseline}", flush=True)
 
+# 滚动检查点(测量修复 2026-06-22):每段判"自上次检查以来**无新增**不变量违反",而非全程比对开跑基线——
+# 否则某段一旦泄漏,后续每段 ==baseline 都假红、把真正出问题的段掩盖掉(打断段泄漏曾级联误报自主段)。
+inv_ckpt = baseline
+def clean_since_ckpt():
+    global inv_ckpt
+    cur = invariants()
+    ok = (cur == inv_ckpt)
+    inv_ckpt = cur   # 推进:本段判完即作为下段新基线 → 泄漏精确定位到具体段,不级联
+    return ok
+
 for idx, (intent, prompt, fup) in enumerate(gen(TASKS)):
     if time.time() > DEADLINE:
         print(f"[到点] 已达上限,在第 {idx} 条停。"); break
@@ -161,7 +171,7 @@ for idx, (intent, prompt, fup) in enumerate(gen(TASKS)):
     viol = invariants()
     reached = any(k in st for k in TERMINAL)
     no_dead = st != "DEADLOCK"
-    inv_ok = (viol == baseline) and viol >= 0
+    inv_ok = clean_since_ckpt() and viol >= 0
     hon = honesty_violation(rid) if rid else None
     # 期望产出文件的意图(code/multi/followup):harness 应真做出东西 → 至少 1 个登记产出物 或 PROBE 里出现新 .py。
     produced = True
@@ -174,7 +184,7 @@ for idx, (intent, prompt, fup) in enumerate(gen(TASKS)):
     if ok and intent == "followup" and rid and fup:
         st2 = followup_wait(rid, fup)
         hon2 = honesty_violation(rid)
-        fok = any(k in st2 for k in TERMINAL) and st2 != "DEADLOCK" and (invariants()==baseline) and hon2 is None
+        fok = any(k in st2 for k in TERMINAL) and st2 != "DEADLOCK" and clean_since_ckpt() and hon2 is None
         ok = ok and fok
         fup_note = f" | 追问 status={st2} 诚实={'ok' if hon2 is None else hon2}"
     ev = f"status={st} 不变量={viol} {'诚实ok' if hon is None else '⚠️'+str(hon)} 产出={'有' if produced else '无'}{fup_note}"
@@ -193,7 +203,7 @@ for r in range(3):
     except Exception: pass
     time.sleep(4)
     st = send_wait("顺便问下,3 加 4 等于几?", max_polls=14)   # 打断后干净任务必须正常到终态
-    ok = any(k in st for k in TERMINAL) and st != "DEADLOCK" and health_ok() and (invariants()==baseline)
+    ok = any(k in st for k in TERMINAL) and st != "DEADLOCK" and health_ok() and clean_since_ckpt()
     results.append(("interrupt", ok, f"打断后 status={st} 不变量={invariants()}"))
     print(f"[{'PASS' if ok else 'FAIL'}] 打断恢复#{r} — status={st} 不变量={invariants()}", flush=True)
 
@@ -207,11 +217,11 @@ try:
     for _ in range(8):
         time.sleep(1)
         if status().get("standingPersonOnDuty") is True: on=True; break
-    ok = on and health_ok() and (invariants()==baseline)
+    ok = on and health_ok() and clean_since_ckpt()
     results.append(("auto", ok, f"go_live standingPersonOnDuty={on}"))
     print(f"[{'PASS' if ok else 'FAIL'}] 自主:go_live 上岗 — {on}", flush=True)
     st = send_wait("现在适合做点啥?随便说说", max_polls=18)
-    ok = any(k in st for k in TERMINAL) and st!="DEADLOCK" and (invariants()==baseline)
+    ok = any(k in st for k in TERMINAL) and st!="DEADLOCK" and clean_since_ckpt()
     results.append(("auto", ok, f"在岗任务 status={st}"))
     print(f"[{'PASS' if ok else 'FAIL'}] 自主:在岗任务 — {st}", flush=True)
     autonomy("stop"); time.sleep(2)

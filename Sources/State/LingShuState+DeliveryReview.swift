@@ -22,6 +22,17 @@ extension LingShuState {
             ? "真实落盘文件:(无——盘上没有任何本回合产出文件)"
             : "真实落盘文件(盘上确实存在,已逐一核实):\n" + realFiles.map { "- \($0)" }.joined(separator: "\n")
 
+        // P3 通用验收(全类型,详见 LingShuState+Acceptance):把 GoalSpec 成功标准分类后逐条确定性核验。
+        // 任一**能确定性核验**的条未达成(文件不存在 / 命令·测试没成功)→ 硬门返工,模型口头"已完成"不能推翻文件系统事实;
+        // 其余(内容质量/设备/环境/用户确认)注入评审官逐条核对(unverifiable 如实标,不假定达成)。无成功标准 → 空报告、零成本跳过。
+        let acceptance = await acceptanceReport(taskRecordID: taskRecordID, realFiles: realFiles)
+        if !acceptance.isEmpty { bindAcceptanceReport(acceptance, to: taskRecordID) }
+        if acceptance.hasDeterministicFailure {
+            appendTrace(kind: .warning, actor: "验收", title: "成功标准确定性核验未过", detail: acceptance.summary)
+            return (false, acceptance.deterministicFailureReason)
+        }
+        let acceptanceBlock = acceptance.isEmpty ? "" : "\n\(acceptance.verifierBlock)\n"
+
         // 代码任务**确定性硬门**(计划 §4 + 执行恢复力):产出真实源码文件 → 必须同时满足
         // ① 测试门:有测试且跑通(全绿) ② 运行门:最近一次构建/运行程序本身不崩(若跑过)。任一不过即确定性判未达标。
         let codeFiles = realFiles.filter { Self.isTestableCodePath($0) }
@@ -87,10 +98,13 @@ extension LingShuState {
             }
         }
 
+        // P1 目标认知消费:记录里有 typed GoalSpec 的成功标准则给验收官参考(完整性维度据此核对是否真达成);无则空串、不加压。
+        let goalCriteria = goalSpec(for: taskRecordID)?.acceptanceCriteriaBlock ?? ""
+        let goalCriteriaBlock = goalCriteria.isEmpty ? "" : "\n\(goalCriteria)\n"
         let prompt = """
         你是独立评审官,严格把关这次交付——既要真实落盘,也要**事实无错、版式不崩**。
         用户要求:\(userRequest)
-        交付答复:\(reply)
+        \(goalCriteriaBlock)\(acceptanceBlock)交付答复:\(reply)
         \(filesBlock)
         \(outcomeBlock)
         \(contentBlock)
@@ -100,7 +114,7 @@ extension LingShuState {
         逐条核对这五个维度(每条写达标/未达标+理由):
         1. 真实性:用户要的产出物在上面【真实落盘文件】清单里就算达标;只有"声称生成了某文件、但它不在清单里"才 ❌(假完成)。清单里有对应文件 = 真实性达标,**不要再以"无法独立验证/存疑"为由打回**。
         2. 事实准确性:用你的知识逐条审查正文里的关键数据/年份/事件/数字/人名,**发现明确错误或与公认事实不符才 ❌ 并写出正确值**;不要把"我没法 100% 确认"当作不达标。**但忽略"自指/易变"事实**——产出物描述它自己的文件体积/字节数/页数/生成时间戳这类(每次重生成都会变、且与用户关心的内容无关),以及 KB 四舍五入这种琐碎数值差(如 41KB vs 40KB),**一律不算事实错误、不得据此打回**,以免陷入自指返工死循环。
-        3. 完整性:是否覆盖用户要求的主题、结构与数量。
+        3. 完整性:是否覆盖用户要求的主题、结构与数量;**若上面给了【成功标准】,逐条核对是否真达成**(未达成的写明缺哪条)。
         4. 版式:若有视觉评审,凡文字重叠/被截断/溢出/错位空白 → ❌ 并指出第几页;无视觉评审则此项默认达标。
         5. 代码门:以上【代码门】结论为准——标 ❌ 则本维度未达标(代码任务需有确定性成功证据:**测试全绿 或 真构建/运行起来不崩,二者择一**);标 ✅ 或"非代码交付跳过"则达标。
         输出格式(严格遵守):

@@ -10,6 +10,31 @@ enum LingShuTaskExecutionStatus: String, Codable, Equatable, Sendable {
     case blocked = "异常"
     /// 网络/网关中断导致暂停——**非失败**,会话上下文保留,联网后自动续跑。
     case suspended = "已暂停"
+
+    // 通用中枢 P2 真闭环·新增状态(additive,影响执行流/汇总/续接,不只是 UI 装饰)。
+    case analyzing = "分析中"             // 前置认知(目标/需求/缺口)进行中
+    case acquiringCapability = "补齐能力中" // 正在主动获取缺失能力(连MCP/自写组件/找技能/浏览器)
+    case waitingForUser = "待用户"        // 需用户提供前提(凭据/授权/付费/物理)才能继续
+    case ready = "就绪"                   // 能力齐备、可执行
+    case partial = "部分完成"             // 复合任务部分成、部分未成
+    case verified = "已核验"              // 完成且按成功标准核验通过
+    case failed = "失败"                  // 真尝试后仍无法完成
+
+    /// 终态(不再自动推进):完成/直答/核验/未达标/失败/部分;阻断与待用户是**可续**的中间停。
+    var isTerminal: Bool {
+        switch self {
+        case .completed, .answered, .verified, .needsRevision, .failed, .partial: return true
+        default: return false
+        }
+    }
+
+    /// 可被「继续」优先恢复的未竟态(spec 第14条:续接优先恢复 blocked/partial/waitingForUser)。
+    var isResumableUnfinished: Bool {
+        switch self {
+        case .blocked, .partial, .waitingForUser, .suspended, .acquiringCapability: return true
+        default: return false
+        }
+    }
 }
 
 enum LingShuTaskExecutionMessageKind: String, Codable, Equatable, Sendable {
@@ -172,6 +197,28 @@ struct LingShuTaskExecutionRecord: Identifiable, Codable, Equatable, Sendable {
     /// 代码交付任务的代码改动概览(分支 + 未提交文件)。nil=非代码任务/工作目录非 git 仓/无未提交改动。
     var codeChanges: LingShuCodeChangeSummary?
 
+    /// 通用中枢 P1·**结构化目标规格**(typed,随记录持久化跨重启)。入口派生后绑定;
+    /// `driveAgentDelivery` 注入执行引导、`verifyAgentDeliverable` 引用成功标准都读它(重启后链路仍拿得到 typed 值)。
+    var goalSpec: LingShuGoalSpec?
+
+    /// 通用中枢 P2·**能力缺口分析**(typed,持久化)。执行前评估"能不能做成/缺什么/怎么补",注入执行引导让大脑先补齐再推进。
+    var gapAnalysis: LingShuGapAnalysis?
+
+    /// 通用中枢 P3·**验收检查项(成功标准分类后)**(typed,持久化)。验收时惰性分类一次后缓存,避免返工循环重复分类。
+    var acceptanceChecks: [LingShuAcceptanceCheck]?
+
+    /// 通用中枢 P3·**全类型验收报告**(typed,持久化)。逐条成功标准的确定性裁决结果,供用户验收时核对。
+    var acceptanceReport: LingShuAcceptanceReport?
+
+    /// 通用中枢 P2 真闭环·**能力需求**(typed,持久化)。从 GoalSpec 推导的通用能力需求,查能力图谱判命中/缺口。
+    var capabilityRequirements: [LingShuCapabilityRequirement]?
+
+    /// 通用中枢 P2 真闭环·**能力获取尝试**(typed,持久化)。缺口补齐过程:走了哪些路径、成败、最小验证结果,供记忆复用 + 审计。
+    var acquisitionAttempts: [LingShuAcquisitionAttempt]?
+
+    /// 通用中枢 P2 真闭环·**完成闸裁决**(typed,持久化)。防伪完成的最终结论(ok/partial/waitingForUser/blocked/needsAcquisition)。
+    var taskOutcome: LingShuCompletionStatus?
+
     /// 一句话**总目标**(模型经 `update_plan` 蒸馏的高度概括,如"构建一个清分结算系统";**不是复述需求**)。
     /// 三级信息架构第 1 级(右侧规划):总目标 → 分步计划(`plan`,抽象里程碑)→ 具体实现(左侧执行对话)。
     /// 空=模型未给(回退用 title)。
@@ -215,6 +262,13 @@ struct LingShuTaskExecutionRecord: Identifiable, Codable, Equatable, Sendable {
         case designIssues
         case codeChanges
         case goal
+        case goalSpec
+        case gapAnalysis
+        case acceptanceChecks
+        case acceptanceReport
+        case capabilityRequirements
+        case acquisitionAttempts
+        case taskOutcome
     }
 
     init(
@@ -233,10 +287,24 @@ struct LingShuTaskExecutionRecord: Identifiable, Codable, Equatable, Sendable {
         designScore: Double? = nil,
         designIssues: [String] = [],
         codeChanges: LingShuCodeChangeSummary? = nil,
-        goal: String = ""
+        goal: String = "",
+        goalSpec: LingShuGoalSpec? = nil,
+        gapAnalysis: LingShuGapAnalysis? = nil,
+        acceptanceChecks: [LingShuAcceptanceCheck]? = nil,
+        acceptanceReport: LingShuAcceptanceReport? = nil,
+        capabilityRequirements: [LingShuCapabilityRequirement]? = nil,
+        acquisitionAttempts: [LingShuAcquisitionAttempt]? = nil,
+        taskOutcome: LingShuCompletionStatus? = nil
     ) {
         self.id = id
         self.goal = goal
+        self.goalSpec = goalSpec
+        self.gapAnalysis = gapAnalysis
+        self.acceptanceChecks = acceptanceChecks
+        self.acceptanceReport = acceptanceReport
+        self.capabilityRequirements = capabilityRequirements
+        self.acquisitionAttempts = acquisitionAttempts
+        self.taskOutcome = taskOutcome
         self.title = title
         self.prompt = prompt
         self.status = status
@@ -271,6 +339,13 @@ struct LingShuTaskExecutionRecord: Identifiable, Codable, Equatable, Sendable {
         designIssues = try container.decodeIfPresent([String].self, forKey: .designIssues) ?? []
         codeChanges = try container.decodeIfPresent(LingShuCodeChangeSummary.self, forKey: .codeChanges)
         goal = try container.decodeIfPresent(String.self, forKey: .goal) ?? ""
+        goalSpec = try container.decodeIfPresent(LingShuGoalSpec.self, forKey: .goalSpec)
+        gapAnalysis = try container.decodeIfPresent(LingShuGapAnalysis.self, forKey: .gapAnalysis)
+        acceptanceChecks = try container.decodeIfPresent([LingShuAcceptanceCheck].self, forKey: .acceptanceChecks)
+        acceptanceReport = try container.decodeIfPresent(LingShuAcceptanceReport.self, forKey: .acceptanceReport)
+        capabilityRequirements = try container.decodeIfPresent([LingShuCapabilityRequirement].self, forKey: .capabilityRequirements)
+        acquisitionAttempts = try container.decodeIfPresent([LingShuAcquisitionAttempt].self, forKey: .acquisitionAttempts)
+        taskOutcome = try container.decodeIfPresent(LingShuCompletionStatus.self, forKey: .taskOutcome)
     }
 
     static func create(prompt: String, now: Date = Date()) -> LingShuTaskExecutionRecord {

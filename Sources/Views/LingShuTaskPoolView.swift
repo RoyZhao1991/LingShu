@@ -137,12 +137,12 @@ struct LingShuTaskPoolView: View {
 
     private func statusColor(_ status: LingShuTaskExecutionStatus) -> Color {
         switch status {
-        case .completed, .answered: return Color.lingHolo
-        case .running, .dispatched: return Color.lingHoloAlt
+        case .completed, .answered, .verified: return Color.lingHolo
+        case .running, .dispatched, .analyzing, .acquiringCapability, .ready: return Color.lingHoloAlt
         case .queued: return .white.opacity(0.4)
-        case .needsRevision: return .orange
-        case .blocked: return .red
-        case .suspended: return .yellow   // 网络中断暂停(会自动续),区别于红色异常
+        case .needsRevision, .partial: return .orange
+        case .blocked, .failed: return .red
+        case .suspended, .waitingForUser: return .yellow   // 暂停/待用户(可续),区别于红色异常
         }
     }
 }

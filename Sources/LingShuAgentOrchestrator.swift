@@ -184,7 +184,10 @@ actor LingShuAgentOrchestrator {
             upsert(id: id, objective: objective, status: .blocked, summary: "等待你补充", blockedOn: question)
             pushes.append("子任务「\(objective)」卡住,需要你定:\(question)")
             Task { await self.onEvent?(.blocked(id: id, objective: objective, question: question)) }
-            // 卡住保留 ③ 槽位(暂停而非结束);收到答案 resume 后续跑。
+            // **卡住=等人(无界延迟),不该占用并发槽**——释放槽位 + 放行排队任务(修死锁:多条"等你补充"
+            // 占满 3 槽→新任务永远派不出去、系统卡死,看着像"两个子任务处理同一件事死锁")。会话与账本保留,
+            // `resumeWithInput` 收到答案后续跑(必要时重新占槽,用户前台续接优先)。
+            admitNext(after: id)
         case .maxTurnsReached(let lastText):
             upsert(id: id, objective: objective, status: .failed, summary: "达轮次上限未收尾:\(digest(lastText))")
             pushes.append("子任务「\(objective)」未能自行收尾,已暂停等你介入。")

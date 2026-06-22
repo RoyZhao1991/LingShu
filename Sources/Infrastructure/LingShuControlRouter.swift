@@ -244,6 +244,15 @@ final class LingShuControlRouter {
             ]
         ],
         [
+            "name": "lingshu_set_goalspec",
+            "description": "开/关目标认知(P1 GoalSpec):开=每个新顶层目标先结构化理解(目标/约束/边界/风险/成功标准),注入执行引导 + 验收成功标准 + 沉淀经验;关=零成本零行为变更。持久化跨重启,默认开。状态见 lingshu_status 的 goalSpecEnabled。args: enabled(bool)。",
+            "inputSchema": [
+                "type": "object",
+                "properties": ["enabled": ["type": "boolean", "description": "true 开 / false 关"]],
+                "required": ["enabled"]
+            ]
+        ],
+        [
             "name": "lingshu_get_trace",
             "description": "读取最近若干条执行轨迹事件(路由/模型调用/工具输出等),用于核验内部流转。",
             "inputSchema": [
@@ -483,6 +492,12 @@ final class LingShuControlRouter {
             }
             state.setAgentLoopVariant(variant)
             return (jsonText(["ok": state.agentLoopVariant == variant, "loopVariant": state.agentLoopVariant.rawValue]), false)
+        case "lingshu_set_goalspec":   // 开/关目标认知(P1 GoalSpec),持久化跨重启
+            guard let enabled = arguments["enabled"] as? Bool else {
+                return ("缺少/非法参数 enabled(应为 true 或 false)", true)
+            }
+            state.setGoalSpecEnabled(enabled)
+            return (jsonText(["ok": true, "goalSpecEnabled": state.goalSpecEnabled]), false)
         case "lingshu_main_session":   // 读常驻主会话上下文尾部(验证子任务简报/纠正是否注入)。args: limit
             let limit = (arguments["limit"] as? Int) ?? 12
             let messages = await state.mainAgentSessionHolder?.messages ?? []

@@ -174,6 +174,12 @@ extension LingShuState {
                 self.autonomousSessionHolder = session
                 kickoff = self.resolveKickoffPrompt(objective: objective, runbook: runbook)
             }
+            // P1+P2 全入口覆盖:自主运行的**真实目标**(非续跑、非空在岗)前置认知=GoalSpec + 能力缺口分析,绑定记录 → 同样被执行引导/验收/经验消费。
+            if self.goalSpecEnabled, !continuing,
+               !objective.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+               self.goalSpec(for: recordID) == nil || self.gapAnalysis(for: recordID) == nil {
+                await self.bindPreflightCognition(request: objective, recordID: recordID)
+            }
             let result: LingShuAgentRunResult
             let isStandingKickoff = objective.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !continuing
             if isStandingKickoff {

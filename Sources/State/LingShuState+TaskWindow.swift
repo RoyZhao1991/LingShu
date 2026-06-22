@@ -28,7 +28,14 @@ extension LingShuState {
         // 而非主会话。否则主会话不知道这条任务做过什么,「继续」就接不上(尤其网络中断暂停后续跑)。
         if let subID = agentSubTaskRecords.first(where: { $0.value == recordID })?.key {
             installAgentEventSinkIfNeeded()
-            Task { await agentOrchestrator.resumeWithInput(id: subID, input: combined) }
+            // P2 真闭环:用户在回应「能力缺口」卡住 →
+            // ① **解除需用户提供的阻断缺口**(用户已给凭据/已指路)——否则静态 gapAnalysis 让完成闸**无限再问同一件事**
+            //    (用户反馈"给了 token 仍没完成"的根因);解除后据本回合**真实结果**判完成,而非据陈旧缺口再问。
+            // ② 给一段续接引导,逼它真用上/真去试可行路径,别只读文件就说做不了。
+            let wasWaiting = taskExecutionRecords.first { $0.id == recordID }?.taskOutcome == .waitingForUser
+            if wasWaiting { resolveUserProvidedGaps(recordID: recordID) }
+            let resumeInput = wasWaiting ? combined + "\n\n" + capabilityResumePreamble(recordID: recordID) : combined
+            Task { await agentOrchestrator.resumeWithInput(id: subID, input: resumeInput) }
             return
         }
         runMainAgentTurn(prompt: combined, taskRecordID: recordID)

@@ -83,4 +83,30 @@ final class AgentTeamTests: XCTestCase {
         XCTAssertTrue(out.contains("研究结论") && out.contains("实现完成") && out.contains("审查通过"), "聚合应含三角色产出:\(out)")
         XCTAssertTrue(out.contains("3 个角色"))
     }
+
+    func testTeamRoleEventsDoNotCreateIndependentTaskRecords() async {
+        // spawn_team 是父任务内部的命名角色协作,角色事件应写回父记录时间线,
+        // 不能被 Orchestrator 的 .spawned/.completed 事件误当成独立顶层子任务记录。
+        let state = LingShuState()
+        let before = Set(state.taskExecutionRecords.map(\.id))
+        let parentID = state.createTaskExecutionRecord(for: "用角色团队完成去重方案")
+        state.installAgentEventSinkIfNeeded()
+        let json = """
+        {"agents":[
+          {"name":"研究员","role":"调研","objective":"调研去重方法","depends_on":[]},
+          {"name":"执行","role":"实现","objective":"基于调研实现","depends_on":["研究员"]}
+        ]}
+        """
+
+        let out = await state.runAgentTeam(argsJSON: json, recordID: parentID, model: RoleScriptedModel())
+
+        let newIDs = Set(state.taskExecutionRecords.map(\.id)).subtracting(before)
+        XCTAssertEqual(newIDs, [parentID], "角色 agent 不应额外创建独立任务记录,实际新增:\(newIDs)")
+        XCTAssertFalse(state.agentSubTaskRecords.keys.contains { $0.hasPrefix("role-") }, "角色 id 不应进入独立子任务映射")
+        let parent = state.taskExecutionRecords.first { $0.id == parentID }
+        XCTAssertEqual(parent?.status, .running, "团队内部角色完成不应提前把父任务收尾")
+        XCTAssertTrue(parent?.messages.contains(where: { $0.actor == "研究员" && $0.text.contains("开始") }) == true)
+        XCTAssertTrue(parent?.messages.contains(where: { $0.actor == "执行" && $0.text.contains("产出") }) == true)
+        XCTAssertTrue(out.contains("研究结论") && out.contains("实现完成"))
+    }
 }

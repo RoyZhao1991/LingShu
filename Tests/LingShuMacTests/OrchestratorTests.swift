@@ -55,6 +55,26 @@ final class OrchestratorTests: XCTestCase {
         XCTAssertTrue(pushes.contains { $0.contains("已完成") })
     }
 
+    // 死锁回归:卡在 ask_user 等用户的任务**不占并发槽**——否则多条"等你补充"占满槽 → 新任务永远派不出去 = 死锁。
+    func testBlockedTasksReleaseConcurrencySlots() async {
+        let orch = LingShuAgentOrchestrator(maxConcurrent: 2)
+        let a = session("sub-a", [.toolCalls([.init(id: "c1", name: "ask_user", argumentsJSON: "{\"question\":\"A?\"}")])])
+        let b = session("sub-b", [.toolCalls([.init(id: "c2", name: "ask_user", argumentsJSON: "{\"question\":\"B?\"}")])])
+        _ = await orch.spawn(id: "sub-a", objective: "把待办同步到 Notion", session: a)
+        _ = await orch.spawn(id: "sub-b", objective: "把待办同步到 Notion", session: b)
+
+        // 两条都卡在等用户 → 槽位已释放,runningCount=0(修死锁:不再被"等你补充"占满)。
+        let running = await orch.runningCount()
+        XCTAssertEqual(running, 0, "卡住等用户的任务不占并发槽")
+        let blocked = await orch.blockedIDs()
+        XCTAssertEqual(Set(blocked), ["sub-a", "sub-b"], "两条仍在账本里记为卡住(会话保留,可续接)")
+
+        // 槽位释放 → 新任务能派出去(旧逻辑会因满槽返回 false=死锁)。
+        let c = session("sub-c", [.text("C 完成")])
+        let admitted = await orch.spawnDetached(id: "sub-c", objective: "另一件事", session: c)
+        XCTAssertTrue(admitted, "卡住任务释放槽后新任务应能派出,不被死锁卡住")
+    }
+
     // 设计点①(隔离):两条子会话各自独立,账本分别记录,互不污染。
     func testTwoSubsAreIsolatedInLedger() async {
         let orch = LingShuAgentOrchestrator(maxConcurrent: 3)

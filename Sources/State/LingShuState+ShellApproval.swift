@@ -35,16 +35,24 @@ extension LingShuState {
     ) async -> LingShuShellApprovalDecision {
         // 自发现高风险脚本首次运行:即使会话已"完全授权"也强制弹一次,把风险点摆给用户裁决(供应链红线)。
         let quarantine = quarantinedScriptHit(in: command)
-        // **开发阶段全权(用户拍板)**:系统授权门直接放行,不每次弹框。**例外**:未审第三方 skill 脚本(quarantine)
-        // 仍拦——那不是灵枢自身动作而是跑别人未审的代码(供应链红线,只增不减)。系统级敏感命令会放行但留醒目审计。
-        if quarantine == nil, developmentPhaseFullAccess {
-            if forceConfirm {
+        if quarantine == nil {
+            // 系统级敏感命令在开发全权下放行,但留醒目审计(发布版会强制确认)。
+            if developmentPhaseFullAccess, forceConfirm {
                 logEvent("⚠️ [开发全权] 自动放行系统级敏感命令(发布版会强制确认):\(String(command.prefix(140)))")
             }
-            return .allowAlways
+            // **SafetyKernel:经统一权限矩阵裁决**(dev-full override / 风险级 / 运行模式 / 持久授权收口到一处)。
+            // 非 quarantine 命令的自动放行/拒绝都由它定;返回 nil 才落到下面的交互弹窗。
+            if let auto = Self.shellApprovalDecision(
+                forceConfirm: forceConfirm,
+                devFullAccess: developmentPhaseFullAccess,
+                sessionAlwaysAllowed: sessionShellAlwaysAllowed,
+                nonInteractive: clarificationCenter.isNonInteractive()
+            ) {
+                return auto
+            }
+        } else if clarificationCenter.isNonInteractive() {
+            return .deny   // 无人值守下的未审脚本:安全拒绝(供应链红线)
         }
-        if quarantine == nil, !forceConfirm, sessionShellAlwaysAllowed { return .allowAlways }
-        if clarificationCenter.isNonInteractive() { return .deny }   // 无人值守:风险脚本/系统敏感操作同样安全拒绝
 
         var notes = quarantine?.notes ?? []
         if forceConfirm { notes.insert("此命令会删除或修改系统级敏感文件(/System、/usr、/etc、内核扩展等),即使完整授权也需你确认。", at: 0) }
@@ -57,6 +65,30 @@ extension LingShuState {
                 riskNotes: notes,
                 resume: { decision in continuation.resume(returning: decision) }
             )
+        }
+    }
+
+    /// **SafetyKernel·系统命令裁决收口到统一权限矩阵(纯函数,可测,2026-06-22)**:
+    /// 把分散的 dev-full / sessionAlways / 非交互 / 风险级判断收敛到 `LingShuPermissionMatrix.decide`——单一真相。
+    /// 返回 `nil` = 需交互弹窗(矩阵判 askUser 且有人在);非 nil = 自动裁决(放行/拒绝)。
+    /// **dev-full 保留为显式开发者 override**(用户拍板的 knob,不经矩阵自动放行;forceConfirm 由调用方留审计日志)。
+    /// 其余全部走矩阵:domain=.terminal,risk=forceConfirm?.critical:.medium,mode=非交互?.autonomous:.standard,
+    /// durablyAllowed=sessionAlways。红线由矩阵硬保证(critical 不自动放行、autonomous 下 critical 直拒)。
+    /// 行为与改造前逐项等价(见 ShellApprovalKernelTests 的真值表),仅把判断收口、便于其余资源域后续接同一矩阵。
+    nonisolated static func shellApprovalDecision(
+        forceConfirm: Bool, devFullAccess: Bool, sessionAlwaysAllowed: Bool, nonInteractive: Bool
+    ) -> LingShuShellApprovalDecision? {
+        if devFullAccess { return .allowAlways }   // 开发者 override(保留现有行为)
+        let verdict = LingShuPermissionMatrix.decide(
+            domain: .terminal,
+            risk: forceConfirm ? .critical : .medium,
+            mode: nonInteractive ? .autonomous : .standard,
+            durablyAllowed: sessionAlwaysAllowed
+        )
+        switch verdict {
+        case .allow:   return .allowAlways
+        case .deny:    return .deny
+        case .askUser: return nonInteractive ? .deny : nil   // 无人可问 → 安全拒;有人 → 弹窗(nil)
         }
     }
 

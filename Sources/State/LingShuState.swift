@@ -244,12 +244,16 @@ final class LingShuState: ObservableObject {
     var mainAgentSessionHolder: (any LingShuAgentSessioning)?
     /// 编排器子会话 id → 任务执行记录 id(让每条并行子任务成为列表里独立任务号)。
     var agentSubTaskRecords: [String: String] = [:]
+    // 注:P1 GoalSpec 不再用内存字典 —— 作为 typed 字段持久化进 LingShuTaskExecutionRecord.goalSpec(跨重启),经 goalSpec(for:) 读。
     /// 主线程分诊「派发」的任务:记录 id → 它在对话里的加载气泡 id(完成时回填这条气泡而非另起一条)。
     /// Stage 2 多任务真隔离:每条派发任务有自己的气泡 + 独立 session,互不串。
     var dispatchedTaskBubbles: [String: UUID] = [:]
     /// 某条**派发的隔离任务**正卡在 ask_user 等用户回答(它问了主题/要信息):上下文感知分诊把它标成
     /// "⏳正等你回答",让分诊器认出用户的答复(哪怕隔了几条)并续到那条隔离会话。见 buildTriageContext。
     var blockedDispatchedRecordID: String?
+    /// **主会话**刚用 ask_user/ask_form 问了用户、正等回答的那条记录 id。下一条用户消息应**续到主会话这条任务**
+    /// (把答复接回去),而不是被重新分诊成一个**新任务**(根治"答复被当成新请求→丢了原目标",如把"待办内容"误当"设个6点提醒")。
+    var pendingMainQuestionRecordID: String?
     /// 主会话当前回合的任务记录 id;工具桥据此把产出文件登记到正确记录。
     var currentAgentTurnRecordID: String?
     /// 当前 agent 主回合的 Task(供语音通话"真指令打断"取消在飞模型调用)。
@@ -1154,7 +1158,32 @@ final class LingShuState: ObservableObject {
         // 记录**按需建**:reply 续用派发线程自己的记录(不另建),task/chat 各建一条。异步,真回复经气泡给出。
         Task { @MainActor [weak self] in
             guard let self else { return }
-            let triage = await self.classifyDispatch(trimmedPrompt)
+            // 主会话刚问了问题在等回答 → 这条消息是答复,**续到主会话那条记录**(把答复接回去、保住原目标),
+            // 不重新分诊成新任务(根治"答复被当新请求→丢原目标",如把待办内容误当'设6点提醒')。
+            if let pendingQ = self.pendingMainQuestionRecordID,
+               self.taskExecutionRecords.contains(where: { $0.id == pendingQ }) {
+                self.pendingMainQuestionRecordID = nil
+                self.appendTrace(kind: .route, actor: "主线程分诊", title: "续答主会话提问", detail: "主会话在等回答→把这条接回原任务,不另起新任务。")
+                _ = self.runMainAgentTurn(prompt: trimmedPrompt, taskRecordID: pendingQ)
+                return
+            }
+            // P1 目标认知:派生 GoalSpec 与分诊**并发**(不加 wall-clock 延迟);新建记录后绑定供执行引导/验收/记忆消费。
+            async let triageF = self.classifyDispatch(trimmedPrompt)
+            let goalSpec: LingShuGoalSpec? = self.goalSpecEnabled ? await self.deriveGoalSpec(for: trimmedPrompt, taskRecordID: nil) : nil
+            let triage = await triageF
+            // P2 能力缺口分析 + 能力需求:**仅对 task 型目标**(chat/reply 不需)执行前判可行性 + 缺口 + 补齐路径,并推导通用能力需求(查图谱)。两者并发。
+            let isTask = self.goalSpecEnabled && triage.kind == .task
+            async let gapA: LingShuGapAnalysis? = isTask ? self.deriveGapAnalysis(for: trimmedPrompt) : nil
+            async let reqA: [LingShuCapabilityRequirement] = isTask ? self.deriveCapabilityRequirements(for: trimmedPrompt) : []
+            let gap = await gapA
+            let reqs = await reqA
+            let newRecordBoundToGoal: @MainActor () -> String = {
+                let rid = self.createTaskExecutionRecord(for: trimmedPrompt)
+                self.bindGoalSpec(goalSpec, to: rid)
+                self.bindGapAnalysis(gap, to: rid)
+                self.bindCapabilityRequirements(reqs, to: rid)
+                return rid
+            }
             switch triage.kind {
             case .reply:
                 // 只续接**仍在进行/等待**的派发任务。已完成(completed)/已直答(answered)的任务不该被"回复"再续跑——
@@ -1166,14 +1195,14 @@ final class LingShuState: ObservableObject {
                 if let rid = triage.replyRecordID, self.agentSubTaskRecords.values.contains(rid), replyActive {
                     self.continueDispatchedThread(prompt: trimmedPrompt, recordID: rid)
                 } else {   // 兜底:线程没了/已完成 → 当对话留主线程
-                    _ = self.runMainAgentTurn(prompt: trimmedPrompt, taskRecordID: self.createTaskExecutionRecord(for: trimmedPrompt))
+                    _ = self.runMainAgentTurn(prompt: trimmedPrompt, taskRecordID: newRecordBoundToGoal())
                 }
             case .task:
                 // 任务**一律先普通模式做**(不再按关键字预判直接进自主)。要占屏实时演示/互动时,由大脑自己调
                 // enter_managed_mode 申请、弹窗征主人同意后才转入托管(用户定调 2026-06-17:通配、不固化、模型自己想)。
-                self.dispatchIsolatedTask(prompt: trimmedPrompt, taskRecordID: self.createTaskExecutionRecord(for: trimmedPrompt), goal: triage.goal)
+                self.dispatchIsolatedTask(prompt: trimmedPrompt, taskRecordID: newRecordBoundToGoal(), goal: triage.goal)
             case .chat:
-                _ = self.runMainAgentTurn(prompt: trimmedPrompt, taskRecordID: self.createTaskExecutionRecord(for: trimmedPrompt))
+                _ = self.runMainAgentTurn(prompt: trimmedPrompt, taskRecordID: newRecordBoundToGoal())
             }
         }
         return ""

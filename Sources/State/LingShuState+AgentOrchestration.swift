@@ -31,40 +31,82 @@ extension LingShuState {
         }
         switch event {
         case .spawned(let id, let objective):
-            // 主线程分诊派发的任务已**预映射**到自己的记录(dispatchIsolatedTask),复用之;否则(模型 spawn_task)新建一条。
-            let recordID = agentSubTaskRecords[id] ?? createTaskExecutionRecord(for: objective)
+            // spawn_team 的命名角色共享父任务记录,由 runRoleAgent 自己把开始/产出写回父时间线;
+            // 角色不是新的顶层离散目标,不能在这里污染独立任务列表或单独收尾父任务。
+            guard !isRoleAgentEventID(id) else { return }
+            // 主线程分诊派发的任务 / 模型 spawn_task 已**预映射**到自己的记录,复用之;否则给未知外部派生兜底建一条。
+            let preMapped = agentSubTaskRecords[id]
+            let recordID = preMapped ?? createTaskExecutionRecord(for: objective)
             agentSubTaskRecords[id] = recordID
             appendTaskRecordMessage(recordID, actor: "灵枢", role: "派生子任务", kind: .router, text: "派生并行子任务:\(objective)")
+            // 兜底入口:正常 spawn_task 已在派生前预建记录并绑定 GoalSpec;这里仅防未来外部直接走 orchestrator。
+            if preMapped == nil, goalSpecEnabled, goalSpec(for: recordID) == nil {
+                bindGoalSpec(
+                    LingShuGoalSpec(objective: objective, kind: .task, successCriteria: ["完成并可验证子目标:\(objective)"]),
+                    to: recordID
+                )
+            }
         case .completed(let id, let objective, let summary):
+            guard !isRoleAgentEventID(id) else { return }
             let recordID = agentSubTaskRecords[id]
             if recordID == blockedDispatchedRecordID { blockedDispatchedRecordID = nil }   // 收尾即解除"等回答"
+            // P2 真闭环:终态由完成闸定(防伪完成)——派发任务即便 orchestrator 报 completed,
+            // 若完成闸判 partial/waitingForUser/blocked,则按真实状态收尾、且**不报「做好了」**。
+            let outcome = recordID.flatMap { rid in taskExecutionRecords.first { $0.id == rid }?.taskOutcome }
+            let status = Self.finishStatus(for: outcome, fallback: .completed)
+            let trulyDone = status == .completed || status == .verified
             if let recordID {
-                appendTaskRecordMessage(recordID, actor: "灵枢", role: "结果", kind: .result, text: summary)
-                finishTaskRecord(recordID, status: .completed, summary: summary)
-                recordDeliverable(recordID: recordID, title: objective, summary: summary)   // 登记产出物供"运行起来/继续"接上
+                appendTaskRecordMessage(recordID, actor: "灵枢", role: trulyDone ? "结果" : "未竟", kind: trulyDone ? .result : .warning, text: summary)
+                finishTaskRecord(recordID, status: status, summary: summary)
+                if trulyDone {
+                    recordDeliverable(recordID: recordID, title: objective, summary: summary)   // 登记产出物供"运行起来/继续"接上
+                }
             }
-            briefMainThread("子任务「\(objective)」已完成:\(summary.prefix(200))")
-            promoteSubtaskKnowledge(objective: objective, summary: summary)   // M3:子线程知识蒸馏进常驻主脑(v2),事后主线程可召回
-            // **完成汇报时机(用户定调 2026-06-19,通用):一律入待汇报队列,由 drain 择机发——互动中捎带下次主线程汇报、待机则主动出声。**
-            deliverOrQueueSubtaskReport(recordID: recordID, objective: objective, summary: summary)
+            if trulyDone {
+                briefMainThread("子任务「\(objective)」已完成:\(summary.prefix(200))")
+                promoteSubtaskKnowledge(objective: objective, summary: summary)   // M3:子线程知识蒸馏进常驻主脑(v2),事后主线程可召回
+                // **完成汇报时机(用户定调 2026-06-19,通用):一律入待汇报队列,由 drain 择机发——互动中捎带下次主线程汇报、待机则主动出声。**
+                deliverOrQueueSubtaskReport(recordID: recordID, objective: objective, summary: summary)
+            } else {
+                // 未真完成:如实回灌(summary 已含完成闸的诚实补尾),不入"做好了"汇报队列。
+                let label = status == .waitingForUser ? "⏸ 需要你配合" : (status == .partial ? "⚠️ 部分完成" : "⚠️ 未能完成")
+                postOrchestratorChat(recordID: recordID, dispatched: summary, spawned: "\(label):子任务「\(objective)」——\(summary.prefix(200))")
+                briefMainThread("子任务「\(objective)」\(label):\(summary.prefix(180))")
+                // 续接优先恢复:待用户/部分完成的派发任务 → 指向它,用户下条消息直接续这条隔离会话(spec 第14条)。
+                if status == .waitingForUser || status == .partial, let recordID { blockedDispatchedRecordID = recordID }
+            }
         case .blocked(let id, let objective, let question):
+            guard !isRoleAgentEventID(id) else { return }
             let recordID = agentSubTaskRecords[id]
-            if let recordID {
+            if let recordID, let idx = taskExecutionRecords.firstIndex(where: { $0.id == recordID }) {
                 appendTaskRecordMessage(recordID, actor: "灵枢", role: "卡住", kind: .warning, text: question)
                 blockedDispatchedRecordID = recordID   // 等用户回答→下条主输入直接续这条隔离会话(不重新分诊)
+                // P2 真闭环:ask_user 阻塞=在等用户 → 状态显示「待用户」而非笼统「执行中」(修"状态很怪");不 finishTaskRecord(保留续接语义)。
+                taskExecutionRecords[idx].status = .waitingForUser
+                if taskExecutionRecords[idx].taskOutcome == nil { taskExecutionRecords[idx].taskOutcome = .waitingForUser }
+                persistTaskExecutionRecords()
             }
             postOrchestratorChat(recordID: recordID, dispatched: "⏸ 卡住,需要你定:\(question)", spawned: "⏸ 子任务「\(objective)」卡住,需要你定:\(question)")
             briefMainThread("子任务「\(objective)」卡住,等待用户补充:\(question.prefix(160))")
         case .failed(let id, let objective, let summary):
+            guard !isRoleAgentEventID(id) else { return }
             let recordID = agentSubTaskRecords[id]
             if recordID == blockedDispatchedRecordID { blockedDispatchedRecordID = nil }
+            // P2 真闭环:即便模型撞顶/停滞被判 failed,若完成闸早已判 waitingForUser/partial(如缺凭据需用户),
+            // 以完成闸为准——给出「需要你…」的诚实收尾,而不是笼统「异常」,并指向它便于续接。
+            let outcome = recordID.flatMap { rid in taskExecutionRecords.first { $0.id == rid }?.taskOutcome }
+            let status = Self.finishStatus(for: outcome, fallback: .blocked)
+            let honest = recordID.flatMap { outcomeAwareSummary(recordID: $0, base: summary) } ?? summary
             if let recordID {
-                appendTaskRecordMessage(recordID, actor: "灵枢", role: "失败", kind: .warning, text: summary)
-                finishTaskRecord(recordID, status: .blocked, summary: summary)
+                appendTaskRecordMessage(recordID, actor: "灵枢", role: status == .waitingForUser ? "待用户" : "失败", kind: .warning, text: honest)
+                finishTaskRecord(recordID, status: status, summary: honest)
+                if status == .waitingForUser || status == .partial { blockedDispatchedRecordID = recordID }
             }
-            postOrchestratorChat(recordID: recordID, dispatched: "⚠️ 未能自行收尾:\(summary)", spawned: "⚠️ 子任务「\(objective)」未能自行收尾:\(summary)")
-            briefMainThread("子任务「\(objective)」未能自行收尾:\(summary.prefix(160))")
+            let head = status == .waitingForUser ? "⏸ 需要你配合" : (status == .partial ? "⚠️ 部分完成" : "⚠️ 未能自行收尾")
+            postOrchestratorChat(recordID: recordID, dispatched: honest, spawned: "\(head):子任务「\(objective)」——\(honest.prefix(220))")
+            briefMainThread("子任务「\(objective)」\(head):\(honest.prefix(160))")
         case .interrupted(let id, let objective, let reason):
+            guard !isRoleAgentEventID(id) else { return }
             // 网络/网关中断:**非失败**,标"已暂停",启动主动重试循环(它在主对话框统一展示重试进度,故这里不另发对话气泡)。
             _ = objective
             let recordID = agentSubTaskRecords[id]
@@ -74,6 +116,7 @@ extension LingShuState {
             }
             startNetworkRetryLoopIfNeeded()
         case .resumed(let id, let objective):
+            guard !isRoleAgentEventID(id) else { return }
             // 重连/手动续接:从"已暂停"翻回"执行中",执行流继续追加进该记录窗口。
             let recordID = agentSubTaskRecords[id]
             if let recordID, let idx = taskExecutionRecords.firstIndex(where: { $0.id == recordID }) {
@@ -83,6 +126,10 @@ extension LingShuState {
             }
             _ = objective
         }
+    }
+
+    private func isRoleAgentEventID(_ id: String) -> Bool {
+        id.hasPrefix("role-")
     }
 
     /// 编排器结果回灌对话:**主线程分诊派发**的任务回填它自己的加载气泡(不另起一条);

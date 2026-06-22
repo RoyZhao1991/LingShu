@@ -223,6 +223,7 @@ actor LingShuAgentSession: LingShuAgentSessioning {
 
     /// 投入一条用户输入,跑完整循环直到模型收尾、卡住或到轮次上限。
     func send(_ userText: String) async -> LingShuAgentRunResult {
+        repairOrphanToolCalls()   // 续接前修齐上一回合飞行中被取消留下的孤儿 tool_call(打断恢复泄漏修复)→ 下面的不变量检查见到的是良构 history
         pendingCorrection = nil   // 新回合不带上一回合可能残留的纠正
         consumePendingBriefings() // 子任务简报先入上下文(在用户新输入之前)——主线程信息同步
         await compactHistoryIfNeeded()   // 回合边界:超窗口的早段**语义压缩成前情提要**(对标 CC auto-compaction),失败回退硬裁剪
@@ -282,6 +283,39 @@ actor LingShuAgentSession: LingShuAgentSessioning {
         messages = Array(messages[..<systemCount]) + kept
     }
 
+    /// **续接前修齐孤儿 tool_call(打断恢复不变量泄漏修复,2026-06-22,见 [[verify-gate-bypass-batchinterrupt-leak]])**:
+    /// 飞行中被取消(`lingshu_stop`)可能停在"assistant 已声明 tool_calls、对应 tool 结果尚未回填"之间,
+    /// 使持久会话 history 留下**未应答 tool_call**。下一回合 `checkInvariants` 会据此记 I1/I2——网关
+    /// `sanitizeToolCallSequence` 虽在序列化时兜底防 400,但会话层不变量检查发生在它之前 → 违反照记、
+    /// `loopInvariantViolations` 爬升(实测打断恢复 0→3→8)。这里在每个续接入口(send/resume/continueLoop)
+    /// 先补齐:为每个 assistant 声明却无紧随 tool 结果的 tool_call 补一条合成结果,使会话层与网关同口径良构。
+    /// `pendingBlockToolCallID`(human-in-the-loop 合法 open 调用)豁免;无孤儿时零改动(干净流程不受影响)。
+    private func repairOrphanToolCalls() {
+        guard messages.contains(where: { $0.role == .assistant && !$0.toolCalls.isEmpty }) else { return }
+        var rebuilt: [LingShuAgentMessage] = []
+        rebuilt.reserveCapacity(messages.count)
+        var i = 0
+        var repairedAny = false
+        while i < messages.count {
+            let m = messages[i]
+            rebuilt.append(m); i += 1
+            guard m.role == .assistant, !m.toolCalls.isEmpty else { continue }
+            // 收集紧随该 assistant 的 tool 结果(良构序列里 tool 结果紧跟其声明)。
+            var provided = Set<String>()
+            while i < messages.count, messages[i].role == .tool {
+                if let id = messages[i].toolCallID { provided.insert(id) }
+                rebuilt.append(messages[i]); i += 1
+            }
+            for call in m.toolCalls where !provided.contains(call.id) && call.id != pendingBlockToolCallID {
+                rebuilt.append(.init(role: .tool,
+                    content: "（该工具调用因上一回合被中断而未完成，补占位以保持消息结构良构。）",
+                    toolCallID: call.id))
+                repairedAny = true
+            }
+        }
+        if repairedAny { messages = rebuilt }
+    }
+
     /// 回合边界**语义压缩**:历史超窗口时,把要丢弃的早段用模型蒸馏成一条「前情提要」,替代硬丢弃——
     /// 长会话不丢早先的决策/产物路径/已确认信息(对标 Claude Code 的 auto-compaction,补"硬丢中段"短板)。
     /// 提要作为 body 首条流转,下次溢出会被连同新内容再压缩=**滚动摘要**。蒸馏失败/为空 → 回退硬裁剪,绝不卡住。
@@ -326,13 +360,15 @@ actor LingShuAgentSession: LingShuAgentSessioning {
         }
         messages.append(.init(role: .tool, content: answer, toolCallID: pending))
         pendingBlockToolCallID = nil
+        repairOrphanToolCalls()   // 填回阻塞答案后,修齐其余孤儿(若打断曾留下)→ runLoop 首个不变量检查良构
         return recordTerminal(await runLoop())
     }
 
     /// 重连后续跑(断网恢复用):**不注入任何新消息**,直接接着跑循环——上下文停在中断前的良构状态,
     /// 重发的就是中断那一步的模型调用。`step` 重置=新的一段预算(与 send/resume 一致)。
     func continueLoop() async -> LingShuAgentRunResult {
-        recordTerminal(await runLoop())
+        repairOrphanToolCalls()   // 重连续跑前防御性修齐(中断点若曾留孤儿)→ 不变量检查良构
+        return recordTerminal(await runLoop())
     }
 
     /// 连续多少次发起完全相同的工具调用即判"原地打转"(停滞)。
@@ -422,9 +458,17 @@ actor LingShuAgentSession: LingShuAgentSessioning {
                     // 同回合非阻塞工具先执行掉补结果(经调度器,可并行),只留阻塞那条作唯一 open 调用(I2)。
                     let nonBlocking = calls.filter { $0.id != blocking.id }
                     let outcomes = await toolDispatcher.dispatch(nonBlocking, tools: tools)
+                    var answeredIDs = Set<String>()
                     for outcome in outcomes {
                         toolInvocations.append(outcome.name)
                         messages.append(.init(role: .tool, content: outcome.output, toolCallID: outcome.id))
+                        answeredIDs.insert(outcome.id)
+                    }
+                    // 取消恢复·孤儿根治:非阻塞工具若因取消只返回部分结果,给未应答的补合成结果(同主路径)。
+                    for call in nonBlocking where !answeredIDs.contains(call.id) {
+                        messages.append(.init(role: .tool,
+                            content: "（该工具调用被中断,未取得结果;补占位以保持消息结构良构。）",
+                            toolCallID: call.id))
                     }
                     toolInvocations.append(blocking.name)
                     pendingBlockToolCallID = blocking.id
@@ -471,10 +515,20 @@ actor LingShuAgentSession: LingShuAgentSessioning {
                 // 差距7-A:同回合无依赖工具经调度器执行(生产侧=并行降延迟);结果**与发起同序**返回,
                 // 据此补 tool 结果保持 OpenAI 协议良构(每个 tool_call 必有同 id 的 tool 响应)。
                 let outcomes = await toolDispatcher.dispatch(calls, tools: tools)
+                var answeredIDs = Set<String>()
                 for outcome in outcomes {
                     toolInvocations.append(outcome.name)
                     lastText = outcome.output
                     messages.append(.init(role: .tool, content: outcome.output, toolCallID: outcome.id))
+                    answeredIDs.insert(outcome.id)
+                }
+                // **取消恢复·孤儿根治(2026-06-22)**:飞行中取消(`lingshu_stop`)可能让调度器只返回部分结果——
+                // 给本回合**未拿到结果的 tool_call 当场补合成结果**,确保 assistant 声明的每个调用都有应答。
+                // 否则该回合的 `.terminal` 不变量检查就当场记 I1/I2(实测打断恢复 #2 仍泄漏 8 的真因:入口修复只防下一回合、防不住本回合终态)。
+                for call in calls where !answeredIDs.contains(call.id) {
+                    messages.append(.init(role: .tool,
+                        content: "（该工具调用被中断,未取得结果;补占位以保持消息结构良构。）",
+                        toolCallID: call.id))
                 }
                 if let steer = pendingSteer {
                     messages.append(.init(role: .user, content: steer))

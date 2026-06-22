@@ -70,9 +70,14 @@ extension LingShuState {
 
         taskExecutionRecords[index].finish(status: status, summary: summary)
         persistTaskExecutionRecords()
-        if status == .completed { recordBrainTaskCompleted() }   // 大脑评分:自主完成一个任务 +1
-        if status == .answered || status == .completed || status == .blocked {
-            markTaskSegmentFinished(recordID: recordID, blocked: status == .blocked)
+        rememberGoalExperienceIfNeeded(recordID: recordID, status: status)   // P1 记忆消费:目标终态→结构化经验沉淀进知识图谱(可检索)
+        if status == .completed || status == .verified { recordBrainTaskCompleted() }   // 大脑评分:自主完成一个任务 +1(verified=核验通过同样算)
+        // 收尾(终态或可续停):结束当前线程段、抓代码改动、起队列下一段、触发离线固化。
+        // 通用中枢 P2 真闭环:partial/failed/waitingForUser 也要收尾(否则线程卡住);未完成的(非完成/核验)按 blocked 计。
+        let finishesSegment: Set<LingShuTaskExecutionStatus> = [.answered, .completed, .verified, .blocked, .partial, .failed, .waitingForUser]
+        if finishesSegment.contains(status) {
+            let asSuccess = status == .completed || status == .verified || status == .answered
+            markTaskSegmentFinished(recordID: recordID, blocked: !asSuccess)
             captureCodeChanges(recordID: recordID)   // 代码任务:抓分支+未提交改动文件,落进记录供右侧面板展示
             DispatchQueue.main.async { [weak self] in
                 self?.startNextQueuedTaskIfAvailable()

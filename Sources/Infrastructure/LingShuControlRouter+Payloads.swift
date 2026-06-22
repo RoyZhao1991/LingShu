@@ -24,6 +24,7 @@ extension LingShuControlRouter {
             "loopVariant": state.agentLoopVariant.rawValue,   // classic=经典连续 / nested=嵌套分阶段
             "loopInvariantViolations": LingShuLoopInvariantTelemetry.total,   // 循环不变量累计违反数(架网遥测;soak/真机断言恒为0)
             "developmentFullAccess": state.developmentPhaseFullAccess,   // 开发阶段全权(系统授权门直接放行;发布版关=人工授权)
+            "goalSpecEnabled": state.goalSpecEnabled,   // P1 目标认知:新顶层目标先结构化理解(默认开;配置入口 lingshu_set_goalspec)
             "trustScore": state.trustScore,             // 系统就绪度(模型连通/通道就绪/近期验收合成)
             "brainScore": ["score": state.brainScore.score, "completed": state.brainScore.completed, "fallbacks": state.brainScore.fallbacks, "brain": state.brainScore.brainID],   // 顶栏「脑力」:自主完成+1/兜底−1/换脑归零
             "missionTitle": state.missionTitle,

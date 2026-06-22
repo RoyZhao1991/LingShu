@@ -33,6 +33,7 @@ final class LingShuBrowserController: NSObject, ObservableObject, WKNavigationDe
         config.mediaTypesRequiringUserActionForPlayback = []
         let view = WKWebView(frame: .zero, configuration: config)
         view.navigationDelegate = self
+        view.uiDelegate = self   // 处理 window.open 弹窗(第三方/OAuth 登录:Google/Apple/Microsoft 都靠它)
         view.allowsBackForwardNavigationGestures = true
         return view
     }
@@ -155,5 +156,58 @@ final class LingShuBrowserController: NSObject, ObservableObject, WKNavigationDe
         tabs[idx].title = webView.title?.isEmpty == false ? webView.title! : tabs[idx].title
         tabs[idx].url = webView.url?.absoluteString ?? tabs[idx].url
         tabs[idx].loading = loading
+    }
+}
+
+// MARK: - WKUIDelegate:弹窗 / 第三方登录 / JS 对话框
+//
+// **根治"灵枢浏览器做 Google 登录点了没反应"(2026-06-22)**:OAuth(Google/Apple/Microsoft/SSO)通过
+// `window.open` 打开授权弹窗,WKWebView 默认**不**新建弹窗 webView → window.open 返回 nil → 登录按钮点了无任何跳转。
+// 实现 `createWebViewWith` 用**传入的 configuration**(共享 process pool/cookie,弹窗才能 postMessage 回 opener)
+// 新建一个 tab 承载弹窗,返回它让 WebKit 把授权请求加载进去;弹窗 `window.close()` 时移除该 tab。
+extension LingShuBrowserController: WKUIDelegate {
+
+    func webView(_ webView: WKWebView,
+                 createWebViewWith configuration: WKWebViewConfiguration,
+                 for navigationAction: WKNavigationAction,
+                 windowFeatures: WKWindowFeatures) -> WKWebView? {
+        let popup = WKWebView(frame: .zero, configuration: configuration)
+        popup.navigationDelegate = self
+        popup.uiDelegate = self
+        popup.allowsBackForwardNavigationGestures = true
+        let id = UUID()
+        let urlStr = navigationAction.request.url?.absoluteString ?? "about:blank"
+        tabs.append(Tab(id: id, webView: popup, title: "登录…", url: urlStr, loading: true))
+        activeTabID = id
+        isPresented = true
+        // 同窗导航(target=_blank 但无 window 特性)时 WebKit 不会自动 load,这里兜底加载请求。
+        if navigationAction.targetFrame == nil, let url = navigationAction.request.url {
+            popup.load(URLRequest(url: url))
+        }
+        return popup
+    }
+
+    /// 弹窗 `window.close()`(OAuth 完成后常调)→ 关掉该 tab,切回前一个;空了关浏览器。
+    func webViewDidClose(_ webView: WKWebView) {
+        guard let idx = tabs.firstIndex(where: { $0.webView === webView }) else { return }
+        let closing = tabs.remove(at: idx)
+        closing.webView.navigationDelegate = nil
+        closing.webView.uiDelegate = nil
+        if activeTabID == closing.id { activeTabID = tabs.last?.id }
+        if tabs.isEmpty { isPresented = false }
+    }
+
+    /// JS alert/confirm/prompt:默认 WebKit 不弹会让某些登录流程卡住——给出合理默认(不阻塞)。
+    func webView(_ webView: WKWebView, runJavaScriptAlertPanelWithMessage message: String,
+                 initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping () -> Void) {
+        completionHandler()
+    }
+    func webView(_ webView: WKWebView, runJavaScriptConfirmPanelWithMessage message: String,
+                 initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping (Bool) -> Void) {
+        completionHandler(true)
+    }
+    func webView(_ webView: WKWebView, runJavaScriptTextInputPanelWithPrompt prompt: String,
+                 defaultText: String?, initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping (String?) -> Void) {
+        completionHandler(defaultText)
     }
 }
