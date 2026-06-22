@@ -52,7 +52,11 @@ extension LingShuState {
     func assembledExecutionGuidance(base: String?, taskRecordID: String?) -> String {
         let goalGuidance = goalSpec(for: taskRecordID)?.executionGuidance(base: base) ?? base
         let gapGuidance = gapAnalysis(for: taskRecordID)?.executionGuidance(base: goalGuidance) ?? goalGuidance
-        return goalExperienceGuidance(base: gapGuidance, taskRecordID: taskRecordID)
+        let expGuidance = goalExperienceGuidance(base: gapGuidance, taskRecordID: taskRecordID)
+        // P6+ 模块变体:把「执行策略」活跃变体追加进引导(自进化可热切换/回退的运行时槽位;基线空=不改)。
+        let addendum = executionStrategyAddendum()
+        guard !addendum.isEmpty else { return expGuidance }
+        return expGuidance.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? addendum : expGuidance + "\n\n" + addendum
     }
 
     /// 从任务记录蒸一条可复用教训(成功打法 / 要避开的坑 + 能力补齐复用线索)。
