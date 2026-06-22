@@ -123,13 +123,9 @@ extension LingShuState {
                 // 单靠它定时任务到点不触发。这里每拍(1s)在主线程廉价检查一次到点触发器(配合 fireDueTriggers 的追赶窗口,健壮)。
                 await MainActor.run {
                     self.fireScheduledTriggersIfDue(now: Date())
-                    // 执行中忙音也搭这趟**后台安全**车(UI coreTimer 在岗/自主被系统暂停,靠不住):处理中且不在朗读 → 每拍 busyTick(内部节流真响)。
-                    let processing = self.autonomousRunTask != nil || self.hasActiveModelCall || self.loopPhase.isActive
-                    if processing, self.voiceManager?.isSpeakingOrQueued != true {
-                        LingShuCueSound.busyTick()
-                    } else {
-                        LingShuCueSound.busyStop()
-                    }
+                    // 执行音统一调度也搭这趟**后台安全**车(UI coreTimer 在岗/自主被系统暂停,靠不住):
+                    // 卡授权界面→急促高音催授权;否则处理中→忙音。二者互斥不并发,见 executionAudioTick。
+                    self.executionAudioTick(isSpeaking: self.voiceManager?.isSpeakingOrQueued == true)
                     // 待机主动汇报:互动结束、空闲下来后,把攒着的后台子任务完成情况主动出声报给主人(也搭这趟后台安全车)。
                     self.deliverPendingReportsIfIdle()
                 }
@@ -141,6 +137,25 @@ extension LingShuState {
                 }
                 try? await Task.sleep(nanoseconds: 1_000_000_000)   // 1s 自驱(内部再按 tickInterval 节流)
             }
+        }
+    }
+
+    /// **执行音统一调度(前台 coreTimer + 后台自驱都走它)**:用户定调——
+    /// ① **卡在授权界面**(系统授权门弹窗 `pendingShellApproval` 在等你点)→ 急促、声调高的**断音**催授权;
+    /// ② 否则**处理中且不在朗读** → 柔和低**忙音**「嘟」。
+    /// **二者互斥、绝不并发**:授权态先 `busyStop()` 再走授权告警,离开授权态先 `authNeededStop()` 复位再判忙音。
+    func executionAudioTick(isSpeaking: Bool) {
+        let processing = autonomousRunTask != nil || hasActiveModelCall || loopPhase.isActive
+        switch LingShuCueSound.executionAudioDecision(stuckAtAuth: pendingShellApproval != nil, processing: processing, isSpeaking: isSpeaking) {
+        case .authAlert:
+            LingShuCueSound.busyStop()          // 隔离:授权态先停执行忙音,绝不并发
+            LingShuCueSound.authNeededTick()    // 急促高音断音催授权
+        case .busy:
+            LingShuCueSound.authNeededStop()    // 离开授权态:复位需授权告警
+            LingShuCueSound.busyTick()
+        case .silent:
+            LingShuCueSound.authNeededStop()
+            LingShuCueSound.busyStop()
         }
     }
 

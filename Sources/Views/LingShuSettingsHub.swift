@@ -75,11 +75,16 @@ struct LingShuSettingsHub: View {
                     LingShuModelGatewaySurface(state: state)
                 case .policy:
                     ScrollView {
-                        LingShuExecutionPolicySurface(state: state).padding(22)
+                        VStack(alignment: .leading, spacing: 24) {
+                            LingShuExecutionPolicySurface(state: state)
+                            Divider()
+                            LingShuPermissionMatrixView()   // #5 权限矩阵可视化
+                        }
+                        .padding(22)
                     }
                 case .residency:
                     ScrollView {
-                        LingShuTriggerSettingsView(triggerService: state.scheduledTriggers)
+                        LingShuTriggerSettingsView(state: state, triggerService: state.scheduledTriggers)
                             .padding(22)
                     }
                 case .skills:

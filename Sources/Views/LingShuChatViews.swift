@@ -130,6 +130,13 @@ struct ChatBubbleView: View {
                     }
                 }
 
+                // 多项确认表单(每事项一行各带选择菜单 + 末行"其他(自行输入)")。
+                if !message.isUser, !message.isLoading, let form = message.form {
+                    LingShuFormCard(form: form, resolved: message.formAnswers) { answers in
+                        state.submitFormAnswers(answers, for: message.id)
+                    }
+                }
+
                 if !message.isUser,
                    !message.isLoading,
                    let taskRecordID = message.taskRecordID,

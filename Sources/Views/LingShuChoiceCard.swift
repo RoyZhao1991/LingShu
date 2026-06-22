@@ -8,13 +8,9 @@ struct LingShuChoiceCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            if !prompt.question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                Text(prompt.question)
-                    .font(.system(size: 12.5, weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.7))
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-
+            // 不再在卡片里重渲染 question:它的内容已经在消息正文(message.text,走 LingShuMessageContentView
+            // 完整 Markdown 渲染)里完整呈现。卡片只放**可点击选项按钮**——否则会把带表格/加粗的正文用纯 Text
+            // 平铺出来(换行被 parse 的 joined(" ") 压没),格式全乱、还和正文重复(用户实测投屏回复格式错乱的真因)。
             ForEach(Array(prompt.options.enumerated()), id: \.offset) { index, option in
                 let isResolved = resolvedChoice != nil
                 let isPicked = resolvedChoice == option.label

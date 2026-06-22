@@ -35,6 +35,14 @@ extension LingShuState {
     ) async -> LingShuShellApprovalDecision {
         // 自发现高风险脚本首次运行:即使会话已"完全授权"也强制弹一次,把风险点摆给用户裁决(供应链红线)。
         let quarantine = quarantinedScriptHit(in: command)
+        // **开发阶段全权(用户拍板)**:系统授权门直接放行,不每次弹框。**例外**:未审第三方 skill 脚本(quarantine)
+        // 仍拦——那不是灵枢自身动作而是跑别人未审的代码(供应链红线,只增不减)。系统级敏感命令会放行但留醒目审计。
+        if quarantine == nil, developmentPhaseFullAccess {
+            if forceConfirm {
+                logEvent("⚠️ [开发全权] 自动放行系统级敏感命令(发布版会强制确认):\(String(command.prefix(140)))")
+            }
+            return .allowAlways
+        }
         if quarantine == nil, !forceConfirm, sessionShellAlwaysAllowed { return .allowAlways }
         if clarificationCenter.isNonInteractive() { return .deny }   // 无人值守:风险脚本/系统敏感操作同样安全拒绝
 
@@ -58,6 +66,23 @@ extension LingShuState {
             return (q.skillID, q.notes)
         }
         return nil
+    }
+
+    /// 开发阶段全权默认值:UserDefaults 显式覆盖优先,否则 DEBUG 构建开(开发期)、Release 关(发布后人工授权)。
+    nonisolated static func loadDevFullAccessDefault() -> Bool {
+        if let v = UserDefaults.standard.object(forKey: "lingshu.devFullAccess") as? Bool { return v }
+        #if DEBUG
+        return true
+        #else
+        return false
+        #endif
+    }
+
+    /// 切换开发阶段全权(持久化)。发布上线前置 false 即恢复"每次人工授权"。
+    func setDevelopmentPhaseFullAccess(_ on: Bool) {
+        developmentPhaseFullAccess = on
+        UserDefaults.standard.set(on, forKey: "lingshu.devFullAccess")
+        logEvent(on ? "已开启开发阶段全权(系统授权门直接放行)" : "已关闭开发阶段全权(恢复人工授权)")
     }
 
     /// 用户在授权弹窗上点选：清挂起、按需置「会话始终允许」、回传决定恢复协程。

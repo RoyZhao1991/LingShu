@@ -128,7 +128,7 @@ final class ConnectorRegistryTests: XCTestCase {
     }
 
     func testMCPTextExtraction() {
-        let result = LingShuMCPStdioClient.extractText(from: [
+        let result = LingShuMCPClient.extractText(from: [
             "content": [["type": "text", "text": "第一段"], ["type": "image"], ["type": "text", "text": "第二段"]]
         ])
         XCTAssertEqual(result, "第一段\n第二段")

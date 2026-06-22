@@ -9,7 +9,7 @@ import Foundation
 /// - 第 4 块:`tts_speak`(写入虚拟麦克风)
 @MainActor
 final class LingShuControlRouter {
-    private let state: LingShuState
+    let state: LingShuState   // 内部可见:载荷序列化拆到 LingShuControlRouter+Payloads.swift 扩展里读取
     static let serverName = "lingshu-control"
     static let serverVersion = "0.1.0"
     static let protocolVersion = "2024-11-05"
@@ -46,7 +46,8 @@ final class LingShuControlRouter {
         case "ping":
             return reply(id: id, result: [:])
         case "tools/list":
-            return reply(id: id, result: ["tools": Self.toolManifest])
+            // 控制/测试工具 + **灵枢具身工具(超越点:对外暴露身体给别的 agent 反向调用)**。
+            return reply(id: id, result: ["tools": Self.toolManifest + LingShuEmbodimentManifest.descriptors(from: embodimentTools())])
         case "tools/call":
             let name = params["name"] as? String ?? ""
             let arguments = params["arguments"] as? [String: Any] ?? [:]
@@ -314,6 +315,12 @@ final class LingShuControlRouter {
     ]
 
     // MARK: - 工具实现
+
+    /// 超越点:从全量 agent 工具过滤出对外暴露的具身工具(计算机控制/浏览器/语音/外设)。
+    /// 走标准执行策略 → 各 handler 内的系统授权/审批门照旧生效(安全红线不放松)。
+    private func embodimentTools() -> [LingShuAgentTool] {
+        LingShuEmbodimentManifest.filter(state.embodimentCandidateTools())
+    }
 
     private func callTool(name: String, arguments: [String: Any]) async -> (text: String, isError: Bool) {
         switch name {
@@ -591,6 +598,13 @@ final class LingShuControlRouter {
                 "registeredSources": state.externalSensory.availableSources.map { ["id": $0.id, "name": $0.displayName, "channel": $0.channel.rawValue] }
             ]), false)
         default:
+            // 超越点:外部 agent 调用灵枢**具身工具**(计算机控制/浏览器/语音/外设)→ 转发到真实 handler。
+            // 安全门照旧在各 handler 内(系统授权等);非具身名才报未知。
+            if let tool = LingShuEmbodimentManifest.tool(named: name, in: embodimentTools()) {
+                let argsJSON = (try? JSONSerialization.data(withJSONObject: arguments)).flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
+                let out = await tool.handler(argsJSON)
+                return (out, false)
+            }
             return ("未知工具：\(name)", true)
         }
     }
@@ -657,120 +671,8 @@ final class LingShuControlRouter {
         ]
     }
 
-    private func ledgerPayload() async -> [[String: Any]] {
-        await state.agentOrchestrator.ledger().map { entry in
-            [
-                "id": entry.id,
-                "objective": entry.objective,
-                "status": entry.status.rawValue,
-                "summary": entry.summary,
-                "blockedOn": entry.blockedOn ?? ""
-            ]
-        }
-    }
-
-    private func statusPayload() -> [String: Any] {
-        [
-            "coreState": state.coreStateDisplay,
-            "loopPhase": state.loopPhase.rawValue,   // 理解中/规划中/执行中/验收中(空=空闲)
-            "loopVariant": state.agentLoopVariant.rawValue,   // classic=经典连续 / nested=嵌套分阶段
-            "trustScore": state.trustScore,             // 系统就绪度(模型连通/通道就绪/近期验收合成)
-            "brainScore": ["score": state.brainScore.score, "completed": state.brainScore.completed, "fallbacks": state.brainScore.fallbacks, "brain": state.brainScore.brainID],   // 顶栏「脑力」:自主完成+1/兜底−1/换脑归零
-            "missionTitle": state.missionTitle,
-            "missionStatus": state.missionStatus,
-            "autonomousPhase": state.autonomousRun.phase.rawValue,
-            "autonomousObjective": state.autonomousRun.objective,
-            "autonomousStatusLine": state.autonomousRun.statusLine,
-            "standingPersonOnDuty": state.isStandingPersonOnDuty,
-            "autoReactArmed": state.autonomousAutoReactArmed,
-            "perceptionDigest": state.perceptionDigest,
-            "perceptionDebug": state.perceptionDebugLine,
-            "voiceListening": state.isListening,
-            "voiceWake": state.voiceWakeListeningEnabled,
-            "micSilentWarning": state.voiceManager?.micSilentWarning ?? "",   // 非空=麦克风没进音(权限/设备)
-            "micLastInputAgoSec": state.voiceManager.map { Int(Date().timeIntervalSince($0.lastInputBufferAt)) } ?? -1,
-            "previewState": [
-                "isPresented": state.previewController.isPresented,
-                "slideshow": state.previewController.slideshow,   // true=全屏演示模式
-                "pageIndex": state.previewController.pageIndex,
-                "pageCount": state.previewController.pageCount,
-                "title": state.previewController.title
-            ],
-            "recentSpoken": Array(state.recentSpokenLines.suffix(14)),   // 演示文字稿(核验对得上画面)
-            "chatCount": state.chatMessages.count,
-            "taskRecordCount": state.taskExecutionRecords.count,
-            "recentTaskRecords": state.taskExecutionRecords.prefix(8).map { record in
-                [
-                    "title": record.title,
-                    "status": record.status.rawValue,
-                    "artifactCount": record.artifacts.count,
-                    "artifacts": record.artifacts.map { $0.location }
-                ]
-            }
-        ]
-    }
-
-    /// 一条任务的 codex 式执行时间线 + 产出物 + 反馈(供 MCP inspect,免点开窗口看卡片)。
-    private func taskDetailPayload(recordID: String) -> [String: Any]? {
-        guard let record = state.taskExecutionRecordLookup.first(where: { $0.id == recordID }) else { return nil }
-        return [
-            "id": record.id,
-            "title": record.title,
-            "status": record.status.rawValue,
-            "summary": record.summary,
-            "feedback": state.taskRecordFeedback[record.id].map { $0 ? "up" : "down" } ?? "none",
-            "plan": record.plan.map { ["title": $0.title, "status": $0.status.rawValue] },
-            "designScore": record.designScore as Any,
-            "codeChanges": record.codeChanges.map { cc in
-                ["repoName": cc.repoName, "branch": cc.branch,
-                 "files": cc.files.map { ["status": $0.status, "label": $0.label, "path": $0.path] }]
-            } as Any,
-            "artifacts": record.artifacts.map { ["title": $0.title, "location": $0.location, "operation": ($0.operation ?? .created).rawValue] },
-            "messages": record.messages.map { message -> [String: Any] in
-                var object: [String: Any] = ["id": message.id, "actor": message.actor, "role": message.role, "kind": message.kind.rawValue, "text": message.text]
-                if let detail = message.detail { object["detail"] = Self.detailPayload(detail) }
-                if let undone = message.undone { object["undone"] = undone }
-                return object
-            }
-        ]
-    }
-
-    /// 结构化消息载荷序列化(toolCall/toolResult/fileEdit)——让 MCP 端能拿到命令/输出/diff 原文。
-    private static func detailPayload(_ detail: LingShuTaskExecutionDetail) -> [String: Any] {
-        switch detail {
-        case let .toolCall(tool, summary, arguments):
-            return ["type": "toolCall", "tool": tool, "summary": summary, "arguments": arguments]
-        case let .toolResult(tool, success, output):
-            return ["type": "toolResult", "tool": tool, "success": success, "output": output]
-        case let .fileEdit(path, operation, added, removed, diff):
-            return ["type": "fileEdit", "path": path, "operation": operation.rawValue, "added": added, "removed": removed, "diff": diff]
-        }
-    }
-
-    private func chatPayload(limit: Int) -> [[String: Any]] {
-        state.chatMessages.suffix(max(1, limit)).map { message in
-            [
-                "speaker": message.speaker,
-                "text": message.text,
-                "isUser": message.isUser,
-                "isLoading": message.isLoading,
-                "choices": message.choices?.options.map(\.label) ?? [],
-                "createdAt": ISO8601DateFormatter().string(from: message.createdAt)
-            ]
-        }
-    }
-
-    private func tracePayload(limit: Int) -> [[String: Any]] {
-        state.executionTrace.suffix(max(1, limit)).map { event in
-            [
-                "time": event.displayTime,
-                "kind": String(describing: event.kind),
-                "actor": event.actor,
-                "title": event.title,
-                "detail": event.detail
-            ]
-        }
-    }
+    // 只读载荷序列化(statusPayload/ledgerPayload/taskDetailPayload/chatPayload/tracePayload)
+    // 已拆到 LingShuControlRouter+Payloads.swift,保持本文件在 ≤800 行硬阈值内。
 
     // MARK: - 编解码辅助
 

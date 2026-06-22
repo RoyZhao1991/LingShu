@@ -20,7 +20,20 @@ enum LingShuChoiceParsing {
             }
         }
         guard options.count >= 2 else { return nil }
-        let q = questionLines.joined(separator: " ").trimmingCharacters(in: .whitespacesAndNewlines)
+        // **防"多问题被当成单选项"误渲染(用户实测:5 个确认问题被 flatten 成一个单选卡)**:
+        // 若这些"选项"本身大多是**问题**(以 ?/? 结尾),说明这是一张多事项确认清单、不是一道单选题——
+        // 返回 nil 不渲染单选卡(那会让人误以为"五选一")。这种应由模型走 ask_form 弹多字段表单(每项各自菜单)。
+        let questionLike = options.filter { let l = $0.label.trimmingCharacters(in: .whitespaces); return l.hasSuffix("?") || l.hasSuffix("？") }.count
+        if questionLike * 2 >= options.count { return nil }
+        // **防"交付报告/说明里的编号清单被误当选择卡"(2026-06-21 用户实测:分账验收报告的 8 条功能渲染成 8 个"选项")**:
+        // ① 报告/交付类文本(含 passed/pytest/验收/产出物/试算平衡 等信号)里的编号项是**说明**不是选项;
+        // ② 选项标签都很长(描述性,而非"接入/暂不/方案A"这类供选择的短词)=这是清单不是选择题。两者任一命中→不渲染选择卡。
+        let reportSignals = ["passed", "failed", "pytest", "验收", "产出物", "试算平衡", "balanced", "新增测试", "总用时", "0 failed"]
+        if reportSignals.contains(where: { text.contains($0) }) { return nil }
+        let avgLabelLen = options.map(\.label.count).reduce(0, +) / max(1, options.count)
+        if avgLabelLen > 14 { return nil }
+        // 保留换行(原来 joined(" ") 会把表格/分段压成一行);question 现不在卡片里渲染,但保持其内容良构。
+        let q = questionLines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
         return CodexRouteChoicePrompt(question: q, options: options)
     }
 

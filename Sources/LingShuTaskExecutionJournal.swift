@@ -129,6 +129,8 @@ struct LingShuCodeChangeSummary: Codable, Equatable, Sendable {
     var repoName: String
     var branch: String
     var files: [Change]
+    /// 仓库工作树根的绝对路径——供「审查」面板就地跑 `git diff` 拉真实 hunk(可选:旧记录解码缺省为 nil)。
+    var repoWorkingDir: String?
 
     struct Change: Codable, Equatable, Sendable, Identifiable {
         var id: String { path }

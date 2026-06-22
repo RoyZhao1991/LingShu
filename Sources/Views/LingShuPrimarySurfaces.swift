@@ -181,14 +181,9 @@ struct LingShuRootView: View {
         }
         .onReceive(coreTimer) { _ in
             state.tickCoreTimers()
-            // 执行中忙音(前台 coreTimer 这条路;在岗/自主时 coreTimer 会被系统暂停,那边由自主感知 1s 自驱 Task 驱动,见 AutonomousPerception)。
-            // 处理中(模型/LOOP/在岗回合在跑)且不在朗读 → 每拍 busyTick(内部按 ~2.4s 节流真响),一旦朗读/空闲即 busyStop。
-            let processing = state.autonomousRunTask != nil || state.hasActiveModelCall || state.loopPhase.isActive
-            if processing, !voice.isSpeakingOrQueued {
-                LingShuCueSound.busyTick()
-            } else {
-                LingShuCueSound.busyStop()
-            }
+            // 执行音统一调度(前台 coreTimer 这条路;在岗/自主时 coreTimer 被系统暂停,那边由自主感知 1s 自驱 Task 驱动)。
+            // 卡授权界面→急促高音催授权;否则处理中且不朗读→忙音。二者互斥不并发,见 executionAudioTick。
+            state.executionAudioTick(isSpeaking: voice.isSpeakingOrQueued)
         }
         .onChange(of: voice.isSpeaking) { _, speaking in
             if speaking { LingShuCueSound.busyStop() }   // 一开口朗读立刻停忙音(不等下一拍驱动)

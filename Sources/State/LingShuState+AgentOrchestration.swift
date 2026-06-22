@@ -34,12 +34,12 @@ extension LingShuState {
             // 主线程分诊派发的任务已**预映射**到自己的记录(dispatchIsolatedTask),复用之;否则(模型 spawn_task)新建一条。
             let recordID = agentSubTaskRecords[id] ?? createTaskExecutionRecord(for: objective)
             agentSubTaskRecords[id] = recordID
-            appendTaskRecordMessage(recordID, actor: "Agent循环", role: "派生子任务", kind: .router, text: "派生并行子任务:\(objective)")
+            appendTaskRecordMessage(recordID, actor: "灵枢", role: "派生子任务", kind: .router, text: "派生并行子任务:\(objective)")
         case .completed(let id, let objective, let summary):
             let recordID = agentSubTaskRecords[id]
             if recordID == blockedDispatchedRecordID { blockedDispatchedRecordID = nil }   // 收尾即解除"等回答"
             if let recordID {
-                appendTaskRecordMessage(recordID, actor: "子任务", role: "结果", kind: .result, text: summary)
+                appendTaskRecordMessage(recordID, actor: "灵枢", role: "结果", kind: .result, text: summary)
                 finishTaskRecord(recordID, status: .completed, summary: summary)
                 recordDeliverable(recordID: recordID, title: objective, summary: summary)   // 登记产出物供"运行起来/继续"接上
             }
@@ -50,7 +50,7 @@ extension LingShuState {
         case .blocked(let id, let objective, let question):
             let recordID = agentSubTaskRecords[id]
             if let recordID {
-                appendTaskRecordMessage(recordID, actor: "子任务", role: "卡住", kind: .warning, text: question)
+                appendTaskRecordMessage(recordID, actor: "灵枢", role: "卡住", kind: .warning, text: question)
                 blockedDispatchedRecordID = recordID   // 等用户回答→下条主输入直接续这条隔离会话(不重新分诊)
             }
             postOrchestratorChat(recordID: recordID, dispatched: "⏸ 卡住,需要你定:\(question)", spawned: "⏸ 子任务「\(objective)」卡住,需要你定:\(question)")
@@ -59,7 +59,7 @@ extension LingShuState {
             let recordID = agentSubTaskRecords[id]
             if recordID == blockedDispatchedRecordID { blockedDispatchedRecordID = nil }
             if let recordID {
-                appendTaskRecordMessage(recordID, actor: "子任务", role: "失败", kind: .warning, text: summary)
+                appendTaskRecordMessage(recordID, actor: "灵枢", role: "失败", kind: .warning, text: summary)
                 finishTaskRecord(recordID, status: .blocked, summary: summary)
             }
             postOrchestratorChat(recordID: recordID, dispatched: "⚠️ 未能自行收尾:\(summary)", spawned: "⚠️ 子任务「\(objective)」未能自行收尾:\(summary)")
@@ -69,7 +69,7 @@ extension LingShuState {
             _ = objective
             let recordID = agentSubTaskRecords[id]
             if let recordID {
-                appendTaskRecordMessage(recordID, actor: "子任务", role: "暂停", kind: .warning, text: "网络中断,已暂停:\(reason)")
+                appendTaskRecordMessage(recordID, actor: "灵枢", role: "暂停", kind: .warning, text: "网络中断,已暂停:\(reason)")
                 finishTaskRecord(recordID, status: .suspended, summary: "网络中断已暂停,联网后自动续跑。")
             }
             startNetworkRetryLoopIfNeeded()
@@ -78,7 +78,7 @@ extension LingShuState {
             let recordID = agentSubTaskRecords[id]
             if let recordID, let idx = taskExecutionRecords.firstIndex(where: { $0.id == recordID }) {
                 taskExecutionRecords[idx].status = .running
-                appendTaskRecordMessage(recordID, actor: "子任务", role: "续跑", kind: .router, text: "网络恢复,自动接着跑。")
+                appendTaskRecordMessage(recordID, actor: "灵枢", role: "续跑", kind: .router, text: "网络恢复,自动接着跑。")
                 persistTaskExecutionRecords()
             }
             _ = objective

@@ -409,6 +409,10 @@ struct ChatMessage: Identifiable, Codable, Equatable, Sendable {
     var attachmentNames: [String]?
     /// 是否是「上岗开场白」气泡:用于去重——每次上岗只保留一句,不让历史里的旧招呼越堆越多。Optional 向后兼容。
     var isStandingGreeting: Bool?
+    /// 多项确认表单(灵枢一次要主人确认多个事项时):每字段一行各带选择菜单;nil=普通消息。Optional 向后兼容。
+    var form: LingShuConfirmForm?
+    /// 主人提交的表单答案(key→值);非 nil=已提交,卡片置为已解决不再可改。
+    var formAnswers: [String: String]?
 
     init(
         id: UUID = UUID(),
@@ -422,7 +426,9 @@ struct ChatMessage: Identifiable, Codable, Equatable, Sendable {
         resolvedChoice: String? = nil,
         thinkingPreview: String? = nil,
         attachmentNames: [String]? = nil,
-        isStandingGreeting: Bool? = nil
+        isStandingGreeting: Bool? = nil,
+        form: LingShuConfirmForm? = nil,
+        formAnswers: [String: String]? = nil
     ) {
         self.id = id
         self.speaker = speaker
@@ -436,6 +442,8 @@ struct ChatMessage: Identifiable, Codable, Equatable, Sendable {
         self.thinkingPreview = thinkingPreview
         self.attachmentNames = attachmentNames
         self.isStandingGreeting = isStandingGreeting
+        self.form = form
+        self.formAnswers = formAnswers
     }
 }
 

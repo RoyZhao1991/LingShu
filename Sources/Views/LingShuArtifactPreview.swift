@@ -66,6 +66,19 @@ struct LingShuArtifactPreviewSheet: View {
     }
 }
 
+/// 无外壳的 inline 产出物渲染(供文件树/多模态面板就地嵌入;复用类型判定 + 各渲染器,不带 Sheet 的固定尺寸/工具栏)。
+struct LingShuInlineArtifactPreview: View {
+    let fileURL: URL
+    var body: some View {
+        switch LingShuArtifactPreviewKind(fileExtension: fileURL.pathExtension) {
+        case .web: LingShuWebView(fileURL: fileURL)
+        case .image: LingShuImagePreviewView(fileURL: fileURL)
+        case .media: LingShuMediaPreviewView(fileURL: fileURL)
+        case .quickLook: LingShuQuickLookView(fileURL: fileURL)
+        }
+    }
+}
+
 private enum LingShuArtifactPreviewKind {
     case web
     case image

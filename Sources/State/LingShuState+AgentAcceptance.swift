@@ -27,7 +27,17 @@ extension LingShuState {
         // 撞顶恢复(执行恢复力核心):一段推进用满 per-run 安全天花板却还没收尾,**不是失败**——
         // 若任务确有在制品(已落产出物 / 动过工具),把它当检查点,补一段全新预算让它接着做完 / 把崩溃修到跑通。
         let result = await recoverFromExhaustionIfNeeded(session: session, result: initial, taskRecordID: taskRecordID)
-        return await runVerificationLoop(session: session, result: result, userRequest: userRequest, taskRecordID: taskRecordID, artifactBaseline: artifactBaseline, trustReplyClaim: trustReplyClaim)
+        let verified = await runVerificationLoop(session: session, result: result, userRequest: userRequest, taskRecordID: taskRecordID, artifactBaseline: artifactBaseline, trustReplyClaim: trustReplyClaim)
+        // **收尾兜底(2026-06-21,清分系统实测根因)**:模型最后一步若是个静默 `run_command`(输出写进文件、stdout 为空),
+        // 收尾回复会退化成「✓ run_command:（无输出，退出码 0）」——任务真做完了、产出物也在,却把"无输出"丢给用户。
+        // 检测到这种占位收尾 + 任务确有产出物 → 用 `composeDeliveryMessage` 据产出物补一段像样的交付说明。
+        if case .completed(let text) = verified,
+           Self.isPlaceholderDelivery(text),
+           currentArtifactCount(taskRecordID) > 0 {
+            let composed = await composeDeliveryMessage(userRequest: userRequest, makerText: text, taskRecordID: taskRecordID)
+            return .completed(text: composed)
+        }
+        return verified
     }
 
     /// 本回合是否在"给主人看/演示"(互动):**预览正开着** 或 本回合**调过 `open_preview`/`present_fullscreen`**。
@@ -110,8 +120,12 @@ extension LingShuState {
         // 对 PPT 挑刺"需修正"→返工循环,把正在演示的回合卡在「结果验证」、还误导主人(演示≠交付一个待 QA 的文件)。
         // 要单独 QA 这个 PPT,主人会另说"检查一下这个PPT"(那才是纯文件交付的工作型回合)。
         if turnDidPresent(taskRecordID) { return result }
+        // 动作型任务也要过专家验收:有**真实动作工具成功执行**(控设备/操作电脑/控外设/浏览器…非读取元工具)
+        // 但没产文件的回合(如"开灯""下单到真平台")原来不触发验收 → 真做没做到没人核实。现一并送审。
+        // (注:run_command/curl 属元工具不计入——纯命令脚本壳无法确定性核实真实世界效果,需经真连接器/动作工具才计。)
+        let didRealAction = taskHadActionToolSuccess(taskRecordID: taskRecordID)
         guard case .completed = result,
-              producedRealArtifacts || claimsArtifact else { return result }
+              producedRealArtifacts || claimsArtifact || didRealAction else { return result }
         setLoopPhase(.verifying)   // 本体/状态栏显示「结果验证」(独立 verifier 核对产出物)
         let verifyCeiling = 8   // 安全天花板,非目标位
         // **非代码交付的返工时间预算(2026-06-17,防"PPT卡几分钟")**:PPT/文档这类没有确定性测试门的交付,
@@ -133,8 +147,14 @@ extension LingShuState {
                 return result
             }
             let (passed, critique) = await verifyAgentDeliverable(userRequest: userRequest, reply: Self.runResultText(result), taskRecordID: taskRecordID)
+            // **差距6·可见 checker**:把独立审查官(maker≠checker)从"藏在验收门里"提成**任务时间线里的命名角色卡**——
+            // 主人能看到「审查员」这个独立角色每轮的裁决(通过/需修正+理由),而不是只有一句隐形"验收通过"。对标 Codex 的命名 CHECKER。
+            appendTaskRecordMessage(taskRecordID, actor: "审查员", role: passed ? "审查·通过" : "审查·需修正(第\(round + 1)轮)",
+                                    kind: passed ? .result : .agent,
+                                    text: passed ? "🧑‍⚖️ 独立审查:✅ 通过——产出物达标(真实落盘 + 内容/版式/代码门核对无误)。"
+                                                 : "🧑‍⚖️ 独立审查:⚠️ 需修正 — \(String(critique.prefix(400)))")
             if passed {
-                appendTrace(kind: .result, actor: "验收", title: "通过", detail: "独立 verifier 核对产出物达标。")
+                appendTrace(kind: .result, actor: "审查员", title: "通过", detail: "独立 CHECKER 核对产出物达标。")
                 // 经过返工(round>0)才通过:maker 最后一轮文本是"逐条修正"的内部 QA 记录,
                 // 直接抛给用户就成了"驴唇不对马嘴"。把交付话术与返工文本解耦——另生成一句干净的面向用户交付说明。
                 if round > 0 {

@@ -124,6 +124,15 @@ actor LingShuAgentSession: LingShuAgentSessioning {
     /// 上下文历史窗口上限(非系统消息条数)。0=不裁剪。常驻主会话设上限,杜绝旧任务无限堆积污染新任务
     /// (例:被问"做自我介绍 PPT"却把几轮前的「人工智能发展简史.pptx」当素材塞进去)。
     let maxHistoryMessages: Int
+    /// 工具调度器(差距7-A·可替换模块):默认串行(经典行为零变更);`makeAgentSession` 生产侧注入并行实现降延迟。
+    private let toolDispatcher: any LingShuToolDispatching
+    /// 历史压缩器(差距4·可替换模块):nil=走内置经典「按条数」蒸馏路径(零变更兜底);生产侧注入 token 分层压缩器。
+    private let historyCompactor: (any LingShuHistoryCompacting)?
+    /// 压缩抽出的关键事实回灌口(差距4·超越):把丢弃段事实 remember 进知识图谱实现近无损。nil=不记(核心循环不依赖 Memory)。
+    private let factSink: (@Sendable ([String]) async -> Void)?
+    /// 当前向模型暴露的工具名集(差距7-B·延迟加载):nil=暴露全部(经典零变更);非 nil=只把集内工具的 schema 喂模型,
+    /// 全部 handler 仍注册可执行,search_tools 激活后下一回合即见(动态扩张)。
+    private let exposedToolNames: LingShuExposedToolSet?
     private(set) var messages: [LingShuAgentMessage]
     private(set) var turnsUsed = 0
     /// 按序记录工具调用名,便于可观测与测试。
@@ -138,6 +147,43 @@ actor LingShuAgentSession: LingShuAgentSessioning {
     /// 子会话/自主/测试不设 → 继续走非流式 `respond`,行为零变更。
     private var textDeltaSink: (@Sendable (String) async -> Void)?
 
+    /// 循环不变量违反记录(差距1·架网):回合边界检查到的违反进这里,fuzz/单测读它精确断言"本会话恒良构"。
+    /// 软断言——只记录不 crash;有上限防长跑无界增长。
+    private(set) var recordedInvariantViolations: [LingShuLoopInvariantViolation] = []
+    /// 本会话上一次循环退出的结构化原因码(差距1.3 遥测)。
+    private(set) var lastExitReason: LingShuAgentExitReason?
+
+    /// 回合边界不变量检查:构造快照 → 检查 → 记录到会话内列表 + 全局遥测。纯观测,绝不改流程/不 crash。
+    private func checkInvariants(at boundary: LingShuLoopBoundary) {
+        guard LingShuLoopInvariants.runtimeChecksEnabled else { return }
+        let snapshot = LingShuLoopStateSnapshot(
+            messages: messages,
+            isRunning: isRunning,
+            pendingBlockToolCallID: pendingBlockToolCallID,
+            hasPendingCorrection: pendingCorrection != nil,
+            maxHistoryMessages: maxHistoryMessages,
+            compactionBudget: historyCompactor?.budget   // 注入了压缩器→按其契约(条数/token)校验 I6;否则回退条数
+        )
+        let violations = LingShuLoopInvariants.check(snapshot, at: boundary)
+        guard !violations.isEmpty else { return }
+        recordedInvariantViolations.append(contentsOf: violations)
+        if recordedInvariantViolations.count > 128 {
+            recordedInvariantViolations.removeFirst(recordedInvariantViolations.count - 128)
+        }
+        LingShuLoopInvariantTelemetry.record(violations, boundary: boundary)
+        #if DEBUG
+        print("⚠️ [循环不变量] 会话\(id) @\(boundary): \(violations.map(\.description).joined(separator: "; "))")
+        #endif
+    }
+
+    /// runLoop 返回后(`defer isRunning=false` 已生效)记录终态不变量。统一三个入口(send/resume/continueLoop)共用。
+    /// 退出原因码由 runLoop 各 return 分支就地写 `lastExitReason`(同一 `.maxTurnsReached` 可来自停滞/只读空转/天花板/取消,需就地区分)。
+    @discardableResult
+    private func recordTerminal(_ result: LingShuAgentRunResult) -> LingShuAgentRunResult {
+        checkInvariants(at: .terminal(LingShuLoopTerminalKind(result)))
+        return result
+    }
+
     init(
         id: String,
         system: String? = nil,
@@ -146,7 +192,11 @@ actor LingShuAgentSession: LingShuAgentSessioning {
         model: any LingShuAgentModel,
         maxTurns: Int = 40,   // 安全天花板(防失控),非目标预算;目标达成/卡住/停滞才是真正的停止位
         maxHistoryMessages: Int = 0,   // 0=不裁剪(短命子会话);常驻主会话传正数设窗口
-        blockingToolNames: Set<String> = ["ask_user"]
+        blockingToolNames: Set<String> = ["ask_user"],
+        toolDispatcher: any LingShuToolDispatching = LingShuSerialToolDispatcher(),
+        historyCompactor: (any LingShuHistoryCompacting)? = nil,
+        factSink: (@Sendable ([String]) async -> Void)? = nil,
+        exposedToolNames: LingShuExposedToolSet? = nil
     ) {
         self.id = id
         self.tools = tools
@@ -154,6 +204,10 @@ actor LingShuAgentSession: LingShuAgentSessioning {
         self.maxTurns = max(1, maxTurns)
         self.maxHistoryMessages = max(0, maxHistoryMessages)
         self.blockingToolNames = blockingToolNames
+        self.toolDispatcher = toolDispatcher
+        self.historyCompactor = historyCompactor
+        self.factSink = factSink
+        self.exposedToolNames = exposedToolNames
         var seeded: [LingShuAgentMessage] = []
         if let system { seeded.append(.init(role: .system, content: system)) }
         seeded.append(contentsOf: initialMessages)   // 跨重启续上:历史对话 seed 进上下文
@@ -173,7 +227,8 @@ actor LingShuAgentSession: LingShuAgentSessioning {
         consumePendingBriefings() // 子任务简报先入上下文(在用户新输入之前)——主线程信息同步
         await compactHistoryIfNeeded()   // 回合边界:超窗口的早段**语义压缩成前情提要**(对标 CC auto-compaction),失败回退硬裁剪
         messages.append(.init(role: .user, content: userText))
-        return await runLoop()
+        checkInvariants(at: .afterCompaction)   // 不变量:压缩后历史在预算内且良构(I6+I1+I2)
+        return recordTerminal(await runLoop())
     }
 
     /// 子任务简报回灌(信息同步,非完整上下文):只把**摘要**塞进主线程,不搬子任务的完整 transcript。
@@ -231,6 +286,18 @@ actor LingShuAgentSession: LingShuAgentSessioning {
     /// 长会话不丢早先的决策/产物路径/已确认信息(对标 Claude Code 的 auto-compaction,补"硬丢中段"短板)。
     /// 提要作为 body 首条流转,下次溢出会被连同新内容再压缩=**滚动摘要**。蒸馏失败/为空 → 回退硬裁剪,绝不卡住。
     private func compactHistoryIfNeeded() async {
+        // 差距4·可替换模块:注入了压缩器(生产侧=token 分层 + 知识图谱无损召回)→ 走它;
+        // 抽出的关键事实经 factSink remember 进图谱(核心循环不直接依赖 Memory,保持模块解耦)。
+        if let compactor = historyCompactor {
+            if let result = await compactor.compact(messages: messages, model: model) {
+                messages = result.messages
+                if !result.extractedFacts.isEmpty, let sink = factSink {
+                    await sink(result.extractedFacts)
+                }
+            }
+            return
+        }
+        // 未注入 → 内置经典「按消息条数」整段蒸馏路径(零变更兜底)。
         guard maxHistoryMessages > 0 else { return }
         let systemCount = messages.prefix { $0.role == .system }.count
         let body = Array(messages[systemCount...])
@@ -259,13 +326,13 @@ actor LingShuAgentSession: LingShuAgentSessioning {
         }
         messages.append(.init(role: .tool, content: answer, toolCallID: pending))
         pendingBlockToolCallID = nil
-        return await runLoop()
+        return recordTerminal(await runLoop())
     }
 
     /// 重连后续跑(断网恢复用):**不注入任何新消息**,直接接着跑循环——上下文停在中断前的良构状态,
     /// 重发的就是中断那一步的模型调用。`step` 重置=新的一段预算(与 send/resume 一致)。
     func continueLoop() async -> LingShuAgentRunResult {
-        await runLoop()
+        recordTerminal(await runLoop())
     }
 
     /// 连续多少次发起完全相同的工具调用即判"原地打转"(停滞)。
@@ -305,6 +372,7 @@ actor LingShuAgentSession: LingShuAgentSessioning {
         while step < maxTurns {   // maxTurns = 安全天花板,非目标停止位
             // 用户停止:真停(任务取消)→ 诚实交还,不假装收尾。
             if Task.isCancelled {
+                lastExitReason = .userCancelled
                 return .maxTurnsReached(lastText: lastText.isEmpty ? "（已被用户停止）" : lastText)
             }
             // 回合边界采纳子任务简报(信息同步)+ 纠正(最高优先级 user 指令)。
@@ -312,33 +380,55 @@ actor LingShuAgentSession: LingShuAgentSessioning {
             _ = consumePendingCorrection()
             step += 1
             turnsUsed += 1
+            // 不变量:此刻上下文必须是良构 OpenAI 序列、无未应答 tool_call(I1+I2)——即将喂给模型。
+            checkInvariants(at: .beforeModelCall)
+            // 差距7-B:延迟加载时只把当前暴露集内的工具 schema 喂模型(全部 handler 仍可执行);nil=全暴露(零变更)。
+            let activeTools: [LingShuAgentTool]
+            if let exposed = exposedToolNames {
+                activeTools = tools.filter { exposed.contains($0.name) }
+            } else {
+                activeTools = tools
+            }
             // 设了 delta 接收口(仅主会话)→ 走流式,最终答复逐字回调进气泡;否则非流式(子会话/自主/测试,零变更)。
             let response: LingShuAgentModelResponse
             if let sink = textDeltaSink {
-                response = await model.respondStreaming(messages: messages, tools: tools, onTextDelta: sink)
+                response = await model.respondStreaming(messages: messages, tools: activeTools, onTextDelta: sink)
             } else {
-                response = await model.respond(messages: messages, tools: tools)
+                response = await model.respond(messages: messages, tools: activeTools)
             }
             switch response {
             case .failed(let reason):
                 // 基础设施中断(网络/网关不可达):**不收尾、不污染上下文**——绝不追加假的"调用失败"助手消息,
                 // 让 messages 原样停在中断前的良构状态(上一步若是工具循环,tool 结果已补齐)。
                 // 返回 .interrupted:上层据此把任务标"已暂停"并保留本会话,重连后 continueLoop() 重发这步模型调用即续上。
+                lastExitReason = .infraInterrupted
                 return .interrupted(reason: reason)
             case .text(let text):
                 messages.append(.init(role: .assistant, content: text))
                 // 模型自认收尾,但用户刚下了纠正 → 不收尾,带着纠正继续(纠正跑偏的"假收尾")。
                 if pendingCorrection != nil { continue }
+                lastExitReason = .normalCompletion
                 return .completed(text: text)
             case .toolCalls(let calls):
                 guard !calls.isEmpty else {
+                    lastExitReason = .normalCompletion
                     return .completed(text: lastText)
                 }
                 messages.append(.init(role: .assistant, content: "", toolCalls: calls))
-                // 阻塞工具:不执行,挂起等外部答案(human-in-the-loop)。
+                // 阻塞工具:挂起等外部答案(human-in-the-loop)。**先把同回合的其余非阻塞工具执行掉并补结果**——
+                // 否则它们成为永远没有 tool 结果的孤儿调用(I2:resume 只回填阻塞那条,其余仍未应答 → 下次喂模型即网关 400)。
+                // 这就是"不变量逼出来的正确性":阻塞前清干净本回合,留下的唯一 open 调用就是 pending 那条。
                 if let blocking = calls.first(where: { blockingToolNames.contains($0.name) }) {
+                    // 同回合非阻塞工具先执行掉补结果(经调度器,可并行),只留阻塞那条作唯一 open 调用(I2)。
+                    let nonBlocking = calls.filter { $0.id != blocking.id }
+                    let outcomes = await toolDispatcher.dispatch(nonBlocking, tools: tools)
+                    for outcome in outcomes {
+                        toolInvocations.append(outcome.name)
+                        messages.append(.init(role: .tool, content: outcome.output, toolCallID: outcome.id))
+                    }
                     toolInvocations.append(blocking.name)
                     pendingBlockToolCallID = blocking.id
+                    lastExitReason = .blockedAwaitingInput
                     return .blocked(question: Self.extractQuestion(from: blocking.argumentsJSON))
                 }
                 // 停滞检测:连续 N 次发起完全相同(同名+同参)的工具调用 = 原地打转。
@@ -355,6 +445,10 @@ actor LingShuAgentSession: LingShuAgentSessioning {
                         pendingSteer = "【系统纠偏】update_plan 这步反复失败,但它只是**可选的计划工具、不是任务本身**。别再调用它了——直接用 write_file / run_command / web_search 等把用户真正要的事做出来,完成后给出结果。"
                     } else {
                         // 卡在**真任务动作**上才诚实交还,且给结果+原因+下一步,不是空喊"走不通"。
+                        // 这一步的 assistant tool_calls **不执行**直接交还——必须给它们补上合成 tool 结果(I2),
+                        // 否则留下悬空的未应答调用,之后 send/resume 续接时网关 400。
+                        appendSyntheticToolResults(for: calls, note: "（已停止:反复尝试未推进,转交。）")
+                        lastExitReason = .stuckHandback
                         return .maxTurnsReached(lastText: "（我反复尝试「\(name)」\(Self.stuckRepeatThreshold) 次都没推进。最近结果:\(lastText.prefix(200))。我先停下,需要你确认一个关键点或给我缺的信息,我换条路继续。）")
                     }
                 }
@@ -374,16 +468,13 @@ actor LingShuAgentSession: LingShuAgentSessioning {
                     nudgedReadOnlyStall = true
                     pendingSteer = "【系统提醒】你已经连续 \(turnsSinceMutation) 步只在读取/查看、还没产出任何东西。掌握足够信息就**立刻动手产出**——要改/建文件就用 edit_file/write_file 真的改(别只 read_file/cat 反复看),纯问答就直接给最终答复。别再反复读同一份内容空转。"
                 }
-                for call in calls {
-                    toolInvocations.append(call.name)
-                    let result: String
-                    if let tool = tools.first(where: { $0.name == call.name }) {
-                        result = await tool.handler(call.argumentsJSON)
-                    } else {
-                        result = "错误:未知工具 \(call.name)"
-                    }
-                    lastText = result
-                    messages.append(.init(role: .tool, content: result, toolCallID: call.id))
+                // 差距7-A:同回合无依赖工具经调度器执行(生产侧=并行降延迟);结果**与发起同序**返回,
+                // 据此补 tool 结果保持 OpenAI 协议良构(每个 tool_call 必有同 id 的 tool 响应)。
+                let outcomes = await toolDispatcher.dispatch(calls, tools: tools)
+                for outcome in outcomes {
+                    toolInvocations.append(outcome.name)
+                    lastText = outcome.output
+                    messages.append(.init(role: .tool, content: outcome.output, toolCallID: outcome.id))
                 }
                 if let steer = pendingSteer {
                     messages.append(.init(role: .user, content: steer))
@@ -391,16 +482,27 @@ actor LingShuAgentSession: LingShuAgentSessioning {
                 // 强制收尾(在工具执行后判,保证 messages 良构可被验收/resume):提示过仍空转 → 工作已完成,
                 // 停止 maker 无限自测,**返回 .completed 交独立验收(checker)** 判定,而非无界空转或被撞顶误判异常。
                 if sawMutation, turnsSinceMutation >= Self.overValidationForceAt {
+                    lastExitReason = .overValidationForced
                     return .completed(text: lastText.isEmpty ? "（工作已完成,产出物已落盘,停止重复验证,交付独立验收。）" : lastText)
                 }
                 // 只读空转到顶仍没动手 → 诚实交还(不假装完成,因为确实没产出),换路或等用户给方向(兼容犹豫的弱模型)。
                 if !sawMutation, turnsSinceMutation >= Self.readOnlyStallForceAt {
+                    lastExitReason = .readOnlyStallHandback
                     return .maxTurnsReached(lastText: "（我连续 \(turnsSinceMutation) 步只在读取查看、没能动手产出——这步我判断不清,先停下。最近看到:\(lastText.prefix(160))。给我个方向或缺的信息,我换条路继续。）")
                 }
             }
         }
         // 撞到安全天花板(极少):同样诚实交还,不假装收尾。
+        lastExitReason = .maxTurnsCeiling
         return .maxTurnsReached(lastText: lastText.isEmpty ? "（已推进很多步仍未收敛，先停下交还以免空耗。）" : lastText)
+    }
+
+    /// 给一组**未执行就交还**的 tool_calls 补上合成 tool 结果,保持 OpenAI 协议良构(每个 tool_call 必有 tool 响应)。
+    /// 用于停滞交还等"放弃执行本回合调用"的分支——避免悬空未应答调用导致续接时网关报错。
+    private func appendSyntheticToolResults(for calls: [LingShuAgentToolCall], note: String) {
+        for call in calls {
+            messages.append(.init(role: .tool, content: note, toolCallID: call.id))
+        }
     }
 
     /// 从阻塞工具的 arguments JSON 抽出问题文本(取 question 字段,缺则用原文)。

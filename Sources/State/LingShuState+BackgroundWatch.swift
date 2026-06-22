@@ -19,7 +19,7 @@ extension LingShuState {
 
     /// shell 是否已预授权(完全授权会话 / 不需人工确认 / 完整授权独立运行)。
     var shellPreauthorized: Bool {
-        sessionShellAlwaysAllowed || !requireHumanApproval || (autonomousRun.isActive && autonomousRun.permissionLevel == .full)
+        developmentPhaseFullAccess || sessionShellAlwaysAllowed || !requireHumanApproval || (autonomousRun.isActive && autonomousRun.permissionLevel == .full)
     }
 
     /// **派发/派生的隔离子任务的执行策略**:继承父上下文的 shell 预授权。

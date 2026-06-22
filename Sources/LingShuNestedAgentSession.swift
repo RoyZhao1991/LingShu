@@ -38,6 +38,9 @@ actor LingShuNestedAgentSession: LingShuAgentSessioning {
     private let consumeInterrupt: @MainActor @Sendable () -> Void
     /// 长期记忆自动召回块(只在简单请求直通时注入 spine,不进规划文本):保留与经典一致的"每轮自动召回"能力。
     private let recallMemory: @MainActor @Sendable (String) async -> String
+    /// 统一自适应 harness 配置(骨架 #2):spine/各阶段 inner 据它建会话,吃齐与 .classic 同一套(并行调度/token压缩/
+    /// factSink/按脑力延迟加载)。nil=回退裸 `LingShuAgentSession`(向后兼容、测试默认)。
+    private let harness: LingShuHarnessConfig?
 
     // MARK: - 内部状态机
     private enum Phase: Equatable {
@@ -53,6 +56,11 @@ actor LingShuNestedAgentSession: LingShuAgentSessioning {
     private var interactionInner: LingShuAgentSession?   // 当前互动阶段的内层会话(续答疑/翻页时复用)
     private var activeInner: LingShuAgentSession?        // 当前在跑的内层会话(continueLoop/断网重连用)
     private var pipelineActive = false                  // 是否处在分阶段流水线中(决定 continueLoop 走法)
+    /// spine 观测面增量基线:`turnsUsed`/`toolInvocations` 必须**单调累加**(可观测计数器倒退=robustness bug,
+    /// 嵌套混沌测试实锤)。流水线阶段是"加"(`+= inner.turnsUsed`),故 spine 同步也必须"加增量"而非覆盖,
+    /// 否则跑过流水线(turnsUsed 累高)后再走 spine 直通会被 spine 的小计数覆盖、倒退。
+    private var spineLastTurns = 0
+    private var spineLastToolCount = 0
 
     // MARK: - 协议观测面
     private(set) var turnsUsed = 0
@@ -75,7 +83,8 @@ actor LingShuNestedAgentSession: LingShuAgentSessioning {
         setPhase: @escaping @MainActor @Sendable (LingShuLoopPhase) -> Void,
         isInterrupted: @escaping @MainActor @Sendable () -> Bool,
         consumeInterrupt: @escaping @MainActor @Sendable () -> Void,
-        recallMemory: @escaping @MainActor @Sendable (String) async -> String = { _ in "" }
+        recallMemory: @escaping @MainActor @Sendable (String) async -> String = { _ in "" },
+        harness: LingShuHarnessConfig? = nil
     ) {
         self.id = id
         self.system = system
@@ -91,6 +100,7 @@ actor LingShuNestedAgentSession: LingShuAgentSessioning {
         self.isInterrupted = isInterrupted
         self.consumeInterrupt = consumeInterrupt
         self.recallMemory = recallMemory
+        self.harness = harness
         self.messages = initialMessages
     }
 
@@ -280,14 +290,21 @@ actor LingShuNestedAgentSession: LingShuAgentSessioning {
 
     private func ensureSpine() -> LingShuAgentSession {
         if let spine { return spine }
-        let s = LingShuAgentSession(id: "\(id)-spine", system: system, initialMessages: initialMessages, tools: tools, model: model, maxTurns: maxTurns, maxHistoryMessages: maxHistoryMessages, blockingToolNames: blockingToolNames)
+        // 骨架 #2:经统一 harness 建 spine,吃齐与 .classic 同一套自适应能力;无 harness 则回退裸会话(兼容)。
+        let s = harness?.makeSession(id: "\(id)-spine", system: system, initialMessages: initialMessages, tools: tools,
+                                     model: model, maxTurns: maxTurns, maxHistoryMessages: maxHistoryMessages, blockingToolNames: blockingToolNames)
+            ?? LingShuAgentSession(id: "\(id)-spine", system: system, initialMessages: initialMessages, tools: tools,
+                                   model: model, maxTurns: maxTurns, maxHistoryMessages: maxHistoryMessages, blockingToolNames: blockingToolNames)
         spine = s
         return s
     }
 
     /// 阶段内层会话:全工具 + 同系统提示,但**新鲜上下文**(只带本阶段输入,前序产物经文本上下文交接)。
+    /// 同样经统一 harness 建(吃齐并行调度/按脑力延迟加载等),短命阶段 maxHistory=0 不压缩(原语义)。
     private func makeInner(idSuffix: String) -> LingShuAgentSession {
-        LingShuAgentSession(id: "\(id)-\(idSuffix)", system: system, tools: tools, model: model, maxTurns: maxTurns, blockingToolNames: blockingToolNames)
+        harness?.makeSession(id: "\(id)-\(idSuffix)", system: system, tools: tools,
+                             model: model, maxTurns: maxTurns, maxHistoryMessages: 0, blockingToolNames: blockingToolNames)
+            ?? LingShuAgentSession(id: "\(id)-\(idSuffix)", system: system, tools: tools, model: model, maxTurns: maxTurns, blockingToolNames: blockingToolNames)
     }
 
     /// 规划:独立一次性会话(无工具),解析为阶段列表(纯函数,容错兜底)。
@@ -301,8 +318,14 @@ actor LingShuNestedAgentSession: LingShuAgentSessioning {
     private func syncFromSpine(_ s: LingShuAgentSession) async {
         messages = await s.messages
         spineBlocked = await s.isBlocked
-        turnsUsed = await s.turnsUsed
-        toolInvocations = await s.toolInvocations
+        // turnsUsed / toolInvocations **只增量累加,绝不覆盖**(保证可观测计数器单调,见 spineLastTurns 注释)。
+        let spineTurns = await s.turnsUsed
+        if spineTurns > spineLastTurns { turnsUsed += spineTurns - spineLastTurns; spineLastTurns = spineTurns }
+        let spineTools = await s.toolInvocations
+        if spineTools.count > spineLastToolCount {
+            toolInvocations += spineTools[spineLastToolCount...]
+            spineLastToolCount = spineTools.count
+        }
         activeInner = s
     }
 

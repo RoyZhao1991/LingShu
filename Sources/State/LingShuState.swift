@@ -160,6 +160,12 @@ final class LingShuState: ObservableObject {
     @Published var localStreamingDialogueEnabled = true
     @Published var enableLocalAudit = true
     @Published var requireHumanApproval = true
+    /// **开发阶段全权(2026-06-21,用户拍板)**:系统授权门(run_command 审批)在开发期**直接放行、不每次弹框**=灵枢拿到最高权限;
+    /// 发布后回到人工授权。**DEBUG 构建默认开**(开发期=`build-app.sh debug`),**Release 默认关**(发布版人工授权);
+    /// 可经 UserDefaults `lingshu.devFullAccess` 覆盖 + `setDevelopmentPhaseFullAccess` 切换。
+    /// **唯一仍拦的红线**:未审第三方 skill 脚本(供应链 quarantine,不是灵枢自身动作,`未审代码不静默执行`只增不减);
+    /// 物理执行器每次确认是另一道硬件安全门、不在此门内。状态见 `lingshu_status.developmentFullAccess`。
+    @Published var developmentPhaseFullAccess: Bool = LingShuState.loadDevFullAccessDefault()
     // 计算机直接操作四肢(截屏/点击/键入)总开关:默认关,授权语义=用户显式开启 + 系统辅助功能授权(计划 §9)。
     // 独立运行「完整授权」档自动视为开启(完整电脑控制)。
     @Published var computerControlEnabled = UserDefaults.standard.bool(forKey: "lingshu.computerControlEnabled") {
@@ -271,6 +277,8 @@ final class LingShuState: ObservableObject {
     /// 记忆 v2 知识图谱(吸收 Obsidian:原子笔记 + 别名归一 + 双链 + 园丁自维护)。懒加载,从 vault 恢复;
     /// 召回 additive 进 recall_memory,dreaming 调 tend 自维护。详见 Sources/Memory/。
     lazy var knowledgeGraph = LingShuKnowledgeGraph()
+    /// 本机文件知识索引(第一刀:文件/文档/代码)。全本地、零上传(on-device 向量),按 opt-in 目录索引,供 recall_local 检索增强答案。
+    lazy var localKnowledgeIndex = LingShuFileKnowledgeIndex()
     /// 定时压缩(checkpoint)定时器。
     var memoryCompactionTimer: Timer?
 
@@ -433,6 +441,9 @@ final class LingShuState: ObservableObject {
     /// ask_choice 待解析的点选(气泡 id → 续接器):大脑用 ask_choice 弹可点选项时,handler 挂起在此等用户点击;
     /// 用户在选项卡片上点选 → selectRouteChoice 唤醒它、把所选项喂回在飞的循环(不另起输入)。
     var pendingChoiceResolvers: [UUID: (String) -> Void] = [:]
+    /// ask_form 待提交的多项确认表单(气泡 id → 续接器):大脑用 ask_form 弹多字段表单时挂起在此,
+    /// 用户填完点「提交」→ submitFormAnswers 唤醒它、把各字段答案喂回在飞的循环。
+    var pendingFormResolvers: [UUID: ([String: String]) -> Void] = [:]
     /// P3 沙箱:apply_skill 物化过的 skill 脚本路径 → 该 skill 声明的权限(P1)。run_command 跑到这些脚本时,
     /// 按声明权限(+工作目录写,让生成器能产出)经 sandbox-exec 关进受限子进程,而非无沙箱裸跑。无声明=最小权限。
     var materializedSkillScripts: [String: LingShuPluginPermissions] = [:]

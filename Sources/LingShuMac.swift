@@ -158,6 +158,10 @@ struct LingShuMacApp: App {
                 LingShuMainActorWatchdog.shared.start(state: state)
                 // 后台预热主 agent 会话(含记忆蒸馏),消除首条消息的蒸馏延迟。
                 Task { _ = await state.mainAgentSession() }
+                // 常驻全局入口:⌥Space 唤起"问/找/做"快速面板(本机知识中枢)。
+                LingShuQuickAskController.shared.install(state: state)
+                // 本机知识 FSEvents 自动增量:opt-in 目录文件一变就增量重索引。
+                LingShuFolderWatcher.shared.start(state: state)
             }
         }
         .windowResizability(.contentMinSize)
@@ -173,6 +177,9 @@ struct LingShuMacApp: App {
                 Text("定时任务：\(enabledTriggers) 个待触发")
             }
             Divider()
+            Button("快速提问 / 找东西 (⌥Space)") {
+                LingShuQuickAskController.shared.toggle()
+            }
             Button("打开主窗口") {
                 NSApp.setActivationPolicy(.regular)
                 LingShuWindowPlacement.bringWindowsToMainScreen()

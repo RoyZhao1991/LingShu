@@ -4,10 +4,30 @@ import AppKit
 struct TaskExecutionRecordSheet: View {
     @ObservedObject var state: LingShuState
     @Environment(\.dismiss) private var dismiss
+    /// 选中的参与 agent(nil=全部):点参与方过滤栏里某个 agent → 时间线只看它的对话。差距6 可见性落到子页面。
+    @State private var selectedAgent: String?
+    /// 多模态工作区面板是否展开铺满(隐藏左侧时间线)。
+    @State private var workspaceExpanded = false
+    /// 是否隐藏右侧多模态面板(对齐 Codex 右栏可隐藏):隐藏后时间线独占整窗。
+    @State private var panelHidden = false
 
     // 从 state 实时取记录:执行流/diff/追问续跑都会即时反映到窗口。
     private var record: LingShuTaskExecutionRecord? { state.selectedTaskRecord }
     private var lineageRecords: [LingShuTaskExecutionRecord] { state.selectedTaskRecordLineage }
+
+    /// 真正参与本任务的 agent 列表(按出场顺序去重 + 各自消息数)——参与方过滤栏的数据。
+    /// 排除**内部机制标签**(Agent循环/中枢/系统是循环/路由的实现细节,不是参与的 agent)和用户本人(你)。
+    private static let nonAgentActors: Set<String> = ["你", "Agent循环", "中枢", "系统", "编排"]
+    private func agentList(_ record: LingShuTaskExecutionRecord) -> [(name: String, count: Int)] {
+        var order: [String] = []; var counts: [String: Int] = [:]
+        for m in record.messages {
+            let a = m.actor.trimmingCharacters(in: .whitespaces)
+            guard !a.isEmpty, !Self.nonAgentActors.contains(a) else { continue }
+            if counts[a] == nil { order.append(a) }
+            counts[a, default: 0] += 1
+        }
+        return order.map { ($0, counts[$0] ?? 0) }
+    }
 
     var body: some View {
         Group {
@@ -53,6 +73,19 @@ struct TaskExecutionRecordSheet: View {
 
                 Spacer()
 
+                // 右栏显隐切换(对齐 Codex 可隐藏右侧面板):隐藏后时间线独占整窗。
+                Button {
+                    withAnimation(.easeInOut(duration: 0.16)) { panelHidden.toggle() }
+                } label: {
+                    Image(systemName: panelHidden ? "sidebar.right" : "rectangle.righthalf.inset.filled")
+                        .font(.system(size: 13, weight: .bold))
+                        .foregroundStyle(panelHidden ? .white.opacity(0.5) : Color.lingHolo)
+                        .frame(width: 30, height: 30)
+                        .background(Color.white.opacity(0.07), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                }
+                .buttonStyle(.plain)
+                .help(panelHidden ? "显示右侧面板" : "隐藏右侧面板")
+
                 Button {
                     dismiss()
                 } label: {
@@ -68,18 +101,24 @@ struct TaskExecutionRecordSheet: View {
             .background(Color.black.opacity(0.72))
 
             HStack(spacing: 0) {
-                VStack(spacing: 0) {
-                    timelineColumn(record: record)
-                    Divider().overlay(Color.white.opacity(0.08))
-                    // 窗口内追问 + 模型选择 + 反馈(codex 式聊天窗口)。
-                    TaskWindowFooter(state: state, recordID: record.id)
+                // 左时间线:面板展开铺满时隐藏(给浏览器/终端/文件树宽度);面板隐藏时则始终显示、独占整窗。
+                if !workspaceExpanded || panelHidden {
+                    VStack(spacing: 0) {
+                        agentFilterBar(record: record)
+                        timelineColumn(record: record)
+                        Divider().overlay(Color.white.opacity(0.08))
+                        // 窗口内追问 + 模型选择 + 反馈(codex 式聊天窗口)。
+                        TaskWindowFooter(state: state, recordID: record.id)
+                    }
+                    if !panelHidden {
+                        Divider().overlay(Color.white.opacity(0.1))
+                    }
                 }
-                Divider()
-                    .overlay(Color.white.opacity(0.1))
-                // 统一侧栏:所有任务都用 TaskDevToolsPanel(目标/任务摘要/进度/产出物);
-                // 「Git 工具」段仅开发任务显示,交付任务(PPT 等)自动隐藏。
-                TaskDevToolsPanel(state: state, record: record, lineageRecords: lineageRecords)
-                    .frame(width: 300)
+                // 右侧多模态面板:概览/审查/文件/浏览器/终端 一键切;可经标题栏按钮整列隐藏。
+                if !panelHidden {
+                    LingShuWorkspacePanel(state: state, record: record, lineageRecords: lineageRecords, expanded: $workspaceExpanded)
+                        .frame(width: workspaceExpanded ? nil : 460)
+                }
             }
         }
         .frame(minWidth: 1020, minHeight: 620)
@@ -95,6 +134,42 @@ struct TaskExecutionRecordSheet: View {
         .foregroundStyle(Color.lingHoloAlt.opacity(0.9))
         .padding(.horizontal, 7).padding(.vertical, 2)
         .background(Color.lingHoloAlt.opacity(0.12), in: Capsule())
+    }
+
+    /// 参与方过滤栏:列出真正参与本任务的 agent(命名角色/审查员/工具/中枢…),点一个 → 时间线只看它的对话。
+    @ViewBuilder
+    private func agentFilterBar(record: LingShuTaskExecutionRecord) -> some View {
+        let agents = agentList(record)
+        if agents.count > 1 {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 6) {
+                    agentChip("全部", icon: "person.3.fill", count: record.messages.count, selected: selectedAgent == nil) { selectedAgent = nil }
+                    ForEach(agents, id: \.name) { a in
+                        agentChip(a.name, icon: "person.fill", count: a.count, selected: selectedAgent == a.name) {
+                            selectedAgent = (selectedAgent == a.name) ? nil : a.name
+                        }
+                    }
+                }
+                .padding(.horizontal, 14).padding(.vertical, 8)
+            }
+            .background(Color.black.opacity(0.4))
+            .overlay(alignment: .bottom) { Divider().overlay(Color.white.opacity(0.08)) }
+        }
+    }
+
+    private func agentChip(_ name: String, icon: String, count: Int, selected: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 5) {
+                Image(systemName: icon).font(.system(size: 8.5, weight: .bold))
+                Text(name).font(.system(size: 11, weight: .semibold)).lineLimit(1)
+                Text("\(count)").font(.system(size: 9.5, weight: .bold, design: .monospaced)).opacity(0.7)
+            }
+            .foregroundStyle(selected ? Color.black.opacity(0.85) : .white.opacity(0.82))
+            .padding(.horizontal, 9).padding(.vertical, 4)
+            .background(selected ? Color.lingHolo : Color.white.opacity(0.07), in: Capsule())
+        }
+        .buttonStyle(.plain)
+        .help("只看「\(name)」的对话")
     }
 
     private func timelineColumn(record: LingShuTaskExecutionRecord) -> some View {
@@ -137,8 +212,13 @@ struct TaskExecutionRecordSheet: View {
                         // 计划 / 任务摘要 / 产出物 一律移到右侧侧栏(TaskDevToolsPanel);
                         // 左栏对**所有**任务(开发与交付统一)只留对话叙述(据用户反馈 2026-06-15)。
 
-                        ForEach(record.messages) { message in
+                        let shownMessages = selectedAgent == nil ? record.messages : record.messages.filter { $0.actor == selectedAgent }
+                        ForEach(shownMessages) { message in
                             TaskExecutionMessageRow(message: message, state: state, recordID: record.id)
+                        }
+                        if shownMessages.isEmpty {
+                            Text("「\(selectedAgent ?? "")」这个参与方在本任务里还没有消息。")
+                                .font(.system(size: 12, weight: .medium)).foregroundStyle(.white.opacity(0.4))
                         }
 
                         Color.clear

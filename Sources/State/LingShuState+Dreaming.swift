@@ -77,6 +77,9 @@ extension LingShuState {
         //    保证每次 dreaming 都会维护知识图谱(衰减/补链/剪枝)。全程 guarded,失败只跳过。详见 +KnowledgeGraphDreaming。
         await consolidateKnowledgeGraph()
 
+        // 0.5 本机知识轨(②):把被 recall_local 高频命中的本机内容蒸馏成离散事实并入图谱(放早段、独立于下面早返回)。
+        await distillFrequentLocalKnowledge()
+
         // 1. 回放样本:终态的交付型任务(完成=成功;未达标/异常=失败,用于算通过率)。热 + 冷一起看。
         let samples: [LingShuDreamingConsolidator.Sample] = taskExecutionRecordLookup.compactMap { record in
             // 用户点踩(👎)的输出不当成功样本——别从用户不满意的产出里学经验。

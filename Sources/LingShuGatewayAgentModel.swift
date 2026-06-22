@@ -17,6 +17,28 @@ final class LingShuGatewayAgentModel: LingShuAgentModel, @unchecked Sendable {
     /// 让执行流像 codex 一样可读(我观察到X→打算做Y→为什么)。@unchecked Sendable 持有。
     var onReasoning: (@Sendable (String) -> Void)?
 
+    /// #1·模型通道续接状态(锁保护):上回合会话签名 + 上回合网关返回的原生续接 id。
+    /// 据此判"本回合是否干净追加",决定续接模式(改写过历史则降级 prefixStable),并在 native 模式带上 id。
+    private let channelLock = NSLock()
+    private var lastSignature: [String] = []
+    private var lastResponseId: String?
+
+    /// 算本回合该带的续接 token + 本回合签名(供成功后回写)。默认 provider(无状态/前缀缓存)→ nil,行为零变更。
+    private func continuationPlan(for messages: [LingShuAgentMessage]) -> (token: String?, signature: [String]) {
+        let sig = LingShuModelChannelStrategy.signature(messages)
+        channelLock.lock(); let prev = lastSignature; let lastId = lastResponseId; channelLock.unlock()
+        let clean = LingShuModelChannelStrategy.isCleanContinuation(previous: prev, current: sig)
+        let mode = LingShuModelChannelStrategy.mode(provider: provider, didRewriteContext: !clean)
+        return (LingShuModelChannelStrategy.continuationToken(mode: mode, lastResponseId: lastId), sig)
+    }
+    /// 成功收到响应后回写:更新签名 + 捕获网关返回的原生续接 id(供下回合 native 链上)。
+    private func recordChannel(signature: [String], replyToken: String?) {
+        channelLock.lock()
+        lastSignature = signature
+        if let t = replyToken, !t.isEmpty { lastResponseId = t }
+        channelLock.unlock()
+    }
+
     init(
         client: LingShuRemoteModelClient,
         provider: String,
@@ -40,6 +62,7 @@ final class LingShuGatewayAgentModel: LingShuAgentModel, @unchecked Sendable {
     func respond(messages: [LingShuAgentMessage], tools: [LingShuAgentTool]) async -> LingShuAgentModelResponse {
         let conversation = Self.sanitizeToolCallSequence(messages.map(Self.toModelMessage))
         let toolDefs = tools.map(Self.toToolDefinition)
+        let plan = continuationPlan(for: messages)   // #1:原生续接(支持的通道+干净追加)或 nil(无状态/已改写,行为零变更)
         let request = LingShuRemoteModelRequest(
             provider: provider,
             model: model,
@@ -51,7 +74,7 @@ final class LingShuGatewayAgentModel: LingShuAgentModel, @unchecked Sendable {
             temperature: temperature,
             stream: false,
             timeout: timeout,
-            continuationToken: nil,
+            continuationToken: plan.token,
             conversationMessages: conversation,
             tools: toolDefs
         )
@@ -63,6 +86,7 @@ final class LingShuGatewayAgentModel: LingShuAgentModel, @unchecked Sendable {
             if Task.isCancelled { return .text("（本轮已被取消）") }
             do {
                 let reply = try await client.send(request)
+                recordChannel(signature: plan.signature, replyToken: reply.continuationToken)   // #1:捕获原生续接 id 供下回合链上
                 // 前缀缓存可观测:本轮命中 + **累计命中率**(命中率掉=前缀被打乱,立刻看得见)。每次调用都记(含未命中,口径才准)。
                 if let prompt = reply.promptTokens {
                     let snap = LingShuPrefixCacheMeter.shared.record(prompt: prompt, cached: reply.cachedTokens ?? 0)
@@ -104,14 +128,16 @@ final class LingShuGatewayAgentModel: LingShuAgentModel, @unchecked Sendable {
             return await respond(messages: messages, tools: tools)
         }
         if Task.isCancelled { return .text("（本轮已被取消）") }
+        let plan = continuationPlan(for: messages)   // #1:同 respond,原生续接或 nil
         let request = LingShuRemoteModelRequest(
             provider: provider, model: model, endpoint: endpoint, protocolName: protocolName,
             apiKey: apiKey, systemPrompt: "", userPrompt: "", temperature: temperature,
-            stream: true, timeout: timeout, continuationToken: nil,
+            stream: true, timeout: timeout, continuationToken: plan.token,
             conversationMessages: Self.sanitizeToolCallSequence(messages.map(Self.toModelMessage)), tools: tools.map(Self.toToolDefinition)
         )
         do {
             let reply = try await client.streamAgent(request, onContentDelta: onTextDelta)
+            recordChannel(signature: plan.signature, replyToken: reply.continuationToken)
             if let prompt = reply.promptTokens {
                 let snap = LingShuPrefixCacheMeter.shared.record(prompt: prompt, cached: reply.cachedTokens ?? 0)
                 lingShuControlLog("prefix-cache: 本轮 hit=\(reply.cachedTokens ?? 0)/\(prompt) (stream) | 累计命中率 \(snap.ratePercent)% (\(snap.totalCached)/\(snap.totalPrompt), \(snap.calls)次) | \(provider) \(model)")
@@ -139,32 +165,43 @@ final class LingShuGatewayAgentModel: LingShuAgentModel, @unchecked Sendable {
 
     // MARK: - 类型互转
 
-    /// **自愈消息结构**:OpenAI/DeepSeek 协议要求每个带 `tool_calls` 的 assistant 消息后,必须紧跟对应**每个 tool_call_id**的 tool 结果。
-    /// 中途插话/续跑/历史裁剪等若让某次 tool_calls 没补齐结果(实测:发反馈时插到工具调用中间),严格服务端(DeepSeek)会
-    /// 400 invalid_request,且被外层误判成"网络中断"无限重试刷屏。这里在发送前补齐:凡缺失结果的 tool_call_id 补一条占位 tool 消息。
+    /// **自愈消息结构(发送前最后一道良构闸,2026-06-21 补双向)**:OpenAI/DeepSeek 协议要求
+    /// ① 每个带 `tool_calls` 的 assistant 后必须紧跟对应**每个 tool_call_id**的 tool 结果;
+    /// ② 每条 `tool` 结果必须对应某个**更早 assistant 声明过的** tool_call_id(否则 400「tool must follow tool_calls」)。
+    /// 中途插话/硬取消/续跑/历史裁剪/seeding 都可能破坏这两条。这里在序列化前一次修齐:
+    /// **缺结果的 tool_call → 补占位**;**孤儿 tool 结果(无对应声明)→ 丢弃**。让任何来源的消息数组都不会把 400 发出去。
+    /// (架网在会话层校验,这里是序列化边界的兜底闸——堵住"会话层看着合法、但取消/seeding 引入的孤儿溜到网关"的漏检。)
     static func sanitizeToolCallSequence(_ messages: [LingShuModelMessage]) -> [LingShuModelMessage] {
         var result: [LingShuModelMessage] = []
         result.reserveCapacity(messages.count)
+        var declared = Set<String>()   // 至此所有 assistant 声明过的 tool_call id
         var i = 0
         while i < messages.count {
             let m = messages[i]
-            result.append(m)
-            if m.role == "assistant", let calls = m.toolCalls, !calls.isEmpty {
-                var provided = Set<String>()
-                var j = i + 1
-                while j < messages.count, messages[j].role == "tool" {
-                    result.append(messages[j])
-                    if let id = messages[j].toolCallID { provided.insert(id) }
-                    j += 1
-                }
-                for call in calls where !provided.contains(call.id) {
-                    result.append(LingShuModelMessage(role: "tool",
-                        content: "(该工具调用未补齐结果,占位以保证消息结构合法)", toolCalls: nil, toolCallID: call.id))
-                }
-                i = j
-            } else {
+            // ② 孤儿 tool 结果:toolCallID 没被任何更早的 assistant tool_calls 声明 → 丢弃。
+            if m.role == "tool" {
+                if let id = m.toolCallID, declared.contains(id) { result.append(m) }
                 i += 1
+                continue
             }
+            result.append(m)
+            guard m.role == "assistant", let calls = m.toolCalls, !calls.isEmpty else { i += 1; continue }
+            calls.forEach { declared.insert($0.id) }
+            // ① 收紧随后的 tool 结果(只收已声明的;紧跟的孤儿也丢),缺的补占位。
+            var provided = Set<String>()
+            var j = i + 1
+            while j < messages.count, messages[j].role == "tool" {
+                let tm = messages[j]
+                if let id = tm.toolCallID, declared.contains(id) {
+                    result.append(tm); provided.insert(id)
+                }
+                j += 1
+            }
+            for call in calls where !provided.contains(call.id) {
+                result.append(LingShuModelMessage(role: "tool",
+                    content: "(该工具调用未补齐结果,占位以保证消息结构合法)", toolCalls: nil, toolCallID: call.id))
+            }
+            i = j
         }
         return result
     }

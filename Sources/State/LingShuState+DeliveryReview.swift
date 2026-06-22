@@ -29,16 +29,41 @@ extension LingShuState {
         let runGate = codeTaskRunEvidence(taskRecordID: taskRecordID, codeFiles: codeFiles)
         // 运行门只在「真尝试过构建/运行且最近一次崩了」时拦(runGate.attempted && !runGate.clean);从没跑过程序不单独拦(交测试门)。
         let runGateBlocks = runGate.attempted && !runGate.clean
-        let codeGatePassed = codeFiles.isEmpty || (testGate.passed && !runGateBlocks)
+        // **能力加固·验收门校准(2026-06-21,根治"springboot 脚手架编译成功却'未能自行收尾'撞顶返工")**:
+        // 确定性成功证据**多形态择一**即可,不再"非有单测全绿不可"——
+        // ① 有测试且全绿 + 运行不崩;或 ② **真把程序构建/运行起来且没崩**(脚手架/构建/可运行程序"建到能跑"就是成功,
+        //    很多工程没有也不需要单测)。但**两者都没有**(只写了文件、从没构建/运行/测试)仍判未达标:必须有确定性验证,
+        //    不许"声称写好了"就收。零关键词、不挑任务类型,纯看确定性证据。
+        let ranWithVisibleOutput = codeTaskHasVisibleRunOutput(taskRecordID: taskRecordID)
+        let codeGatePassed = LingShuVerifierGate.codeDeterministicGatePasses(
+            hasCodeFiles: !codeFiles.isEmpty, testsGreen: testGate.passed, ranWithVisibleOutput: ranWithVisibleOutput, runCrashed: runGateBlocks)
+
+        // **差距2:按交付物类型 gate 贵 LLM 评审**(确定性门照跑、只省 LLM 自评)。纯代码交付——确定性门(测试/运行)
+        // 已**权威定正确性**:过则直接通过、跳过冗余 LLM(省一次贵调用 + 往返延迟,差距2/7);不过则按确定性失败直接返工。
+        // 主观交付物(PPT/文档)或代码+主观混合 → 仍跑 LLM(事实/版式/完整性是主观维度,下方继续)。
+        switch LingShuVerifierGate.decide(codeFileCount: codeFiles.count,
+                                          hasSubjectiveArtifact: LingShuVerifierGate.hasSubjectiveArtifact(realFilePaths: realFiles),
+                                          codeGatePassed: codeGatePassed) {
+        case .skipPassedByDeterministicGate:
+            appendTrace(kind: .result, actor: "验收", title: "确定性门通过·跳过LLM评审", detail: "纯代码交付:测试全绿+运行起来+跑出可见结果,确定性门已定正确性,省一次贵 LLM 自评。")
+            return (true, "确定性代码门通过(测试全绿 + 运行起来 + 跑出可见结果),跳过冗余 LLM 评审。")
+        case .skipFailedByDeterministicGate:
+            appendTrace(kind: .warning, actor: "验收", title: "确定性门未过·跳过LLM评审", detail: "纯代码交付确定性门失败,直接按失败反馈返工。")
+            return (false, codeGateFailureReason(testGate: testGate, runGate: runGate, runGateBlocks: runGateBlocks))
+        case .runLLMReview:
+            break
+        }
+
         let testGateBlock: String
         if codeFiles.isEmpty {
             testGateBlock = "代码门:本次非代码交付,跳过。"
         } else {
             let testLine = testGate.passed ? "✅ \(testGate.detail)" : "❌ \(testGate.detail)"
             let runLine = runGateBlocks ? "❌ \(runGate.detail)" : "✅ \(runGate.detail)"
+            let outputLine = ranWithVisibleOutput ? "✅ 已跑出可见结果" : "❌ 还没看到真实运行结果(疑似只编译/空跑无输出)"
             testGateBlock = codeGatePassed
-                ? "代码门:✅ 通过。测试门:\(testLine) 运行门:\(runLine)"
-                : "代码门:❌ 未通过。测试门:\(testLine) 运行门:\(runLine) 代码交付必须:写测试用例并跑到全绿、且程序真正构建/运行起来不崩——跑崩了/报错是要修复的观测,不是交付。"
+                ? "代码门:✅ 通过(测试全绿 + 运行不崩 + 跑出可见结果)。测试门:\(testLine) 运行门:\(runLine) 结果:\(outputLine)"
+                : "代码门:❌ 未通过。测试门:\(testLine) 运行门:\(runLine) 结果:\(outputLine)。**构建≠交付**:需跑测试到全绿 + 真运行起来 + 贴出真实结果;「编译通过、无输出」不算。"
         }
 
         // 真实结果后置校验(verifyOutcome,方案 §6):动作型任务交付是**真实效果不是文件**。
@@ -77,7 +102,7 @@ extension LingShuState {
         2. 事实准确性:用你的知识逐条审查正文里的关键数据/年份/事件/数字/人名,**发现明确错误或与公认事实不符才 ❌ 并写出正确值**;不要把"我没法 100% 确认"当作不达标。**但忽略"自指/易变"事实**——产出物描述它自己的文件体积/字节数/页数/生成时间戳这类(每次重生成都会变、且与用户关心的内容无关),以及 KB 四舍五入这种琐碎数值差(如 41KB vs 40KB),**一律不算事实错误、不得据此打回**,以免陷入自指返工死循环。
         3. 完整性:是否覆盖用户要求的主题、结构与数量。
         4. 版式:若有视觉评审,凡文字重叠/被截断/溢出/错位空白 → ❌ 并指出第几页;无视觉评审则此项默认达标。
-        5. 代码门:以上【代码门】结论为准——标 ❌ 则本维度未达标(代码任务必须有测试且全绿、且程序真正跑起来不崩);标 ✅ 或"非代码交付跳过"则达标。
+        5. 代码门:以上【代码门】结论为准——标 ❌ 则本维度未达标(代码任务需有确定性成功证据:**测试全绿 或 真构建/运行起来不崩,二者择一**);标 ✅ 或"非代码交付跳过"则达标。
         输出格式(严格遵守):
         1. 先逐条核对并写明达标/未达标及理由(未达标写清缺什么、怎么改)。
         2. 另起一行:核对统计 PASS=<达标条数> FAIL=<未达标条数>
@@ -97,14 +122,35 @@ extension LingShuState {
         // 代码门是**确定性硬门**:代码任务未满足「有测试且全绿」或「程序构建/运行不崩」→ 即使 LLM 评审放行也判未达标,
         // 把缺哪条 + 崩溃片段回灌给 maker,逼它修到真跑通(执行恢复力),而不是把异常当交付。
         if !codeFiles.isEmpty, !codeGatePassed {
-            var reasons: [String] = []
-            if !testGate.passed { reasons.append("[测试门] ❌ \(testGate.detail) 请补测试用例并跑到全绿。") }
-            if runGateBlocks { reasons.append("[运行门] ❌ \(runGate.detail) 请修到程序能正常构建/运行、不再崩溃/报错。") }
-            let reasonText = reasons.joined(separator: "\n")
+            let reasonText = codeGateFailureReason(testGate: testGate, runGate: runGate, runGateBlocks: runGateBlocks)
             let appended = critique.isEmpty ? reasonText : critique + "\n\n" + reasonText
             return (false, appended)
         }
         return (verdict.allPassed, critique)
+    }
+
+    /// 是否真跑出**可见结果**(用户定调"我要看到结果"):任一 run_command 成功且输出**非"（无输出，退出码 N）"空跑占位**、有实质内容。
+    /// 脚手架/工程编译过、退出码 0 但无输出 ≠ 看到结果——必须真把测试/程序跑出能看到的输出。
+    func codeTaskHasVisibleRunOutput(taskRecordID: String?) -> Bool {
+        guard let record = taskExecutionRecords.first(where: { $0.id == taskRecordID }) else { return false }
+        for message in record.messages {
+            if case let .toolResult(tool, success, output) = message.detail, tool == "run_command", success {
+                let t = output.trimmingCharacters(in: .whitespacesAndNewlines)
+                if t.isEmpty || t.hasPrefix("（无输出") || t.contains("无输出，退出码") { continue }   // 空跑占位,不算
+                if t.count >= 4 { return true }
+            }
+        }
+        return false
+    }
+
+    /// 代码确定性门未过时给 maker 的返工指引(用户校准:**构建≠成功**——必须跑测试到全绿 + 运行起来 + 看到真实结果)。
+    func codeGateFailureReason(testGate: (passed: Bool, detail: String),
+                               runGate: (attempted: Bool, clean: Bool, detail: String),
+                               runGateBlocks: Bool) -> String {
+        if runGateBlocks {
+            return "[运行门] ❌ \(runGate.detail) 请修到程序能正常构建/运行、不再崩溃/报错。"
+        }
+        return "[确定性验证] ❌ **构建完成不算交付**。把全链路跑完、让我看到结果:① 写/补测试用例,用 run_command **真跑测试到全绿**;② **真把程序运行起来**(app/服务/CLI 就启动并驱动它,如起服务后 curl 一个接口);③ 交付里**贴出真实运行输出/结果**——「编译通过、无输出、退出码 0」不是结果。(\(testGate.detail))"
     }
 
     /// 本任务记录里是否**有真实动作工具成功执行**(自编执行器/计算机操作/外设控制… 即非产出读取元工具)。
@@ -260,6 +306,18 @@ extension LingShuState {
     /// 交付话术与返工文本解耦:验收经返工后才通过时,maker 最后一轮文本是"逐条修正"的内部 QA 记录
     /// (用户看到会觉得驴唇不对马嘴)。这里用一个**无工具**的小会话,据原始请求 + 真实产出物清单,
     /// 生成一句面向用户的干净交付说明;为空/失败则回退原文,绝不卡住交付。
+    /// 收尾回复是否退化成**空/占位的工具结果**(模型最后一步是个静默 `run_command`、没写收尾总结):
+    /// 如「✓ run_command:（无输出，退出码 0）」「（已发起工具调用）」。这种不该直接丢给用户当交付,应据产出物补一段。
+    nonisolated static func isPlaceholderDelivery(_ text: String) -> Bool {
+        let t = LingShuReasoningText.stripThinkTags(text).trimmingCharacters(in: .whitespacesAndNewlines)
+        if t.isEmpty { return true }
+        // 「（无输出…）」是工具无 stdout 的专用占位串,真交付里绝不会这么写——直接命中(不靠长度)。
+        if t.contains("（无输出") || t.contains("(无输出") { return true }
+        if t.contains("已发起工具调用") && t.count <= 30 { return true }   // 纯"已发起工具调用"占位
+        if t.hasPrefix("✓") && t.contains("run_command") && t.count <= 50 { return true }   // 裸工具回执当收尾
+        return false
+    }
+
     func composeDeliveryMessage(userRequest: String, makerText: String, taskRecordID: String?) async -> String {
         let artifacts = (taskExecutionRecords.first { $0.id == taskRecordID }?.artifacts ?? [])
             .filter { FileManager.default.fileExists(atPath: $0.location) }
@@ -373,7 +431,9 @@ extension LingShuState {
     /// 从命令/输出抽取交付型文件(绝对或相对路径,相对则相对工作目录解析)。只认交付型扩展名,
     /// 不收脚本/中间数据(.py/.json/.sh),避免「任务产出文件」被噪声塞满。供 run_command 补登产出物。
     nonisolated static func extractRunCommandArtifacts(_ text: String, workingDirectory: String) -> [String] {
-        let pattern = "[\\w\\u4e00-\\u9fff./~_-]+\\.(?:pptx|docx|xlsx|pdf|html?|md|csv|png|jpe?g)"
+        // 扩展名白名单:文档/媒体 + **源码/配置/构建产物**(根治"run_command 写的工程文件如 pom.xml/*.java/*.yml 不进产出物")。
+        // 误登记由调用处 mtime 过滤兜住(只登「本次命令真创建/改动」的);`\b` 防 cpp/jsx 等被前缀(c/js)截短误匹配。
+        let pattern = "[\\w\\u4e00-\\u9fff./~_-]+\\.(?:pptx|docx|xlsx|pdf|html?|md|csv|png|jpe?g|java|kt|swift|py|jsx|js|tsx|ts|go|rs|rb|cpp|cc|c|hpp|h|cs|php|scala|vue|sql|xml|yaml|yml|json|toml|ini|properties|gradle|sh|bash|env|conf|cfg|txt|jar)\\b"
         guard let re = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else { return [] }
         let range = NSRange(text.startIndex..., in: text)
         var out: [String] = []

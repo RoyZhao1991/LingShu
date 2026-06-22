@@ -170,10 +170,9 @@ struct LingShuLocalToolExecutor: LingShuToolExecuting {
     /// 精确编辑:把文件里**唯一匹配**的 old_string 换成 new_string(不重写整文件)——改大代码的核心四肢。
     /// old_string 需与文件内容逐字符一致(含缩进);不唯一/找不到则拒绝并说明,逼模型带足上下文或分次改。
     private func editFile(path: String, oldString: String, newString: String, workingDirectory: String) -> LingShuToolResult {
-        let normalizedRoot = (workingDirectory as NSString).standardizingPath
-        let normalizedPath = (path as NSString).standardizingPath
-        guard normalizedPath.hasPrefix(normalizedRoot + "/") || normalizedPath == normalizedRoot else {
-            return .init(tool: "edit_file", success: false, output: "编辑位置必须在工作目录 \(normalizedRoot) 内。")
+        let r = Self.resolveWorkspaceWritePath(path, workingDirectory: workingDirectory)
+        guard let normalizedPath = r.resolved else {
+            return .init(tool: "edit_file", success: false, output: r.error ?? "path 无效。")
         }
         guard let data = FileManager.default.contents(atPath: normalizedPath),
               let content = String(data: data, encoding: .utf8) else {
@@ -201,11 +200,33 @@ struct LingShuLocalToolExecutor: LingShuToolExecuting {
         }
     }
 
-    private func writeFile(path: String, content: String, workingDirectory: String) -> LingShuToolResult {
+    /// 解析+围栏写入路径:**空路径先给清晰可操作的报错**(模型空参/大内容把工具 JSON 撑爆时,别用误导的"工作目录内"让它瞎重试);
+    /// **相对路径以工作目录为基**(模型常传相对路径);越界才拒。返回解析后的绝对路径或错误说明。
+    nonisolated static func resolveWorkspaceWritePath(_ path: String, workingDirectory: String) -> (resolved: String?, error: String?) {
+        let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
         let normalizedRoot = (workingDirectory as NSString).standardizingPath
-        let normalizedPath = (path as NSString).standardizingPath
+        guard !trimmed.isEmpty else {
+            return (nil, "缺少 path 参数——没说要写哪个文件。请带上**绝对路径**(在 \(normalizedRoot) 内)和**完整 content**。如果内容很大导致工具调用为空,改用 run_command 的 heredoc(cat > 文件 <<'EOF' … EOF)分块写,或先 write_file 写骨架再 edit_file 增补。")
+        }
+        let abs = (trimmed.hasPrefix("/") || trimmed.hasPrefix("~"))
+            ? (trimmed as NSString).expandingTildeInPath
+            : (normalizedRoot as NSString).appendingPathComponent(trimmed)   // 相对路径→以工作目录为基
+        let normalizedPath = (abs as NSString).standardizingPath
         guard normalizedPath.hasPrefix(normalizedRoot + "/") || normalizedPath == normalizedRoot else {
-            return .init(tool: "write_file", success: false, output: "写入位置必须在工作目录 \(normalizedRoot) 内。")
+            return (nil, "写入位置必须在工作目录 \(normalizedRoot) 内(收到解析为:\(normalizedPath))。")
+        }
+        return (normalizedPath, nil)
+    }
+
+    private func writeFile(path: String, content: String, workingDirectory: String) -> LingShuToolResult {
+        let r = Self.resolveWorkspaceWritePath(path, workingDirectory: workingDirectory)
+        guard let normalizedPath = r.resolved else {
+            return .init(tool: "write_file", success: false, output: r.error ?? "path 无效。")
+        }
+        // 防"空内容误覆盖":content 为空但目标文件已存在且非空 → 多半是大内容把工具 JSON 撑爆成空参,拒绝清空已有文件。
+        if content.isEmpty,
+           let existing = FileManager.default.contents(atPath: normalizedPath), !existing.isEmpty {
+            return .init(tool: "write_file", success: false, output: "content 为空、但 \(normalizedPath) 已有内容——拒绝用空内容覆盖(多半是内容太大把工具调用撑空了)。要清空请显式说明;否则改用 run_command heredoc 分块写,或 edit_file 增量改。")
         }
         do {
             try FileManager.default.createDirectory(
@@ -257,9 +278,9 @@ struct LingShuLocalToolExecutor: LingShuToolExecuting {
         guard allowShell else {
             return .init(tool: "run_command", success: false, output: "用户已拒绝本次命令执行（授权弹窗选择了拒绝）。请勿重复发起同一命令；改用专用工具，或给出用户可手动运行的方案。")
         }
-        let lowered = trimmed.lowercased()
-        let blocked = ["sudo", "rm -rf /", "mkfs", "diskutil erase", "shutdown", "reboot", "> /dev/"]
-        if blocked.contains(where: { lowered.contains($0) }) {
+        // 危险命令判定抽到纯逻辑 LingShuCommandSafety(可测)。关键:**放行 `> /dev/null` 等伪设备重定向**
+        // （旧的宽串 `"> /dev/"` 误拦了后台启动服务的家常写法 → SpringCloud 等服务类任务永远卡在"启动验证"交付不了）。
+        if LingShuCommandSafety.isDangerous(trimmed) {
             return .init(tool: "run_command", success: false, output: "命令命中危险操作黑名单，拒绝执行。")
         }
 

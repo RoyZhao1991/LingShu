@@ -135,11 +135,13 @@ extension LingShuState {
         )
         // 注入"最近产出物"上下文:让"运行起来/继续/改一下"这类派发任务接得上(知道刚做了什么、在哪、怎么跑),
         // 不再重新扫工作目录瞎猜(根治"超级玛丽做完了却问我要运行哪个项目")。
-        let deliverCtx = recentDeliverablesContext()
+        // + 当前项目结构(文件树):多轮迭代同一项目时,免每轮从头探索代码(用户实测"没上次记忆")。
+        let combinedCtx = [currentProjectStructureContext(), recentDeliverablesContext()]
+            .filter { !$0.isEmpty }.joined(separator: "\n\n")
         let sub = makeAgentSession(
             id: subID,
             system: Self.dispatchedTaskSystemPrompt(workingDir: codexWorkingDirectory),
-            initialMessages: deliverCtx.isEmpty ? [] : [.init(role: .system, content: deliverCtx)],
+            initialMessages: combinedCtx.isEmpty ? [] : [.init(role: .system, content: combinedCtx)],
             tools: tools,
             model: adapter,
             // 安全天花板(防失控),非目标预算——复杂工程的「读→改→构建→测试→修」单段推进

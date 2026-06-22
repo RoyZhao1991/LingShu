@@ -44,13 +44,14 @@ extension LingShuState {
         return brainScore.score >= 12
     }
 
-    /// 脑力旋钮(方案"框架随脑力可调"):脑被证明强 → 在系统提示最前面**放权**(自行决定是否 update_plan、
-    /// 验收从简、按最优路径高效推进,别被流程束缚);弱脑则保留厚脚手架(返回空串=不改原提示)。
-    /// **安全红线不随旋钮放松**(不可逆/对外先确认、危险代码不静默执行)。这让"强脑→薄 harness"真正生效。
+    /// 脑力旋钮(方案 §差距2"框架随脑力可调",2026-06-21 改连续起步档):脑力分 → **连续起步先验**(纯逻辑
+    /// `LingShuHarnessProfile`),按能力分级给薄/中/厚三档起步提示,**无 85 二元硬跳变**(根治"一道偏题把强脑打回厚")。
+    /// 真正的薄/厚由升级阶梯 `LingShuCapabilityEscalation` **按本次确定性结果反应式**加厚(默认最薄 Rung0)。
+    /// **安全红线不随档位放松**(各档文案都含)。
     func harnessKnobPrefix() -> String {
-        guard brainProvenStrong else { return "" }
-        let tag = brainBenchmarkResult.map { "脑力测评 \($0.score) 分" } ?? "运行表现稳定"
-        return "【能力旋钮·已放权】你已被评为高能力脑(\(tag)):多步任务**可自行判断**是否先调 update_plan(不强制)、验收从简,放手按你最优路径高效推进,别被流程细则束缚。**唯一不放松的是安全红线**:不可逆/对外动作仍先确认,危险/未审代码绝不静默执行。\n\n"
+        let capability = LingShuHarnessProfile.capability(benchmark: brainBenchmarkResult?.score, runNetScore: brainScore.score)
+        let tag = brainBenchmarkResult.map { "脑力测评 \($0.score) 分" } ?? "运行表现 \(brainScore.score)"
+        return LingShuHarnessProfile.knobPrefix(capability: capability, tag: tag)
     }
 
     nonisolated static func loadBrainScore() -> LingShuBrainScore {

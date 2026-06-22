@@ -93,12 +93,55 @@ extension LingShuState {
             .map(\.location)
             .filter { Self.isCodeLikePath($0) }
         guard !taskCodePaths.isEmpty else { return }   // 非代码任务 → 不抓、不显示(治"问时间也有代码改动")
+        // 工程根=代码文件的公共父目录(新工程多半在自己的目录里,不一定是 codexWorkingDirectory)。
+        // **剔除临时/scratch 输出**(/tmp、/var/folders 这类):一个跑到 /tmp 的输出文件会让公共父目录跨根缩到 "/"→nil,
+        // 把整个工程根判丢(实测:清分系统的源码在 ~/app/settlement-system,但一个 /tmp/output.txt 让 codeRoot 失准)。
+        let projectPaths = taskCodePaths.filter { p in
+            !["/tmp/", "/private/tmp/", "/private/var/folders/", "/var/folders/"].contains { p.hasPrefix($0) }
+        }
+        let codeRoot = Self.commonParentDir(projectPaths.isEmpty ? taskCodePaths : projectPaths) ?? workingDir
         Task { @MainActor [weak self] in
-            guard let summary = await Self.gitChangeSummary(workingDir: workingDir, limitTo: taskCodePaths) else { return }
+            // **强制绑定 git(用户定调 2026-06-21)**:工程目录若不在 git 工作树里 → 自动 `git init`,
+            // 让代码改动**始终可 diff、审查面板看得见**(根治"新工程没 git→审查说没改动")。不自动 commit:
+            // 留文件未跟踪=审查里以"新增"红绿呈现;要版本化由用户/大脑显式 commit(面板有提交按钮)。
+            await Self.ensureGitRepo(at: codeRoot)
+            guard let summary = await Self.gitChangeSummary(workingDir: codeRoot, limitTo: taskCodePaths) else { return }
             guard let self, let i = self.taskExecutionRecords.firstIndex(where: { $0.id == recordID }) else { return }
             self.taskExecutionRecords[i].codeChanges = summary
             self.persistTaskExecutionRecords()
         }
+    }
+
+    /// 强制绑定 git:确保 `dir` 在一个 git 工作树里——不在则 `git init`(已在仓内则不动,避免嵌套仓)。
+    /// 让所有代码开发的改动可 diff/可见。非破坏:只建 `.git`、不改源文件、不自动提交。
+    /// 不该被 `git init` 的**过宽/敏感目录**(会把整个家目录/系统目录纳入版本控制)。只拦这些目录本身,不拦其子目录(工程目录都在子目录里)。
+    nonisolated static func isSafeToInitGit(_ dir: String) -> Bool {
+        let path = (dir as NSString).standardizingPath
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        var blocked: Set<String> = ["/", "/tmp", "/private", "/private/tmp", "/var", "/usr", "/etc", "/opt",
+                                    "/Applications", "/Library", "/System", "/Users", home]
+        for sub in ["Desktop", "Documents", "Downloads", "Movies", "Music", "Pictures", "Public"] {
+            blocked.insert((home as NSString).appendingPathComponent(sub))
+        }
+        return !blocked.contains(path)
+    }
+
+    @discardableResult
+    nonisolated static func ensureGitRepo(at dir: String) async -> Bool {
+        var isDir: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: dir, isDirectory: &isDir), isDir.boolValue else { return false }
+        guard isSafeToInitGit(dir) else { return false }   // 过宽/敏感目录不 init(只对工程子目录绑 git)
+        var git: String?
+        for candidate in gitCandidatePaths() where await runCapturing(candidate, ["--version"]).lowercased().contains("git version") {
+            git = candidate; break
+        }
+        guard let git else { return false }
+        let inside = await runCapturing(git, ["-C", dir, "rev-parse", "--is-inside-work-tree"]).trimmingCharacters(in: .whitespacesAndNewlines)
+        if inside == "true" { return true }   // 已在 git 仓(含父级仓)→ 不再 init,避免嵌套
+        _ = await runCapturing(git, ["-C", dir, "init"])
+        let after = await runCapturing(git, ["-C", dir, "rev-parse", "--is-inside-work-tree"]).trimmingCharacters(in: .whitespacesAndNewlines)
+        if after == "true" { lingShuControlLog("强制绑定git:已 git init @\(dir)"); return true }
+        return false
     }
 
     /// 是否源码/配置/文档类路径(用于把交付物/素材排除在"代码改动"之外)。
@@ -134,7 +177,7 @@ extension LingShuState {
         let topLevel = await runCapturing(git, ["-C", workingDir, "rev-parse", "--show-toplevel"])
             .trimmingCharacters(in: .whitespacesAndNewlines)
         guard !topLevel.isEmpty else { return nil }
-        let porcelain = await runCapturing(git, ["-C", workingDir, "status", "--porcelain"])
+        let porcelain = await runCapturing(git, ["-C", workingDir, "status", "--porcelain", "--untracked-files=all"])
         let allDirty = parseGitPorcelain(porcelain)
         // 只留本任务自己的文件(把 porcelain 的仓库相对路径还原成绝对路径,与 taskPaths 求交)。
         let taskAbs = Set(taskPaths.map { ($0 as NSString).standardizingPath })
@@ -143,13 +186,18 @@ extension LingShuState {
             return taskAbs.contains((abs as NSString).standardizingPath)
         }
         guard !mine.isEmpty else { return nil }   // 本任务文件都已提交/干净 → 不显示
-        let branch = await runCapturing(git, ["-C", workingDir, "branch", "--show-current"])
+        var branch = await runCapturing(git, ["-C", workingDir, "branch", "--show-current"])
             .trimmingCharacters(in: .whitespacesAndNewlines)
+        if branch.isEmpty {   // 刚 git init、还没 commit=未出生分支:`branch --show-current` 为空,改用 symbolic-ref 取未出生分支名(main/master)。
+            branch = await runCapturing(git, ["-C", workingDir, "symbolic-ref", "--short", "HEAD"])
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+        }
         let repoName = (topLevel as NSString).lastPathComponent
         lingShuControlLog("codeChanges: 本任务 \(mine.count) 个未提交改动 @\(repoName)/\(branch)")
         return .init(repoName: repoName.isEmpty ? "repo" : repoName,
-                     branch: branch.isEmpty ? "(detached HEAD)" : branch,
-                     files: Array(mine.prefix(60)))
+                     branch: branch.isEmpty ? "(未提交)" : branch,
+                     files: Array(mine.prefix(60)),
+                     repoWorkingDir: topLevel)
     }
 
     /// 解析 `git status --porcelain` 为代码改动文件(纯函数,可测)。
@@ -262,7 +310,7 @@ extension LingShuState {
         let commitOut = await runCapturing(git, ["-C", topLevel, "commit", "-m", message])
         if commitOut.contains("nothing to commit") { return false }
         // 验证:这些文件应已从未提交清单消失。
-        let after = parseGitPorcelain(await runCapturing(git, ["-C", topLevel, "status", "--porcelain"])).map(\.path)
+        let after = parseGitPorcelain(await runCapturing(git, ["-C", topLevel, "status", "--porcelain", "--untracked-files=all"])).map(\.path)
         let committed = !files.contains { after.contains($0) }
         lingShuControlLog("gitCommit: \(committed ? "已提交" : "未生效") \(files.count) 文件 @\(topLevel)")
         return committed
