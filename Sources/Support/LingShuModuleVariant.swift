@@ -69,6 +69,18 @@ struct LingShuModuleVariantRegistry: Codable, Sendable, Equatable {
         return target
     }
 
+    /// 删除一个变体(治理:清掉被否决/测试用的变体)。**基线不可删、当前活跃不可删**(先切走/回退再删)。成功→true。
+    @discardableResult
+    mutating func remove(slotID: String, variantID: String) -> Bool {
+        guard var slot = slots[slotID],
+              let v = slot.variants.first(where: { $0.id == variantID }),
+              v.source != "baseline", slot.activeVariantID != variantID else { return false }
+        slot.variants.removeAll { $0.id == variantID }
+        slot.history.removeAll { $0 == variantID }   // 历史栈里同步清掉,回退不会指向已删变体
+        slots[slotID] = slot
+        return true
+    }
+
     func activeVariant(slotID: String) -> LingShuModuleVariant? {
         guard let slot = slots[slotID] else { return nil }
         return slot.variants.first { $0.id == slot.activeVariantID }

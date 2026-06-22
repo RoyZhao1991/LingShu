@@ -53,10 +53,11 @@ extension LingShuState {
         let goalGuidance = goalSpec(for: taskRecordID)?.executionGuidance(base: base) ?? base
         let gapGuidance = gapAnalysis(for: taskRecordID)?.executionGuidance(base: goalGuidance) ?? goalGuidance
         let expGuidance = goalExperienceGuidance(base: gapGuidance, taskRecordID: taskRecordID)
-        // P6+ 模块变体:把「执行策略」活跃变体追加进引导(自进化可热切换/回退的运行时槽位;基线空=不改)。
-        let addendum = executionStrategyAddendum()
-        guard !addendum.isEmpty else { return expGuidance }
-        return expGuidance.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? addendum : expGuidance + "\n\n" + addendum
+        // P6+ 模块变体:执行策略片段(运行时热切换槽)经【编译核心变体·组合器】与上面引导组合——
+        // 默认 append(策略后置,行为同历史);可一键切 prepend(策略前置,给重视开头指令的大脑)/一键回退。
+        // 基线策略片段为空时组合器优雅返回 expGuidance 原样(不改行为)。
+        let strategy = executionStrategyAddendum()
+        return activeGuidanceComposer().compose(experience: expGuidance, strategy: strategy)
     }
 
     /// 从任务记录蒸一条可复用教训(成功打法 / 要避开的坑 + 能力补齐复用线索)。

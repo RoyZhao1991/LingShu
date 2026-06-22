@@ -253,6 +253,32 @@ final class LingShuControlRouter {
             ]
         ],
         [
+            "name": "lingshu_set_self_evolution",
+            "description": "开/关**自我进化(P6)总开关**(默认关,高风险能力)。开 → 灵枢自检反复弱点并提**待批**改进提案(采纳仍逐条人批、可一键回退);关 → 不挖/不提/不采纳,零行为。持久化跨重启。状态见 lingshu_status.selfEvolutionEnabled。args: enabled(bool)。",
+            "inputSchema": [
+                "type": "object",
+                "properties": ["enabled": ["type": "boolean", "description": "true 开 / false 关"]],
+                "required": ["enabled"]
+            ]
+        ],
+        [
+            "name": "lingshu_module_variants",
+            "description": "P6+ 无界自进化·模块变体注册表(可一键切换/回退的可逆自进化治理)。action: list(列各槽位变体+活跃)/ register(登记新变体,默认 inactive)/ switch(一键切活跃)/ rollback(一键回退上一版/基线)/ remove(删变体,基线与活跃不可删)。args: action, slotID, variantId(switch/remove 需要), label/payload/source/activate(register)。槽位:guidance.execution(执行策略)/ guidance.persona(行为人格)/ gate.acquisitionCeiling(获取上限数值)/ core.guidanceAssembly(编译核心组合器:append|prepend)。",
+            "inputSchema": [
+                "type": "object",
+                "properties": [
+                    "action": ["type": "string", "description": "list | register | switch | rollback | remove"],
+                    "slotID": ["type": "string", "description": "槽位 id(register/switch/rollback/remove 需要)"],
+                    "variantId": ["type": "string", "description": "变体 id(switch/remove 需要)"],
+                    "label": ["type": "string", "description": "变体人读名(register)"],
+                    "payload": ["type": "string", "description": "变体载体:提示片段/数值/实现键(register)"],
+                    "source": ["type": "string", "description": "来源(register,默认 manual)"],
+                    "activate": ["type": "boolean", "description": "register 后是否立即切为活跃(默认 false)"]
+                ],
+                "required": ["action"]
+            ]
+        ],
+        [
             "name": "lingshu_get_trace",
             "description": "读取最近若干条执行轨迹事件(路由/模型调用/工具输出等),用于核验内部流转。",
             "inputSchema": [
@@ -367,6 +393,44 @@ final class LingShuControlRouter {
         case "lingshu_get_chat":
             let limit = (arguments["limit"] as? Int) ?? 20
             return (jsonText(["messages": chatPayload(limit: limit)]), false)
+        case "lingshu_set_self_evolution":   // P6 自我进化总开关(默认关,高风险)。args: enabled(bool)
+            guard let enabled = arguments["enabled"] as? Bool else {
+                return ("缺少/非法参数 enabled(应为 true 或 false)", true)
+            }
+            state.setSelfEvolutionEnabled(enabled)
+            return (jsonText(["ok": true, "selfEvolutionEnabled": state.selfEvolutionEnabled]), false)
+        case "lingshu_module_variants":   // P6+ 无界自进化:列/注册/切换/回退模块变体(可逆治理)。
+            let action = (arguments["action"] as? String) ?? "list"
+            switch action {
+            case "list":
+                return (jsonText(moduleVariantsPayload()), false)
+            case "register":
+                guard let slotID = arguments["slotID"] as? String else { return ("缺少参数 slotID", true) }
+                let label = (arguments["label"] as? String) ?? "manual-\(slotID)"
+                let payload = (arguments["payload"] as? String) ?? ""
+                let source = (arguments["source"] as? String) ?? "manual"
+                let activate = (arguments["activate"] as? Bool) ?? false
+                let vid = state.registerModuleVariant(slotID: slotID, label: label, source: source, payload: payload, activate: activate)
+                return (jsonText(["ok": true, "variantId": vid, "activated": activate, "registry": moduleVariantsPayload()]), false)
+            case "switch":
+                guard let slotID = arguments["slotID"] as? String, let vid = arguments["variantId"] as? String else {
+                    return ("缺少参数 slotID / variantId", true)
+                }
+                let ok = state.switchModuleVariant(slotID: slotID, to: vid)
+                return (jsonText(["ok": ok, "registry": moduleVariantsPayload()]), false)
+            case "rollback":
+                guard let slotID = arguments["slotID"] as? String else { return ("缺少参数 slotID", true) }
+                let target = state.rollbackModuleVariant(slotID: slotID)
+                return (jsonText(["ok": target != nil, "rolledBackTo": target ?? "", "registry": moduleVariantsPayload()]), false)
+            case "remove":
+                guard let slotID = arguments["slotID"] as? String, let vid = arguments["variantId"] as? String else {
+                    return ("缺少参数 slotID / variantId", true)
+                }
+                let ok = state.removeModuleVariant(slotID: slotID, variantID: vid)
+                return (jsonText(["ok": ok, "registry": moduleVariantsPayload()]), false)
+            default:
+                return ("未知 action:\(action)(list|register|switch|rollback|remove)", true)
+            }
         case "lingshu_get_trace":
             let limit = (arguments["limit"] as? Int) ?? 30
             return (jsonText(["trace": tracePayload(limit: limit)]), false)

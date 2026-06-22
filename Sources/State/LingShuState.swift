@@ -251,6 +251,12 @@ final class LingShuState: ObservableObject {
     /// **派发队列区**(用户定调):主界面支持 3 并发,多出来的进**可见队列区等待**(不直接进主窗口/不派发);
     /// 有空位时自动晋级派发;晋级前可在队列区删除。见 LingShuState+DispatchQueue。
     @Published var queuedDispatchTasks: [LingShuQueuedDispatchTask] = []
+    /// 模块变体注册表(P6+ 无界自进化)改版计数:注册/切换/回退后 bump,驱动变体管理面板刷新(注册表本身存 UserDefaults 按需读)。
+    @Published var moduleVariantsRevision = 0
+    /// **自我进化(P6)总开关**:默认**关闭**(自进化属高风险能力,需主人显式开启 + 风险确认)。
+    /// 关 → 不挖反复弱点/不提改进提案/不采纳,零行为;开 → P6 自检弱点并提**待批**提案(采纳仍逐条人批、可一键回退)。
+    /// 持久化 `lingshu.selfEvolution`。改 via `setSelfEvolutionEnabled`。见 [[pluggable-self-evolution-m0-m1]][[skill-self-evolution]]。
+    @Published var selfEvolutionEnabled: Bool = (UserDefaults.standard.object(forKey: "lingshu.selfEvolution") as? Bool ?? false)
     /// 某条**派发的隔离任务**正卡在 ask_user 等用户回答(它问了主题/要信息):上下文感知分诊把它标成
     /// "⏳正等你回答",让分诊器认出用户的答复(哪怕隔了几条)并续到那条隔离会话。见 buildTriageContext。
     var blockedDispatchedRecordID: String?
@@ -448,9 +454,14 @@ final class LingShuState: ObservableObject {
     /// ask_choice 待解析的点选(气泡 id → 续接器):大脑用 ask_choice 弹可点选项时,handler 挂起在此等用户点击;
     /// 用户在选项卡片上点选 → selectRouteChoice 唤醒它、把所选项喂回在飞的循环(不另起输入)。
     var pendingChoiceResolvers: [UUID: (String) -> Void] = [:]
+    /// 新阻塞协议下的 ask_choice:循环已 `.blocked` 释放任务槽,这里只记住卡片属于哪条主任务;
+    /// 点选后用 `session.resume` 回填原工具调用。
+    var pendingChoiceContexts: [UUID: LingShuPendingHumanInputContext] = [:]
     /// ask_form 待提交的多项确认表单(气泡 id → 续接器):大脑用 ask_form 弹多字段表单时挂起在此,
     /// 用户填完点「提交」→ submitFormAnswers 唤醒它、把各字段答案喂回在飞的循环。
     var pendingFormResolvers: [UUID: ([String: String]) -> Void] = [:]
+    /// 新阻塞协议下的 ask_form:循环已 `.blocked` 释放任务槽,表单提交后 resume 原工具调用。
+    var pendingFormContexts: [UUID: LingShuPendingHumanInputContext] = [:]
     /// P3 沙箱:apply_skill 物化过的 skill 脚本路径 → 该 skill 声明的权限(P1)。run_command 跑到这些脚本时,
     /// 按声明权限(+工作目录写,让生成器能产出)经 sandbox-exec 关进受限子进程,而非无沙箱裸跑。无声明=最小权限。
     var materializedSkillScripts: [String: LingShuPluginPermissions] = [:]
@@ -506,6 +517,8 @@ final class LingShuState: ObservableObject {
             detail: report.recoveredTaskSummary ?? report.statusText
         )
         lastSpokenMessageID = chatMessages.last(where: { !$0.isUser && !$0.isLoading })?.id
+        // P6+ 无界自进化:确保所有可进化槽位都有基线变体(回退有处可去、变体面板一上来就列得全)。幂等。
+        ensureAllModuleBaselines()
     }
 
     var usesCodexAuth: Bool {
@@ -1192,7 +1205,7 @@ final class LingShuState: ObservableObject {
                     // 续答**主会话**的提问:接回主会话(同一条记录,把答复喂回去),不另起新任务。
                     self.pendingMainQuestionRecordID = nil
                     self.appendTrace(kind: .route, actor: "主线程分诊", title: "续答主会话提问", detail: "判为对主会话提问的回答,接回原任务,不另起。")
-                    _ = self.runMainAgentTurn(prompt: trimmedPrompt, taskRecordID: rid)
+                    _ = self.runMainAgentTurn(prompt: trimmedPrompt, taskRecordID: rid, resumeBlocked: true)
                 } else if let rid = triage.replyRecordID, self.agentSubTaskRecords.values.contains(rid), replyActive {
                     self.continueDispatchedThread(prompt: trimmedPrompt, recordID: rid)
                 } else {   // 兜底:线程没了/已完成 → 当对话留主线程

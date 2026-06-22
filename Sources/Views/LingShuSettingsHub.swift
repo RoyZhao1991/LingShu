@@ -93,6 +93,8 @@ struct LingShuSettingsHub: View {
                             LingShuSkillsPanel(state: state)
                             Divider()
                             LingShuExtensionsPanel(state: state)   // P5 统一扩展管理(技能+连接器:启停/权限/效能)
+                            Divider()
+                            LingShuModuleVariantsPanel(state: state)   // P6+ 无界自进化:模块变体治理(切换/回退)
                         }
                         .padding(22)
                     }

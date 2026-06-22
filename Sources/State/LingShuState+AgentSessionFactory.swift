@@ -17,7 +17,7 @@ extension LingShuState {
         model: any LingShuAgentModel,
         maxTurns: Int = 40,
         maxHistoryMessages: Int = 0,
-        blockingToolNames: Set<String> = ["ask_user"],
+        blockingToolNames: Set<String> = LingShuHumanInputEnvelope.blockingToolNames,
         recordIDProvider: @escaping @MainActor @Sendable () -> String? = { nil }
     ) -> any LingShuAgentSessioning {
         let harness = currentHarnessConfig()   // 统一自适应 harness 配置(classic 与 nested 共用同一份)

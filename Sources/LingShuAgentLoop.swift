@@ -192,7 +192,7 @@ actor LingShuAgentSession: LingShuAgentSessioning {
         model: any LingShuAgentModel,
         maxTurns: Int = 40,   // 安全天花板(防失控),非目标预算;目标达成/卡住/停滞才是真正的停止位
         maxHistoryMessages: Int = 0,   // 0=不裁剪(短命子会话);常驻主会话传正数设窗口
-        blockingToolNames: Set<String> = ["ask_user"],
+        blockingToolNames: Set<String> = LingShuHumanInputEnvelope.blockingToolNames,
         toolDispatcher: any LingShuToolDispatching = LingShuSerialToolDispatcher(),
         historyCompactor: (any LingShuHistoryCompacting)? = nil,
         factSink: (@Sendable ([String]) async -> Void)? = nil,
@@ -456,16 +456,25 @@ actor LingShuAgentSession: LingShuAgentSessioning {
                 // 这就是"不变量逼出来的正确性":阻塞前清干净本回合,留下的唯一 open 调用就是 pending 那条。
                 if let blocking = calls.first(where: { blockingToolNames.contains($0.name) }) {
                     // 同回合非阻塞工具先执行掉补结果(经调度器,可并行),只留阻塞那条作唯一 open 调用(I2)。
-                    let nonBlocking = calls.filter { $0.id != blocking.id }
-                    let outcomes = await toolDispatcher.dispatch(nonBlocking, tools: tools)
+                    // 若模型一次发出多个阻塞工具,只保留第一个等待用户,其余补合成结果；绝不执行另一个
+                    // ask_form/ask_choice 的 handler,否则 handler 自身等待用户会把本轮重新卡死。
+                    let executable = calls.filter { $0.id != blocking.id && !blockingToolNames.contains($0.name) }
+                    let skippedBlocking = calls.filter { $0.id != blocking.id && blockingToolNames.contains($0.name) }
+                    let outcomes = await toolDispatcher.dispatch(executable, tools: tools)
                     var answeredIDs = Set<String>()
                     for outcome in outcomes {
                         toolInvocations.append(outcome.name)
                         messages.append(.init(role: .tool, content: outcome.output, toolCallID: outcome.id))
                         answeredIDs.insert(outcome.id)
                     }
+                    for call in skippedBlocking {
+                        messages.append(.init(role: .tool,
+                            content: "（本回合已有一个用户确认在等待，本确认项已跳过；请收到用户答案后再继续确认。）",
+                            toolCallID: call.id))
+                        answeredIDs.insert(call.id)
+                    }
                     // 取消恢复·孤儿根治:非阻塞工具若因取消只返回部分结果,给未应答的补合成结果(同主路径)。
-                    for call in nonBlocking where !answeredIDs.contains(call.id) {
+                    for call in calls where call.id != blocking.id && !answeredIDs.contains(call.id) {
                         messages.append(.init(role: .tool,
                             content: "（该工具调用被中断,未取得结果;补占位以保持消息结构良构。）",
                             toolCallID: call.id))
@@ -473,7 +482,7 @@ actor LingShuAgentSession: LingShuAgentSessioning {
                     toolInvocations.append(blocking.name)
                     pendingBlockToolCallID = blocking.id
                     lastExitReason = .blockedAwaitingInput
-                    return .blocked(question: Self.extractQuestion(from: blocking.argumentsJSON))
+                    return .blocked(question: Self.blockedPrompt(for: blocking))
                 }
                 // 停滞检测:连续 N 次发起完全相同(同名+同参)的工具调用 = 原地打转。
                 let signature = calls.map { "\($0.name)#\($0.argumentsJSON)" }.joined(separator: "|")
@@ -567,5 +576,16 @@ actor LingShuAgentSession: LingShuAgentSessioning {
             return question
         }
         return argumentsJSON
+    }
+
+    /// 阻塞工具返回给宿主 UI 的提示。自由问句直接给问题；结构化卡片则给 envelope，
+    /// 由 State 层渲染表单/选项并在用户提交后 resume 原工具调用。
+    static func blockedPrompt(for call: LingShuAgentToolCall) -> String {
+        switch call.name {
+        case "ask_form", "ask_choice":
+            return LingShuHumanInputEnvelope(tool: call.name, argumentsJSON: call.argumentsJSON).encodedPrompt
+        default:
+            return extractQuestion(from: call.argumentsJSON)
+        }
     }
 }

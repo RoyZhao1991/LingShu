@@ -21,6 +21,12 @@ final class TaskSegmenterTests: XCTestCase {
         XCTAssertEqual(result?.taskIntents.count, 0)
     }
 
+    func testHeuristicReportContextSelfIntroMarkedNonTask() {
+        let result = segmenter.heuristicSegmentation("我在给老师汇报课题，介绍一下你自己")
+        XCTAssertNotNil(result)
+        XCTAssertEqual(result?.taskIntents.count, 0)
+    }
+
     func testHeuristicDefersMultiTaskToModel() {
         // 出现多任务信号 → 快路返回 nil，交模型拆。
         XCTAssertNil(segmenter.heuristicSegmentation("帮我做个 PPT，另外把昨天那个爬虫也跑一下"))

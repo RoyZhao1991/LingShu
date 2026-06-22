@@ -43,8 +43,9 @@ final class SelfImprovementTests: XCTestCase {
     func testProposeStoresPendingAndDoesNotAutoAdopt() {
         let ek = "lingshu.goal.experiences"; let pk = "lingshu.self.improvements"
         UserDefaults.standard.removeObject(forKey: ek); UserDefaults.standard.removeObject(forKey: pk)
-        defer { UserDefaults.standard.removeObject(forKey: ek); UserDefaults.standard.removeObject(forKey: pk) }
+        defer { UserDefaults.standard.removeObject(forKey: ek); UserDefaults.standard.removeObject(forKey: pk); UserDefaults.standard.removeObject(forKey: "lingshu.selfEvolution") }
         let state = LingShuState()
+        state.setSelfEvolutionEnabled(true)   // 自我进化总开关默认关,测提案需先开
         // 灌三条同类失败经验。
         for (o, l) in [("把待办同步到 Notion 数据库", "缺 token"), ("同步今日待办到 Notion", "缺 DB ID"), ("把待办写进 Notion", "没共享")] {
             state.recordGoalExperience(.init(objective: o, kind: "task", outcome: "未达标", lesson: l))
@@ -62,8 +63,9 @@ final class SelfImprovementTests: XCTestCase {
     func testRejectMarksRejectedAndStopsReproposing() {
         let ek = "lingshu.goal.experiences"; let pk = "lingshu.self.improvements"
         UserDefaults.standard.removeObject(forKey: ek); UserDefaults.standard.removeObject(forKey: pk)
-        defer { UserDefaults.standard.removeObject(forKey: ek); UserDefaults.standard.removeObject(forKey: pk) }
+        defer { UserDefaults.standard.removeObject(forKey: ek); UserDefaults.standard.removeObject(forKey: pk); UserDefaults.standard.removeObject(forKey: "lingshu.selfEvolution") }
         let state = LingShuState()
+        state.setSelfEvolutionEnabled(true)
         for (o, l) in [("把待办同步到 Notion", "缺 token"), ("同步待办到 Notion 库", "缺 DB")] {
             state.recordGoalExperience(.init(objective: o, kind: "task", outcome: "失败", lesson: l))
         }
@@ -81,5 +83,52 @@ final class SelfImprovementTests: XCTestCase {
         let back = try JSONDecoder().decode(LingShuImprovementProposal.self, from: JSONEncoder().encode(p))
         XCTAssertEqual(back.theme, "同步 Notion")
         XCTAssertEqual(back.status, .pending)
+    }
+
+    // MARK: 自动触发(非成功经验落库即挖反复弱点,无需手动调,无模型调用)
+
+    @MainActor
+    func testAutoMineTriggersOnRecurringFailureNotSuccess() {
+        let ek = "lingshu.goal.experiences"; let pk = "lingshu.self.improvements"
+        UserDefaults.standard.removeObject(forKey: ek); UserDefaults.standard.removeObject(forKey: pk)
+        defer { UserDefaults.standard.removeObject(forKey: ek); UserDefaults.standard.removeObject(forKey: pk); UserDefaults.standard.removeObject(forKey: "lingshu.selfEvolution") }
+        let state = LingShuState()
+        state.setSelfEvolutionEnabled(true)   // 开自我进化总开关后才自动挖
+        // 第一条失败:未成簇(<2)→自动挖不出。
+        state.recordGoalExperience(.init(objective: "把待办同步到 Notion", kind: "task", outcome: "失败", lesson: "缺 token"))
+        XCTAssertEqual(state.autoMineSelfImprovementsOnFailure(outcome: "失败"), 0, "单条未成簇→不提案")
+        // 第二条同类失败:成簇≥2 → **自动**提出待批提案(无需手动调 proposeSelfImprovements)。
+        state.recordGoalExperience(.init(objective: "同步今日待办到 Notion", kind: "task", outcome: "未达标", lesson: "缺 DB ID"))
+        XCTAssertEqual(state.autoMineSelfImprovementsOnFailure(outcome: "未达标"), 1, "第2次同类失败→自动挖出1条提案")
+        XCTAssertEqual(state.improvementProposals().first?.status, .pending, "自动提案仍 pending,不自动采纳")
+        // 成功终态不触发(即便库里已有失败簇)。
+        XCTAssertEqual(state.autoMineSelfImprovementsOnFailure(outcome: "已完成"), 0, "成功终态不触发")
+    }
+
+    // MARK: 自我进化总开关(默认关 → P6 完全静默;开 → 才挖/提/采纳)
+
+    @MainActor
+    func testSelfEvolutionSwitchDefaultsOffAndGatesEverything() {
+        let ek = "lingshu.goal.experiences"; let pk = "lingshu.self.improvements"; let sk = "lingshu.selfEvolution"
+        UserDefaults.standard.removeObject(forKey: ek); UserDefaults.standard.removeObject(forKey: pk); UserDefaults.standard.removeObject(forKey: sk)
+        defer { UserDefaults.standard.removeObject(forKey: ek); UserDefaults.standard.removeObject(forKey: pk); UserDefaults.standard.removeObject(forKey: sk) }
+        let state = LingShuState()
+        XCTAssertFalse(state.selfEvolutionEnabled, "自我进化**默认关闭**")
+        // 默认关:即便两条同类失败成簇,挖掘/提案/自动触发全静默。
+        state.recordGoalExperience(.init(objective: "做季度汇报PPT", kind: "task", outcome: "失败", lesson: "跑偏"))
+        state.recordGoalExperience(.init(objective: "做季度总结PPT", kind: "task", outcome: "未达标", lesson: "配色乱"))
+        XCTAssertEqual(state.proposeSelfImprovements(), 0, "关→手动提案也零行为")
+        XCTAssertEqual(state.autoMineSelfImprovementsOnFailure(outcome: "未达标"), 0, "关→自动触发也不挖")
+        XCTAssertTrue(state.improvementProposals().isEmpty)
+        // 开启 → 同样的失败簇即提案;持久化跨实例。
+        state.setSelfEvolutionEnabled(true)
+        XCTAssertTrue(state.selfEvolutionEnabled)
+        XCTAssertEqual(state.proposeSelfImprovements(), 1, "开→反复弱点成簇即提案")
+        XCTAssertEqual(UserDefaults.standard.object(forKey: sk) as? Bool, true, "开关持久化")
+        // 关闭后采纳也被门控(高风险动作)。
+        let pid = state.improvementProposals().first!.id
+        state.setSelfEvolutionEnabled(false)
+        state.approveSelfImprovement(id: pid)
+        XCTAssertEqual(state.improvementProposals().first?.status, .pending, "关→采纳被门控,提案仍 pending")
     }
 }

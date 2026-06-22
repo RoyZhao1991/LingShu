@@ -21,7 +21,8 @@ extension LingShuState {
         }
         var result = initial
         var acquireRounds = 0
-        let acquireCeiling = 2   // 安全天花板:驱动获取最多 2 轮(每轮 resume 全新预算)
+        // 安全天花板:驱动获取最多 N 轮(每轮 resume 全新预算)。默认 2;P6+ 数值参数槽可一键调(夹在 1–5)/一键回退。
+        let acquireCeiling = acquisitionCeilingOverride() ?? 2
         while true {
             if Task.isCancelled || batchInterruptRequested {
                 let d = await computeCompletionDecision(taskRecordID: taskRecordID, reply: Self.runResultText(result))

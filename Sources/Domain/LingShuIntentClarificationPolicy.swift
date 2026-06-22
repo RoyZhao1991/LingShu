@@ -91,7 +91,10 @@ struct LingShuIntentClarificationPolicy {
     }
 
     private func isIdentityOrGreeting(_ normalized: String) -> Bool {
-        [
+        if LingShuSelfReferenceIntent.isDirectAssistantSelfIntroduction(normalized) {
+            return true
+        }
+        return [
             "你是谁", "你是什么", "你叫什么", "灵枢是谁",
             "你好", "您好", "在吗", "hello", "hi"
         ].contains(normalized)

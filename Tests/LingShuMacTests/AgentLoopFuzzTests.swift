@@ -236,6 +236,45 @@ final class AgentLoopFuzzTests: XCTestCase {
         XCTAssertTrue(v.isEmpty, "resume 后历史仍应良构:\(v)")
     }
 
+    func testAskFormBlocksWithoutExecutingHandlerThenResume() async {
+        actor Flag {
+            private var value = false
+            func set() { value = true }
+            func get() -> Bool { value }
+        }
+
+        let args = """
+        {"title":"确认汇报信息","fields":[{"key":"topic","question":"课题是什么","options":["灵枢"]}]}
+        """
+        let model = Scripted([
+            .toolCalls([.init(id: "form", name: "ask_form", argumentsJSON: args)]),
+            .text("拿到表单答案后继续"),
+        ])
+        let flag = Flag()
+        let form = LingShuAgentTool(name: "ask_form", description: "表单") { _ in
+            await flag.set()
+            return "不应该执行到这里"
+        }
+        let session = LingShuAgentSession(id: "form-block", tools: [form], model: model, maxTurns: 10)
+
+        let r1 = await session.send("需要确认多个事项")
+        guard case .blocked(let prompt) = r1 else { return XCTFail("ask_form 应作为 human-in-the-loop 阻塞,实际 \(r1)") }
+        let handlerExecuted = await flag.get()
+        XCTAssertFalse(handlerExecuted, "ask_form handler 不应在阻塞时执行,否则会在 continuation 里卡住主循环")
+        let envelope = LingShuHumanInputEnvelope.decode(from: prompt)
+        XCTAssertEqual(envelope?.tool, "ask_form")
+        XCTAssertEqual(envelope?.argumentsJSON, args)
+        let blockedAfterForm = await session.isBlocked
+        XCTAssertTrue(blockedAfterForm)
+
+        let r2 = await session.resume("主人已确认以下事项:\n- 课题是什么 → 灵枢")
+        XCTAssertEqual(r2, .completed(text: "拿到表单答案后继续"))
+        let blockedAfterResume = await session.isBlocked
+        XCTAssertFalse(blockedAfterResume)
+        let violations = await session.recordedInvariantViolations
+        XCTAssertTrue(violations.isEmpty, "表单阻塞/恢复不应破坏 tool_call 良构:\(violations)")
+    }
+
     func testExitReasonsAreRecorded() async {
         // 各退出分支落对应结构化原因码(差距1.3 遥测)。
         // 正常完成

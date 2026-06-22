@@ -32,6 +32,16 @@ extension LingShuState {
         // ask_choice:有在飞的循环挂起等点选 → 直接唤醒它继续(不另起新输入);否则走旧 route-choice 路径。
         if let resolver = pendingChoiceResolvers.removeValue(forKey: messageID) {
             resolver(option.label)
+        } else if let context = pendingChoiceContexts.removeValue(forKey: messageID) {
+            let answer = "主人选择：\(option.label)"
+            appendTaskRecordMessage(context.recordID, actor: "你", role: "选项答复", kind: .user, text: answer)
+            pendingMainQuestionRecordID = nil
+            _ = runMainAgentTurn(
+                prompt: answer,
+                taskRecordID: context.recordID,
+                resumeBlocked: true,
+                originalPromptForVerification: context.originalPrompt
+            )
         } else {
             _ = submitTextInput(option.label, source: .typed)
         }

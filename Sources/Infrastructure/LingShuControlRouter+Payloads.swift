@@ -17,6 +17,30 @@ extension LingShuControlRouter {
         }
     }
 
+    /// P6+ 无界自进化:各槽位的变体清单 + 活跃标记 + **运行时实际生效值**(证明切换/回退真热影响行为,非纸面)。
+    func moduleVariantsPayload() -> [String: Any] {
+        let reg = state.moduleRegistry()
+        let slots = LingShuModuleSlots.all.map { slot -> [String: Any] in
+            let activeID = reg.activeVariant(slotID: slot)?.id ?? ""
+            let variants = reg.variants(slotID: slot).map { v -> [String: Any] in
+                ["id": v.id, "label": v.label, "source": v.source,
+                 "active": v.id == activeID, "payload": String(v.payload.prefix(160))]
+            }
+            return ["slotID": slot, "label": LingShuModuleSlots.label(slot), "activeVariantId": activeID, "variants": variants]
+        }
+        return [
+            "slots": slots,
+            // 运行时实际消费到的值(切换/回退后这里立刻变 = 热生效证据)。
+            "effective": [
+                "executionStrategy": String(state.executionStrategyAddendum().prefix(120)),
+                "persona": String(state.personaStrategyAddendum().prefix(120)),
+                "acquisitionCeiling": state.acquisitionCeilingOverride() ?? 2,
+                "guidanceComposer": type(of: state.activeGuidanceComposer()).key,
+                "assembledGuidanceSample": String(state.assembledExecutionGuidance(base: nil, taskRecordID: nil).prefix(160))
+            ]
+        ]
+    }
+
     func statusPayload() -> [String: Any] {
         [
             "coreState": state.coreStateDisplay,
@@ -25,6 +49,7 @@ extension LingShuControlRouter {
             "loopInvariantViolations": LingShuLoopInvariantTelemetry.total,   // 循环不变量累计违反数(架网遥测;soak/真机断言恒为0)
             "developmentFullAccess": state.developmentPhaseFullAccess,   // 开发阶段全权(系统授权门直接放行;发布版关=人工授权)
             "goalSpecEnabled": state.goalSpecEnabled,   // P1 目标认知:新顶层目标先结构化理解(默认开;配置入口 lingshu_set_goalspec)
+            "selfEvolutionEnabled": state.selfEvolutionEnabled,   // P6 自我进化总开关(默认关;高风险,UI 开启需风险确认;配置入口 lingshu_set_self_evolution)
             "trustScore": state.trustScore,             // 系统就绪度(模型连通/通道就绪/近期验收合成)
             "brainScore": ["score": state.brainScore.score, "completed": state.brainScore.completed, "fallbacks": state.brainScore.fallbacks, "brain": state.brainScore.brainID],   // 顶栏「脑力」:自主完成+1/兜底−1/换脑归零
             "missionTitle": state.missionTitle,

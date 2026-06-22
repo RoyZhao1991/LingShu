@@ -92,5 +92,7 @@ extension LingShuState {
         recordGoalExperience(.init(objective: spec.objective, kind: spec.kind.rawValue, outcome: outcome,
                                    lesson: distilledGoalLesson(outcome: outcome, spec: spec, record: rec),
                                    sourceRecordID: recordID))
+        // P6 自动触发:非成功终态落库即挖一次反复弱点(纯,无模型调用),失败成簇即自动提待批改进提案(去重、不自动采纳)。
+        autoMineSelfImprovementsOnFailure(outcome: outcome)
     }
 }

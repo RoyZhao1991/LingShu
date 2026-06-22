@@ -38,7 +38,7 @@ extension LingShuState {
             Task { await agentOrchestrator.resumeWithInput(id: subID, input: resumeInput) }
             return
         }
-        runMainAgentTurn(prompt: combined, taskRecordID: recordID)
+        runMainAgentTurn(prompt: combined, taskRecordID: recordID, resumeBlocked: true)
     }
 
     /// **流程纠正(干预)**:看到 agent 跑偏时,中途把纠正注入**正在跑的会话**(主/自主)。

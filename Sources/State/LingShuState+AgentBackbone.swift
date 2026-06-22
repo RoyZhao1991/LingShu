@@ -38,7 +38,19 @@ extension LingShuState {
     nonisolated static func runResultText(_ result: LingShuAgentRunResult) -> String {
         switch result {
         case .completed(let value): return value
-        case .blocked(let question): return "我需要你先定一下:\(question)"
+        case .blocked(let question):
+            if let envelope = LingShuHumanInputEnvelope.decode(from: question) {
+                switch envelope.tool {
+                case "ask_form":
+                    return LingShuConfirmForm.parse(envelope.argumentsJSON)?.title ?? "我需要你确认几件事。"
+                case "ask_choice":
+                    let parsed = parseChoiceArgs(envelope.argumentsJSON)
+                    return parsed.0.isEmpty ? "我需要你做个选择。" : parsed.0
+                default:
+                    return "我需要你先定一下。"
+                }
+            }
+            return "我需要你先定一下:\(question)"
         case .maxTurnsReached(let value): return value.isEmpty ? "（本轮未能收尾,请补充信息）" : value
         case .interrupted(let reason): return reason.isEmpty ? "（网络中断,已暂停——联网后我会自动接着跑。）" : reason
         }
@@ -54,65 +66,7 @@ extension LingShuState {
     }
 
     // 验收门 verifyAgentDeliverable 已移至 LingShuState+DeliveryReview.swift(与看图/取文同处一个子域)。
-
-    /// 记忆归一:跨会话只喂【蒸馏摘要】、不原样回放历史助手输出(断"旧错误自述被模仿"的 seed 污染);会话内当轮仍走 verbatim 上下文。
-    func seededDistilledMemory() async -> [LingShuAgentMessage] {
-        var seed: [LingShuAgentMessage] = []
-        // 跨 app 重启:确保最近产出物从增量存储恢复到内存,主会话首轮即知悉(让重启后"运行起来"也接得上)。
-        if recentDeliverables.isEmpty {
-            let restored = await deliverableStore.all()
-            if recentDeliverables.isEmpty { recentDeliverables = Array(restored.suffix(8)) }
-        }
-        let distilled = await distillConversationMemory()
-        if !distilled.isEmpty {
-            seed.append(.init(role: .system, content: "【跨会话记忆(已蒸馏,供延续上下文,不要逐条复述、不要照搬其中措辞)】\n\(distilled)"))
-        }
-        // 最近产出物上下文:主会话也知悉,"运行起来/继续"留主线程时同样接得上(跨重启从增量存储恢复)。
-        let deliverCtx = recentDeliverablesContext()
-        if !deliverCtx.isEmpty { seed.append(.init(role: .system, content: deliverCtx)) }
-        seed.append(identityAnchorMessage())
-        return seed
-    }
-
-    /// 身份锚点(最近性最强),压过任何历史里"由 MiniMax 开发"的旧错误自述。
-    func identityAnchorMessage() -> LingShuAgentMessage {
-        .init(role: .system, content: "身份提醒(最高优先级):你是灵枢,由 Roy Zhao 开发。你是**贾维斯式的通用私人助理**,不是编程工具——**遇到含糊、没给明确任务的输入,按通才接住**(出谋划策/查证研究/规划/操作设备/打理生活与工作),主动问清要达成什么或给个方向,**绝不缩回「你想让我写什么代码」**。**不提底层用什么模型**(可替换、与身份无关)。被问身份只答:'我是灵枢,由 Roy Zhao 打造。'")
-    }
-
-    /// 用模型把近期对话(含旧压缩摘要)蒸馏成简洁要点记忆——提炼而非复述,断开污染。
-    func distillConversationMemory() async -> String {
-        var lines: [String] = []
-        let digest = persistedConversationDigest.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !digest.isEmpty { lines.append("更早摘要:\(digest.prefix(600))") }
-        let recent = chatMessages
-            .filter { !$0.isLoading && !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
-            .suffix(24)
-        for message in recent {
-            lines.append("\(message.isUser ? "用户" : "灵枢"):\(message.text.prefix(400))")
-        }
-        guard !lines.isEmpty else { return "" }
-        let prompt = """
-        把下面对话压成简洁"记忆"供后续会话延续(提炼要点、不要原样复述,150 字内):
-        - 用户是谁 / 偏好 / 明确要求
-        - 已完成的事(含产出物文件路径)
-        - 未决 / 待办项
-        - 已澄清的关键结论(如身份口径等)
-        对话:
-        \(lines.joined(separator: "\n"))
-        """
-        let summarizer = LingShuAgentSession(
-            id: "distill-\(UUID().uuidString.prefix(6))",
-            system: "你是记忆蒸馏器,只输出提炼后的要点摘要,不寒暄、不复述原文。",
-            tools: [],
-            model: makeAgentModelAdapter(),
-            maxTurns: 1
-        )
-        let result = await summarizer.send(prompt)
-        if case .completed(let text) = result {
-            return LingShuReasoningText.stripThinkTags(text).trimmingCharacters(in: .whitespacesAndNewlines)
-        }
-        return ""
-    }
+    // 跨会话记忆 seed(seededDistilledMemory / identityAnchorMessage / distillConversationMemory)已拆至 LingShuState+AgentMemorySeed.swift(守 500 行架构闸)。
 
     // 编排器事件桥接 + 子任务→主线程简报已拆为独立模块 → LingShuState+AgentOrchestration.swift。
 
@@ -167,9 +121,14 @@ extension LingShuState {
         - 上文「历史对话」是你与该用户之前(含重启前)的真实记录,要据此保持连续,别说"没做过/记混了"。
         - **只做当前这件事,别把历史里出现过的、与本次无关的旧任务/旧产出物(别的 PPT、测试文件、过往交付的文件路径与体积等)当成本次的素材塞进交付物**——历史只用于延续对话语境,不是当前交付内容的来源。
         """
+        // P6+ 模块变体:把「行为人格策略」活跃变体追加进系统提示尾(additive,不动上面的身份锚点/铁律;
+        // 基线空=不改)。自进化产物先 inactive,人一键切换才生效、出问题一键回退。
+        let personaAddendum = personaStrategyAddendum()
+        let composedSystem = personaAddendum.isEmpty ? system
+            : system + "\n- **【自进化·行为策略(可一键切换/回退,不覆盖上面身份与铁律)】**:\(personaAddendum)"
         let session = makeAgentSession(
             id: "main",
-            system: harnessKnobPrefix() + system,
+            system: harnessKnobPrefix() + composedSystem,
             initialMessages: await seededDistilledMemory(),
             tools: tools,
             model: adapter,
@@ -211,7 +170,7 @@ extension LingShuState {
 
     /// 主入口:常规输入交给主 agent 会话(异步跑循环,结果回填气泡)。
     @discardableResult
-    func runMainAgentTurn(prompt: String, taskRecordID: String?) -> String {
+    func runMainAgentTurn(prompt: String, taskRecordID: String?, resumeBlocked: Bool = false, originalPromptForVerification: String? = nil) -> String {
         // 新一轮开始:先掐掉上一条回复还在放的 TTS,避免旧音频盖到新轮(音频/文字 desync)。
         interruptSpeechOutput?()
         let turnStartedAt = Date()   // 计总用时,回复末尾展示
@@ -253,11 +212,32 @@ extension LingShuState {
             }
             // 极简对话模式:整轮按**纯对话**处理——直接口语作答,不派生子任务、不写文件/跑命令、不走固化 skill
             // (那些是任务交付的套路,聊天用不上)。其余模式照常:命中固化 skill 回合开头广播其存在。
-            let guidance = self.isMinimalVoiceMode
-                ? "【对话模式】当前是语音对话,请像聊天一样直接、口语化、简洁地回答。不要派生子任务、不要写文件或跑命令、不要套用 PPT/文档等交付模板——这只是对话。"
-                : self.matchedSkillHint(for: prompt)
+            let guidance: String
+            if self.isMinimalVoiceMode {
+                guidance = "【对话模式】当前是语音对话,请像聊天一样直接、口语化、简洁地回答。不要派生子任务、不要写文件或跑命令、不要套用 PPT/文档等交付模板——这只是对话。"
+            } else {
+                guidance = [
+                    self.matchedSkillHint(for: prompt),
+                    LingShuSelfReferenceIntent.directIntroductionGuidance(for: prompt)
+                ]
+                .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+                .joined(separator: "\n\n")
+            }
             // 主会话=编排器(重活派发各自验收),自己回复提到既有文件别误进验收空转(trustReplyClaim:false,同常驻路径)。
-            let result = await self.driveAgentDelivery(session: session, prompt: prompt, guidance: guidance, taskRecordID: taskRecordID, trustReplyClaim: false)
+            let result: LingShuAgentRunResult
+            if resumeBlocked, await session.isBlocked {
+                let initial = await session.resume(prompt)
+                result = await self.verifyAndContinue(
+                    session: session,
+                    result: initial,
+                    userRequest: originalPromptForVerification ?? prompt,
+                    taskRecordID: taskRecordID,
+                    trustReplyClaim: false
+                )
+            } else {
+                result = await self.driveAgentDelivery(session: session, prompt: prompt, guidance: guidance, taskRecordID: taskRecordID, trustReplyClaim: false)
+            }
             // 网络中断:**不收尾**——挂起本回合(气泡显示已暂停),保存续跑上下文,联网后 resumeSuspendedMainTurnIfNeeded 从中断处续跑。
             if case .interrupted(let reason) = result {
                 self.suspendedMainTurn = (bubbleID: pendingID, recordID: taskRecordID, prompt: prompt, startedAt: turnStartedAt)
@@ -270,7 +250,7 @@ extension LingShuState {
                 self.startNetworkRetryLoopIfNeeded()   // 启动主动重试(对话框可见进度)
                 return
             }
-            self.finalizeMainTurn(result: result, bubbleID: pendingID, recordID: taskRecordID, prompt: prompt, startedAt: turnStartedAt)
+            self.finalizeMainTurn(result: result, bubbleID: pendingID, recordID: taskRecordID, prompt: originalPromptForVerification ?? prompt, startedAt: turnStartedAt)
             // 朗读由根视图的 speakLatestReplyIfNeeded(监听 chatMessages)统一负责,这里不再重复播报(否则双声线)。
         }
         return pending.text
@@ -278,6 +258,9 @@ extension LingShuState {
 
     /// 主会话回合收尾(正常完成 / 重连续跑后完成共用):填回气泡 + 落记录 + 记忆。
     func finalizeMainTurn(result: LingShuAgentRunResult, bubbleID: UUID, recordID: String?, prompt: String, startedAt: Date) {
+        if renderHumanInputBlockIfNeeded(result: result, bubbleID: bubbleID, recordID: recordID, prompt: prompt, startedAt: startedAt) {
+            return
+        }
         let text = Self.runResultText(result)
         // 回复末尾加总用时(极简语音模式不加——会被 TTS 念出来,且那是纯对话)。记录/记忆仍存干净 text。
         let elapsed = Date().timeIntervalSince(startedAt)

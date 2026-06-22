@@ -1097,6 +1097,16 @@ final class CoreBoundaryTests: XCTestCase {
         XCTAssertNil(decision, "点名了交付物应直接落地，而不是抛澄清三连问")
     }
 
+    func testIntentClarificationPolicyAllowsReportContextSelfIntro() {
+        let policy = LingShuIntentClarificationPolicy()
+        let decision = policy.clarification(
+            for: "我在给老师汇报课题，介绍一下你自己",
+            memoryContext: .init(hotMatches: [], coldMatches: [], shouldLoadHistory: false, status: "无记忆")
+        )
+
+        XCTAssertNil(decision, "主体已知为灵枢本人时不应反问课题方向、老师背景或汇报时长")
+    }
+
     func testIntentClarificationPolicyStillAsksForObjectlessVagueAction() {
         // 完全没有对象的模糊动作仍然需要问。
         let policy = LingShuIntentClarificationPolicy()

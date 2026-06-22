@@ -27,6 +27,9 @@ extension LingShuState {
         guard let form = LingShuConfirmForm.parse(argsJSON) else {
             return "(ask_form 参数无效:需要 fields[{key,question,options}]。事项少就用 ask_user/ask_choice。)"
         }
+        if shouldSuppressFormForKnownSelfIntroduction() {
+            return "(当前请求的主体是灵枢本人,信息已足够;不要弹表单询问课题/受众/时长,请直接完成自我介绍。)"
+        }
         if clarificationCenter.isNonInteractive() {
             return "(当前无人值守,无法弹确认表单让主人逐项填;请按合理默认推进、或稍后主人在场时再确认。)"
         }
@@ -37,12 +40,33 @@ extension LingShuState {
         }
     }
 
-    /// 主人在表单卡上点「提交」:置已解决态(不再可改)、回传答案恢复挂起的工具协程。
+    private func shouldSuppressFormForKnownSelfIntroduction() -> Bool {
+        guard let recordID = currentAgentTurnRecordID,
+              let prompt = taskExecutionRecords.first(where: { $0.id == recordID })?.prompt else {
+            return false
+        }
+        return LingShuSelfReferenceIntent.isDirectAssistantSelfIntroduction(prompt)
+    }
+
+    /// 主人在表单卡上点「提交」:置已解决态(不再可改)、把答案恢复给原工具调用。
     func submitFormAnswers(_ answers: [String: String], for messageID: UUID) {
         guard let idx = chatMessages.firstIndex(where: { $0.id == messageID }),
               chatMessages[idx].formAnswers == nil else { return }
+        let answerText = chatMessages[idx].form?.formatAnswers(answers) ?? "主人已提交确认表单:\n" + answers.map { "- \($0.key) → \($0.value)" }.joined(separator: "\n")
         chatMessages[idx].formAnswers = answers
         logEvent("用户提交确认表单(\(answers.count) 项)")
-        if let resolver = pendingFormResolvers.removeValue(forKey: messageID) { resolver(answers) }
+        if let resolver = pendingFormResolvers.removeValue(forKey: messageID) {
+            resolver(answers)
+            return
+        }
+        guard let context = pendingFormContexts.removeValue(forKey: messageID) else { return }
+        appendTaskRecordMessage(context.recordID, actor: "你", role: "表单答复", kind: .user, text: answerText)
+        pendingMainQuestionRecordID = nil
+        _ = runMainAgentTurn(
+            prompt: answerText,
+            taskRecordID: context.recordID,
+            resumeBlocked: true,
+            originalPromptForVerification: context.originalPrompt
+        )
     }
 }

@@ -86,6 +86,7 @@ struct LingShuTaskSegmenter {
     // MARK: - 辅助
 
     static func looksLikeTask(_ normalized: String) -> Bool {
+        if LingShuSelfReferenceIntent.isDirectAssistantSelfIntroduction(normalized) { return false }
         if !LingShuTaskThreadScheduler.topicTokens(from: normalized).isEmpty { return true }
         let buildVerbs = ["做", "写", "生成", "开发", "实现", "搭", "制作", "整理", "部署", "修复", "重构", "测试", "爬", "构建", "设计"]
         return buildVerbs.contains { normalized.contains($0) }

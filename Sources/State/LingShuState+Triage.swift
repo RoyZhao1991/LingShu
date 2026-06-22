@@ -28,6 +28,9 @@ extension LingShuState {
     /// 返回 reply 时附 `replyRecordID`(要续的那条派发线程记录)。**保守**:判不出 → chat(留主线程),不误派。
     func classifyDispatch(_ prompt: String) async -> (kind: DispatchKind, goal: String?, replyRecordID: String?) {
         if isMinimalVoiceMode { return (.chat, nil, nil) }   // 极简语音:一律对话
+        if LingShuSelfReferenceIntent.isDirectAssistantSelfIntroduction(prompt) {
+            return (.chat, nil, nil)
+        }
 
         let ctx = buildTriageContext()
         var threadBlock = ""
