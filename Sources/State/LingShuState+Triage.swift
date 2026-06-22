@@ -146,10 +146,17 @@ extension LingShuState {
         // + 当前项目结构(文件树):多轮迭代同一项目时,免每轮从头探索代码(用户实测"没上次记忆")。
         let combinedCtx = [currentProjectStructureContext(), recentDeliverablesContext()]
             .filter { !$0.isEmpty }.joined(separator: "\n\n")
+        // **前置认知引导也注入派发任务**(P1 目标 / P2 缺口补齐 / P4 历史经验)——派发不走 driveAgentDelivery,
+        // 此前这些引导只到主会话/自主、漏了派发任务(P4 live 实测暴露)。经 system initialMessage 补上。
+        var initialMessages: [LingShuAgentMessage] = combinedCtx.isEmpty ? [] : [.init(role: .system, content: combinedCtx)]
+        let preflightGuidance = assembledExecutionGuidance(base: nil, taskRecordID: taskRecordID)
+        if !preflightGuidance.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            initialMessages.append(.init(role: .system, content: preflightGuidance))
+        }
         let sub = makeAgentSession(
             id: subID,
             system: Self.dispatchedTaskSystemPrompt(workingDir: codexWorkingDirectory),
-            initialMessages: combinedCtx.isEmpty ? [] : [.init(role: .system, content: combinedCtx)],
+            initialMessages: initialMessages,
             tools: tools,
             model: adapter,
             // 安全天花板(防失控),非目标预算——复杂工程的「读→改→构建→测试→修」单段推进

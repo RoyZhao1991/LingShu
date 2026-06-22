@@ -88,5 +88,9 @@ extension LingShuState {
         _ = knowledgeGraph.remember(.init(kind: .fact, title: String(spec.objective.prefix(60)),
                                           body: body, source: .inference, confidence: 0.5))
         appendTrace(kind: .result, actor: "经验沉淀", title: "目标经验入图谱", detail: String(body.prefix(80)))
+        // P4 经验闭环:同时存一条**结构化、可主动召回复用**的经验(下次同类目标执行前自动注入引导)。
+        recordGoalExperience(.init(objective: spec.objective, kind: spec.kind.rawValue, outcome: outcome,
+                                   lesson: distilledGoalLesson(outcome: outcome, spec: spec, record: rec),
+                                   sourceRecordID: recordID))
     }
 }
