@@ -122,7 +122,8 @@ extension LingShuState {
         dispatchedTaskBubbles[taskRecordID] = pending.id
         appendTrace(kind: .route, actor: "主线程分诊", title: "派发隔离任务", detail: "判为执行任务,派生独立隔离 session 并行推进(不进主对话上下文)。")
 
-        let adapter = makeAgentModelAdapter()
+        // P5 脑分层:据本任务复杂度路由到弱/中/强档脑(配了多脑才有真分层;单脑落回当前脑)。
+        let adapter = routedModelAdapter(taskRecordID: taskRecordID)
         // 边做边想:派发的隔离子任务也要把模型每步动作前的旁白落进**这条任务自己的记录**——否则任务窗口
         // 只见工具调用、缺"运行时思考",看不出每步为什么这么做。记录 id 用本子任务的(主会话用 currentAgentTurnRecordID,
         // 这里不同);后台并行跑,不抢全局 missionStatus。
