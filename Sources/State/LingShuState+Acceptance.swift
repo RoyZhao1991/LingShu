@@ -10,7 +10,8 @@ extension LingShuState {
     /// 据某任务记录算全类型验收报告:取 GoalSpec 成功标准 → 惰性分类(缓存)→ 用宿主侧事实逐条裁决。
     /// 无成功标准 / 开关关 → 空报告(不加压、零成本)。
     func acceptanceReport(taskRecordID: String?, realFiles: [String]) async -> LingShuAcceptanceReport {
-        guard goalSpecEnabled, let spec = goalSpec(for: taskRecordID), !spec.successCriteria.isEmpty else {
+        guard shouldRunGoalAcceptance(taskRecordID: taskRecordID),
+              let spec = goalSpec(for: taskRecordID) else {
             return LingShuAcceptanceReport(verdicts: [], note: "")
         }
         // 分类:惰性、缓存到记录(返工循环里复用,不重复分类)。
@@ -56,6 +57,13 @@ extension LingShuState {
         return taskExecutionRecords.first(where: { $0.id == recordID })?.acceptanceChecks
     }
 
+    /// P3 验收触发条件:只有 task 型目标且带成功标准才强制跑 GoalSpec 验收。
+    /// 闲聊/问答不因 GoalSpec 误判而加重模型调用;但 task 即便没产物也要跑,让缺文件/缺命令能被硬门发现。
+    func shouldRunGoalAcceptance(taskRecordID: String?) -> Bool {
+        guard goalSpecEnabled, let spec = goalSpec(for: taskRecordID) else { return false }
+        return spec.kind == .task && !spec.successCriteria.isEmpty
+    }
+
     /// 把验收报告绑定到记录(typed,持久化)+ 落 trace,供用户验收逐条核对。
     func bindAcceptanceReport(_ report: LingShuAcceptanceReport, to recordID: String?) {
         guard !report.isEmpty, let recordID, let idx = taskExecutionRecords.firstIndex(where: { $0.id == recordID }) else { return }
@@ -63,16 +71,21 @@ extension LingShuState {
         persistTaskExecutionRecords()
     }
 
-    /// fileExists 探针:绝对/相对工作目录的真文件,或已确认落盘文件里 basename / 扩展名(*.ext)命中。
+    /// fileExists 探针:只认**本任务证据集**里的真实文件(登记产出物 ∪ 本次回复声明且盘上存在的文件)。
+    /// 不直接扫描工作目录,避免历史旧文件把本轮未产出的成功标准误判为达成。
     func acceptanceFileExists(_ probe: String, realFiles: [String]) -> Bool {
-        let abs = probe.hasPrefix("/") ? probe : (codexWorkingDirectory as NSString).appendingPathComponent(probe)
-        if FileManager.default.fileExists(atPath: abs) { return true }
-        let base = (probe as NSString).lastPathComponent.lowercased()
+        let trimmed = probe.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+        let normalizedRealFiles = Set(realFiles.map { ($0 as NSString).standardizingPath })
+        let base = (trimmed as NSString).lastPathComponent.lowercased()
         if base.hasPrefix("*.") {
             let ext = String(base.dropFirst(2))
-            return realFiles.contains { ($0 as NSString).pathExtension.lowercased() == ext }
+            return normalizedRealFiles.contains { ($0 as NSString).pathExtension.lowercased() == ext }
         }
-        return realFiles.contains { ($0 as NSString).lastPathComponent.lowercased() == base }
+        let abs = trimmed.hasPrefix("/") ? trimmed : (codexWorkingDirectory as NSString).appendingPathComponent(trimmed)
+        let normalizedProbe = (abs as NSString).standardizingPath
+        if normalizedRealFiles.contains(normalizedProbe) { return true }
+        return normalizedRealFiles.contains { ($0 as NSString).lastPathComponent.lowercased() == base }
     }
 
     /// commandSucceeds 探针:扫执行记录里 run_command 配对,看含探针子串的命令是否成功执行过。

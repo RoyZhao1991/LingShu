@@ -149,11 +149,13 @@ enum LingShuAcceptancePlanner {
     铁律:**能落到「文件存在」或「命令·测试成功」的尽量分到 file_exists / command_succeeds 并给出 probe**——这两类是唯一能被宿主确定性核验、不靠模型自说自话的;其余按真实语义分类,不要硬塞。
     """
 
-    /// 容错解析:剥围栏 + 取首个 [...] 数组 + 逐项解析。无法解析的成功标准回退为 content_quality(交评审官,绝不静默丢弃)。
+    /// 容错解析:剥围栏 + 取首个 [...] 数组 + 逐项解析。
+    /// 铁律:模型少返/漏返/乱返时,仍按原成功标准逐条返回检查项,缺失项回退为 content_quality,绝不静默丢条。
     static func parse(_ raw: String, fallbackCriteria: [String]) -> [LingShuAcceptanceCheck] {
-        let fallback = fallbackCriteria
+        let cleaned = fallbackCriteria
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
+        let fallback = cleaned
             .map { LingShuAcceptanceCheck(kind: .contentQuality, criterion: $0, probe: nil) }
 
         guard let start = raw.firstIndex(of: "["), let end = raw.lastIndex(of: "]"), start < end,
@@ -168,7 +170,28 @@ enum LingShuAcceptancePlanner {
             return LingShuAcceptanceCheck(kind: parseKind(obj["kind"] as? String), criterion: criterion,
                                           probe: probeRaw.isEmpty ? nil : probeRaw)
         }
-        return parsed.isEmpty ? fallback : parsed
+        guard !parsed.isEmpty else { return fallback }
+        guard !cleaned.isEmpty else { return parsed }
+
+        // 常见正常路径:模型按原顺序返回同样数量的检查项。即使 criterion 被轻微改写,
+        // 也用原成功标准文本覆盖回去,保证验收报告与 GoalSpec 一一对应。
+        if parsed.count == cleaned.count {
+            return zip(cleaned, parsed).map { original, check in
+                LingShuAcceptanceCheck(kind: check.kind, criterion: original, probe: check.probe)
+            }
+        }
+
+        // 异常路径:模型漏项/多项。只采用能按原文匹配上的分类;没匹配上的原标准退回 content_quality。
+        var used = Set<Int>()
+        return cleaned.map { original in
+            let key = normalizeCriterion(original)
+            if let idx = parsed.indices.first(where: { !used.contains($0) && normalizeCriterion(parsed[$0].criterion) == key }) {
+                used.insert(idx)
+                let check = parsed[idx]
+                return LingShuAcceptanceCheck(kind: check.kind, criterion: original, probe: check.probe)
+            }
+            return LingShuAcceptanceCheck(kind: .contentQuality, criterion: original, probe: nil)
+        }
     }
 
     static func parseKind(_ raw: String?) -> LingShuCriterionKind {
@@ -181,5 +204,13 @@ enum LingShuAcceptancePlanner {
         case "content_quality", "contentquality", "content", "quality": return .contentQuality
         default: return .contentQuality   // 兜底交评审官,不丢
         }
+    }
+
+    private static func normalizeCriterion(_ value: String) -> String {
+        value
+            .lowercased()
+            .filter { !$0.isWhitespace && !$0.isNewline }
+            .map(String.init)
+            .joined()
     }
 }

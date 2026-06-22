@@ -118,6 +118,9 @@ extension LingShuState {
         // ("讲解完处理中卡很久",2026-06-19 实测根因)。故常驻路径 `trustReplyClaim=false`:只在**本回合真落了新登记
         // 产出物**(producedRealArtifacts)时才验收;一次性/派发/自主执行路径保留兜底。
         let claimsArtifact = trustReplyClaim && Self.replyClaimsArtifact(Self.runResultText(result))
+        // P3:task 型 GoalSpec 带成功标准时,即便模型没落文件/没声称路径,也必须跑验收。
+        // 否则「口头说完成但没产物」会绕过文件/命令确定性硬门。
+        let hasGoalAcceptance = shouldRunGoalAcceptance(taskRecordID: taskRecordID)
         // **演示类回合不跑产出物验收(2026-06-19 实测根因"做PPT+演示卡在验收中")**:用过 `present_fullscreen`(占屏放映)
         // 的回合本质是**互动/演示、不是文件交付**。即使顺手做了 PPT(producedRealArtifacts=true)也别验收——否则 verifier
         // 对 PPT 挑刺"需修正"→返工循环,把正在演示的回合卡在「结果验证」、还误导主人(演示≠交付一个待 QA 的文件)。
@@ -128,7 +131,7 @@ extension LingShuState {
         // (注:run_command/curl 属元工具不计入——纯命令脚本壳无法确定性核实真实世界效果,需经真连接器/动作工具才计。)
         let didRealAction = taskHadActionToolSuccess(taskRecordID: taskRecordID)
         guard case .completed = result,
-              producedRealArtifacts || claimsArtifact || didRealAction else { return result }
+              producedRealArtifacts || claimsArtifact || didRealAction || hasGoalAcceptance else { return result }
         setLoopPhase(.verifying)   // 本体/状态栏显示「结果验证」(独立 verifier 核对产出物)
         let verifyCeiling = 8   // 安全天花板,非目标位
         // **非代码交付的返工时间预算(2026-06-17,防"PPT卡几分钟")**:PPT/文档这类没有确定性测试门的交付,

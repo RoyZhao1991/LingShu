@@ -14,8 +14,7 @@ struct LingShuDialogueSurface: View {
             LingShuChatScroll(state: state)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-            LingShuPulseStrip(state: state)
-
+            // 运行脉搏条已删(它只是「状态」surface 的冗余入口,顶栏「状态」tab 即可进,留着白占空间)。
             LingShuInputDock(state: state, voice: voice, vision: vision, perceptionGateway: perceptionGateway)
         }
         .frame(maxWidth: 980)
@@ -114,58 +113,6 @@ private struct LingShuChatScroll: View {
     private func chatBottomSignature(_ messages: [ChatMessage]) -> String {
         guard let message = messages.last else { return "empty" }
         return "\(message.id.uuidString):\(message.text.count):\(message.isLoading)"
-    }
-}
-
-/// 对话表面的运行脉搏条：状态速览的唯一入口，点击进入运行态。
-/// 条上每个元素都映射真实信号——状态点与文字 = 中枢状态（秒级局部刷新），
-/// 中段文案 = 当前任务动作，计数 = 活跃任务线程，波形 = 主通道是否有调用在途。
-struct LingShuPulseStrip: View {
-    @ObservedObject var state: LingShuState
-
-    var body: some View {
-        Button {
-            state.selectedSurface = .runtime
-        } label: {
-            HStack(spacing: 10) {
-                Circle()
-                    .fill(state.coreState.color)
-                    .frame(width: 7, height: 7)
-                    .shadow(color: state.coreState.color.opacity(0.85), radius: 4)
-
-                TimelineView(.periodic(from: .now, by: 1)) { _ in
-                    Text(state.coreStateDisplay)
-                        .font(.system(size: 11, weight: .bold, design: .monospaced))
-                        .foregroundStyle(state.coreState.color)
-                }
-
-                Text(state.missionStatus)
-                    .font(.system(size: 11.5, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.55))
-                    .lineLimit(1)
-
-                Spacer(minLength: 10)
-
-                if !state.taskThreads.isEmpty {
-                    Text("\(state.taskThreads.count) 线程")
-                        .font(.system(size: 10.5, weight: .bold, design: .monospaced))
-                        .foregroundStyle(.white.opacity(0.5))
-                }
-
-                LingShuVoiceWaveView(color: .lingHolo, isActive: state.hasActiveModelCall)
-                    .help("主通道调用活动：跳动表示模型调用在途")
-
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 10, weight: .bold))
-                    .foregroundStyle(.white.opacity(0.45))
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .lingShuHUDPanel(cornerLength: 8, fillOpacity: 0.03)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .help("打开运行态：完整调用链、执行轨迹与会话状态")
     }
 }
 

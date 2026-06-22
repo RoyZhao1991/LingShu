@@ -34,6 +34,36 @@ final class AcceptanceTests: XCTestCase {
         XCTAssertEqual(checks.first?.criterion, "标准A")
     }
 
+    func testParseNeverDropsMissingCriteriaWhenPlannerReturnsPartialArray() {
+        let raw = """
+        [
+          {"criterion":"生成 report.pdf","kind":"file_exists","probe":"report.pdf"},
+          {"criterion":"测试全绿","kind":"command_succeeds","probe":"swift test"}
+        ]
+        """
+        let checks = LingShuAcceptancePlanner.parse(
+            raw,
+            fallbackCriteria: ["生成 report.pdf", "内容覆盖三大主题", "测试全绿"]
+        )
+        XCTAssertEqual(checks.count, 3, "模型少返验收项时也必须与原成功标准一一对应")
+        XCTAssertEqual(checks[0].kind, .fileExists)
+        XCTAssertEqual(checks[1].kind, .contentQuality, "漏掉的中间项回退交评审官,不能静默消失")
+        XCTAssertEqual(checks[1].criterion, "内容覆盖三大主题")
+        XCTAssertEqual(checks[2].kind, .commandSucceeds)
+    }
+
+    func testParseUsesOriginalCriteriaWhenPlannerRewordsSameCount() {
+        let raw = """
+        [
+          {"criterion":"需要生成PDF报告","kind":"file_exists","probe":"report.pdf"}
+        ]
+        """
+        let checks = LingShuAcceptancePlanner.parse(raw, fallbackCriteria: ["生成 report.pdf"])
+        XCTAssertEqual(checks.count, 1)
+        XCTAssertEqual(checks[0].criterion, "生成 report.pdf", "验收报告必须回指 GoalSpec 原成功标准")
+        XCTAssertEqual(checks[0].kind, .fileExists)
+    }
+
     func testParseKindToleratesAliases() {
         XCTAssertEqual(LingShuAcceptancePlanner.parseKind("fileExists"), .fileExists)
         XCTAssertEqual(LingShuAcceptancePlanner.parseKind("command"), .commandSucceeds)
@@ -112,6 +142,40 @@ final class AcceptanceTests: XCTestCase {
         XCTAssertTrue(report.verdicts.allSatisfy { $0.status == .unverifiable }, "非确定性类型一律 unverifiable,绝不幻觉为达成")
         XCTAssertFalse(report.hasDeterministicFailure, "unverifiable 不触发硬门")
         XCTAssertEqual(report.unverifiable.count, 4)
+    }
+
+    @MainActor
+    func testFileExistsUsesTaskEvidenceNotStaleWorkspaceFile() throws {
+        let state = LingShuState()
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lingshu-p3-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let stale = dir.appendingPathComponent("report.pdf").path
+        FileManager.default.createFile(atPath: stale, contents: Data("old".utf8))
+        state.codexWorkingDirectory = dir.path
+
+        XCTAssertFalse(state.acceptanceFileExists("report.pdf", realFiles: []),
+                       "工作目录里有旧文件但本任务没有登记/声明时,不能算本轮达成")
+        XCTAssertTrue(state.acceptanceFileExists("report.pdf", realFiles: [stale]),
+                      "本任务证据集包含该文件时才算达成")
+        XCTAssertTrue(state.acceptanceFileExists("*.pdf", realFiles: [stale]))
+    }
+
+    @MainActor
+    func testGoalAcceptanceTriggersOnlyForTaskCriteria() {
+        let state = LingShuState()
+        let taskID = state.createTaskExecutionRecord(for: "生成报告")
+        state.bindGoalSpec(LingShuGoalSpec(objective: "生成报告", kind: .task, successCriteria: ["生成 report.pdf"]), to: taskID)
+        XCTAssertTrue(state.shouldRunGoalAcceptance(taskRecordID: taskID))
+
+        let questionID = state.createTaskExecutionRecord(for: "解释一个概念")
+        state.bindGoalSpec(LingShuGoalSpec(objective: "解释概念", kind: .question, successCriteria: ["回答清楚"]), to: questionID)
+        XCTAssertFalse(state.shouldRunGoalAcceptance(taskRecordID: questionID), "问答不应因成功标准误触发重型交付验收")
+
+        let noCriteriaID = state.createTaskExecutionRecord(for: "做点事")
+        state.bindGoalSpec(LingShuGoalSpec(objective: "做点事", kind: .task), to: noCriteriaID)
+        XCTAssertFalse(state.shouldRunGoalAcceptance(taskRecordID: noCriteriaID))
     }
 
     func testVerifierBlockAndFailureReason() {
