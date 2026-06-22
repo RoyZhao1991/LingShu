@@ -126,6 +126,8 @@ extension LingShuState {
             }
             _ = objective
         }
+        // 任务收尾/卡住/中断都可能释放并发槽 → 看队列区有没有该晋级派发的(idempotent:满则 no-op)。
+        promoteQueuedDispatchIfPossible()
     }
 
     private func isRoleAgentEventID(_ id: String) -> Bool {

@@ -79,11 +79,19 @@ extension LingShuState {
         }
         let ordered = lastSay.sorted { $0.value.at > $1.value.at }.prefix(3)   // 取最近 3 条线程
         var threads: [TriageThread] = []
-        for (i, kv) in ordered.enumerated() {
+        // **主会话刚问了问题在等回答** → 作为首条可续线程加进分诊上下文(标⏳),让分诊器能把「答复」路由回它、
+        // 也能把「新任务」照常判成 task 去派子线程(不再无脑把后续都塞回主会话→阻塞)。它不是派发线程,路由时单独识别。
+        if let pendingQ = pendingMainQuestionRecordID,
+           let rec = taskExecutionRecords.first(where: { $0.id == pendingQ }) {
+            let lastAsk = rec.messages.last(where: { $0.actor == "灵枢" })?.text ?? rec.summary
+            threads.append(.init(label: "T1", recordID: pendingQ,
+                                 summary: "⏳正等你回答 标题=「\(rec.title.prefix(28))」 它上次问:「\(lastAsk.prefix(120))」"))
+        }
+        for kv in ordered {
             let title = taskExecutionRecords.first(where: { $0.id == kv.key })?.title ?? "任务"
             let awaiting = kv.key == blockedDispatchedRecordID ? "⏳正等你回答 " : ""
             let summary = "\(awaiting)标题=「\(title.prefix(28))」 它上次说:「\(kv.value.text.prefix(120))」"
-            threads.append(.init(label: "T\(i + 1)", recordID: kv.key, summary: summary))
+            threads.append(.init(label: "T\(threads.count + 1)", recordID: kv.key, summary: summary))
         }
         // 近上下文:最近 8 条逐字,线程消息打标签(让分诊器看清这句话属于哪条线程)。
         let labelByRecord = Dictionary(threads.map { ($0.recordID, $0.label) }, uniquingKeysWith: { a, _ in a })

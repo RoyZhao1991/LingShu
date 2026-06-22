@@ -329,6 +329,59 @@ struct LingShuAttachmentTray: View {
     }
 }
 
+/// **派发队列区**(用户定调):并发满 3 时,多出来的 task 进这里**可见等待**(未进主窗口/未派发),
+/// 有空位自动晋级开始;晋级前可在此**删除**。横排芯片 + 删除 X,样式对齐附件托盘。
+struct LingShuDispatchQueueTray: View {
+    @ObservedObject var state: LingShuState
+
+    var body: some View {
+        let items = state.queuedDispatchTasks
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Image(systemName: "tray.full")
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundStyle(Color.lingHolo)
+                Text("队列区 · \(items.count) 条等待中(满 3 并发,有空位自动开始;晋级前可删)")
+                    .font(.system(size: 10, weight: .bold, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.5))
+                Spacer(minLength: 0)
+            }
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(items) { chip($0) }
+                }
+            }
+        }
+    }
+
+    private func chip(_ item: LingShuQueuedDispatchTask) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "clock")
+                .font(.system(size: 13, weight: .bold))
+                .foregroundStyle(Color.lingHolo.opacity(0.85))
+            VStack(alignment: .leading, spacing: 1) {
+                Text((item.goal?.isEmpty == false ? item.goal! : item.prompt))
+                    .font(.system(size: 11.5, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.9))
+                    .lineLimit(1)
+                Text("排队中")
+                    .font(.system(size: 9, weight: .bold, design: .monospaced))
+                    .foregroundStyle(Color.lingHolo.opacity(0.7))
+            }
+            Button { state.removeQueuedDispatchTask(id: item.id) } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(.white.opacity(0.6))
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
+        .frame(maxWidth: 240)
+        .lingShuHUDPanel(cornerLength: 6, fillOpacity: 0.05)
+    }
+}
+
 struct LingShuInputDock: View {
     @ObservedObject var state: LingShuState
     @ObservedObject var voice: VoiceIOManager
@@ -338,6 +391,9 @@ struct LingShuInputDock: View {
 
     var body: some View {
         VStack(spacing: 10) {
+            if !state.queuedDispatchTasks.isEmpty {
+                LingShuDispatchQueueTray(state: state)
+            }
             if !state.pendingAttachments.isEmpty {
                 LingShuAttachmentTray(state: state)
             }
