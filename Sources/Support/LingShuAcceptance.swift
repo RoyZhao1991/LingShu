@@ -217,7 +217,7 @@ enum LingShuAcceptancePlanner {
         return parsed
     }
 
-    private static func firstFileProbe(in text: String) -> String? {
+    static func firstFileProbe(in text: String) -> String? {
         let pattern = #"(/[^\s，。；;:：'"]+\.(?:pptx|docx|pdf|html?|md|csv|json|txt|py|js|ts|tsx|jsx|swift|xlsx|png|jpe?g|wav|mp3|mp4)|[A-Za-z0-9_\-./\p{Han}]+?\.(?:pptx|docx|pdf|html?|md|csv|json|txt|py|js|ts|tsx|jsx|swift|xlsx|png|jpe?g|wav|mp3|mp4)|\*\.(?:pptx|docx|pdf|html?|md|csv|json|txt|py|js|ts|tsx|jsx|swift|xlsx|png|jpe?g|wav|mp3|mp4))"#
         return firstRegexMatch(pattern: pattern, in: text)
     }

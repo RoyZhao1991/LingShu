@@ -216,8 +216,15 @@ struct LingShuTaskExecutionRecord: Identifiable, Codable, Equatable, Sendable {
     /// 通用中枢 P2 真闭环·**能力获取尝试**(typed,持久化)。缺口补齐过程:走了哪些路径、成败、最小验证结果,供记忆复用 + 审计。
     var acquisitionAttempts: [LingShuAcquisitionAttempt]?
 
+    /// 通用中枢·能力主动探测观察(typed,持久化)。能力图谱未命中时,探测器会留下发现/置信度/证据,
+    /// 后续可转为已验证能力或继续请求授权/驱动。
+    var capabilityProbeObservations: [LingShuCapabilityProbeObservation]?
+
     /// 通用中枢 P2 真闭环·**完成闸裁决**(typed,持久化)。防伪完成的最终结论(ok/partial/waitingForUser/blocked/needsAcquisition)。
     var taskOutcome: LingShuCompletionStatus?
+
+    /// 通用中枢·真实效果验收报告(typed,持久化)。P3 成功标准裁决后,进一步沉淀成可展示/可追溯的现实效果证据链。
+    var effectVerificationReport: LingShuEffectVerificationReport?
 
     /// 一句话**总目标**(模型经 `update_plan` 蒸馏的高度概括,如"构建一个清分结算系统";**不是复述需求**)。
     /// 三级信息架构第 1 级(右侧规划):总目标 → 分步计划(`plan`,抽象里程碑)→ 具体实现(左侧执行对话)。
@@ -268,7 +275,9 @@ struct LingShuTaskExecutionRecord: Identifiable, Codable, Equatable, Sendable {
         case acceptanceReport
         case capabilityRequirements
         case acquisitionAttempts
+        case capabilityProbeObservations
         case taskOutcome
+        case effectVerificationReport
     }
 
     init(
@@ -294,7 +303,9 @@ struct LingShuTaskExecutionRecord: Identifiable, Codable, Equatable, Sendable {
         acceptanceReport: LingShuAcceptanceReport? = nil,
         capabilityRequirements: [LingShuCapabilityRequirement]? = nil,
         acquisitionAttempts: [LingShuAcquisitionAttempt]? = nil,
-        taskOutcome: LingShuCompletionStatus? = nil
+        capabilityProbeObservations: [LingShuCapabilityProbeObservation]? = nil,
+        taskOutcome: LingShuCompletionStatus? = nil,
+        effectVerificationReport: LingShuEffectVerificationReport? = nil
     ) {
         self.id = id
         self.goal = goal
@@ -304,7 +315,9 @@ struct LingShuTaskExecutionRecord: Identifiable, Codable, Equatable, Sendable {
         self.acceptanceReport = acceptanceReport
         self.capabilityRequirements = capabilityRequirements
         self.acquisitionAttempts = acquisitionAttempts
+        self.capabilityProbeObservations = capabilityProbeObservations
         self.taskOutcome = taskOutcome
+        self.effectVerificationReport = effectVerificationReport
         self.title = title
         self.prompt = prompt
         self.status = status
@@ -345,7 +358,9 @@ struct LingShuTaskExecutionRecord: Identifiable, Codable, Equatable, Sendable {
         acceptanceReport = try container.decodeIfPresent(LingShuAcceptanceReport.self, forKey: .acceptanceReport)
         capabilityRequirements = try container.decodeIfPresent([LingShuCapabilityRequirement].self, forKey: .capabilityRequirements)
         acquisitionAttempts = try container.decodeIfPresent([LingShuAcquisitionAttempt].self, forKey: .acquisitionAttempts)
+        capabilityProbeObservations = try container.decodeIfPresent([LingShuCapabilityProbeObservation].self, forKey: .capabilityProbeObservations)
         taskOutcome = try container.decodeIfPresent(LingShuCompletionStatus.self, forKey: .taskOutcome)
+        effectVerificationReport = try container.decodeIfPresent(LingShuEffectVerificationReport.self, forKey: .effectVerificationReport)
     }
 
     static func create(prompt: String, now: Date = Date()) -> LingShuTaskExecutionRecord {

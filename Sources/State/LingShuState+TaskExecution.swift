@@ -12,6 +12,8 @@ extension LingShuState {
         let record = LingShuTaskExecutionRecord.create(prompt: prompt)
         taskExecutionJournal.upsert(record, into: &taskExecutionRecords)
         persistTaskExecutionRecords()
+        recordWorldTask(.init(id: record.id, title: record.title, phase: .planning, ownerAgentID: "agent:lingshu", updatedAt: record.updatedAt))
+        recordWorldEvent(kind: .task, source: "任务记录", summary: "创建任务:\(record.title)", relatedEntityIDs: ["agent:lingshu"], payload: ["recordID": record.id])
         return record.id
     }
 
@@ -29,6 +31,10 @@ extension LingShuState {
         // 净化(剥模型名泄露 + 裸 tool_calls JSON)走独立模块 LingShuTaskMessageFormatting。
         taskExecutionRecords[index].append(actor: actor, role: role, kind: kind, text: LingShuTaskMessageFormatting.sanitize(text), detail: detail)
         persistTaskExecutionRecords()
+        recordWorldEvent(kind: .task, source: actor, summary: "\(role):\(text)", payload: [
+            "recordID": recordID,
+            "messageKind": kind.rawValue
+        ])
     }
 
     func appendTaskRecordArtifact(
@@ -70,6 +76,14 @@ extension LingShuState {
 
         taskExecutionRecords[index].finish(status: status, summary: summary)
         persistTaskExecutionRecords()
+        recordWorldTask(.init(
+            id: recordID,
+            title: taskExecutionRecords[index].title,
+            phase: worldTaskPhase(from: status),
+            ownerAgentID: "agent:lingshu",
+            updatedAt: taskExecutionRecords[index].updatedAt
+        ))
+        recordWorldEvent(kind: .task, source: "任务记录", summary: "任务收尾:\(status.rawValue) \(summary)", payload: ["recordID": recordID])
         rememberGoalExperienceIfNeeded(recordID: recordID, status: status)   // P1 记忆消费:目标终态→结构化经验沉淀进知识图谱(可检索)
         if status == .completed || status == .verified { recordBrainTaskCompleted() }   // 大脑评分:自主完成一个任务 +1(verified=核验通过同样算)
         // 收尾(终态或可续停):结束当前线程段、抓代码改动、起队列下一段、触发离线固化。

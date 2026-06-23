@@ -21,6 +21,7 @@ extension LingShuState {
                                description: cap.description, source: cap.source,
                                online: true, permission: .granted, verified: true, lastVerifiedAt: nil))
         }
+        for entry in probedCapabilityEntries() { graph.upsert(entry) }
         for acquired in acquiredCapabilities() { graph.upsert(acquired) }
         return graph
     }
@@ -95,6 +96,9 @@ extension LingShuState {
         if !missing.isEmpty {
             appendTrace(kind: .system, actor: "能力需求", title: "需求查图谱",
                         detail: "需要 \(reqs.count) 项能力,\(missing.count) 项图谱未命中:" + missing.map { $0.verb.rawValue }.joined(separator: "、"))
+        }
+        Task { @MainActor [weak self] in
+            await self?.probeCapabilityRequirements(reqs, recordID: recordID)
         }
     }
 

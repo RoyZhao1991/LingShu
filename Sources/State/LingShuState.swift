@@ -187,6 +187,9 @@ final class LingShuState: ObservableObject {
         .init(timestamp: Date(), kind: .system, actor: "灵枢", title: "待机", detail: "主对话就绪。下达任务后，这里会显示路由、模型调用、agent 入队和工具输出。", isStream: false)
     ]
     @Published var taskRuntime: TaskRuntimeSnapshot = .idle
+    /// 通用中枢世界模型:汇总用户、任务、agent、设备、服务、感知与验收事件。
+    /// 当前先作为基础设施接线层,后续 UI/执行器统一读写它,避免各模块互相直连。
+    @Published var worldModel: LingShuWorldModel = LingShuState.loadWorldModelSnapshot()
     @Published var activeTaskThread: LingShuTaskThread?
     @Published var taskThreads: [LingShuTaskThread] = []
     @Published var taskExecutionRecords: [LingShuTaskExecutionRecord] = []
@@ -412,6 +415,8 @@ final class LingShuState: ObservableObject {
     let remoteSessionPool = LingShuRemoteSessionPool()
     let remoteConnectionPolicy = LingShuRemoteConnectionPolicy()
     let taskExecutionJournal = LingShuTaskExecutionJournal()
+    /// 能力主动探测注册表:把"图谱未命中"升级为"主动探测/推断/留下证据",第二阶段接入能力图谱。
+    let capabilityProbeRegistry = LingShuCapabilityProbeRegistry()
     let engineeringArtifactService = LingShuEngineeringArtifactService()
     let autonomousEnvironmentProbe = LingShuAutonomousEnvironmentProbe()
     /// 外接设备感知中枢（手机通知/日历…独立模块汇聚成标准输入）。详见 LingShuState+ExternalSensory。
@@ -493,6 +498,7 @@ final class LingShuState: ObservableObject {
     var perceptionSceneRefreshTrigger: (() -> Void)?
 
     init() {
+        installGeneralHubInfrastructure()
         restoreChatHistory()
         // 非交互裁决策略：自主运行中且非观察模式时，待确认问题自动按安全默认定夺，
         // 不阻塞无人值守执行（任务续接死锁那一类的根治）。其余场景照常逐题询问用户。
@@ -674,6 +680,11 @@ final class LingShuState: ObservableObject {
         if executionTrace.count > 180 {
             executionTrace.removeFirst(executionTrace.count - 180)
         }
+
+        recordWorldEvent(kind: .system, source: actor, summary: "\(title):\(cleanedDetail)", payload: [
+            "traceKind": kind.rawValue,
+            "isStream": isStream ? "true" : "false"
+        ])
     }
 
     func appendCodexStream(_ rawText: String, actor: String) {
@@ -1155,6 +1166,7 @@ final class LingShuState: ObservableObject {
             resetExecutionTrace(for: trimmedPrompt)
         }
         appendTrace(kind: .system, actor: source.displayName, title: "文本入队", detail: "\(source.displayName) 已落成文本，进入灵枢 agent 循环。")
+        recordWorldEvent(kind: .userInput, source: source.displayName, summary: trimmedPrompt, relatedEntityIDs: ["agent:lingshu"])
         // 用户开口的瞬间按需刷新场景理解（异步，不阻塞本轮；本地解析路由不出网）。
         perceptionSceneRefreshTrigger?()
 

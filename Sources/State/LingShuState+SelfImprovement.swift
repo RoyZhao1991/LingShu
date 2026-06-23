@@ -81,6 +81,12 @@ extension LingShuState {
         guard selfEvolutionEnabled else { return }   // 自我进化关 → 不采纳(高风险动作受总开关门控)
         var list = improvementProposals()
         guard let idx = list.firstIndex(where: { $0.id == id }), list[idx].status == .pending else { return }
+        let gate = safeEvolutionGateDecision(for: list[idx])
+        guard gate.allowedToRun else {
+            appendTrace(kind: .warning, actor: "自我进化", title: "安全门未放行", detail: "\(gate.reason):\(gate.requiredApprovals.joined(separator: "、"))")
+            chatMessages.append(.init(speaker: "灵枢", text: "这条自我改进我还不能直接执行。安全门要求先补齐：\(gate.requiredApprovals.joined(separator: "、"))。", isUser: false))
+            return
+        }
         list[idx].status = .approved
         persistImprovementProposals(list)
         let prop = list[idx]

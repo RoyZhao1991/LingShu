@@ -72,14 +72,23 @@ extension LingShuState {
         let signals = brainRoutingSignals(taskRecordID: taskRecordID, escalationCount: escalationCount)
         let available = availableBrainTiers()
         let desired = LingShuBrainRouter.desiredTier(signals)
-        let chosen = LingShuBrainRouter.resolve(desired: desired, available: available)
+        let adaptive = LingShuAdaptiveBrainRouter.route(
+            demand: adaptiveBrainDemand(taskRecordID: taskRecordID, escalationCount: escalationCount),
+            profiles: adaptiveBrainProfiles()
+        )
+        let adaptiveTier = adaptive.selectedBrainID
+            .flatMap { id -> LingShuBrainTier? in
+                guard id.hasPrefix("tier:") else { return nil }
+                return LingShuBrainTier(rawValue: String(id.dropFirst("tier:".count)))
+            }
+        let chosen = adaptiveTier ?? LingShuBrainRouter.resolve(desired: desired, available: available)
         let note: String
         if available.isEmpty {
-            note = "复杂度→\(desired.rawValue)档;未配多脑,用当前脑。"
+            note = "能力路由→\(adaptive.reason);未配多脑,用当前脑。"
         } else if chosen != desired {
-            note = "复杂度→\(desired.rawValue)档,该档未配→降级到 \(chosen.rawValue)档。"
+            note = "复杂度→\(desired.rawValue)档;能力路由→\(chosen.rawValue)档。\(adaptive.reason)"
         } else {
-            note = "复杂度→\(chosen.rawValue)档(已配)。"
+            note = "能力路由→\(chosen.rawValue)档。\(adaptive.reason)"
         }
         appendTrace(kind: .system, actor: "脑分层", title: "脑路由", detail: note)
         return chosen

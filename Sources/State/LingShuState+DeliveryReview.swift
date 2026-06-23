@@ -27,6 +27,9 @@ extension LingShuState {
         // 其余(内容质量/设备/环境/用户确认)注入评审官逐条核对(unverifiable 如实标,不假定达成)。无成功标准 → 空报告、零成本跳过。
         let acceptance = await acceptanceReport(taskRecordID: taskRecordID, realFiles: realFiles)
         if !acceptance.isEmpty { bindAcceptanceReport(acceptance, to: taskRecordID) }
+        if let effectFailure = bindAndGateEffectVerification(acceptance, taskRecordID: taskRecordID) {
+            return effectFailure
+        }
         if acceptance.hasDeterministicFailure {
             appendTrace(kind: .warning, actor: "验收", title: "成功标准确定性核验未过", detail: acceptance.summary)
             return (false, acceptance.deterministicFailureReason)

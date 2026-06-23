@@ -22,11 +22,44 @@ extension LingShuState {
             checks = derived
         }
         guard let checks, !checks.isEmpty else { return LingShuAcceptanceReport(verdicts: [], note: "") }
+        // **用户指定路径 authoritative(2026-06-23,监工"连文件名都要确认/自建任务被判异常"修)**:
+        // 分类器常给 fileExists 编个占位名(如 fibonacci_output.txt),与用户原话指定的路径不符 → 真文件被判"未找到"→
+        // 无尽返工/反问。这里把 fileExists 探针**对齐到用户明确指定的输出路径**,不让占位名误判失败。
+        let reconciled = reconcileFileProbesToUserPaths(checks, taskRecordID: taskRecordID)
         return LingShuAcceptanceReport.make(
-            checks: checks,
+            checks: reconciled,
             fileExists: { [weak self] probe in self?.acceptanceFileExists(probe, realFiles: realFiles) ?? false },
             commandSucceeded: { [weak self] probe in (self?.commandProbeOutcome(probe, taskRecordID: taskRecordID)) ?? nil }
         )
+    }
+
+    /// 用户在目标/约束/原始请求里**明确指定的输出文件路径**(authoritative,压过分类器编的占位名)。
+    func userSpecifiedOutputPaths(taskRecordID: String?) -> [String] {
+        var texts: [String] = []
+        if let spec = goalSpec(for: taskRecordID) {
+            texts.append(spec.objective); texts.append(contentsOf: spec.constraints); texts.append(contentsOf: spec.successCriteria)
+        }
+        if let rec = taskExecutionRecords.first(where: { $0.id == taskRecordID }) { texts.append(rec.prompt) }
+        var paths: [String] = []
+        for t in texts {
+            if let p = LingShuAcceptancePlanner.firstFileProbe(in: t), !paths.contains(p) { paths.append(p) }
+        }
+        return paths
+    }
+
+    /// 把 fileExists 检查的探针对齐到用户明确指定的路径:用户只指定一个输出文件时,所有 fileExists 用它(覆盖占位名);
+    /// probe 已按文件名对上用户某个路径则不动。零用户路径 → 原样(不强改)。
+    func reconcileFileProbesToUserPaths(_ checks: [LingShuAcceptanceCheck], taskRecordID: String?) -> [LingShuAcceptanceCheck] {
+        let userPaths = userSpecifiedOutputPaths(taskRecordID: taskRecordID)
+        guard !userPaths.isEmpty else { return checks }
+        let userBases = Set(userPaths.map { ($0 as NSString).lastPathComponent.lowercased() })
+        return checks.map { c in
+            guard c.kind == .fileExists else { return c }
+            let probeBase = ((c.probe ?? "") as NSString).lastPathComponent.lowercased()
+            if !probeBase.isEmpty, userBases.contains(probeBase) { return c }   // 探针已对上用户路径
+            // 单文件场景:换成用户唯一指定路径;多文件:用第一个(仍比占位名强,真文件 basename 也会被兜)。
+            return LingShuAcceptanceCheck(kind: .fileExists, criterion: c.criterion, probe: userPaths[0])
+        }
     }
 
     /// 把成功标准分类成验收检查项(模型 1-shot、无工具)。解析失败 → 全部回退 content_quality(交评审官,不丢条目)。
