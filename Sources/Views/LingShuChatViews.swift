@@ -70,8 +70,20 @@ struct ChatBubbleView: View {
                         // 任务执行：主线程只显示「当前步骤 + 耗时」的紧凑状态（语音友好、不刷屏）；
                         // 点一下进任务子线程窗口看实时的多段执行过程——对齐 codex/claude 的状态行做法。
                         // per-task 活动:显示**这条消息自己任务**的进度,不读全局 missionTitle(根治多任务并行时串台)。
-                        LingShuTaskProgressIndicator(stage: state.activityLabel(for: message.taskRecordID), startedAt: message.createdAt) {
-                            state.openTaskRecord(message.taskRecordID)
+                        HStack(spacing: 8) {
+                            LingShuTaskProgressIndicator(stage: state.activityLabel(for: message.taskRecordID), startedAt: message.createdAt) {
+                                state.openTaskRecord(message.taskRecordID)
+                            }
+                            // 问答线可删:**等待中(未执行)**的问答显示删除按钮(执行中的那条不可删)。
+                            if state.canDeletePendingChatTurn(message.id) {
+                                Button { state.deletePendingChatTurn(bubbleID: message.id) } label: {
+                                    Image(systemName: "xmark.circle.fill")
+                                        .font(.system(size: 15))
+                                        .foregroundStyle(.white.opacity(0.35))
+                                }
+                                .buttonStyle(.plain)
+                                .help("删除这条等待中的问答(执行中的不可删)")
+                            }
                         }
                     } else {
                         VStack(alignment: .leading, spacing: 7) {

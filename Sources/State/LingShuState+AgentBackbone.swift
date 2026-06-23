@@ -188,6 +188,8 @@ extension LingShuState {
             chatMessages.append(pending)
             pendingID = pending.id
         }
+        // 问答线可删等待队列:登记这条问答(轮到才执行;等待中可删)。
+        if !pendingChatTurnIDs.contains(pendingID) { pendingChatTurnIDs.append(pendingID) }
         appendTrace(kind: .route, actor: "Agent循环", title: "主会话", detail: "经统一 agent 循环处理(真模型 + 工具 + 隔离子会话 + 账本)。")
         currentAgentTurnRecordID = taskRecordID   // 工具桥据此把产出文件登记到本回合记录
         // 置"模型在飞"状态:驱动语音通话显示"灵枢在思考…"+暂停麦克风(否则无状态、麦克风不停会打断回复)。
@@ -202,10 +204,21 @@ extension LingShuState {
             // 模型把多轮揉在一起答(串台)+ 并发模型调用。
             await previousTurn?.value
             guard let self else { return }
+            // 问答线可删:轮到执行时若这条已被用户删除 → 跳过(不真跑、不进会话上下文),让下一条接上(线性不断)。
+            guard !self.cancelledChatTurnIDs.contains(pendingID) else {
+                self.cancelledChatTurnIDs.remove(pendingID)
+                self.pendingChatTurnIDs.removeAll { $0 == pendingID }
+                self.isModelReplying = false
+                self.enterCoreState(.standby, resetTimer: false)
+                return
+            }
+            self.executingChatTurnID = pendingID   // 标记"执行中"(此条不可删)
             defer {
                 self.isModelReplying = false
                 self.missionTitle = "待机中"
                 self.enterCoreState(.standby, resetTimer: false)
+                self.pendingChatTurnIDs.removeAll { $0 == pendingID }
+                if self.executingChatTurnID == pendingID { self.executingChatTurnID = nil }
             }
             let session = await self.mainAgentSession()   // 首次构造会蒸馏记忆做 seed
             // 真流式:最终答复逐字进本回合气泡(+ 按句早读 TTS)。捕获本轮 pendingID;回合串行执行保证不并发。
@@ -257,6 +270,25 @@ extension LingShuState {
             // 朗读由根视图的 speakLatestReplyIfNeeded(监听 chatMessages)统一负责,这里不再重复播报(否则双声线)。
         }
         return ""   // 即时 ack(占位气泡正文留空,真回复经气泡流式/回填)
+    }
+
+    /// 问答线:删除一条**等待中(未执行)**的问答(连同它的问题与答复占位)。**执行中的那条不可删**(线性,删了会断流)。
+    func deletePendingChatTurn(bubbleID: UUID) {
+        guard pendingChatTurnIDs.contains(bubbleID), bubbleID != executingChatTurnID else { return }
+        cancelledChatTurnIDs.insert(bubbleID)              // 轮到执行点会跳过(见 runMainAgentTurn)
+        pendingChatTurnIDs.removeAll { $0 == bubbleID }
+        // 删答复占位 + 它前面那条用户消息(整条问答删掉)。
+        if let idx = chatMessages.firstIndex(where: { $0.id == bubbleID }) {
+            let userIdx = (idx > 0 && chatMessages[idx - 1].isUser) ? idx - 1 : nil
+            chatMessages.remove(at: idx)
+            if let userIdx { chatMessages.remove(at: userIdx) }   // userIdx < idx,移除 idx 后仍有效
+        }
+        appendTrace(kind: .route, actor: "问答队列", title: "删除等待问答", detail: "用户删除一条尚未执行的问答。")
+    }
+
+    /// UI:这条答复气泡是否「等待中可删」(已排队问答 且 非执行中)。
+    func canDeletePendingChatTurn(_ bubbleID: UUID) -> Bool {
+        pendingChatTurnIDs.contains(bubbleID) && bubbleID != executingChatTurnID
     }
 
     /// 主会话回合收尾(正常完成 / 重连续跑后完成共用):填回气泡 + 落记录 + 记忆。

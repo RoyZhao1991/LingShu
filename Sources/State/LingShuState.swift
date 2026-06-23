@@ -236,7 +236,9 @@ final class LingShuState: ObservableObject {
     private let modelGateway = LingShuModelGateway()
     let remoteModelClient = LingShuRemoteModelClient()
     /// 主会话派生的并行子会话经此编排(隔离上下文 + 有界并发 + 统一账本 + 续接)。
-    let agentOrchestrator = LingShuAgentOrchestrator(maxConcurrent: 3)
+    /// **任务线串行(用户定调 2026-06-23「1+1=2 双线」)**:同时只 1 个任务在执行,其余进可删除队列区(信息池)。
+    /// 与问答线(主会话)独立并行。任务卡住(待用户/阻断)会释放槽位让队列晋级(见编排器 .blocked),不阻问答。
+    let agentOrchestrator = LingShuAgentOrchestrator(maxConcurrent: 1)
     /// 常驻主 agent 会话(对话连续性);懒构造,见 LingShuState+AgentBackbone。
     /// 核心循环变体开关(新旧循环热切换):`.classic`=经典连续循环 / `.nested`=嵌套分阶段验收循环。
     /// 持久化到 UserDefaults(跨重启保留所选引擎);经 `setAgentLoopVariant` 切换(默认常量/MCP 调试口)。
@@ -251,6 +253,12 @@ final class LingShuState: ObservableObject {
     /// **派发队列区**(用户定调):主界面支持 3 并发,多出来的进**可见队列区等待**(不直接进主窗口/不派发);
     /// 有空位时自动晋级派发;晋级前可在队列区删除。见 LingShuState+DispatchQueue。
     @Published var queuedDispatchTasks: [LingShuQueuedDispatchTask] = []
+    /// **问答线(主会话)可删等待队列**(用户定调 2026-06-23「1+1=2 双线」):问答串行,**只1条在执行**,其余**等待中可删**。
+    /// 与任务线独立并行(1任务+1问答可同时跑;任一卡住不阻另一条)。pending=已排队的答复气泡;executing=正在跑的那条(不可删)。
+    @Published var pendingChatTurnIDs: [UUID] = []
+    @Published var executingChatTurnID: UUID?
+    /// 已删除的问答答复气泡:对应 turn 轮到执行点时**跳过**(不真跑、不进会话上下文)。
+    var cancelledChatTurnIDs: Set<UUID> = []
     /// 模块变体注册表(P6+ 无界自进化)改版计数:注册/切换/回退后 bump,驱动变体管理面板刷新(注册表本身存 UserDefaults 按需读)。
     @Published var moduleVariantsRevision = 0
     /// **自我进化(P6)总开关**:默认**关闭**(自进化属高风险能力,需主人显式开启 + 风险确认)。
@@ -1186,13 +1194,15 @@ final class LingShuState: ObservableObject {
             // 注:主会话待答问题不再无脑把后续都接回主会话(那会阻塞——新任务本该派子线程并行)。
             // 改为把它放进分诊上下文(buildTriageContext 标⏳),由分诊器判:答复→续主会话提问;新任务→派子线程。
             // P1 目标认知:派生 GoalSpec 与分诊**并发**(不加 wall-clock 延迟);新建记录后绑定供执行引导/验收/记忆消费。
-            async let triageF = self.classifyDispatch(trimmedPrompt)
-            let goalSpec: LingShuGoalSpec? = self.goalSpecEnabled ? await self.deriveGoalSpec(for: trimmedPrompt, taskRecordID: nil) : nil
-            let triage = await triageF
-            // P2 能力缺口分析 + 能力需求:**仅对 task 型目标**(chat/reply 不需)执行前判可行性 + 缺口 + 补齐路径,并推导通用能力需求(查图谱)。两者并发。
+            // **性能优化(2026-06-23):先分诊,前置认知(GoalSpec/缺口/能力需求)仅 task 才派生**——
+            // 问答/续接(chat/reply)直答不需,省掉那几次控制面往返 + 减少并发脑调用(双线串行下脑负载更低)。
+            let triage = await self.classifyDispatch(trimmedPrompt)
             let isTask = self.goalSpecEnabled && triage.kind == .task
+            // task 的三项前置认知并发(不互相加 wall-clock);非 task 全部跳过。
+            async let goalSpecA: LingShuGoalSpec? = isTask ? self.deriveGoalSpec(for: trimmedPrompt, taskRecordID: nil) : nil
             async let gapA: LingShuGapAnalysis? = isTask ? self.deriveGapAnalysis(for: trimmedPrompt) : nil
             async let reqA: [LingShuCapabilityRequirement] = isTask ? self.deriveCapabilityRequirements(for: trimmedPrompt) : []
+            let goalSpec = await goalSpecA
             let gap = await gapA
             let reqs = await reqA
             let newRecordBoundToGoal: @MainActor () -> String = {
