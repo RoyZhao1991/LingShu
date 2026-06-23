@@ -1175,6 +1175,12 @@ final class LingShuState: ObservableObject {
         //   chat(直答/问答)→ 留主 session(对话连续);
         //   task(全新执行/落盘/多步)→ 派发**独立隔离 session 并行跑**(不串主上下文)。
         // 记录**按需建**:reply 续用派发线程自己的记录(不另建),task/chat 各建一条。异步,真回复经气泡给出。
+        // **顺序修(2026-06-23,监工"一问一答变成怪格式"):**分诊是异步(控制面往返),若只 append 用户消息、答复气泡
+        // 等分诊完才出,rapid 连发就"问题全堆上面、答复全堆下面"。这里**同步先放一个答复占位气泡紧跟用户消息后**,
+        // 保持 Q→A 交错;分诊定路由后:chat/派发**复用**它,入队/续接到已有线程则**移除**它。
+        let placeholder = ChatMessage(speaker: "灵枢", text: "", isUser: false, isLoading: true)
+        chatMessages.append(placeholder)
+        let placeholderID = placeholder.id
         Task { @MainActor [weak self] in
             guard let self else { return }
             // 注:主会话待答问题不再无脑把后续都接回主会话(那会阻塞——新任务本该派子线程并行)。
@@ -1208,11 +1214,12 @@ final class LingShuState: ObservableObject {
                     // 续答**主会话**的提问:接回主会话(同一条记录,把答复喂回去),不另起新任务。
                     self.pendingMainQuestionRecordID = nil
                     self.appendTrace(kind: .route, actor: "主线程分诊", title: "续答主会话提问", detail: "判为对主会话提问的回答,接回原任务,不另起。")
-                    _ = self.runMainAgentTurn(prompt: trimmedPrompt, taskRecordID: rid, resumeBlocked: true)
+                    _ = self.runMainAgentTurn(prompt: trimmedPrompt, taskRecordID: rid, resumeBlocked: true, existingBubbleID: placeholderID)
                 } else if let rid = triage.replyRecordID, self.agentSubTaskRecords.values.contains(rid), replyActive {
+                    self.removeChatBubble(placeholderID)   // 答复进那条派发线程自己的气泡,占位不再用
                     self.continueDispatchedThread(prompt: trimmedPrompt, recordID: rid)
                 } else {   // 兜底:线程没了/已完成 → 当对话留主线程
-                    _ = self.runMainAgentTurn(prompt: trimmedPrompt, taskRecordID: newRecordBoundToGoal())
+                    _ = self.runMainAgentTurn(prompt: trimmedPrompt, taskRecordID: newRecordBoundToGoal(), existingBubbleID: placeholderID)
                 }
             case .task:
                 // 主界面 task 支持 3 并发;**满了进可见队列区等待**(不直接派发、可删除),有空位自动晋级(用户定调)。
@@ -1223,13 +1230,14 @@ final class LingShuState: ObservableObject {
                 let cap = await self.agentOrchestrator.capacity()
                 let active = self.dispatchedTaskBubbles.count + self.queuedDispatchTasks.count
                 if Self.shouldQueueDispatch(running: active, capacity: cap) {
+                    self.removeChatBubble(placeholderID)   // 进队列区(信息池),不在主对话留气泡
                     self.enqueueDispatchTask(prompt: trimmedPrompt, goal: triage.goal, goalSpec: goalSpec, gap: gap, requirements: reqs)
                 } else {
                     // 要占屏实时演示/互动时,由大脑自己调 enter_managed_mode 申请、弹窗征主人同意后才转入托管。
-                    self.dispatchIsolatedTask(prompt: trimmedPrompt, taskRecordID: newRecordBoundToGoal(), goal: triage.goal)
+                    self.dispatchIsolatedTask(prompt: trimmedPrompt, taskRecordID: newRecordBoundToGoal(), goal: triage.goal, existingBubbleID: placeholderID)
                 }
             case .chat:
-                _ = self.runMainAgentTurn(prompt: trimmedPrompt, taskRecordID: newRecordBoundToGoal())
+                _ = self.runMainAgentTurn(prompt: trimmedPrompt, taskRecordID: newRecordBoundToGoal(), existingBubbleID: placeholderID)
             }
         }
         return ""

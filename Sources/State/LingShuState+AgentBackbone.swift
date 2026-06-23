@@ -171,20 +171,23 @@ extension LingShuState {
 
     /// 主入口:常规输入交给主 agent 会话(异步跑循环,结果回填气泡)。
     @discardableResult
-    func runMainAgentTurn(prompt: String, taskRecordID: String?, resumeBlocked: Bool = false, originalPromptForVerification: String? = nil) -> String {
+    func runMainAgentTurn(prompt: String, taskRecordID: String?, resumeBlocked: Bool = false, originalPromptForVerification: String? = nil, existingBubbleID: UUID? = nil) -> String {
         // 新一轮开始:先掐掉上一条回复还在放的 TTS,避免旧音频盖到新轮(音频/文字 desync)。
         interruptSpeechOutput?()
         let turnStartedAt = Date()   // 计总用时,回复末尾展示
         // pending 气泡正文留空:工具执行中显示紧凑进度行,最终答复流式到达时逐字填充(见 ChatBubbleView)。
-        // 不再预置占位话——否则 text 一开始就非空,会让"有流式正文才逐字"的判断失准 + 与逐字正文重复。
-        let pending = ChatMessage(
-            speaker: "灵枢",
-            text: "",
-            isUser: false,
-            isLoading: true,
-            taskRecordID: taskRecordID
-        )
-        chatMessages.append(pending)
+        // **顺序修(2026-06-23)**:`existingBubbleID` 给了就**复用 submitTextInput 已同步放在用户消息后的占位气泡**
+        // (保持 Q→A 交错,不让 rapid 连发"问题全堆上面、答复全堆下面");没给则照旧新建。
+        let pendingID: UUID
+        if let existingBubbleID, let idx = chatMessages.firstIndex(where: { $0.id == existingBubbleID }) {
+            chatMessages[idx].taskRecordID = taskRecordID
+            chatMessages[idx].isLoading = true
+            pendingID = existingBubbleID
+        } else {
+            let pending = ChatMessage(speaker: "灵枢", text: "", isUser: false, isLoading: true, taskRecordID: taskRecordID)
+            chatMessages.append(pending)
+            pendingID = pending.id
+        }
         appendTrace(kind: .route, actor: "Agent循环", title: "主会话", detail: "经统一 agent 循环处理(真模型 + 工具 + 隔离子会话 + 账本)。")
         currentAgentTurnRecordID = taskRecordID   // 工具桥据此把产出文件登记到本回合记录
         // 置"模型在飞"状态:驱动语音通话显示"灵枢在思考…"+暂停麦克风(否则无状态、麦克风不停会打断回复)。
@@ -193,7 +196,6 @@ extension LingShuState {
         missionTitle = "理解需求"   // 进度显示当前活动而非笼统"思考中";有计划后随计划步走(currentActivityLabel)
         missionStatus = "正在推进这件事(按需读写文件、跑命令、联网查证)。"
         enterCoreState(.thinking)
-        let pendingID = pending.id
         let previousTurn = activeAgentTurnTask
         activeAgentTurnTask = Task { @MainActor [weak self] in
             // 串行:等上一轮彻底跑完再开始——杜绝 actor 重入导致多条 user 消息堆进同一上下文、
@@ -254,7 +256,7 @@ extension LingShuState {
             self.finalizeMainTurn(result: result, bubbleID: pendingID, recordID: taskRecordID, prompt: originalPromptForVerification ?? prompt, startedAt: turnStartedAt)
             // 朗读由根视图的 speakLatestReplyIfNeeded(监听 chatMessages)统一负责,这里不再重复播报(否则双声线)。
         }
-        return pending.text
+        return ""   // 即时 ack(占位气泡正文留空,真回复经气泡流式/回填)
     }
 
     /// 主会话回合收尾(正常完成 / 重连续跑后完成共用):填回气泡 + 落记录 + 记忆。

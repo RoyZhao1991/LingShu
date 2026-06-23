@@ -110,8 +110,14 @@ extension LingShuState {
     /// 把一个任务派发给**独立隔离 session** 并行跑(Stage 2 真隔离):本任务自己的 record + 全新 session,
     /// 经 `orchestrator.spawnDetached` 后台并发(maxConcurrent 3),**不挂主 session、不串上下文**。
     /// 返回即时确认(加载气泡);完成/卡住/失败由编排器事件回填该气泡(见 handleOrchestratorEvent)。
+    /// 移除一个**还在 loading 的占位气泡**(分诊判为入队/续接到已有线程时,submitTextInput 预放的答复占位不再用)。
+    /// 只移除 loading 态,避免误删已有正文的真气泡。
+    func removeChatBubble(_ id: UUID) {
+        chatMessages.removeAll { $0.id == id && $0.isLoading }
+    }
+
     @discardableResult
-    func dispatchIsolatedTask(prompt: String, taskRecordID: String, goal: String?) -> String {
+    func dispatchIsolatedTask(prompt: String, taskRecordID: String, goal: String?, existingBubbleID: UUID? = nil) -> String {
         installAgentEventSinkIfNeeded()
         interruptSpeechOutput?()
         let subID = "task-\(UUID().uuidString.prefix(6))"
@@ -120,9 +126,20 @@ extension LingShuState {
             taskExecutionRecords[i].goal = goal
             persistTaskExecutionRecords()
         }
-        let pending = ChatMessage(speaker: "灵枢", text: dialogueAcknowledgement.intake(for: prompt), isUser: false, isLoading: true, taskRecordID: taskRecordID)
-        chatMessages.append(pending)
-        dispatchedTaskBubbles[taskRecordID] = pending.id
+        // **顺序修(2026-06-23)**:复用 submitTextInput 已同步放在用户消息后的占位气泡(保持 Q→A 交错),没给才新建。
+        let intake = dialogueAcknowledgement.intake(for: prompt)
+        let bubbleID: UUID
+        if let existingBubbleID, let idx = chatMessages.firstIndex(where: { $0.id == existingBubbleID }) {
+            chatMessages[idx].text = intake
+            chatMessages[idx].taskRecordID = taskRecordID
+            chatMessages[idx].isLoading = true
+            bubbleID = existingBubbleID
+        } else {
+            let pending = ChatMessage(speaker: "灵枢", text: intake, isUser: false, isLoading: true, taskRecordID: taskRecordID)
+            chatMessages.append(pending)
+            bubbleID = pending.id
+        }
+        dispatchedTaskBubbles[taskRecordID] = bubbleID
         appendTrace(kind: .route, actor: "主线程分诊", title: "派发隔离任务", detail: "判为执行任务,派生独立隔离 session 并行推进(不进主对话上下文)。")
 
         // P5 脑分层:据本任务复杂度路由到弱/中/强档脑(配了多脑才有真分层;单脑落回当前脑)。
@@ -184,7 +201,7 @@ extension LingShuState {
             self.fillDispatchedBubble(taskRecordID, text: "前面任务排队较久仍没轮到,先没派出去——稍后重发即可。")
             self.agentSubTaskRecords[subID] = nil
         }
-        return pending.text
+        return intake
     }
 
     /// 用户这条是在**回答/延续某条派发的隔离任务**(如它问"做什么主题"、或几条之前问过):续跑**那条隔离会话本身**
