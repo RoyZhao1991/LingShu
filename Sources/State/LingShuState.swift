@@ -1216,9 +1216,13 @@ final class LingShuState: ObservableObject {
                 }
             case .task:
                 // 主界面 task 支持 3 并发;**满了进可见队列区等待**(不直接派发、可删除),有空位自动晋级(用户定调)。
-                let running = await self.agentOrchestrator.runningCount()
+                // **竞态修(2026-06-23,监工"信息池丢了"):**容量门改用**同步 MainActor 状态**(活跃派发气泡数 + 队列区数),
+                // 临界区(读数→判→派发/入队)**无 await**。原 `await runningCount()` 的 await 是交错点:rapid 连发的多条会
+                // 在此交错、全读到旧 running=0、全绕过队列直接派发(溢出被编排器内部不可见地兜住,可见队列区永不建)。
+                // dispatchedTaskBubbles 派发时同步置、收尾时同步清(见 Triage),正是无竞态的活跃派发计数。capacity 是常量,先读不影响。
                 let cap = await self.agentOrchestrator.capacity()
-                if Self.shouldQueueDispatch(running: running, capacity: cap) {
+                let active = self.dispatchedTaskBubbles.count + self.queuedDispatchTasks.count
+                if Self.shouldQueueDispatch(running: active, capacity: cap) {
                     self.enqueueDispatchTask(prompt: trimmedPrompt, goal: triage.goal, goalSpec: goalSpec, gap: gap, requirements: reqs)
                 } else {
                     // 要占屏实时演示/互动时,由大脑自己调 enter_managed_mode 申请、弹窗征主人同意后才转入托管。
