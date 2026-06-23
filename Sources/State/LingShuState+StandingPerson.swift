@@ -186,17 +186,36 @@ extension LingShuState {
     /// 在岗空闲时起一条新回合续跑（与插话注入区分）。**不再前置感知态势**——
     /// 直接问的问题就干净地答(屏幕变化只静默监测,要看屏自己 screen_capture),避免"介绍一下你自己"被态势前缀污染成"在岗待命"。
     /// `sentText`:真正发给模型的文本(默认=prompt);打断续接时传"打断措辞"包装版,而 trace/状态仍用 prompt 原文,不污染界面。
+    /// 在岗答复**流式气泡收尾**:有流式气泡 → `finalizeStreamingBubble` 定稿(逐字临时文本换成验收后最终回复;text 空→移除 partial),
+    /// 返回 true(调用方不必再 append);**无流式气泡**(开场招呼/目标驱动独立运行)→ 返回 false,调用方走原 append。供 finishAutonomousRun 收尾用。
+    @discardableResult
+    func settleStandingStreamBubble(text: String, recordID: String?) -> Bool {
+        guard let id = standingStreamingBubbleID else { return false }
+        standingStreamingBubbleID = nil
+        finalizeStreamingBubble(id, text: text, taskRecordID: recordID)
+        return true
+    }
+
     func resumeStandingSession(session: any LingShuAgentSessioning, prompt: String, recordID: String, sentText: String? = nil) {
         enterAutonomousRunningState(statusLine: "在岗处理：\(String(prompt.prefix(20)))")
         missionTitle = "灵枢在岗"
         appendTrace(kind: .runtime, actor: "灵枢", title: "在岗接令", detail: String(prompt.prefix(40)))
         // 在岗会话跨回合复用同一记录:记下本回合开始前的产出物数,验收门只看本回合**新增**(否则"演示/答疑"会被旧PPT误拖进验收)。
         let baseline = currentArtifactCount(recordID)
+        // **在岗答复流式(2026-06-23,提升流畅性)**:建一个实时流式气泡,模型正文增量边到边逐字上屏(+按句早读 TTS),
+        // 不再整轮跑完才一次性回灌。多步循环里工具往返之间的停顿仍在(可接受),但有文字进度=不再"卡住很多次"。
+        let streamBubble = ChatMessage(speaker: "灵枢", text: "", isUser: false, isLoading: true, taskRecordID: recordID)
+        chatMessages.append(streamBubble)
+        standingStreamingBubbleID = streamBubble.id
+        let bubbleID = streamBubble.id
         let previous = autonomousRunTask
         autonomousRunTask?.cancel()
         autonomousRunTask = Task { @MainActor [weak self] in
             await previous?.value   // 单线程:等被取消的上一条回合真停下(在回合边界退出,历史良构),新回合才接手
             guard let self, !Task.isCancelled else { return }
+            await session.setTextDeltaSink { [weak self] delta in
+                await MainActor.run { self?.appendStreamingBubbleText(delta, to: bubbleID) }
+            }
             let initial = await session.resume(sentText ?? prompt)
             // 常驻在岗路径关掉"回复文本声称产文件"的验收触发(trustReplyClaim:false):在岗轻量/对话/演示回合
             // 重活都派发给隔离 session 各自验收、自己几乎不直接产交付物,其回复一提到既有文件就误进验收→空转停滞("讲解完卡处理中")。

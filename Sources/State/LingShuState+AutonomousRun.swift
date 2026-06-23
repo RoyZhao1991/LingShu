@@ -291,11 +291,14 @@ extension LingShuState {
                 missionStatus = String(fullText.prefix(80))
                 appendTaskRecordMessage(recordID, actor: "灵枢", role: "在岗", kind: .result, text: fullText)
                 if let idx = taskExecutionRecords.firstIndex(where: { $0.id == recordID }) { taskExecutionRecords[idx].status = .answered }
-                // 上岗开场白:先把**尾部残留的旧招呼**去掉(每次上岗只留一句,不让历史里的招呼越堆越多),再追加这句并标记。
-                if isKickoffGreeting {
-                    while let last = chatMessages.last, last.isStandingGreeting == true { chatMessages.removeLast() }
+                // 在岗答复流式气泡定稿(逐字流式的临时文本→验收后最终回复);无流式气泡(开场招呼)才走原 append。
+                if !settleStandingStreamBubble(text: fullText, recordID: recordID) {
+                    // 上岗开场白:先把**尾部残留的旧招呼**去掉(每次上岗只留一句,不让历史里的招呼越堆越多),再追加这句并标记。
+                    if isKickoffGreeting {
+                        while let last = chatMessages.last, last.isStandingGreeting == true { chatMessages.removeLast() }
+                    }
+                    chatMessages.append(.init(speaker: "灵枢", text: fullText, isUser: false, taskRecordID: recordID, isStandingGreeting: isKickoffGreeting ? true : nil))
                 }
-                chatMessages.append(.init(speaker: "灵枢", text: fullText, isUser: false, taskRecordID: recordID, isStandingGreeting: isKickoffGreeting ? true : nil))
                 enterCoreState(.standby, resetTimer: false)
                 appendTrace(kind: .result, actor: "灵枢", title: "在岗", detail: String(fullText.prefix(80)))
                 return
@@ -318,6 +321,7 @@ extension LingShuState {
             missionTitle = "独立运行待答复"
             missionStatus = question
             appendTaskRecordMessage(recordID, actor: "独立运行", role: "待答复", kind: .warning, text: question)
+            settleStandingStreamBubble(text: "", recordID: recordID)   // 移除流式 partial,改用带选项的待答复气泡
             chatMessages.append(.init(speaker: "灵枢", text: "⏸ 独立运行需要你定一下：\(question)\n（直接在对话里回复，我就继续推进）", isUser: false, taskRecordID: recordID, choices: LingShuChoiceParsing.parse(question)))
             enterCoreState(.standby, resetTimer: false)
             appendTrace(kind: .warning, actor: "独立运行", title: "卡住待答复", detail: question)
@@ -336,7 +340,9 @@ extension LingShuState {
                 missionStatus = String(reply.prefix(80))
                 appendTaskRecordMessage(recordID, actor: "灵枢", role: "在岗", kind: .warning, text: reply)
                 if let idx = taskExecutionRecords.firstIndex(where: { $0.id == recordID }) { taskExecutionRecords[idx].status = .answered }
-                chatMessages.append(.init(speaker: "灵枢", text: reply, isUser: false, taskRecordID: recordID))
+                if !settleStandingStreamBubble(text: reply, recordID: recordID) {
+                    chatMessages.append(.init(speaker: "灵枢", text: reply, isUser: false, taskRecordID: recordID))
+                }
                 enterCoreState(.standby, resetTimer: false)
                 appendTrace(kind: .warning, actor: "灵枢", title: "在岗(未在步数内收尾)", detail: String(reply.prefix(80)))
                 return
@@ -353,6 +359,7 @@ extension LingShuState {
             appendTrace(kind: .warning, actor: "独立运行", title: "步数上限", detail: String(text.prefix(80)))
         case .interrupted(let reason):
             // 网络中断:**非失败**——独立运行挂起,登记重连后自动续跑;会话上下文保留在 autonomousSessionHolder。
+            settleStandingStreamBubble(text: "", recordID: recordID)   // 移除流式 partial(续跑时重建),不留 loading 气泡
             suspendedAutonomousRecordID = recordID
             updateAutonomousRun(phase: .paused, statusLine: "网络中断,已暂停,联网后自动续。")
             missionTitle = "独立运行已暂停(等网络)"

@@ -338,6 +338,9 @@ final class LingShuState: ObservableObject {
     var autonomousRunTask: Task<Void, Never>?
     var autonomousRunRecordID: String?
     var autonomousSessionHolder: (any LingShuAgentSessioning)?
+    /// 在岗答复的**流式气泡** id:在岗答复(对话)边生成边逐字上屏(与主界面同款),收尾时由 finishAutonomousRun 定稿。
+    /// nil = 本回合非流式(开场招呼/目标驱动独立运行,仍走末尾一次性回灌)。
+    var standingStreamingBubbleID: UUID?
     var autonomousPendingQuestion: String?
     /// 互动中派后台的子任务**完成后的待汇报队列**:在互动中完成则攒这里(不打断),择机捎带/待机时主动汇报。
     var pendingSubtaskReports: [String] = []
