@@ -142,6 +142,24 @@ final class SelfBuiltCapabilityGateTests: XCTestCase {
         XCTAssertNotEqual(decision.status, .blocked, "不该判失败")
     }
 
+    // —— 用户可读:绝不把内部标识 human.confirm/external_system.write 抛给用户 ——
+    func testHumanizedGapAskHidesRawIdentifiers() {
+        let hc = LingShuCapabilityGap(kind: .humanConfirmation, missing: "human.confirm:Python 脚本运行结果", fillPath: "先向用户确认", blocking: true)
+        let a = LingShuState.humanizeGapAsk(hc)
+        XCTAssertFalse(a.contains("human.confirm"), "不暴露内部动词标识")
+        XCTAssertTrue(a.contains("Python 脚本运行结果") || a.contains("确认"), "给人话")
+        let perm = LingShuCapabilityGap(kind: .permission, missing: "external_system.write:Notion工作区", fillPath: "需要用户授权", blocking: true)
+        let pa = LingShuState.humanizeGapAsk(perm)
+        XCTAssertFalse(pa.contains("external_system.write"), "不暴露内部动词")
+        XCTAssertTrue(pa.contains("Notion工作区"), "保留人读对象")
+        XCTAssertTrue(pa.contains("授权") || pa.contains("登录"), "说清要授权")
+        // humanGapTarget:剥内部动词前缀,但不误伤普通中文(含冒号)目标。
+        XCTAssertEqual(LingShuState.humanGapTarget("external_system.write:Notion"), "Notion")
+        XCTAssertEqual(LingShuState.humanGapTarget("api.call:GitHub"), "GitHub")
+        XCTAssertEqual(LingShuState.humanGapTarget("普通中文目标"), "普通中文目标")
+        XCTAssertEqual(LingShuState.humanGapTarget("时间:12点"), "时间:12点", "非内部动词前缀不剥")
+    }
+
     // —— 辅助纯函数 ——
     func testHelpers() {
         XCTAssertTrue(LingShuState.isScriptArtifact("/a/b/sync.py"))

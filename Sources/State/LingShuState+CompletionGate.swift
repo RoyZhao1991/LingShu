@@ -253,7 +253,35 @@ extension LingShuState {
     func capabilityUserAsk(taskRecordID: String?) -> String {
         let gap = gapAnalysis(for: taskRecordID)
         return (gap?.blockingGaps.filter { $0.requiresUser } ?? [])
-            .map { "「\($0.missing)」(\($0.fillPath))" }.joined(separator: "、")
+            .map { Self.humanizeGapAsk($0) }.joined(separator: ";")
+    }
+
+    /// 把缺口翻成**人话的"需要你做什么"**(绝不把内部标识 `external_system.write:Notion` / fillPath 抛给用户)。
+    nonisolated static func humanizeGapAsk(_ gap: LingShuCapabilityGap) -> String {
+        let target = humanGapTarget(gap.missing)
+        switch gap.kind {
+        case .permission:
+            return target.isEmpty ? "对相关账号/服务的授权(登录或给我凭据)" : "对「\(target)」的授权(登录或给我对应凭据)"
+        case .funding:
+            return target.isEmpty ? "付费/扣款的确认" : "「\(target)」的付费确认"
+        case .device:
+            return target.isEmpty ? "相关设备/外设的确认与权限" : "「\(target)」的确认与权限"
+        case .humanConfirmation:
+            return target.isEmpty ? "你的确认或我需要的关键信息" : "你对「\(target)」的确认或必要信息"
+        default:
+            return target.isEmpty ? gap.missing : "「\(target)」"
+        }
+    }
+
+    /// 取缺口的人读对象:剥掉内部动词前缀(能力需求派生的 missing 形如 "external_system.write:Notion工作区" → "Notion工作区")。
+    nonisolated static func humanGapTarget(_ missing: String) -> String {
+        guard let colon = missing.firstIndex(of: ":") else { return missing.trimmingCharacters(in: .whitespaces) }
+        let prefix = String(missing[..<colon])
+        // 仅当前缀像内部动词标识(含点或全小写下划线)才剥离,普通含冒号的中文目标原样保留。
+        if prefix.contains(".") || prefix.range(of: "^[a-z_]+$", options: .regularExpression) != nil {
+            return String(missing[missing.index(after: colon)...]).trimmingCharacters(in: .whitespaces)
+        }
+        return missing.trimmingCharacters(in: .whitespaces)
     }
 
     /// 据记录已绑的 taskOutcome 给收尾文案补诚实尾巴(编排器 .failed/.blocked 收尾时用):
