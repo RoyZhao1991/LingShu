@@ -50,8 +50,18 @@ struct ChatBubbleView: View {
     @ObservedObject var state: LingShuState
     /// 霓虹侧条的"呼吸"相位——轻微动效,看着更科幻(只动一根 2px 条 + 描边,开销极小)。
     @State private var glow = false
+    /// 气泡内"追加信息"输入(任务等用户输入时)。
+    @State private var taskReplyText = ""
 
     private var accent: Color { message.isUser ? .lingHolo : .lingHoloAlt }
+
+    /// 气泡内回复直达该任务的隔离会话(不经主输入/分诊)。
+    private func sendTaskReply(_ recordID: String) {
+        let t = taskReplyText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !t.isEmpty else { return }
+        taskReplyText = ""
+        state.answerDispatchedTask(recordID: recordID, answer: t)
+    }
 
     var body: some View {
         HStack {
@@ -147,6 +157,25 @@ struct ChatBubbleView: View {
                     LingShuFormCard(form: form, resolved: message.formAnswers) { answers in
                         state.submitFormAnswers(answers, for: message.id)
                     }
+                }
+
+                // **气泡内追加信息**:这条任务在等用户输入 → 从气泡直接回复(选项上方/无选项时单独),
+                // 答复**直达该任务隔离会话**(不经主输入/分诊),不怕被后续聊天淹没。
+                if !message.isUser, let rid = message.awaitingInputForRecordID {
+                    HStack(spacing: 6) {
+                        TextField(state.loc("回复这条任务(如 A / B,或补充信息)…", "Reply to this task…"),
+                                  text: $taskReplyText)
+                            .textFieldStyle(.roundedBorder)
+                            .font(.system(size: 13))
+                            .onSubmit { sendTaskReply(rid) }
+                        Button { sendTaskReply(rid) } label: {
+                            Image(systemName: "arrow.up.circle.fill").font(.system(size: 18))
+                                .foregroundStyle(Color.lingHolo)
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(taskReplyText.trimmingCharacters(in: .whitespaces).isEmpty)
+                    }
+                    .padding(.top, 4)
                 }
 
                 if !message.isUser,

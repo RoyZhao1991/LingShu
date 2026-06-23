@@ -64,4 +64,36 @@ final class DualLaneTests: XCTestCase {
         let state = LingShuState()
         XCTAssertFalse(state.canDeletePendingChatTurn(UUID()), "不在 pending 列表 → 不可删")
     }
+
+    // 卡住任务的「气泡内待输入」:标记 + 气泡内直答(直达隔离会话,不经分诊)。
+    func testDispatchedTaskAwaitingInputInBubble() {
+        let state = LingShuState()
+        let rec = LingShuTaskExecutionRecord(id: "r1", title: "斐波那契", prompt: "P", status: .running, summary: "",
+                                             participants: [], createdAt: Date(), updatedAt: Date(), messages: [])
+        state.taskExecutionRecords = [rec]
+        let bubble = ChatMessage(speaker: "灵枢", text: "推进中", isUser: false, isLoading: true, taskRecordID: "r1")
+        state.chatMessages = [bubble]
+        state.dispatchedTaskBubbles["r1"] = bubble.id
+
+        // 卡住 → 把气泡标成「待你输入」。
+        state.markDispatchedBubbleAwaitingInput(recordID: "r1", question: "选 A 还是 B?")
+        let m = state.chatMessages.first { $0.id == bubble.id }
+        XCTAssertEqual(m?.awaitingInputForRecordID, "r1", "气泡标成待输入(渲染气泡内回复控件)")
+        XCTAssertEqual(m?.isLoading, false, "不再 loading")
+        XCTAssertNil(state.dispatchedTaskBubbles["r1"], "气泡定稿,旧映射清掉(答复时新建续跑气泡)")
+
+        // 气泡内直答 → 清待输入标记 + 显示用户答复(直达隔离会话续跑)。
+        state.agentSubTaskRecords["sub1"] = "r1"
+        state.answerDispatchedTask(recordID: "r1", answer: "A")
+        XCTAssertNil(state.chatMessages.first { $0.id == bubble.id }?.awaitingInputForRecordID, "答后清除待输入(置灰)")
+        XCTAssertTrue(state.chatMessages.contains { $0.isUser && $0.text == "A" }, "用户答复A显示在气泡处")
+        XCTAssertNotNil(state.dispatchedTaskBubbles["r1"], "新建了续跑进度气泡")
+    }
+
+    func testAnswerEmptyIsNoop() {
+        let state = LingShuState()
+        let before = state.chatMessages.count
+        state.answerDispatchedTask(recordID: "rX", answer: "   ")
+        XCTAssertEqual(state.chatMessages.count, before, "空答复无副作用")
+    }
 }

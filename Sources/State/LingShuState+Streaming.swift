@@ -29,6 +29,12 @@ extension LingShuState {
         guard let index = chatMessages.firstIndex(where: { $0.id == messageID }),
               chatMessages[index].resolvedChoice == nil else { return }
         chatMessages[index].resolvedChoice = option.label
+        // **气泡内待输入的派发任务**:选项点击**直达那条隔离会话**(不经分诊/主输入),修"卡住任务被聊天淹没回复对不上"。
+        if let rid = chatMessages[index].awaitingInputForRecordID {
+            chatMessages[index].awaitingInputForRecordID = nil
+            answerDispatchedTask(recordID: rid, answer: option.label)
+            return
+        }
         // ask_choice:有在飞的循环挂起等点选 → 直接唤醒它继续(不另起新输入);否则走旧 route-choice 路径。
         if let resolver = pendingChoiceResolvers.removeValue(forKey: messageID) {
             resolver(option.label)

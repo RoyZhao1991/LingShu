@@ -229,6 +229,50 @@ extension LingShuState {
         dispatchedTaskBubbles[recordID] = nil
     }
 
+    /// **任务卡住等用户输入 → 把它的气泡标成「待你输入」**(渲染气泡内回复控件:选项/追加信息)。
+    /// 这样无论后面堆了多少聊天,回复都从这条气泡发出、**直达该任务隔离会话**(不靠分诊在历史里找回它)。
+    func markDispatchedBubbleAwaitingInput(recordID: String, question: String) {
+        let text = "⏸ 这条任务需要你定一下:\(question)"
+        let choices = LingShuChoiceParsing.parse(question)
+        if let bid = dispatchedTaskBubbles[recordID], let idx = chatMessages.firstIndex(where: { $0.id == bid }) {
+            chatMessages[idx].text = text
+            chatMessages[idx].isLoading = false
+            chatMessages[idx].choices = choices
+            chatMessages[idx].awaitingInputForRecordID = recordID
+        } else {
+            chatMessages.append(.init(speaker: "灵枢", text: text, isUser: false, taskRecordID: recordID,
+                                      choices: choices, awaitingInputForRecordID: recordID))
+        }
+        dispatchedTaskBubbles[recordID] = nil   // 这条气泡定稿成"待你输入";答复时新建续跑气泡
+    }
+
+    /// **气泡内直接回答一条等待输入的派发任务**(选项点击 / 追加信息提交):**直达那条隔离会话续跑**——
+    /// 不经主输入框/分诊(避免被后续聊天淹没找不回),也**不受问答线活跃阻塞**(双线独立,故不查 hasActiveModelCall)。
+    func answerDispatchedTask(recordID: String, answer: String) {
+        let trimmed = answer.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        if let i = chatMessages.firstIndex(where: { $0.awaitingInputForRecordID == recordID }) {
+            chatMessages[i].awaitingInputForRecordID = nil           // 置灰这条"待输入"气泡
+            if chatMessages[i].resolvedChoice == nil { chatMessages[i].resolvedChoice = trimmed }
+        }
+        chatMessages.append(.init(speaker: "你", text: trimmed, isUser: true))   // 答复显示在气泡处,接上 Q→A
+        appendTaskRecordMessage(recordID, actor: "你", role: "答复", kind: .user, text: trimmed)
+        if recordID == blockedDispatchedRecordID { blockedDispatchedRecordID = nil }
+        guard let subID = agentSubTaskRecords.first(where: { $0.value == recordID })?.key else {
+            _ = runMainAgentTurn(prompt: trimmed, taskRecordID: recordID, resumeBlocked: true)   // 兜底:非隔离→主会话续
+            return
+        }
+        installAgentEventSinkIfNeeded()
+        let wasWaiting = taskExecutionRecords.first { $0.id == recordID }?.taskOutcome == .waitingForUser
+        if wasWaiting { resolveUserProvidedGaps(recordID: recordID) }
+        let resumeInput = wasWaiting ? trimmed + "\n\n" + capabilityResumePreamble(recordID: recordID) : trimmed
+        let pending = ChatMessage(speaker: "灵枢", text: dialogueAcknowledgement.intake(for: trimmed), isUser: false, isLoading: true, taskRecordID: recordID)
+        chatMessages.append(pending)
+        dispatchedTaskBubbles[recordID] = pending.id
+        appendTrace(kind: .route, actor: "任务气泡", title: "气泡内直答", detail: "气泡内回复直达派发任务隔离会话(不经分诊)。")
+        Task { await agentOrchestrator.resumeWithInput(id: subID, input: resumeInput) }
+    }
+
     /// 派发任务执行者的系统提示(隔离 session 用):LOOP 计划 + 真落盘 + 不造假的核心规则。
     nonisolated static func dispatchedTaskSystemPrompt(workingDir: String) -> String {
         """

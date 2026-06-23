@@ -413,6 +413,9 @@ struct ChatMessage: Identifiable, Codable, Equatable, Sendable {
     var form: LingShuConfirmForm?
     /// 主人提交的表单答案(key→值);非 nil=已提交,卡片置为已解决不再可改。
     var formAnswers: [String: String]?
+    /// **这条气泡在等某条派发任务的用户输入**(选择/追加信息)→ UI 在气泡内渲染回复控件,答复**直达该记录的隔离会话**
+    /// (不经主输入/分诊,避免被后续聊天淹没后找不回那条任务)。nil=普通消息。Optional 向后兼容。
+    var awaitingInputForRecordID: String?
 
     init(
         id: UUID = UUID(),
@@ -428,7 +431,8 @@ struct ChatMessage: Identifiable, Codable, Equatable, Sendable {
         attachmentNames: [String]? = nil,
         isStandingGreeting: Bool? = nil,
         form: LingShuConfirmForm? = nil,
-        formAnswers: [String: String]? = nil
+        formAnswers: [String: String]? = nil,
+        awaitingInputForRecordID: String? = nil
     ) {
         self.id = id
         self.speaker = speaker
@@ -444,6 +448,7 @@ struct ChatMessage: Identifiable, Codable, Equatable, Sendable {
         self.isStandingGreeting = isStandingGreeting
         self.form = form
         self.formAnswers = formAnswers
+        self.awaitingInputForRecordID = awaitingInputForRecordID
     }
 }
 

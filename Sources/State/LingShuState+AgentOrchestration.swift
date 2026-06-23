@@ -86,7 +86,13 @@ extension LingShuState {
                 if taskExecutionRecords[idx].taskOutcome == nil { taskExecutionRecords[idx].taskOutcome = .waitingForUser }
                 persistTaskExecutionRecords()
             }
-            postOrchestratorChat(recordID: recordID, dispatched: "⏸ 卡住,需要你定:\(question)", spawned: "⏸ 子任务「\(objective)」卡住,需要你定:\(question)")
+            // **气泡内待输入(2026-06-23,监工"卡住的任务被聊天淹没、回复对不上"修)**:把这条任务的气泡标成「待你输入」,
+            // 渲染气泡内回复控件(选项/追加信息),答复直达该隔离会话——不再靠分诊在历史里找回它。
+            if let recordID {
+                markDispatchedBubbleAwaitingInput(recordID: recordID, question: question)
+            } else {
+                chatMessages.append(.init(speaker: "灵枢", text: "⏸ 子任务「\(objective)」卡住,需要你定:\(question)", isUser: false, choices: LingShuChoiceParsing.parse(question)))
+            }
             briefMainThread("子任务「\(objective)」卡住,等待用户补充:\(question.prefix(160))")
         case .failed(let id, let objective, let summary):
             guard !isRoleAgentEventID(id) else { return }
