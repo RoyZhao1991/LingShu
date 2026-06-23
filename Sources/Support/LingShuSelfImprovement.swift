@@ -33,6 +33,18 @@ struct LingShuImprovementProposal: Codable, Sendable, Equatable, Identifiable {
         self.status = status
         self.at = at
     }
+
+    /// P6 安全流水线(非持久字段):自我改进只能沿这条可审计路径推进,不能直接改核心。
+    var safetyPipeline: [String] {
+        [
+            "定位反复弱点与成功标准",
+            "选择最小可逆补齐方式(技能/连接器/外围组件/策略变体)",
+            "沙箱或只读环境试跑",
+            "最小验证新能力确实可用",
+            "登记为默认关闭的变体或能力",
+            "用户显式启用后生效,保留一键回退"
+        ]
+    }
 }
 
 enum LingShuSelfImprovementMiner {

@@ -12,12 +12,28 @@ extension LingShuState {
     /// 当前能力图谱:现有扁平能力(视为已验证可用)+ 持久化的已获取能力。
     func capabilityGraph() -> LingShuCapabilityGraph {
         var graph = LingShuCapabilityGraph()
+        for entry in Self.kernelCapabilityEntries() {
+            graph.upsert(entry)
+        }
         for cap in enumerateCapabilities() {
-            graph.upsert(.init(id: cap.id, verb: nil, description: cap.description, source: cap.source,
+            graph.upsert(.init(id: cap.id,
+                               verb: LingShuCapabilityVerb.infer(id: cap.id, description: cap.description, source: cap.source),
+                               description: cap.description, source: cap.source,
                                online: true, permission: .granted, verified: true, lastVerifiedAt: nil))
         }
         for acquired in acquiredCapabilities() { graph.upsert(acquired) }
         return graph
+    }
+
+    /// 内核和本体原生四肢也进入图谱,否则 P2 会把"浏览器自动化/本地生成"误判为缺能力。
+    nonisolated static func kernelCapabilityEntries() -> [LingShuCapabilityEntry] {
+        [
+            .init(id: "kernel:local_file.scan", verb: .localFileScan, description: "内核原语:本机文件读取/搜索/扫描", source: "builtin", verified: true),
+            .init(id: "kernel:document.generate", verb: .documentGenerate, description: "内核原语:本地生成文档、代码、报告、演示材料", source: "builtin", verified: true),
+            .init(id: "kernel:compute", verb: .compute, description: "内核原语:本地计算与数据处理", source: "builtin", verified: true),
+            .init(id: "kernel:browser.operate", verb: .browserOperate, description: "内核四肢:浏览器自动化、网页读取与交互", source: "builtin", verified: true),
+            .init(id: "kernel:device.discover", verb: .deviceDiscover, description: "内核四肢:发现本机硬件、外设与传感器", source: "builtin", verified: true)
+        ]
     }
 
     /// 持久化的已获取能力(跨重启可复用)。
@@ -61,7 +77,7 @@ extension LingShuState {
         let session = LingShuAgentSession(
             id: "capreq-\(UUID().uuidString.prefix(6))",
             system: LingShuCapabilityRequirementPlanner.systemPrompt,
-            tools: [], model: makeAgentModelAdapter(), maxTurns: 1
+            tools: [], model: controlPlaneModelAdapter(.capabilityRequirement), maxTurns: 1
         )
         guard case .completed(let text) = await session.send(trimmed) else { return [] }
         return LingShuCapabilityRequirementPlanner.parse(LingShuReasoningText.stripThinkTags(text))
@@ -75,9 +91,68 @@ extension LingShuState {
         persistTaskExecutionRecords()
         let graph = capabilityGraph()
         let missing = reqs.filter { if case .missing = graph.match($0) { return true }; return false }
+        mergeCapabilityRequirementGaps(reqs, graph: graph, into: recordID)
         if !missing.isEmpty {
             appendTrace(kind: .system, actor: "能力需求", title: "需求查图谱",
                         detail: "需要 \(reqs.count) 项能力,\(missing.count) 项图谱未命中:" + missing.map { $0.verb.rawValue }.joined(separator: "、"))
+        }
+    }
+
+    /// P2 补齐:能力需求查图谱后的权威事实要进入 GapAnalysis,让 CompletionGate 能确定性驱动"找能力/要授权"。
+    func mergeCapabilityRequirementGaps(_ reqs: [LingShuCapabilityRequirement], graph: LingShuCapabilityGraph, into recordID: String) {
+        let gaps = reqs.compactMap { req -> LingShuCapabilityGap? in
+            switch graph.match(req) {
+            case .satisfied:
+                return nil
+            case .needsAuth(let entry):
+                return .init(kind: .permission,
+                             missing: "\(req.verb.rawValue):\(req.target.isEmpty ? entry.description : req.target)",
+                             fillPath: "需要用户授权或提供凭据后启用 \(entry.description)",
+                             blocking: true)
+            case .missing:
+                guard !req.verb.satisfiedByKernel else { return nil }
+                return Self.gapFromMissingRequirement(req)
+            }
+        }
+        guard !gaps.isEmpty, let idx = taskExecutionRecords.firstIndex(where: { $0.id == recordID }) else { return }
+        var analysis = taskExecutionRecords[idx].gapAnalysis ??
+            LingShuGapAnalysis(feasibleNow: false, gaps: [], note: "能力图谱前置核验发现缺口。")
+        for gap in gaps where !analysis.gaps.contains(where: { $0.kind == gap.kind && $0.missing == gap.missing }) {
+            analysis.gaps.append(gap)
+        }
+        if analysis.gaps.contains(where: { $0.blocking && !$0.resolved }) { analysis.feasibleNow = false }
+        taskExecutionRecords[idx].gapAnalysis = analysis
+        appendTaskRecordMessage(recordID, actor: "能力图谱", role: "缺口", kind: .core,
+                                text: "能力图谱核验发现 \(gaps.count) 项待补能力,已并入完成闸。")
+        persistTaskExecutionRecords()
+    }
+
+    nonisolated static func gapFromMissingRequirement(_ req: LingShuCapabilityRequirement) -> LingShuCapabilityGap {
+        let target = req.target.trimmingCharacters(in: .whitespacesAndNewlines)
+        let name = target.isEmpty ? req.verb.rawValue : "\(req.verb.rawValue):\(target)"
+        switch req.verb {
+        case .externalSystemRead, .externalSystemWrite:
+            return .init(kind: .tool, missing: name,
+                         fillPath: "先查已连 MCP/连接器;没有则 discover_skill 或 author_component 补外部系统读写能力,必要时请求授权。",
+                         blocking: true)
+        case .apiCall:
+            return .init(kind: .tool, missing: name,
+                         fillPath: "先查已有 API 工具;没有则 author_component 编写受限 API 调用组件并最小验证。",
+                         blocking: true)
+        case .browserOperate:
+            return .init(kind: .tool, missing: name,
+                         fillPath: "补浏览器自动化/网页操作能力后再推进。",
+                         blocking: true)
+        case .deviceDiscover, .deviceControl:
+            return .init(kind: .device, missing: name,
+                         fillPath: "先 discover_devices 探测设备;控制真实设备前需要用户确认设备与权限。",
+                         blocking: true)
+        case .humanConfirm:
+            return .init(kind: .humanConfirmation, missing: name,
+                         fillPath: "先向用户确认或索取必要信息。",
+                         blocking: true)
+        case .localFileScan, .documentGenerate, .compute, .unknown:
+            return .init(kind: .tool, missing: name, fillPath: "补齐对应通用工具能力。", blocking: true)
         }
     }
 

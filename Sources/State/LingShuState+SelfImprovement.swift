@@ -86,7 +86,13 @@ extension LingShuState {
         let prop = list[idx]
         appendTrace(kind: .result, actor: "自我进化", title: "已批准·派任务去建", detail: String(prop.theme.prefix(40)))
         registerImprovementAsVariant(prop)   // P6→变体联动:登记成可一键启用/回退的策略变体
-        let prompt = "自我改进:我在「\(prop.theme)」这类目标上反复受挫(\(prop.occurrences) 次)。请补齐对应能力——优先 author_component 自写工具 / discover_skill 装现成技能 / 接连接器(都经沙箱+安全门),建好用最小验证确认真可用。"
+        let pipeline = prop.safetyPipeline.enumerated().map { "\($0.offset + 1). \($0.element)" }.joined(separator: "\n")
+        let prompt = """
+        自我改进:我在「\(prop.theme)」这类目标上反复受挫(\(prop.occurrences) 次)。请补齐对应能力。
+        必须遵守安全流水线:
+        \(pipeline)
+        优先 author_component 自写外围工具 / discover_skill 装现成技能 / 接连接器;禁止直接修改核心 Swift 或让未审代码自动生效。建好后用最小验证确认真可用。
+        """
         _ = submitTextInput(prompt, source: .plugin("自我进化"))
     }
 

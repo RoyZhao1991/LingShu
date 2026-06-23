@@ -43,6 +43,14 @@ final class BrainRouterTests: XCTestCase {
         XCTAssertEqual(LingShuBrainRouter.route(s, available: [.weak, .medium]), .medium, "想要强但只配弱中→降级中")
     }
 
+    func testControlPlaneRolesHaveBoundedRoutingProfiles() {
+        XCTAssertEqual(LingShuBrainRouter.desiredTier(LingShuControlPlaneRole.triage.defaultSignals), .weak)
+        XCTAssertEqual(LingShuBrainRouter.desiredTier(LingShuControlPlaneRole.goalSpec.defaultSignals), .medium)
+        XCTAssertEqual(LingShuBrainRouter.desiredTier(LingShuControlPlaneRole.deliveryReview.defaultSignals), .strong)
+        XCTAssertLessThanOrEqual(LingShuControlPlaneRole.triage.timeoutSeconds, 6)
+        XCTAssertLessThanOrEqual(LingShuControlPlaneRole.acceptancePlanner.timeoutSeconds, 8)
+    }
+
     // MARK: State 层:配置 + 路由 + 单脑回退
 
     @MainActor

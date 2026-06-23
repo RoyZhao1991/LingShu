@@ -107,22 +107,24 @@ final class P3_AcceptanceCoverageTests: XCTestCase {
         XCTAssertEqual(p3[1].probe, "swift test"); n += 1
         XCTAssertEqual(p3[2].kind, .contentQuality); n += 1
         XCTAssertNil(p3[2].probe, "空 probe → nil"); n += 1
-        // D2: 非 JSON / 空 → 全回退 contentQuality
+        // D2: 非 JSON / 空 → 本地启发式回退:不丢条目,且保留文件/命令硬证据。
         for bad in ["不是JSON", "", "   ", "{对象不是数组}", "没有方括号"] {
             let pf = LingShuAcceptancePlanner.parse(bad, fallbackCriteria: crit)
             XCTAssertEqual(pf.count, 3, "回退保全部条目: \(bad)"); n += 1
-            XCTAssertTrue(pf.allSatisfy { $0.kind == .contentQuality }, "回退均 contentQuality"); n += 1
+            XCTAssertEqual(pf[0].kind, .fileExists, "回退仍识别文件硬证据"); n += 1
+            XCTAssertEqual(pf[1].kind, .commandSucceeds, "回退仍识别命令硬证据"); n += 1
+            XCTAssertEqual(pf[2].kind, .contentQuality, "无硬证据才交主观评审"); n += 1
         }
         // D3: 空 fallback + 有解析 → 用解析
         let pe = LingShuAcceptancePlanner.parse("[{\"criterion\":\"x\",\"kind\":\"file_exists\",\"probe\":\"x.txt\"}]", fallbackCriteria: [])
         XCTAssertEqual(pe.count, 1); n += 1
         XCTAssertEqual(pe[0].kind, .fileExists); n += 1
-        // D4: 数量不匹配 → 按原文匹配,未匹配回退 contentQuality
+        // D4: 数量不匹配 → 按原文匹配,未匹配走本地启发式。
         let jsonMismatch = "[{\"criterion\":\"swift test 全绿\",\"kind\":\"command_succeeds\",\"probe\":\"swift test\"}]"
         let pm = LingShuAcceptancePlanner.parse(jsonMismatch, fallbackCriteria: crit)
         XCTAssertEqual(pm.count, 3, "不丢条目"); n += 1
         XCTAssertEqual(pm.first { $0.criterion == "swift test 全绿" }?.kind, .commandSucceeds, "匹配上的用其分类"); n += 1
-        XCTAssertEqual(pm.first { $0.criterion == "生成 report.pdf" }?.kind, .contentQuality, "没匹配的回退"); n += 1
+        XCTAssertEqual(pm.first { $0.criterion == "生成 report.pdf" }?.kind, .fileExists, "未匹配但含文件线索→本地硬证据"); n += 1
         // D5: criterion 空的项被跳过 → 回退
         let pSkip = LingShuAcceptancePlanner.parse("[{\"criterion\":\"\",\"kind\":\"file_exists\"}]", fallbackCriteria: ["唯一标准"])
         XCTAssertEqual(pSkip.count, 1); n += 1

@@ -54,7 +54,7 @@ extension LingShuState {
         """
         let classifier = LingShuAgentSession(
             id: "triage-\(UUID().uuidString.prefix(6))",
-            system: system, tools: [], model: makeAgentModelAdapter(), maxTurns: 1
+            system: system, tools: [], model: controlPlaneModelAdapter(.triage), maxTurns: 1
         )
         let result = await classifier.send("用户最新消息:\(prompt)")
         guard case .completed(let raw) = result else { return (.chat, nil, nil) }

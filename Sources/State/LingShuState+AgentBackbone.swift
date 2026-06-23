@@ -22,7 +22,7 @@ extension LingShuState {
     }
 
     /// 用当前模型配置构造真实模型适配器(@unchecked Sendable,可被工具/会话捕获)。
-    func makeAgentModelAdapter() -> LingShuGatewayAgentModel {
+    func makeAgentModelAdapter(timeout: TimeInterval? = nil, maxAttempts: Int = 3) -> LingShuGatewayAgentModel {
         LingShuGatewayAgentModel(
             client: remoteModelClient,
             provider: modelProvider,
@@ -31,7 +31,8 @@ extension LingShuState {
             protocolName: selectedModelPreset?.protocolName ?? "OpenAI 兼容",
             apiKey: apiKey,
             temperature: temperature,
-            timeout: codexTimeoutSeconds
+            timeout: timeout ?? codexTimeoutSeconds,
+            maxAttempts: maxAttempts
         )
     }
 

@@ -36,6 +36,26 @@ enum LingShuCapabilityVerb: String, Codable, Sendable, Equatable, CaseIterable {
         default: return .unknown
         }
     }
+
+    /// 从能力提供方的 id/description/source 做**通用词汇**动词归一,让 CapabilityGraph 不再只是"记录清单"。
+    /// 这里不写任何具体服务名或产物名,只识别 read/write/browser/device/api/document 等通用语义。
+    static func infer(id: String, description: String, source: String) -> LingShuCapabilityVerb? {
+        let text = "\(id) \(description) \(source)".lowercased()
+        func has(_ needles: [String]) -> Bool { needles.contains { text.contains($0) } }
+        if has(["browser", "navigate", "web.", "dom", "click", "screenshot", "网页", "浏览器"]) { return .browserOperate }
+        if has(["device.discover", "discover_devices", "scan_devices", "hardware", "sensor", "peripheral", "外设", "硬件", "传感器"]) { return .deviceDiscover }
+        if has(["device.control", "actuator", "peripheral_control", "控制设备", "执行器"]) { return .deviceControl }
+        if has(["presentation", "slides", "deck", "document", "report", "markdown", "pdf", "docx", "pptx", "文档", "报告", "汇报", "演示"]) { return .documentGenerate }
+        if has(["local_file", "read_file", "list_directory", "search_text", "filesystem", "本机文件", "全文搜索"]) { return .localFileScan }
+        if has(["api", "http", "endpoint", "接口"]) { return .apiCall }
+        if has(["create", "update", "write", "sync", "send", "post", "upload", "delete", "写入", "同步", "创建", "更新", "发送", "上传", "删除"]) {
+            return .externalSystemWrite
+        }
+        if has(["read", "get", "list", "search", "fetch", "query", "download", "读取", "查询", "搜索", "获取", "下载"]) {
+            return .externalSystemRead
+        }
+        return nil
+    }
 }
 
 struct LingShuCapabilityRequirement: Codable, Sendable, Equatable {

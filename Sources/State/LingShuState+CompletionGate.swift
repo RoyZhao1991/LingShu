@@ -90,20 +90,36 @@ extension LingShuState {
     }
 
     /// 据执行记录里的工具事件抽取能力获取信号(纯扫描):是否试过自补、是否成功、补后是否被真实动作工具调通(最小验证)。
+    ///
+    /// **防伪但不死板**(2026-06-23 修「自建脚本补齐被误判失败」):除了 `isAcquisitionTool`(author_component/连MCP/找技能…),
+    /// 也认**工程师式自补**——写了一个可执行脚本/工具(fileEdit 脚本文件 或 write_file/edit_file 脚本)再用 `run_command` **真跑成功**,
+    /// 即视为"补齐了能力且最小验证通过"(这正是模型这次自写 Notion 客户端脚本并跑通 200 的合法路径)。
+    /// **防伪护栏不放松**:必须①真写了脚本 ②run_command 真 success(exit0) ③输出无明显失败标记——
+    /// 只嘴说完成 / 脚本没跑 / 跑了报错(Traceback/❌/command not found…)都不算,仍走 block。
     func acquisitionSignals(record: LingShuTaskExecutionRecord, requiresUser: Bool) -> LingShuAcquisitionSignals {
         var attempted = false
         var succeeded = false
         var verified = false
         var sawAcquireSuccess = false
+        var authoredScript = false   // 工程师式自补:写了可执行脚本/工具
         for m in record.messages {
             switch m.detail {
-            case let .toolCall(tool, _, _):
+            case let .toolCall(tool, summary, arguments):
                 if Self.isAcquisitionTool(tool) { attempted = true }
-            case let .toolResult(tool, ok, _):
+                if (tool == "write_file" || tool == "edit_file"), Self.mentionsScriptArtifact(summary + " " + arguments) {
+                    attempted = true; authoredScript = true   // 写脚本=尝试自补(真跑成功才升级为已验证)
+                }
+            case let .fileEdit(path, _, _, _, _):
+                if Self.isScriptArtifact(path) { authoredScript = true; attempted = true }   // 写脚本=尝试自补
+            case let .toolResult(tool, ok, output):
                 if Self.isAcquisitionTool(tool) {
                     if ok { succeeded = true; sawAcquireSuccess = true }
                 } else if ok, sawAcquireSuccess, LingShuOutcomeVerification.isActionTool(tool) {
                     verified = true   // 获取成功后,新能力被一个真实动作工具调通 = 最小验证通过
+                }
+                // 工程师式自补的最小验证:自写脚本 + run_command 真跑成功(且输出无失败标记)。
+                if ok, tool == "run_command", authoredScript, !Self.runOutputLooksFailed(output) {
+                    attempted = true; succeeded = true; verified = true
                 }
             default:
                 break
@@ -111,6 +127,27 @@ extension LingShuState {
         }
         return .init(requiresUser: requiresUser, attemptedSelfAcquire: attempted,
                      acquireSucceeded: succeeded, newCapabilityVerified: verified)
+    }
+
+    /// 文本是否提到可执行脚本工件(供 write_file/edit_file 参数判"是不是在写脚本/工具")。
+    nonisolated static func mentionsScriptArtifact(_ text: String) -> Bool {
+        isScriptArtifact(text)
+    }
+
+    /// 路径/文本是否指向**可执行脚本**(自建能力的载体)。只认通用脚本扩展,零领域。
+    nonisolated static func isScriptArtifact(_ text: String) -> Bool {
+        let t = text.lowercased()
+        let exts = [".py", ".js", ".mjs", ".ts", ".tsx", ".jsx", ".sh", ".rb", ".go", ".rs", ".php", ".pl", ".swift"]
+        return exts.contains { t.contains($0) }
+    }
+
+    /// run_command 输出是否含**明显失败标记**(防伪:脚本吞异常仍 exit0 时,据输出兜住)。保守只认强失败信号。
+    nonisolated static func runOutputLooksFailed(_ output: String) -> Bool {
+        let markers = ["traceback (most recent call last)", "command not found", "no such file or directory",
+                       "modulenotfounderror", "❌", "exception:", "fatal error", "permission denied",
+                       "connection refused", "401 unauthorized", "403 forbidden", "500 internal"]
+        let o = output.lowercased()
+        return markers.contains { o.contains($0) }
     }
 
     /// 记录能力获取过程到任务记录(typed acquisitionAttempts,供记忆复用 + 审计)+ 验证通过的写入图谱可复用。
@@ -139,6 +176,15 @@ extension LingShuState {
             }
         }
         taskExecutionRecords[idx].acquisitionAttempts = attempts
+        // 自补且最小验证通过 → 把这些**可自补阻断缺口标 resolved**:记录不再挂"未解除阻断缺口",
+        // 完成闸/续接/收尾文案据此一致(不再把真做成的任务展示成"没能完成")。
+        if outcome == .acquiredVerified, var analysis = taskExecutionRecords[idx].gapAnalysis {
+            var changed = false
+            for i in analysis.gaps.indices where analysis.gaps[i].blocking && analysis.gaps[i].selfAcquirable && !analysis.gaps[i].resolved {
+                analysis.gaps[i].resolved = true; changed = true
+            }
+            if changed { taskExecutionRecords[idx].gapAnalysis = analysis }
+        }
         persistTaskExecutionRecords()
     }
 

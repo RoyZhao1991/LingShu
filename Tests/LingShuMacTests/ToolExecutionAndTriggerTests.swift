@@ -269,4 +269,27 @@ final class ScheduledTriggerTests: XCTestCase {
         let oneShot = LingShuState.scheduledFireAfter(dateString: nil, hour: 9, minute: 0, now: now, calendar: cal, repeatsDaily: false)
         XCTAssertEqual(oneShot, LingShuState.nextOccurrence(hour: 9, minute: 0, from: now, calendar: cal))
     }
+
+    func testScheduledTriggerPromptInjectsAuthoritativeDateAnchor() {
+        let timeZone = TimeZone(identifier: "Asia/Shanghai")!
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = timeZone
+        let firedAt = calendar.date(from: DateComponents(year: 2026, month: 6, day: 23, hour: 8, minute: 0, second: 0))!
+        let trigger = LingShuScheduledTrigger(
+            title: "早间新闻",
+            prompt: "搜索今天早上8点左右的国内外重要新闻并朗读，保存为今日热点新闻摘要.md",
+            hour: 8,
+            minute: 0,
+            repeatsDaily: true
+        )
+
+        let prompt = LingShuState.scheduledTriggerPrompt(trigger: trigger, firedAt: firedAt, timeZone: timeZone)
+
+        XCTAssertTrue(prompt.contains("权威本地时间：2026-06-23 08:00:00"))
+        XCTAssertTrue(prompt.contains("ISO 日期：2026-06-23"))
+        XCTAssertTrue(prompt.contains("日期戳：20260623"))
+        XCTAssertTrue(prompt.contains("文件名时，日期必须使用 20260623"))
+        XCTAssertTrue(prompt.contains(trigger.prompt))
+        XCTAssertFalse(prompt.contains("20250718"), "定时任务不得继承历史产物中的错误日期")
+    }
 }

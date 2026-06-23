@@ -46,11 +46,12 @@ extension LingShuState {
     }
 
     /// 取某档脑的模型适配器:配了该档 → 用其配置;没配 → 落回当前单脑(makeAgentModelAdapter)。
-    func tierModelAdapter(_ tier: LingShuBrainTier) -> LingShuGatewayAgentModel {
-        guard let cfg = brainTierConfigs()[tier] else { return makeAgentModelAdapter() }
+    func tierModelAdapter(_ tier: LingShuBrainTier, timeout: TimeInterval? = nil, maxAttempts: Int = 3) -> LingShuGatewayAgentModel {
+        guard let cfg = brainTierConfigs()[tier] else { return makeAgentModelAdapter(timeout: timeout, maxAttempts: maxAttempts) }
         return LingShuGatewayAgentModel(
             client: remoteModelClient, provider: cfg.provider, model: cfg.model, endpoint: cfg.endpoint,
-            protocolName: "OpenAI 兼容", apiKey: cfg.apiKey, temperature: temperature, timeout: codexTimeoutSeconds
+            protocolName: "OpenAI 兼容", apiKey: cfg.apiKey, temperature: temperature,
+            timeout: timeout ?? codexTimeoutSeconds, maxAttempts: maxAttempts
         )
     }
 

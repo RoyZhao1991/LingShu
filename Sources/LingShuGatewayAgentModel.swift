@@ -13,6 +13,7 @@ final class LingShuGatewayAgentModel: LingShuAgentModel, @unchecked Sendable {
     private let apiKey: String
     private let temperature: Double
     private let timeout: TimeInterval
+    private let maxAttempts: Int
     /// 每步「边做边想」的旁白:模型在发起工具调用时附带的自然语言推理(剥 think 后)经此上报,
     /// 让执行流像 codex 一样可读(我观察到X→打算做Y→为什么)。@unchecked Sendable 持有。
     var onReasoning: (@Sendable (String) -> Void)?
@@ -47,7 +48,8 @@ final class LingShuGatewayAgentModel: LingShuAgentModel, @unchecked Sendable {
         protocolName: String,
         apiKey: String,
         temperature: Double,
-        timeout: TimeInterval
+        timeout: TimeInterval,
+        maxAttempts: Int = 3
     ) {
         self.client = client
         self.provider = provider
@@ -57,6 +59,7 @@ final class LingShuGatewayAgentModel: LingShuAgentModel, @unchecked Sendable {
         self.apiKey = apiKey
         self.temperature = temperature
         self.timeout = timeout
+        self.maxAttempts = max(1, maxAttempts)
     }
 
     func respond(messages: [LingShuAgentMessage], tools: [LingShuAgentTool]) async -> LingShuAgentModelResponse {
@@ -80,7 +83,7 @@ final class LingShuGatewayAgentModel: LingShuAgentModel, @unchecked Sendable {
         )
         // 自愈:模型调用超时/瞬时网络抖动会恢复——重试(指数退避)而不是一超时就把整轮当"完成"中断。
         // 用户主动取消(CancellationError)立即让路,不重试。最多 3 次都失败才如实回报(不伪装成结果)。
-        let maxAttempts = 3
+        let maxAttempts = self.maxAttempts
         var lastError: Error?
         for attempt in 1...maxAttempts {
             if Task.isCancelled { return .text("（本轮已被取消）") }

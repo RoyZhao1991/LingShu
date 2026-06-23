@@ -27,6 +27,21 @@ final class CapabilityGraphTests: XCTestCase {
         XCTAssertEqual(LingShuCapabilityVerb.parse("garbage"), .unknown)
     }
 
+    func testInferVerbFromGenericCapabilityText() {
+        XCTAssertEqual(
+            LingShuCapabilityVerb.infer(id: "mcp:server.create_page", description: "create or update remote page", source: "mcp"),
+            .externalSystemWrite
+        )
+        XCTAssertEqual(
+            LingShuCapabilityVerb.infer(id: "skill:presentation", description: "固化技能·presentation design", source: "skill"),
+            .documentGenerate
+        )
+        XCTAssertEqual(
+            LingShuCapabilityVerb.infer(id: "browser.navigate", description: "网页导航与 DOM 操作", source: "builtin"),
+            .browserOperate
+        )
+    }
+
     func testKernelVerbsSatisfiedByMatch() {
         let g = LingShuCapabilityGraph()
         if case .satisfied = g.match(.init(verb: .localFileScan)) {} else { XCTFail("本机扫文件内核原语即满足") }
@@ -86,6 +101,31 @@ final class CapabilityGraphTests: XCTestCase {
         if case .satisfied = state.capabilityGraph().match(.init(verb: .externalSystemWrite)) {} else {
             XCTFail("已获取并验证→需求命中")
         }
+    }
+
+    @MainActor
+    func testCapabilityRequirementsMergeIntoGapAnalysis() {
+        let key = "lingshu.capability.acquired"
+        UserDefaults.standard.removeObject(forKey: key)
+        defer { UserDefaults.standard.removeObject(forKey: key) }
+        let state = LingShuState()
+        let rid = state.createTaskExecutionRecord(for: "同步到外部系统")
+        defer {
+            state.taskExecutionRecords.removeAll { $0.id == rid }
+            state.persistTaskExecutionRecords()
+            state.taskExecutionJournal.flush()
+        }
+
+        state.bindCapabilityRequirements([
+            .init(verb: .externalSystemWrite, target: "远端工作台", detail: "写入外部系统"),
+            .init(verb: .browserOperate, target: "网页", detail: "浏览器自动化")
+        ], to: rid)
+
+        let gap = state.gapAnalysis(for: rid)
+        XCTAssertTrue(gap?.hasBlockingGap == true, "图谱未命中的外部写入能力必须反写为阻断缺口")
+        XCTAssertTrue(gap?.gaps.contains(where: { $0.missing.contains("external_system.write") }) == true)
+        XCTAssertFalse(gap?.gaps.contains(where: { $0.missing.contains("browser.operate") }) == true,
+                       "内核浏览器自动化已入图谱,不应误判缺口")
     }
 
     // MARK: 续接优先恢复(spec 第14条末)

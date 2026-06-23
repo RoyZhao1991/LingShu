@@ -126,7 +126,7 @@ extension LingShuState {
             id: "verifier-\(UUID().uuidString.prefix(6))",
             system: reviewer.promptBlock,
             tools: [],
-            model: makeAgentModelAdapter(),
+            model: controlPlaneModelAdapter(.deliveryReview, taskRecordID: taskRecordID),
             maxTurns: 1
         )
         let result = await verifier.send(prompt)
@@ -347,7 +347,7 @@ extension LingShuState {
             id: "deliver-\(UUID().uuidString.prefix(6))",
             system: "你是交付播报助手,只输出面向用户的最终交付说明,不复述任何内部过程。",
             tools: [],
-            model: makeAgentModelAdapter(),
+            model: controlPlaneModelAdapter(.deliveryComposer, taskRecordID: taskRecordID),
             maxTurns: 1
         )
         let result = await composer.send(prompt)

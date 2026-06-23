@@ -16,7 +16,7 @@ extension LingShuState {
         let session = LingShuAgentSession(
             id: "gap-\(UUID().uuidString.prefix(6))",
             system: LingShuGapAnalyzer.systemPrompt(capabilities: snapshot),
-            tools: [], model: makeAgentModelAdapter(), maxTurns: 1
+            tools: [], model: controlPlaneModelAdapter(.gapAnalysis), maxTurns: 1
         )
         guard case .completed(let text) = await session.send(trimmed) else { return nil }
         guard let analysis = LingShuGapAnalyzer.parse(LingShuReasoningText.stripThinkTags(text)) else {

@@ -38,7 +38,7 @@ extension LingShuState {
         let session = LingShuAgentSession(
             id: "accept-\(UUID().uuidString.prefix(6))",
             system: LingShuAcceptancePlanner.systemPrompt,
-            tools: [], model: makeAgentModelAdapter(), maxTurns: 1
+            tools: [], model: controlPlaneModelAdapter(.acceptancePlanner), maxTurns: 1
         )
         let payload = "成功标准:\n" + cleaned.enumerated().map { "\($0.offset + 1). \($0.element)" }.joined(separator: "\n")
         guard case .completed(let text) = await session.send(payload) else { return fallback }

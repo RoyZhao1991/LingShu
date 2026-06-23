@@ -27,7 +27,7 @@ extension LingShuState {
     func deriveGoalSpec(for request: String, taskRecordID: String?) async -> LingShuGoalSpec? {
         let trimmed = request.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
-        let adapter = makeAgentModelAdapter()
+        let adapter = controlPlaneModelAdapter(.goalSpec, taskRecordID: taskRecordID)
         let session = LingShuAgentSession(
             id: "goalspec-\(UUID().uuidString.prefix(6))",
             system: LingShuGoalSpecParser.systemPrompt,

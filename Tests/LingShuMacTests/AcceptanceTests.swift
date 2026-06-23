@@ -34,6 +34,19 @@ final class AcceptanceTests: XCTestCase {
         XCTAssertEqual(checks.first?.criterion, "标准A")
     }
 
+    func testFallbackHeuristicsPreserveDeterministicEvidence() {
+        let checks = LingShuAcceptancePlanner.parse(
+            "这根本不是 JSON",
+            fallbackCriteria: ["生成 report.pdf", "swift test 全绿", "内容覆盖三大主题"]
+        )
+        XCTAssertEqual(checks.count, 3)
+        XCTAssertEqual(checks[0].kind, .fileExists)
+        XCTAssertEqual(checks[0].probe, "report.pdf")
+        XCTAssertEqual(checks[1].kind, .commandSucceeds)
+        XCTAssertEqual(checks[1].probe, "swift test")
+        XCTAssertEqual(checks[2].kind, .contentQuality)
+    }
+
     func testParseNeverDropsMissingCriteriaWhenPlannerReturnsPartialArray() {
         let raw = """
         [

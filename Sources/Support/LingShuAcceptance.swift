@@ -155,8 +155,7 @@ enum LingShuAcceptancePlanner {
         let cleaned = fallbackCriteria
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
-        let fallback = cleaned
-            .map { LingShuAcceptanceCheck(kind: .contentQuality, criterion: $0, probe: nil) }
+        let fallback = cleaned.map(Self.heuristicCheck)
 
         guard let start = raw.firstIndex(of: "["), let end = raw.lastIndex(of: "]"), start < end,
               let data = String(raw[start...end]).data(using: .utf8),
@@ -177,7 +176,8 @@ enum LingShuAcceptancePlanner {
         // 也用原成功标准文本覆盖回去,保证验收报告与 GoalSpec 一一对应。
         if parsed.count == cleaned.count {
             return zip(cleaned, parsed).map { original, check in
-                LingShuAcceptanceCheck(kind: check.kind, criterion: original, probe: check.probe)
+                preferDeterministicHeuristic(original: original,
+                                             parsed: LingShuAcceptanceCheck(kind: check.kind, criterion: original, probe: check.probe))
             }
         }
 
@@ -188,10 +188,63 @@ enum LingShuAcceptancePlanner {
             if let idx = parsed.indices.first(where: { !used.contains($0) && normalizeCriterion(parsed[$0].criterion) == key }) {
                 used.insert(idx)
                 let check = parsed[idx]
-                return LingShuAcceptanceCheck(kind: check.kind, criterion: original, probe: check.probe)
+                return preferDeterministicHeuristic(original: original,
+                                                   parsed: LingShuAcceptanceCheck(kind: check.kind, criterion: original, probe: check.probe))
             }
-            return LingShuAcceptanceCheck(kind: .contentQuality, criterion: original, probe: nil)
+            return heuristicCheck(original)
         }
+    }
+
+    /// 本地确定性启发式:模型分类失败/漏分时,常见文件与测试命令仍能被硬门覆盖。
+    /// 零领域定制:只识别扩展名、路径、常见测试/构建命令这类通用信号。
+    static func heuristicCheck(_ criterion: String) -> LingShuAcceptanceCheck {
+        let c = criterion.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let probe = firstFileProbe(in: c) {
+            return .init(kind: .fileExists, criterion: c, probe: probe)
+        }
+        if let probe = firstCommandProbe(in: c) {
+            return .init(kind: .commandSucceeds, criterion: c, probe: probe)
+        }
+        return .init(kind: .contentQuality, criterion: c, probe: nil)
+    }
+
+    private static func preferDeterministicHeuristic(original: String, parsed: LingShuAcceptanceCheck) -> LingShuAcceptanceCheck {
+        let heuristic = heuristicCheck(original)
+        guard heuristic.kind.isDeterministic else { return parsed }
+        if !parsed.kind.isDeterministic || (parsed.probe ?? "").isEmpty {
+            return heuristic
+        }
+        return parsed
+    }
+
+    private static func firstFileProbe(in text: String) -> String? {
+        let pattern = #"(/[^\s，。；;:：'"]+\.(?:pptx|docx|pdf|html?|md|csv|json|txt|py|js|ts|tsx|jsx|swift|xlsx|png|jpe?g|wav|mp3|mp4)|[A-Za-z0-9_\-./\p{Han}]+?\.(?:pptx|docx|pdf|html?|md|csv|json|txt|py|js|ts|tsx|jsx|swift|xlsx|png|jpe?g|wav|mp3|mp4)|\*\.(?:pptx|docx|pdf|html?|md|csv|json|txt|py|js|ts|tsx|jsx|swift|xlsx|png|jpe?g|wav|mp3|mp4))"#
+        return firstRegexMatch(pattern: pattern, in: text)
+    }
+
+    private static func firstCommandProbe(in text: String) -> String? {
+        let lower = text.lowercased()
+        let commands = [
+            "swift test", "swift build", "pytest", "python -m pytest", "npm test", "npm run test",
+            "npm run build", "yarn test", "pnpm test", "go test", "cargo test", "mvn test", "gradle test",
+            "xcodebuild test"
+        ]
+        if let hit = commands.first(where: { lower.contains($0) }) { return hit }
+        if lower.contains("测试") || lower.contains("全绿") || lower.contains("test") {
+            return "test"
+        }
+        if lower.contains("构建") || lower.contains("编译") || lower.contains("build") {
+            return "build"
+        }
+        return nil
+    }
+
+    private static func firstRegexMatch(pattern: String, in text: String) -> String? {
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else { return nil }
+        let range = NSRange(text.startIndex..<text.endIndex, in: text)
+        guard let match = regex.firstMatch(in: text, options: [], range: range),
+              let swiftRange = Range(match.range, in: text) else { return nil }
+        return String(text[swiftRange])
     }
 
     static func parseKind(_ raw: String?) -> LingShuCriterionKind {
