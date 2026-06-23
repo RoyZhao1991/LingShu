@@ -109,6 +109,39 @@ final class SelfBuiltCapabilityGateTests: XCTestCase {
         XCTAssertNotEqual(decision.status, .ok, "嘴说完成、零真实补齐 → 完成闸不放过(防伪)")
     }
 
+    // —— human.confirm 推测缺口非阻断(不死板):不独立把自包含任务卡成待用户;真外部依赖仍阻断(防伪)——
+    func testHumanConfirmRequirementIsNonBlockingButRealDepsStillBlock() {
+        let hc = LingShuState.gapFromMissingRequirement(.init(verb: .humanConfirm, target: "脚本运行结果"))
+        XCTAssertFalse(hc.blocking, "human.confirm 推测缺口 → 非阻断,不独立卡成待用户")
+        XCTAssertEqual(hc.kind, .humanConfirmation)
+        // 对照:真外部依赖仍阻断。
+        XCTAssertTrue(LingShuState.gapFromMissingRequirement(.init(verb: .externalSystemWrite, target: "Notion")).blocking, "外部写仍阻断")
+        XCTAssertTrue(LingShuState.gapFromMissingRequirement(.init(verb: .apiCall, target: "x")).blocking, "API 调用仍阻断")
+        XCTAssertTrue(LingShuState.gapFromMissingRequirement(.init(verb: .deviceControl, target: "灯")).blocking, "控制设备仍阻断")
+        XCTAssertTrue(LingShuState.gapFromMissingRequirement(.init(verb: .browserOperate, target: "网页")).blocking, "浏览器操作仍阻断")
+    }
+
+    // —— 联动:自建跑通 + 仅剩 human.confirm(非阻断)→ 完成闸不卡待用户 ——
+    func testSelfBuiltPlusHumanConfirmDoesNotWaitForUser() async {
+        let state = LingShuState()
+        state.setGoalSpecEnabled(true)
+        var rec = LingShuTaskExecutionRecord(id: "r-hc-\(UUID().uuidString.prefix(6))", title: "调公开API",
+                                             prompt: "写脚本调用公开API并跑通", status: .running, summary: "",
+                                             participants: [], createdAt: Date(), updatedAt: Date(),
+                                             messages: [msgFileEdit("/Users/example/app/zen.py"),
+                                                        msgRun(true, "Approachable is better than simple.")])
+        rec.goalSpec = LingShuGoalSpec(objective: "写脚本调公开API并跑通", kind: .task)
+        // 自建可补的 api 缺口 + 推测 human.confirm(现非阻断)
+        rec.gapAnalysis = LingShuGapAnalysis(feasibleNow: false, gaps: [
+            LingShuCapabilityGap(kind: .tool, missing: "API 调用工具", fillPath: "author_component", blocking: true),
+            LingShuState.gapFromMissingRequirement(.init(verb: .humanConfirm, target: "脚本运行结果"))
+        ], note: "")
+        state.taskExecutionRecords.insert(rec, at: 0)
+        let decision = await state.computeCompletionDecision(taskRecordID: rec.id, reply: "✅ 已写好脚本并跑通,输出已打印。")
+        XCTAssertNotEqual(decision.status, .waitingForUser, "自建跑通 + 仅剩推测 human.confirm → 不卡待用户")
+        XCTAssertNotEqual(decision.status, .blocked, "不该判失败")
+    }
+
     // —— 辅助纯函数 ——
     func testHelpers() {
         XCTAssertTrue(LingShuState.isScriptArtifact("/a/b/sync.py"))

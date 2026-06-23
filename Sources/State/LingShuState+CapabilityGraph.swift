@@ -148,9 +148,13 @@ extension LingShuState {
                          fillPath: "先 discover_devices 探测设备;控制真实设备前需要用户确认设备与权限。",
                          blocking: true)
         case .humanConfirm:
+            // **防伪但不死板**(2026-06-23):能力需求规划器的 human.confirm 是**推测性**的(它常给自包含任务也安一个
+            // "确认结果"),不该独立把已做完+已核验的任务卡成「待用户」。降级为**非阻断**(advisory):
+            // ① 真需凭据/授权 → 对应外部动作会失败(401/错误),由 external_system 等缺口 + 真实失败证据兜住(防伪不放松);
+            // ② 真需用户拍板 → 模型自己会 ask_user(走真 .blocked→waitingForUser 的合法路径),不靠这条推测缺口。
             return .init(kind: .humanConfirmation, missing: name,
-                         fillPath: "先向用户确认或索取必要信息。",
-                         blocking: true)
+                         fillPath: "如确需用户确认/凭据,执行中用 ask_user 主动索取;否则按自包含完成。",
+                         blocking: false)
         case .localFileScan, .documentGenerate, .compute, .unknown:
             return .init(kind: .tool, missing: name, fillPath: "补齐对应通用工具能力。", blocking: true)
         }
