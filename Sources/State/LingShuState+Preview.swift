@@ -90,7 +90,8 @@ extension LingShuState {
                 name: "close_preview",
                 description: "关闭预览面板。",
                 parametersJSON: "{\"type\":\"object\",\"properties\":{}}"
-            ) { [weak self] _ in await MainActor.run { self?.previewController.close() ?? "预览不可用" } }
+            ) { [weak self] _ in await MainActor.run { self?.previewController.close() ?? "预览不可用" } },
+            presentDocumentsTool()   // 「演示与答疑」插件:通读→脚本化演示→实时答疑→视频流式续演→多文档连播
         ]
     }
 }

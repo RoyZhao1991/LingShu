@@ -52,6 +52,7 @@ extension LingShuState {
             recordedAgentTool($0, recordIDProvider: recordIDProvider)
         }
         return builtinTools + externalTools + skillTools + pluginTools + recordedLocalKnowledgeTools + [listCapabilitiesTool()]
+            + agentDelegationTools(executionPolicy: executionPolicy)   // Codex/Claude 作为可委托外部 agent 工具,交给大脑自选
     }
 
     /// 给非原语 Agent 工具补一层结构化执行记录。

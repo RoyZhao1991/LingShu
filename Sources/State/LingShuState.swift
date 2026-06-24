@@ -500,6 +500,10 @@ final class LingShuState: ObservableObject {
     @Published var meetingConversation = LingShuMeetingConversationController()
     /// 文件预览中枢(灵枢的"眼睛+手"):大脑用四肢工具打开 PPT/PDF/Word/Excel 并翻页/滚动(演示/阅读)。
     let previewController = LingShuPreviewController()
+    /// 「演示与答疑」插件的演示编排引擎(脚本/答疑/续演/多文档队列);钩子由 installPresentationHooks 装配。
+    let presentationController = LingShuPresentationController()
+    /// 在飞的演示播放任务(后台照稿念;用户输入经 handlePresentationInputIfNeeded 拦成答疑)。
+    var presentationPlaybackTask: Task<Void, Never>?
     /// 内置多 tab 浏览器:大脑用 browser_* 四肢上网/做网页自动化测试(打开URL/多tab/JS执行/滚动/全屏)。
     let browserController = LingShuBrowserController()
     /// 由根视图注入：返回当前实时态势感知上下文（无有效信号时返回空串）。
@@ -1173,6 +1177,8 @@ final class LingShuState: ObservableObject {
     ) -> String {
         let trimmedPrompt = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedPrompt.isEmpty else { return "" }
+        // 「演示与答疑」进行时:用户开口=实时答疑(**主线程线性**,保真人交互感),拦下来处理,不走常规分诊/派发。
+        if appendUserMessage, handlePresentationInputIfNeeded(trimmedPrompt) { return "" }
         cancelMainRemoteHealthProbe(reason: "探活让路", detail: "收到用户指令，已停止后台探活，把主通道让给本轮任务。")
 
         // 记录**按需建**(不再在最顶 eager 建):被续答/在岗/答复等早返回接管的轮次用各自的记录,

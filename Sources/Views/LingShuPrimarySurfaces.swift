@@ -80,7 +80,7 @@ struct LingShuRootView: View {
             }
         }
         .preferredColorScheme(.dark)
-        .background(LingShuPreviewHost(controller: state.previewController))   // 大脑 open_preview → 弹出预览
+        .background(LingShuPreviewHost(controller: state.previewController, presentation: state.presentationController))   // 大脑 open_preview → 弹出预览(含「演示与答疑」进度条)
         .background(LingShuBrowserHost(controller: state.browserController))   // 大脑 browser_open → 弹出内置浏览器
         .sheet(item: $state.pendingShellApproval) { pending in
             LingShuPermissionApprovalView(pending: pending) { decision in

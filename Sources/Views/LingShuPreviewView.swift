@@ -8,11 +8,12 @@ import WebKit
 /// 观察 `controller.isPresented`:大脑 open_preview → 开窗;close_preview / 用户关窗 → 同步收掉。
 struct LingShuPreviewHost: NSViewRepresentable {
     @ObservedObject var controller: LingShuPreviewController
+    let presentation: LingShuPresentationController   // 「演示与答疑」进度条用
 
     func makeNSView(context: Context) -> NSView { NSView() }
 
     func updateNSView(_ nsView: NSView, context: Context) {
-        context.coordinator.sync(controller: controller)
+        context.coordinator.sync(controller: controller, presentation: presentation)
     }
 
     func makeCoordinator() -> Coordinator { Coordinator() }
@@ -22,10 +23,10 @@ struct LingShuPreviewHost: NSViewRepresentable {
         private var window: NSWindow?
         private weak var controller: LingShuPreviewController?
 
-        func sync(controller: LingShuPreviewController) {
+        func sync(controller: LingShuPreviewController, presentation: LingShuPresentationController) {
             self.controller = controller
             if controller.isPresented, window == nil {
-                let host = NSHostingController(rootView: LingShuPreviewSheet(controller: controller))
+                let host = NSHostingController(rootView: LingShuPreviewSheet(controller: controller, presentation: presentation))
                 let w = NSWindow(contentViewController: host)
                 w.title = "灵枢演示"
                 w.setContentSize(NSSize(width: 1040, height: 720))
@@ -63,6 +64,7 @@ struct LingShuPreviewHost: NSViewRepresentable {
 /// 文件预览面板:PDFKit 渲染 PPT/PDF/Word/Excel(office 已转 PDF),大脑经四肢工具翻页/滚动。
 struct LingShuPreviewSheet: View {
     @ObservedObject var controller: LingShuPreviewController
+    @ObservedObject var presentation: LingShuPresentationController
 
     var body: some View {
         VStack(spacing: 0) {
@@ -116,6 +118,7 @@ struct LingShuPreviewSheet: View {
                 }
             }
             .frame(minWidth: 720, minHeight: 540)
+            LingShuPresentationProgressBar(presentation: presentation)   // 「文本即进度条」:演示时显示脚本进度+当前讲稿,点格跳转
         }
         .frame(minWidth: controller.slideshow ? nil : 900, maxWidth: .infinity,
                minHeight: controller.slideshow ? nil : 660, maxHeight: .infinity)
