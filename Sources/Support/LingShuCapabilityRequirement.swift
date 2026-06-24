@@ -86,7 +86,7 @@ enum LingShuCapabilityRequirementPlanner {
         guard let start = raw.firstIndex(of: "["), let end = raw.lastIndex(of: "]"), start < end,
               let data = String(raw[start...end]).data(using: .utf8),
               let arr = try? JSONSerialization.jsonObject(with: data) as? [Any] else { return [] }
-        return arr.compactMap { item in
+        let parsed: [LingShuCapabilityRequirement] = arr.compactMap { item in
             guard let obj = item as? [String: Any] else { return nil }
             let verb = LingShuCapabilityVerb.parse(obj["verb"] as? String)
             guard verb != .unknown else { return nil }
@@ -95,5 +95,46 @@ enum LingShuCapabilityRequirementPlanner {
                 target: ((obj["target"] as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines),
                 detail: ((obj["detail"] as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines))
         }
+        return sanitized(parsed)
+    }
+
+    static func sanitized(_ requirements: [LingShuCapabilityRequirement]) -> [LingShuCapabilityRequirement] {
+        requirements.filter { !isNonCapabilityHumanConfirmation($0) }
+    }
+
+    /// `human.confirm` 只应表达真正的授权/凭据/付款/高风险动作确认。
+    /// "把结果告诉用户/用户确认方案"属于交互或交付,不是需要接入的能力,不能进入图谱形成 requiresAuth。
+    static func isNonCapabilityHumanConfirmation(_ requirement: LingShuCapabilityRequirement) -> Bool {
+        guard requirement.verb == .humanConfirm else { return false }
+        let text = "\(requirement.target) \(requirement.detail)"
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return true }
+        let lower = text.lowercased()
+
+        if LingShuHumanBoundarySemantics.isBareHumanActorTarget(requirement.target),
+           !LingShuHumanBoundarySemantics.containsConcreteProtectedBoundary(text) {
+            return true
+        }
+
+        let trueBoundarySignals = [
+            "授权", "凭据", "token", "api key", "apikey", "oauth", "登录", "账号", "账户",
+            "密码", "支付", "付款", "扣款", "转账", "删除", "生产", "高风险", "危险",
+            "物理", "设备控制", "开灯", "关灯", "机器人", "接管", "屏幕录制", "辅助功能"
+        ]
+        if trueBoundarySignals.contains(where: { lower.contains($0.lowercased()) }) {
+            return false
+        }
+
+        let genericTargets = ["用户", "主人", "我", "结果", "最终结果", "文件路径", "产出物路径"]
+        let deliverySignals = [
+            "告知", "告诉", "回复", "回答", "汇报", "反馈", "交付", "最终说明",
+            "方案确认", "步骤确认", "确认方案", "确认步骤", "满意", "验收",
+            "tell", "reply", "inform", "final answer", "final response"
+        ]
+        if genericTargets.contains(where: { lower == $0.lowercased() || lower.contains($0.lowercased()) }),
+           deliverySignals.contains(where: { lower.contains($0.lowercased()) }) || lower.count <= 8 {
+            return true
+        }
+        return deliverySignals.contains(where: { lower.contains($0.lowercased()) })
     }
 }

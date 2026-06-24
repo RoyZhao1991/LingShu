@@ -109,10 +109,10 @@ final class LingShuGatewayAgentModel: LingShuAgentModel, @unchecked Sendable {
                 return .text("（本轮已被取消）")
             } catch {
                 lastError = error
-                lingShuControlLog("agent model error(尝试 \(attempt)/\(maxAttempts)): \(error) | endpoint=\(endpoint) provider=\(provider) model=\(model) keyLen=\(apiKey.count) msgs=\(messages.count) tools=\(tools.count)")
-                // 4xx 客户端错误(消息结构/参数非法,**非** 429 限流)→ 重试也不会好,**绝不**当网络中断无限重刷:直接如实终止本轮。
-                if case let LingShuModelGatewayError.requestFailed(code, body) = error, (400..<500).contains(code), code != 429 {
-                    return .text("(本轮请求被模型服务端拒绝 HTTP \(code):\(body.prefix(160))。这是请求结构/参数问题,不是网络中断——我先停下这轮,不重试。)")
+                let failure = LingShuModelServiceFailure.classify(error)
+                lingShuControlLog("agent model error(尝试 \(attempt)/\(maxAttempts), kind=\(failure.kind.rawValue)): \(failure.userFacingMessage) | endpoint=\(endpoint) provider=\(provider) model=\(model) keyLen=\(apiKey.count) msgs=\(messages.count) tools=\(tools.count)")
+                if !failure.shouldRetryRequest {
+                    return .failed(reason: failure.encodedReason)
                 }
                 if attempt < maxAttempts {
                     // 退避:1.5s、3s——给瞬时超时/限流喘息,再原样重发同一上下文。
@@ -121,7 +121,8 @@ final class LingShuGatewayAgentModel: LingShuAgentModel, @unchecked Sendable {
             }
         }
         // 基础设施中断(非任务失败):重试耗尽 → 返回 .failed,循环据此 .interrupted 并保留上下文,等重连自动续跑。
-        return .failed(reason: "模型调用连续 \(maxAttempts) 次未成功:\(lastError?.localizedDescription ?? "未知原因")。可能是主通道不可达或网络问题——已暂停,联网后自动接着跑。")
+        let failure = lastError.map { LingShuModelServiceFailure.classify($0) } ?? .init(kind: .unknown, statusCode: nil, detail: "未知原因")
+        return .failed(reason: failure.encodedReason)
     }
 
     /// 流式应答:最终答复逐字经 `onTextDelta` 回调(进 UI 气泡 + 按句早读 TTS)。工具轮 content 基本为空、
@@ -156,13 +157,9 @@ final class LingShuGatewayAgentModel: LingShuAgentModel, @unchecked Sendable {
         } catch is CancellationError {
             return .text("（本轮已被取消）")
         } catch {
-            lingShuControlLog("agent stream error: \(error) | endpoint=\(endpoint) provider=\(provider) model=\(model)")
-            // 4xx 客户端错误(结构/参数,非 429)→ 不当网络中断无限重刷,如实终止本轮。
-            if case let LingShuModelGatewayError.requestFailed(code, body) = error, (400..<500).contains(code), code != 429 {
-                return .text("(本轮请求被模型服务端拒绝 HTTP \(code):\(body.prefix(160))。这是请求结构/参数问题,不是网络中断——我先停下这轮,不重试。)")
-            }
-            // 其余(网络/网关/5xx/超时)当基础设施中断 → 循环 .interrupted → 挂起,重连后续跑。
-            return .failed(reason: "流式连接中断:\(error.localizedDescription)。已暂停,联网后自动接着跑。")
+            let failure = LingShuModelServiceFailure.classify(error)
+            lingShuControlLog("agent stream error(kind=\(failure.kind.rawValue)): \(failure.userFacingMessage) | endpoint=\(endpoint) provider=\(provider) model=\(model)")
+            return .failed(reason: failure.encodedReason)
         }
     }
 

@@ -7,6 +7,7 @@ enum LingShuChoiceParsing {
 
     /// 解析文本里的枚举选项;不足 2 个有效选项返回 nil(不是选择题)。
     static func parse(_ text: String) -> CodexRouteChoicePrompt? {
+        if let prompt = parseHumanInputEnvelope(text) { return prompt }
         var questionLines: [String] = []
         var options: [CodexRouteChoiceOption] = []
         var inOptions = false
@@ -35,6 +36,36 @@ enum LingShuChoiceParsing {
         // 保留换行(原来 joined(" ") 会把表格/分段压成一行);question 现不在卡片里渲染,但保持其内容良构。
         let q = questionLines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
         return CodexRouteChoicePrompt(question: q, options: options)
+    }
+
+    private static func parseHumanInputEnvelope(_ text: String) -> CodexRouteChoicePrompt? {
+        guard let envelope = LingShuHumanInputEnvelope.firstEmbedded(in: text)?.envelope,
+              envelope.tool == "ask_choice",
+              let data = envelope.argumentsJSON.data(using: .utf8),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return nil
+        }
+        let question = ((obj["question"] as? String)
+                        ?? (obj["title"] as? String)
+                        ?? (obj["prompt"] as? String)
+                        ?? "请选择下一步")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        var options: [CodexRouteChoiceOption] = []
+        if let arr = obj["options"] as? [[String: Any]] {
+            for item in arr {
+                let label = ((item["label"] as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !label.isEmpty else { continue }
+                let detail = (item["detail"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+                options.append(CodexRouteChoiceOption(label: label, detail: detail?.isEmpty == true ? nil : detail))
+            }
+        } else if let arr = obj["options"] as? [String] {
+            for raw in arr {
+                let label = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !label.isEmpty { options.append(CodexRouteChoiceOption(label: label)) }
+            }
+        }
+        return CodexRouteChoicePrompt(question: question.isEmpty ? "请选择下一步" : question,
+                                      options: options).sanitized
     }
 
     /// 去掉行首的枚举标记(数字./)、、:、圆圈①、keycap 1️⃣),返回其后内容;非选项行返回 nil。

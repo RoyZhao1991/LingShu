@@ -20,6 +20,24 @@ final class CapabilityGraphTests: XCTestCase {
         XCTAssertEqual(reqs[1].verb, .localFileScan)
     }
 
+    func testRequirementParseDropsDeliveryHumanConfirmButKeepsRealBoundary() {
+        let raw = """
+        [
+          {"verb":"human.confirm","target":"用户","detail":"告知最终结果与文件路径"},
+          {"verb":"human.confirm","target":"用户","detail":"需要用户授权或提供凭据"},
+          {"verb":"human.confirm","target":"生产数据删除","detail":"删除前必须用户授权确认"},
+          {"verb":"external_system.write","target":"远端工作区","detail":"同步数据"}
+        ]
+        """
+        let reqs = LingShuCapabilityRequirementPlanner.parse(raw)
+
+        XCTAssertFalse(reqs.contains { $0.verb == .humanConfirm && $0.target == "用户" },
+                       "告知/回复/交付结果不是需要接入或授权的能力")
+        XCTAssertTrue(reqs.contains { $0.verb == .humanConfirm && $0.target == "生产数据删除" },
+                      "真实高风险边界仍然必须保留")
+        XCTAssertTrue(reqs.contains { $0.verb == .externalSystemWrite })
+    }
+
     func testVerbAliases() {
         XCTAssertEqual(LingShuCapabilityVerb.parse("external_system.write"), .externalSystemWrite)
         XCTAssertEqual(LingShuCapabilityVerb.parse("API"), .apiCall)
@@ -126,6 +144,104 @@ final class CapabilityGraphTests: XCTestCase {
         XCTAssertTrue(gap?.gaps.contains(where: { $0.missing.contains("external_system.write") }) == true)
         XCTAssertFalse(gap?.gaps.contains(where: { $0.missing.contains("browser.operate") }) == true,
                        "内核浏览器自动化已入图谱,不应误判缺口")
+    }
+
+    @MainActor
+    func testLocalKnowledgeRequirementNormalizesToBuiltInCapability() {
+        let state = LingShuState()
+        let rid = state.createTaskExecutionRecord(for: "只调用 recall_local 查 VALFS-7003")
+        defer {
+            state.taskExecutionRecords.removeAll { $0.id == rid }
+            state.persistTaskExecutionRecords()
+            state.taskExecutionJournal.flush()
+        }
+
+        state.bindCapabilityRequirements([
+            .init(verb: .externalSystemRead,
+                  target: "本地知识检索服务",
+                  detail: "调用 recall_local 工具查询本地知识库")
+        ], to: rid)
+
+        let record = state.taskExecutionRecords.first { $0.id == rid }
+        XCTAssertEqual(record?.capabilityRequirements?.first?.verb, .localFileScan,
+                       "本地知识检索应归一为本机能力,不能进入外部系统授权链")
+        XCTAssertNil(state.gapAnalysis(for: rid), "内置本地召回能力不应反写为授权缺口")
+    }
+
+    @MainActor
+    func testExplicitRuntimeToolSelectionNormalizesSpeculativeExternalRequirement() {
+        let state = LingShuState()
+        let reqs = state.normalizeCapabilityRequirementsForBuiltIns([
+            .init(verb: .externalSystemRead,
+                  target: "用户的日历服务",
+                  detail: "读取用户日历并建立本机知识索引")
+        ], contextText: "调用 index_calendar 工具把我的日历索引进本机知识,把结果一句话告诉我。")
+
+        XCTAssertEqual(reqs.first?.verb, .localFileScan,
+                       "用户显式点名已注册运行时工具时,不能再把同一目标推入外部授权链")
+        XCTAssertEqual(reqs.first?.target, "index_calendar")
+    }
+
+    @MainActor
+    func testExplicitGenericToolDoesNotCoverUnrelatedExternalRequirement() {
+        let state = LingShuState()
+        let reqs = state.normalizeCapabilityRequirementsForBuiltIns([
+            .init(verb: .externalSystemWrite,
+                  target: "用户的第三方工作区",
+                  detail: "写入第三方服务")
+        ], contextText: "先用 run_command 检查本机环境,然后同步到第三方工作区。")
+
+        XCTAssertEqual(reqs.first?.verb, .externalSystemWrite,
+                       "显式提到通用工具不代表它能覆盖无关第三方系统授权")
+        XCTAssertEqual(reqs.first?.target, "用户的第三方工作区")
+    }
+
+    @MainActor
+    func testBogusLocalKnowledgeProbeObservationDoesNotPoisonGraph() {
+        let state = LingShuState()
+        let recordID = state.createTaskExecutionRecord(for: "历史误探测")
+        defer {
+            state.taskExecutionRecords.removeAll { $0.id == recordID }
+            state.persistTaskExecutionRecords()
+            state.taskExecutionJournal.flush()
+        }
+        let observation = LingShuCapabilityProbeObservation(
+            targetID: "target:external_system.read:local",
+            capabilityID: "external_system.read:本地知识检索服务",
+            verb: LingShuCapabilityVerb.externalSystemRead.rawValue,
+            description: "外部系统能力需要探测接口/授权/连接器:本地知识检索服务",
+            status: .requiresAuth,
+            confidence: 0.75
+        )
+
+        state.bindCapabilityProbeObservations([observation], to: recordID)
+
+        XCTAssertFalse(state.capabilityNodes().contains { $0.id.contains("本地知识检索服务") },
+                       "旧的本地知识 requiresAuth 误探测不能继续投影成待授权能力节点")
+        if case .missing = state.capabilityGraph().match(.init(verb: .externalSystemRead, target: "真实外部系统", detail: "读取第三方服务")) {
+            // expected
+        } else {
+            XCTFail("旧本地知识误探测不能让真正外部系统读需求命中 needsAuth")
+        }
+    }
+
+    @MainActor
+    func testBindingDropsDeliveryOnlyHumanConfirmRequirement() {
+        let state = LingShuState()
+        let rid = state.createTaskExecutionRecord(for: "写脚本并告知结果")
+        defer {
+            state.taskExecutionRecords.removeAll { $0.id == rid }
+            state.persistTaskExecutionRecords()
+            state.taskExecutionJournal.flush()
+        }
+
+        state.bindCapabilityRequirements([
+            .init(verb: .humanConfirm, target: "用户", detail: "告知最终结果与文件路径")
+        ], to: rid)
+
+        let record = state.taskExecutionRecords.first(where: { $0.id == rid })
+        XCTAssertNil(record?.capabilityRequirements, "交付型用户确认不应持久化为能力需求")
+        XCTAssertNil(state.gapAnalysis(for: rid), "交付型用户确认不应反写为缺口")
     }
 
     // MARK: 续接优先恢复(spec 第14条末)

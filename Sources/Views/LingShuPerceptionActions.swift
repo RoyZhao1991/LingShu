@@ -90,54 +90,88 @@ enum LingShuPerceptionActions {
         guard state.voiceWakeListeningEnabled, !voice.isRecording else { return }
 
         do {
-            try voice.startRecognition(
-                onText: { _ in },
-                onAudioChunk: { packet in
-                    // 灵枢自己正在发声时,不拿这段(含自家 TTS 回声的)音频做声线画像——否则自激回声被当成第二个人,
-                    // 假"多人对话"会让寻址闸门把主人的提问丢弃(实测"问了不回"根因)。
-                    perceptionGateway.ingestAudioChunk(packet, profileSpeaker: !voice.isSpeakingOrQueued)
-                },
-                onInterruption: {
-                    scheduleRecognitionRestart(
-                        state: state,
-                        voice: voice,
-                        perceptionGateway: perceptionGateway
-                    )
-                },
-                onResult: { result in
-                    handleVoiceTranscript(
-                        result,
-                        state: state,
-                        voice: voice,
-                        perceptionGateway: perceptionGateway
-                    )
-                    // 每句结束的续听已由 VoiceIOManager 内部无缝轮换处理，不再整体重启识别。
-                }
-            )
-
-            state.isListening = true
-            // 连续态(在岗/极简通话)不要求唤醒词,别再误报"正在等待触发词灵枢"(实测误导)。
-            let continuousMode = state.isMinimalVoiceMode || state.isStandingPersonOnDuty
-            let waitingForWake = state.requiresVoiceWakeWord && !continuousMode && !state.isVoiceConversationActive
-            state.appendTrace(
-                kind: .system,
-                actor: "语音",
-                title: waitingForWake ? "等待唤醒" : "实时对话",
-                detail: waitingForWake
-                    ? "麦克风已接入，正在等待触发词“\(effectiveWakeWord(for: state))”。"
-                    : "麦克风已接入，实时对话已开启（在岗/通话态可直接说话，无需唤醒词）。"
-            )
+            try startRecognitionOnce(state: state, voice: voice, perceptionGateway: perceptionGateway)
         } catch {
-            state.voiceWakeListeningEnabled = false
-            state.isVoiceConversationActive = false
-            state.isListening = false
-            voice.markInputError("语音启动失败")
-            state.chatMessages.append(.init(
-                speaker: "灵枢",
-                text: "语音启动失败：\(error.localizedDescription)",
-                isUser: false
-            ))
+            let originalProvider = voice.transcriptionProvider
+            guard originalProvider.kind != .appleSpeech else {
+                markRecognitionStartupFailed(error, state: state, voice: voice)
+                return
+            }
+
+            voice.stopRecognition()
+            voice.transcriptionProvider = .appleSpeech
+            voice.markInputError("\(originalProvider.displayName) 启动失败，已切换 Apple Speech")
+            state.appendTrace(
+                kind: .warning,
+                actor: "语音",
+                title: "输入通道兜底",
+                detail: "\(originalProvider.displayName) 启动失败:\(error.localizedDescription)。已尝试 Apple Speech。"
+            )
+            do {
+                try startRecognitionOnce(state: state, voice: voice, perceptionGateway: perceptionGateway)
+            } catch {
+                markRecognitionStartupFailed(error, state: state, voice: voice)
+            }
         }
+    }
+
+    private static func startRecognitionOnce(
+        state: LingShuState,
+        voice: VoiceIOManager,
+        perceptionGateway: LingShuRealtimePerceptionGateway
+    ) throws {
+        try voice.startRecognition(
+            onText: { _ in },
+            onAudioChunk: { packet in
+                // 灵枢自己正在发声时,不拿这段(含自家 TTS 回声的)音频做声线画像——否则自激回声被当成第二个人,
+                // 假"多人对话"会让寻址闸门把主人的提问丢弃(实测"问了不回"根因)。
+                perceptionGateway.ingestAudioChunk(packet, profileSpeaker: !voice.isSpeakingOrQueued)
+            },
+            onInterruption: {
+                scheduleRecognitionRestart(
+                    state: state,
+                    voice: voice,
+                    perceptionGateway: perceptionGateway
+                )
+            },
+            onResult: { result in
+                handleVoiceTranscript(
+                    result,
+                    state: state,
+                    voice: voice,
+                    perceptionGateway: perceptionGateway
+                )
+                // 每句结束的续听已由 VoiceIOManager 内部无缝轮换处理，不再整体重启识别。
+            }
+        )
+
+        state.isListening = true
+        // 连续态(在岗/极简通话)不要求唤醒词,别再误报"正在等待触发词灵枢"(实测误导)。
+        let continuousMode = state.isMinimalVoiceMode || state.isStandingPersonOnDuty
+        let waitingForWake = state.requiresVoiceWakeWord && !continuousMode && !state.isVoiceConversationActive
+        state.appendTrace(
+            kind: .system,
+            actor: "语音",
+            title: waitingForWake ? "等待唤醒" : "实时对话",
+            detail: waitingForWake
+                ? "麦克风已接入，正在等待触发词“\(effectiveWakeWord(for: state))”。"
+                : "麦克风已接入，实时对话已开启（在岗/通话态可直接说话，无需唤醒词）。"
+        )
+    }
+
+    private static func markRecognitionStartupFailed(_ error: Error, state: LingShuState, voice: VoiceIOManager) {
+        state.voiceWakeListeningEnabled = false
+        state.isVoiceConversationActive = false
+        state.isListening = false
+        voice.markInputError("语音输入启动失败")
+        state.missionTitle = "语音输入异常"
+        state.missionStatus = "麦克风或语音识别输入没有启动成功。发声通道仍可用，这不是 TTS 故障。"
+        state.appendTrace(
+            kind: .warning,
+            actor: "语音",
+            title: "输入启动失败",
+            detail: error.localizedDescription
+        )
     }
 
     private static func scheduleRecognitionRestart(

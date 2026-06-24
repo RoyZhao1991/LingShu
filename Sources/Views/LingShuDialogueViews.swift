@@ -288,7 +288,7 @@ struct LingShuDispatchQueueTray: View {
                 Image(systemName: "tray.full")
                     .font(.system(size: 10, weight: .bold))
                     .foregroundStyle(Color.lingHolo)
-                Text("队列区 · \(items.count) 条等待中(满 3 并发,有空位自动开始;晋级前可删)")
+                Text("队列区 · \(items.count) 条等待中(任务串行,前一条完成后开始;晋级前可删)")
                     .font(.system(size: 10, weight: .bold, design: .monospaced))
                     .foregroundStyle(.white.opacity(0.5))
                 Spacer(minLength: 0)
@@ -329,6 +329,55 @@ struct LingShuDispatchQueueTray: View {
     }
 }
 
+/// **进行中长条**(用户定调 2026-06-23):任务线串行,同时只一条在跑;长条**自动定位**当前正在执行的派发任务,
+/// 让你随时看到"是谁占着槽、堵着队列"。点「定位」打开它的执行窗口看进度;点「停止」终止它(释放槽位让队列晋级,
+/// 不影响问答线)。无在跑任务时不显示。
+struct LingShuRunningTaskBar: View {
+    @ObservedObject var state: LingShuState
+
+    var body: some View {
+        if let rec = state.runningDispatchedTask {
+            HStack(spacing: 9) {
+                LingShuPulseDot()
+                Text("进行中")
+                    .font(.system(size: 9.5, weight: .bold, design: .monospaced))
+                    .foregroundStyle(Color.lingHolo)
+                Text(rec.title.isEmpty ? rec.prompt : rec.title)
+                    .font(.system(size: 11.5, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.92))
+                    .lineLimit(1)
+                Spacer(minLength: 6)
+                Button { state.openTaskRecord(rec.id) } label: {
+                    Label("定位", systemImage: "scope").font(.system(size: 10.5, weight: .semibold))
+                }
+                .buttonStyle(.bordered).controlSize(.small)
+                Button { state.stopDispatchedTask(recordID: rec.id) } label: {
+                    Label("停止", systemImage: "stop.fill")
+                        .font(.system(size: 10.5, weight: .semibold))
+                        .foregroundStyle(.red.opacity(0.85))
+                }
+                .buttonStyle(.bordered).controlSize(.small)
+            }
+            .padding(.horizontal, 11)
+            .padding(.vertical, 7)
+            .lingShuHUDPanel(cornerLength: 6, fillOpacity: 0.08)
+        }
+    }
+}
+
+/// 在跑指示的小脉动点。
+private struct LingShuPulseDot: View {
+    @State private var on = false
+    var body: some View {
+        Circle()
+            .fill(Color.lingHolo)
+            .frame(width: 7, height: 7)
+            .opacity(on ? 1 : 0.35)
+            .animation(.easeInOut(duration: 0.8).repeatForever(autoreverses: true), value: on)
+            .onAppear { on = true }
+    }
+}
+
 struct LingShuInputDock: View {
     @ObservedObject var state: LingShuState
     @ObservedObject var voice: VoiceIOManager
@@ -338,6 +387,7 @@ struct LingShuInputDock: View {
 
     var body: some View {
         VStack(spacing: 10) {
+            LingShuRunningTaskBar(state: state)
             if !state.queuedDispatchTasks.isEmpty {
                 LingShuDispatchQueueTray(state: state)
             }

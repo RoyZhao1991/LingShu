@@ -128,14 +128,34 @@ extension LingShuControlRouter {
 
     func chatPayload(limit: Int) -> [[String: Any]] {
         state.chatMessages.suffix(max(1, limit)).map { message in
-            [
+            var object: [String: Any] = [
+                "id": message.id.uuidString,
                 "speaker": message.speaker,
                 "text": message.text,
                 "isUser": message.isUser,
                 "isLoading": message.isLoading,
-                "choices": message.choices?.options.map(\.label) ?? [],
                 "createdAt": ISO8601DateFormatter().string(from: message.createdAt)
             ]
+            if let taskRecordID = message.taskRecordID { object["taskRecordID"] = taskRecordID }
+            if let awaitingInputForRecordID = message.awaitingInputForRecordID { object["awaitingInputForRecordID"] = awaitingInputForRecordID }
+            if let choices = message.choices {
+                object["choices"] = [
+                    "question": choices.question,
+                    "options": choices.options.map { option in
+                        [
+                            "label": option.label,
+                            "detail": option.detail ?? "",
+                            "action": option.action ?? ""
+                        ]
+                    }
+                ]
+            } else {
+                object["choices"] = []
+            }
+            if let resolvedChoice = message.resolvedChoice { object["resolvedChoice"] = resolvedChoice }
+            if let attachmentNames = message.attachmentNames, !attachmentNames.isEmpty { object["attachmentNames"] = attachmentNames }
+            if let thinkingPreview = message.thinkingPreview, !thinkingPreview.isEmpty { object["thinkingPreview"] = thinkingPreview }
+            return object
         }
     }
 

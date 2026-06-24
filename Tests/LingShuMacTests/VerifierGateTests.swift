@@ -33,6 +33,35 @@ final class VerifierGateTests: XCTestCase {
         XCTAssertEqual(d, .runLLMReview)
     }
 
+    func testCommandOnlyAcceptanceCanSkipLLM() {
+        let report = LingShuAcceptanceReport(verdicts: [
+            .init(criterion: "成功调用 recall_local", kind: .commandSucceeds, status: .met, evidence: "toolResult success"),
+            .init(criterion: "成功调用 index_calendar", kind: .commandSucceeds, status: .met, evidence: "toolResult success")
+        ], note: "")
+
+        XCTAssertTrue(LingShuVerifierGate.deterministicAcceptanceCanSkipLLM(report),
+                      "纯工具/命令型成功标准已由执行记录证明时,不应再进入 LLM 主观审查死循环")
+    }
+
+    func testFileOrSubjectiveAcceptanceStillRunsLLM() {
+        let fileReport = LingShuAcceptanceReport(verdicts: [
+            .init(criterion: "生成 report.md", kind: .fileExists, status: .met, evidence: "文件存在")
+        ], note: "")
+        let subjectiveReport = LingShuAcceptanceReport(verdicts: [
+            .init(criterion: "内容覆盖三大主题", kind: .contentQuality, status: .unverifiable, evidence: "交评审官")
+        ], note: "")
+        let failedReport = LingShuAcceptanceReport(verdicts: [
+            .init(criterion: "成功调用 recall_local", kind: .commandSucceeds, status: .unmet, evidence: "执行失败")
+        ], note: "")
+
+        XCTAssertFalse(LingShuVerifierGate.deterministicAcceptanceCanSkipLLM(fileReport),
+                       "文件存在只能说明落盘,不能替代内容/版式评审")
+        XCTAssertFalse(LingShuVerifierGate.deterministicAcceptanceCanSkipLLM(subjectiveReport),
+                       "内容质量仍需主观评审")
+        XCTAssertFalse(LingShuVerifierGate.deterministicAcceptanceCanSkipLLM(failedReport),
+                       "确定性未达成不能短路")
+    }
+
     // MARK: 代码确定性门校准(能力加固:测试绿 或 真构建/运行通过,二者择一)
 
     func testFullChainPasses() {
@@ -64,5 +93,48 @@ final class VerifierGateTests: XCTestCase {
         XCTAssertTrue(LingShuVerifierGate.hasSubjectiveArtifact(realFilePaths: ["/x/report.md"]))
         XCTAssertFalse(LingShuVerifierGate.hasSubjectiveArtifact(realFilePaths: ["/x/a.py", "/x/test_a.py"]))
         XCTAssertFalse(LingShuVerifierGate.hasSubjectiveArtifact(realFilePaths: []))
+    }
+
+    func testInvalidReviewerProtocolTextIsNonActionable() {
+        XCTAssertTrue(LingShuVerifierGate.isNonActionableReviewCritique(
+            "⚠️ 需修正 — 评审器未返回有效意见，且缺少可核验的确定性证据。"
+        ))
+        XCTAssertTrue(LingShuVerifierGate.isNonActionableReviewCritique(""))
+    }
+
+    func testConcreteReviewCritiqueIsActionable() {
+        let critique = """
+        1. 真实性:达标
+        2. 完整性:未达标,缺少目标网站字段说明
+        核对统计 PASS=1 FAIL=1
+        结论:需修正
+        """
+        XCTAssertFalse(LingShuVerifierGate.isNonActionableReviewCritique(critique))
+    }
+
+    func testHostEvidenceCanReplaceInvalidReviewOnlyWhenRealEvidenceExists() {
+        let emptyReport = LingShuAcceptanceReport(verdicts: [], note: "")
+        XCTAssertTrue(LingShuVerifierGate.hostDeterministicEvidenceCanReplaceInvalidReview(
+            codeEvidenceClean: true,
+            realFiles: ["/tmp/report.md"],
+            hadAction: false,
+            acceptance: emptyReport
+        ))
+        XCTAssertFalse(LingShuVerifierGate.hostDeterministicEvidenceCanReplaceInvalidReview(
+            codeEvidenceClean: true,
+            realFiles: [],
+            hadAction: false,
+            acceptance: emptyReport
+        ), "纯口头声称不能因为评审失效而放行")
+
+        let failedReport = LingShuAcceptanceReport(verdicts: [
+            .init(criterion: "生成 a.pdf", kind: .fileExists, status: .unmet, evidence: "文件不存在")
+        ], note: "")
+        XCTAssertFalse(LingShuVerifierGate.hostDeterministicEvidenceCanReplaceInvalidReview(
+            codeEvidenceClean: true,
+            realFiles: ["/tmp/other.md"],
+            hadAction: false,
+            acceptance: failedReport
+        ), "成功标准确定性失败时不能被无效评审兜底覆盖")
     }
 }

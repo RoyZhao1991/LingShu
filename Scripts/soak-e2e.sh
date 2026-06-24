@@ -80,7 +80,9 @@ def last_reply():
     except Exception: pass
     return ""
 
-TERMINAL = ("已完成", "已直接回答", "异常", "未达标")
+SUCCESS_TERMINAL = ("已完成", "已直接回答")
+FAILURE_TERMINAL = ("异常", "未达标")
+TERMINAL = SUCCESS_TERMINAL + FAILURE_TERMINAL
 
 def send_wait(prompt, max_polls=42):
     call("lingshu_send_prompt", {"text": prompt})
@@ -169,7 +171,7 @@ for idx, (intent, prompt, fup) in enumerate(gen(TASKS)):
     st = send_wait(prompt)
     rid = (top_record() or {}).get("id")
     viol = invariants()
-    reached = any(k in st for k in TERMINAL)
+    succeeded = any(k in st for k in SUCCESS_TERMINAL)
     no_dead = st != "DEADLOCK"
     inv_ok = clean_since_ckpt() and viol >= 0
     hon = honesty_violation(rid) if rid else None
@@ -178,13 +180,13 @@ for idx, (intent, prompt, fup) in enumerate(gen(TASKS)):
     if intent in ("code","multi","followup"):
         ac = (top_record() or {}).get("artifactCount", 0)
         produced = ac >= 1 or len(glob.glob(f"{PROBE}/**/*.py", recursive=True)) > 0
-    ok = reached and no_dead and inv_ok and (hon is None) and produced
+    ok = succeeded and no_dead and inv_ok and (hon is None) and produced
     # followup:真人追问,验证 harness 接得住、仍到终态、仍诚实。
     fup_note = ""
     if ok and intent == "followup" and rid and fup:
         st2 = followup_wait(rid, fup)
         hon2 = honesty_violation(rid)
-        fok = any(k in st2 for k in TERMINAL) and st2 != "DEADLOCK" and clean_since_ckpt() and hon2 is None
+        fok = any(k in st2 for k in SUCCESS_TERMINAL) and st2 != "DEADLOCK" and clean_since_ckpt() and hon2 is None
         ok = ok and fok
         fup_note = f" | 追问 status={st2} 诚实={'ok' if hon2 is None else hon2}"
     ev = f"status={st} 不变量={viol} {'诚实ok' if hon is None else '⚠️'+str(hon)} 产出={'有' if produced else '无'}{fup_note}"
@@ -203,7 +205,7 @@ for r in range(3):
     except Exception: pass
     time.sleep(4)
     st = send_wait("顺便问下,3 加 4 等于几?", max_polls=14)   # 打断后干净任务必须正常到终态
-    ok = any(k in st for k in TERMINAL) and st != "DEADLOCK" and health_ok() and clean_since_ckpt()
+    ok = any(k in st for k in SUCCESS_TERMINAL) and st != "DEADLOCK" and health_ok() and clean_since_ckpt()
     results.append(("interrupt", ok, f"打断后 status={st} 不变量={invariants()}"))
     print(f"[{'PASS' if ok else 'FAIL'}] 打断恢复#{r} — status={st} 不变量={invariants()}", flush=True)
 
@@ -221,7 +223,7 @@ try:
     results.append(("auto", ok, f"go_live standingPersonOnDuty={on}"))
     print(f"[{'PASS' if ok else 'FAIL'}] 自主:go_live 上岗 — {on}", flush=True)
     st = send_wait("现在适合做点啥?随便说说", max_polls=18)
-    ok = any(k in st for k in TERMINAL) and st!="DEADLOCK" and clean_since_ckpt()
+    ok = any(k in st for k in SUCCESS_TERMINAL) and st!="DEADLOCK" and clean_since_ckpt()
     results.append(("auto", ok, f"在岗任务 status={st}"))
     print(f"[{'PASS' if ok else 'FAIL'}] 自主:在岗任务 — {st}", flush=True)
     autonomy("stop"); time.sleep(2)

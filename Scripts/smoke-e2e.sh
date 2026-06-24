@@ -56,7 +56,9 @@ def top_status():
     except Exception as e:
         return f"查询失败({e})"
 
-TERMINAL = ("已完成", "已直接回答", "异常", "未达标")
+SUCCESS_TERMINAL = ("已完成", "已直接回答")
+FAILURE_TERMINAL = ("异常", "未达标")
+TERMINAL = SUCCESS_TERMINAL + FAILURE_TERMINAL
 def send_wait(prompt, max_polls=30):
     call("lingshu_send_prompt", {"text": prompt})
     for _ in range(max_polls):
@@ -72,11 +74,11 @@ results = []  # (名称, 通过?, 证据)
 st1 = send_wait(f"在目录 {PROBE} 写 add.py,实现 add(a,b) 返回 a+b;再写测试验证 add(2,3)==5 并真正跑通;最后一句话告诉我结果与文件路径。")
 has_src = os.path.exists(f"{PROBE}/add.py")
 has_test = len(glob.glob(f"{PROBE}/*test*.py")) > 0 or len(glob.glob(f"{PROBE}/test_*.py")) > 0
-results.append(("编码闭环: 源码+测试真落盘", has_src and has_test, f"status={st1} add.py={'有' if has_src else '无'} 测试={'有' if has_test else '无'}"))
+results.append(("编码闭环: 源码+测试真落盘", any(k in st1 for k in SUCCESS_TERMINAL) and has_src and has_test, f"status={st1} add.py={'有' if has_src else '无'} 测试={'有' if has_test else '无'}"))
 
 # 用例2:对话回路——断言任务到达终态(引擎对纯问答也能跑通收尾)。
 st2 = send_wait("1 加 1 等于几?一句话直接回答。", max_polls=12)
-results.append(("对话回路: 纯问答能收尾", any(k in st2 for k in TERMINAL), f"status={st2}"))
+results.append(("对话回路: 纯问答能收尾", any(k in st2 for k in SUCCESS_TERMINAL), f"status={st2}"))
 
 print("\n===== 冒烟结果 =====")
 passed = 0

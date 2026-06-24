@@ -32,18 +32,52 @@ extension LingShuState {
         // **气泡内待输入的派发任务**:选项点击**直达那条隔离会话**(不经分诊/主输入),修"卡住任务被聊天淹没回复对不上"。
         if let rid = chatMessages[index].awaitingInputForRecordID {
             chatMessages[index].awaitingInputForRecordID = nil
-            answerDispatchedTask(recordID: rid, answer: option.label)
+            switch Self.prerequisiteChoiceSemantics(option) {
+            case .denyOrStop:
+                closeDispatchedTaskForDeniedPrerequisite(recordID: rid, answer: option.label)
+            case .alternative:
+                answerDispatchedTask(
+                    recordID: rid,
+                    answer: Self.framedAlternativePrerequisiteInput(option.label),
+                    displayAnswer: option.label
+                )
+            case .provided, .unknown:
+                answerDispatchedTask(recordID: rid, answer: option.label)
+            }
             return
         }
         // ask_choice:有在飞的循环挂起等点选 → 直接唤醒它继续(不另起新输入);否则走旧 route-choice 路径。
         if let resolver = pendingChoiceResolvers.removeValue(forKey: messageID) {
             resolver(option.label)
         } else if let context = pendingChoiceContexts.removeValue(forKey: messageID) {
-            let answer = "主人选择：\(option.label)"
-            appendTaskRecordMessage(context.recordID, actor: "你", role: "选项答复", kind: .user, text: answer)
+            let displayAnswer = "主人选择：\(option.label)"
             pendingMainQuestionRecordID = nil
+            let wasWaiting = context.recordID.flatMap { rid in
+                taskExecutionRecords.first { $0.id == rid }?.taskOutcome
+            } == .waitingForUser
+            switch Self.prerequisiteChoiceSemantics(option) {
+            case .denyOrStop where wasWaiting:
+                if let recordID = context.recordID {
+                    closeDispatchedTaskForDeniedPrerequisite(recordID: recordID, answer: option.label)
+                }
+                return
+            default:
+                break
+            }
+            appendTaskRecordMessage(context.recordID, actor: "你", role: "选项答复", kind: .user, text: displayAnswer)
+            let semanticInput: String
+            switch Self.prerequisiteChoiceSemantics(option) {
+            case .alternative:
+                semanticInput = Self.framedAlternativePrerequisiteInput(option.label)
+            case .provided, .unknown, .denyOrStop:
+                semanticInput = displayAnswer
+            }
+            if wasWaiting && Self.userInputProvidesPrerequisite(semanticInput) { resolveUserProvidedGaps(recordID: context.recordID) }
+            let resumePrompt = wasWaiting && Self.userInputProvidesPrerequisite(semanticInput)
+                ? semanticInput + "\n\n" + capabilityResumePreamble(recordID: context.recordID)
+                : semanticInput
             _ = runMainAgentTurn(
-                prompt: answer,
+                prompt: resumePrompt,
                 taskRecordID: context.recordID,
                 resumeBlocked: true,
                 originalPromptForVerification: context.originalPrompt

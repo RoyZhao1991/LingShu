@@ -7,11 +7,14 @@ import Foundation
 @MainActor
 extension LingShuState {
 
-    /// 常驻灵枢在岗中：无单一目标（空 objective）且执行会话仍在（可接续）。运行/暂停均算在岗。
+    /// 常驻灵枢在岗中：无单一目标（空 objective）且状态机已经进入运行/暂停等非 idle 态。
+    ///
+    /// 注意:会话对象(`autonomousSessionHolder`)是在上岗后异步构造的,不能把它作为"是否上岗"的判据。
+    /// 否则控制端/状态栏会在启动窗口期误报未上岗,长跑和用户都会看到 on/off 抖动。
+    /// 真要接管输入时仍在 `handleStandingPersonInputIfNeeded` 里要求 session 存在。
     var isStandingPersonOnDuty: Bool {
         autonomousRun.phase != .idle
             && autonomousRun.objective.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            && autonomousSessionHolder != nil
     }
 
     /// 让灵枢「上岗」成为常驻灵枢：不需要预设目标——环境自检通过即直接上岗（能听/能说/能思考/能动手），
@@ -123,7 +126,18 @@ extension LingShuState {
     ///   这套机制对任何长回合通用（演示 PPT、开会、跑长任务……),配合麦克风打断 TTS = 随时插入讨论再续。
     /// - 在岗会话**空闲**（上一段已收尾）→ 起一条新回合续跑（resume）。
     func handleStandingPersonInputIfNeeded(prompt: String, taskRecordID: String?) -> String? {
-        guard isStandingPersonOnDuty, let session = autonomousSessionHolder else { return nil }
+        guard isStandingPersonOnDuty else { return nil }
+        guard let session = autonomousSessionHolder else {
+            let addition = "主人补充/追问:\(prompt)"
+            if let pending = pendingStandingKickoff, !pending.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                pendingStandingKickoff = pending + "\n\n" + addition
+            } else {
+                pendingStandingKickoff = addition
+            }
+            missionStatus = "正在进入自主模式,这句已并入待处理上下文。"
+            appendTrace(kind: .route, actor: "灵枢", title: "在岗启动中接令", detail: String(prompt.prefix(40)))
+            return ""
+        }
         // **暂停态:任何输入都不起回合(2026-06-20)**:暂停 = 全停下等手动「继续」(`resumeAutonomousRun` 按钮),
         // 语音/唤醒词/文字都不该绕过暂停拉起新处理。给一句提示、消费掉这条输入(返回 "" = 已接管不再下发)。
         if autonomousRun.phase == .paused {
@@ -139,6 +153,11 @@ extension LingShuState {
         let recordID = autonomousRunRecordID ?? createTaskExecutionRecord(for: "灵枢在岗")
         autonomousRunRecordID = recordID
         appendTaskRecordMessage(recordID, actor: "主人", role: "指令", kind: .core, text: prompt)
+
+        if previewController.isPresented, LingShuInteractionFulfillment.isVisiblePresentationControl(prompt) {
+            handleVisiblePresentationControl(prompt: prompt, recordID: recordID)
+            return ""
+        }
 
         // **互动 vs 执行,对新输入处理不同(用户定调 2026-06-19,通用"像一个人"逻辑)**:
         if autonomousRunTask != nil {
@@ -240,6 +259,78 @@ extension LingShuState {
         missionStatus = "演示已退出,在岗待命。"
         enterCoreState(.standby, resetTimer: false)
         return ""
+    }
+
+    /// 预览已打开时的确定性前台控制:继续/下一页/上一页这类输入不是新任务,也不该再回模型重规划。
+    /// 运行时直接推动当前可视材料,确保画面翻页与语音播放同步；复杂追问仍交给大脑。
+    private func handleVisiblePresentationControl(prompt: String, recordID: String) {
+        batchInterruptRequested = true
+        interruptSpeechOutput?()
+        autonomousRunTask?.cancel()
+        autonomousRunTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            self.enterAutonomousRunningState(statusLine: "继续当前演示")
+            self.missionTitle = "灵枢在岗"
+            self.appendTrace(kind: .runtime, actor: "演示运行器", title: "前台控制", detail: String(prompt.prefix(40)))
+
+            if LingShuInteractionFulfillment.isPreviousPageCommand(prompt) {
+                await self.speakCurrentPreviewPage(after: self.previewController.prev(), recordID: recordID)
+            } else if LingShuInteractionFulfillment.isNextPageCommand(prompt),
+                      !LingShuInteractionFulfillment.isContinuePresentationCommand(prompt) {
+                await self.speakCurrentPreviewPage(after: self.previewController.next(), recordID: recordID)
+            } else {
+                await self.continuePreviewPresentationFromCurrentPage(recordID: recordID)
+            }
+
+            guard !Task.isCancelled else { return }
+            self.autonomousRunTask = nil
+            self.enterCoreState(.standby, resetTimer: false)
+            self.missionStatus = "当前演示段落已完成,仍在岗。"
+        }
+    }
+
+    func continuePreviewPresentationFromCurrentPage(recordID: String) async {
+        guard previewController.isPresented else { return }
+        if !previewController.slideshow {
+            let slide = previewController.setSlideshow(true)
+            appendTaskRecordMessage(recordID, actor: "演示运行器", role: "进入全屏", kind: .agent, text: slide)
+        }
+
+        if previewController.isHTML {
+            await speakCurrentPreviewPage(after: "继续当前网页预览。", recordID: recordID)
+            return
+        }
+
+        let total = max(1, previewController.pageCount)
+        while previewController.pageIndex < total {
+            if Task.isCancelled || consumeBatchInterrupt() { return }
+            await speakCurrentPreviewPage(after: nil, recordID: recordID)
+            if Task.isCancelled || consumeBatchInterrupt() { return }
+            if previewController.pageIndex >= total - 1 { break }
+            let moved = previewController.next()
+            appendTaskRecordMessage(recordID, actor: "演示运行器", role: "翻页", kind: .agent, text: moved)
+            await Task.yield()
+        }
+        let done = "这一段我已经讲完了。需要我继续答疑、回到某一页，还是收尾？"
+        voiceManager?.speak(done)
+        recordSpokenLine(done)
+        appendTaskRecordMessage(recordID, actor: "灵枢", role: "演示停顿", kind: .result, text: done)
+        await voiceManager?.awaitPlaybackDone()
+    }
+
+    func speakCurrentPreviewPage(after actionResult: String?, recordID: String) async {
+        if let actionResult {
+            appendTaskRecordMessage(recordID, actor: "演示运行器", role: "翻页", kind: .agent, text: actionResult)
+        }
+        let title = previewController.title
+        let page = previewController.displayedPageNumber
+        let total = previewController.pageCount > 0 ? previewController.pageCount : nil
+        let pageText = previewController.isHTML ? "" : previewController.pageText(max(0, page - 1))
+        let line = LingShuInteractionFulfillment.pageNarration(title: title, pageNumber: page, totalPages: total, pageText: pageText)
+        voiceManager?.speak(line)
+        recordSpokenLine(line)
+        appendTaskRecordMessage(recordID, actor: "灵枢", role: "逐页讲解", kind: .result, text: line)
+        await voiceManager?.awaitPlaybackDone()
     }
 
     /// 纯唤醒词("灵枢")打断:**真停掉在飞的处理**(主回合 + 自主/在岗回合),回到聆听。保持在岗(不下岗)。

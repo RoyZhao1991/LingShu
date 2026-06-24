@@ -10,7 +10,7 @@ extension LingShuState {
         [
             LingShuAgentTool(
                 name: "open_preview",
-                description: "在 app 内打开文件预览(PPT/PDF/Word/Excel 都行,office 会自动转 PDF)。做演示/讲解/带人看文档时先用它打开。**返回里带【本页实际内容】——讲解必须照这页真实内容讲,别凭记忆/编**。正式演讲流程:open_preview → present_fullscreen(true) 进全屏演示 → 逐页 speak 讲(照本页内容)+ preview_next 翻 → 讲完 present_fullscreen(false) 退出。",
+                description: "在 app 内打开文件预览(PPT/PDF/Word/Excel 都行,office 会自动转 PDF)。用户上传了附件时,直接使用附件上下文里的本机路径作为 path,不要先搜索文件。做演示/讲解/带人看文档时先用它打开。**返回里带【本页实际内容】——讲解必须照这页真实内容讲,别凭记忆/编**。正式演讲流程:open_preview → preview_document_text 读全篇 → present_fullscreen(true) 进全屏演示 → run_steps 批量安排 speak/preview_next → 讲完 present_fullscreen(false) 退出。",
                 parametersJSON: "{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\",\"description\":\"文件绝对路径\"}},\"required\":[\"path\"]}"
             ) { [weak self] args in
                 let path = Self.jsonField(args, "path") ?? args
@@ -18,7 +18,7 @@ extension LingShuState {
             },
             LingShuAgentTool(
                 name: "preview_document_text",
-                description: "一次性读取当前预览文档**所有页**的文字(先理解全篇、再规划讲稿——做演示/讲解前先用它把整篇读完,而不是逐页翻着边读边讲)。返回每页 内容。配合 run_steps:读全 → 想好每页讲稿 → 批量顺滑播。",
+                description: "一次性读取当前预览文档**所有页**的文字(先理解全篇、再规划讲稿——做演示/讲解前先用它把整篇读完,而不是逐页翻着边读边讲)。返回每页内容。配合 run_steps:读全 → 想好每页讲稿 → 批量顺滑播。不要为了读已打开的文档再搜索文件路径。",
                 parametersJSON: "{\"type\":\"object\",\"properties\":{}}"
             ) { [weak self] _ in
                 guard let self else { return "预览不可用" }

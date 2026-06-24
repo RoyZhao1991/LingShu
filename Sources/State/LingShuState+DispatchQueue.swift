@@ -1,7 +1,7 @@
 import Foundation
 
-/// **派发队列区**(用户定调 2026-06-22):主界面 task 支持 3 并发(= 编排器 maxConcurrent),
-/// 多出来的**不直接派发**,进一个**可见的队列区等待**;有空位时自动晋级派发;晋级前用户可在队列区**删除**。
+/// **派发队列区**(用户定调 2026-06-22;并发改 1 串行 2026-06-23):主界面 task **串行**(编排器 maxConcurrent=1),
+/// 同时只允许一条在执行;多出来的**不直接派发**,进一个**可见的队列区等待**;前一条完成后自动晋级派发;晋级前用户可在队列区**删除**。
 /// 与编排器内部并发队列分工:这条是**派发前**的用户可见可删队列(承载已分诊为 task、但当前并发已满的请求)。
 /// 自主模式单线程推进不受影响(它不走这条 task 派发路径)。
 struct LingShuQueuedDispatchTask: Identifiable, Equatable {
@@ -13,9 +13,12 @@ struct LingShuQueuedDispatchTask: Identifiable, Equatable {
     let gap: LingShuGapAnalysis?
     let requirements: [LingShuCapabilityRequirement]
     let createdAt: Date
+    /// 主对话里紧跟用户消息的答复气泡。任务排队时复用它显示"已入队",晋级时继续复用它显示执行进度,
+    /// 保证聊天流永远是一问一答,不把多条用户消息堆在一起。
+    let bubbleID: UUID?
 
     init(prompt: String, goal: String?, goalSpec: LingShuGoalSpec?, gap: LingShuGapAnalysis?,
-         requirements: [LingShuCapabilityRequirement], createdAt: Date = Date()) {
+         requirements: [LingShuCapabilityRequirement], createdAt: Date = Date(), bubbleID: UUID? = nil) {
         self.id = "queued-\(UUID().uuidString.prefix(8))"
         self.prompt = prompt
         self.goal = goal
@@ -23,6 +26,7 @@ struct LingShuQueuedDispatchTask: Identifiable, Equatable {
         self.gap = gap
         self.requirements = requirements
         self.createdAt = createdAt
+        self.bubbleID = bubbleID
     }
 
     static func == (a: LingShuQueuedDispatchTask, b: LingShuQueuedDispatchTask) -> Bool { a.id == b.id }
@@ -38,13 +42,70 @@ extension LingShuState {
 
     /// 并发已满 → 把这条(已分诊为 task)请求放进**可见队列区等待**,不创建记录/不派发。带上已派生的前置认知,晋级时直接用。
     func enqueueDispatchTask(prompt: String, goal: String?, goalSpec: LingShuGoalSpec?,
-                            gap: LingShuGapAnalysis?, requirements: [LingShuCapabilityRequirement]) {
-        let item = LingShuQueuedDispatchTask(prompt: prompt, goal: goal, goalSpec: goalSpec, gap: gap, requirements: requirements)
+                            gap: LingShuGapAnalysis?, requirements: [LingShuCapabilityRequirement],
+                            existingBubbleID: UUID? = nil) {
+        let item = LingShuQueuedDispatchTask(prompt: prompt, goal: goal, goalSpec: goalSpec, gap: gap,
+                                             requirements: requirements, bubbleID: existingBubbleID)
         queuedDispatchTasks.append(item)
         appendTrace(kind: .route, actor: "派发队列", title: "进队列区等待",
                     detail: "并发已满,本条进队列区等空位;晋级前可删除。")
-        // 加载气泡里也提示一句(队列区在 UI 单独呈现;这里不创建任务记录,避免提前进主窗口)。
-        chatMessages.append(.init(speaker: "灵枢", text: "📥 已加入队列区等待(前面满 3 并发);有空位我自动开始,排期间你可在队列区删掉它。", isUser: false))
+        // 复用 submitTextInput 已经紧跟用户消息创建的占位气泡,不要删掉再尾部追加,
+        // 否则快速连发会变成"多个问题在上、多个回答在下"。
+        let text = "📥 已加入队列区等待(前面有任务在执行);前一条完成后我自动开始,排期间你可在队列区删掉它。"
+        if let existingBubbleID, let idx = chatMessages.firstIndex(where: { $0.id == existingBubbleID }) {
+            chatMessages[idx].text = text
+            chatMessages[idx].isLoading = false
+        } else {
+            chatMessages.append(.init(speaker: "灵枢", text: text, isUser: false))
+        }
+    }
+
+    /// 当前正在执行的派发任务(任务线串行,至多 1 条)——供「进行中」长条自动定位。
+    /// 取 dispatchedTaskBubbles(活跃派发气泡集,完成/卡住即清)里**状态仍在推进**的那条;
+    /// 终态/待人的(已完成/已核验/部分完成/异常/失败/待用户)排除,防残留气泡误显示。
+    var runningDispatchedTask: LingShuTaskExecutionRecord? {
+        let active: Set<LingShuTaskExecutionStatus> = [.running, .dispatched, .analyzing, .acquiringCapability, .ready]
+        let activeRIDs = Set(dispatchedTaskBubbles.keys)
+        return taskExecutionRecordLookup.first { activeRIDs.contains($0.id) && active.contains($0.status) }
+    }
+
+    /// 清掉不再占执行槽的派发气泡映射。旧版本/异常路径可能把 `waitingForUser`、`partial`、
+    /// `failed` 等非活跃记录残留在 dispatchedTaskBubbles, 导致后续任务一直误判"前面有任务在执行"。
+    func pruneInactiveDispatchedTaskBubbles() {
+        let active: Set<LingShuTaskExecutionStatus> = [.running, .dispatched, .analyzing, .acquiringCapability, .ready]
+        let statusByID = Dictionary(uniqueKeysWithValues: taskExecutionRecords.map { ($0.id, $0.status) })
+        let staleIDs = dispatchedTaskBubbles.keys.filter { recordID in
+            guard let status = statusByID[recordID] else { return true }
+            return !active.contains(status)
+        }
+        guard !staleIDs.isEmpty else { return }
+        for id in staleIDs { dispatchedTaskBubbles.removeValue(forKey: id) }
+        appendTrace(kind: .system, actor: "派发队列", title: "释放非活跃槽位", detail: "清理 \(staleIDs.count) 条已停止/待用户/终态任务的活跃映射。")
+    }
+
+    /// 停止指定派发任务(「进行中」长条的"停止"):recordID → subID → 编排器只取消这一条,
+    /// 释放槽位让队列自动晋级;**不动问答线**(区别于 cancelCurrentCall 的全停)。
+    func stopDispatchedTask(recordID: String) {
+        guard let subID = agentSubTaskRecords.first(where: { $0.value == recordID })?.key else {
+            dispatchedTaskBubbles.removeValue(forKey: recordID)
+            if blockedDispatchedRecordID == recordID { blockedDispatchedRecordID = nil }
+            appendTaskRecordMessage(recordID, actor: "用户", role: "停止", kind: .warning, text: "用户已停止该任务。")
+            finishTaskRecord(recordID, status: .failed, summary: "用户已停止该任务。")
+            promoteQueuedDispatchIfPossible()
+            return
+        }
+        appendTrace(kind: .warning, actor: "用户", title: "停止任务", detail: "进行中长条手动停止该派发任务,释放槽位。")
+        let orchestrator = agentOrchestrator
+        Task { @MainActor [weak self] in
+            let stopped = await orchestrator.cancel(id: subID)
+            guard !stopped, let self else { return }
+            // 编排器没有活跃 driveTask,但 UI 记录仍处于执行/待用户等非终态时,本地兜底收口。
+            self.dispatchedTaskBubbles.removeValue(forKey: recordID)
+            if self.blockedDispatchedRecordID == recordID { self.blockedDispatchedRecordID = nil }
+            self.appendTaskRecordMessage(recordID, actor: "用户", role: "停止", kind: .warning, text: "用户已停止该任务。")
+            self.finishTaskRecord(recordID, status: .failed, summary: "用户已停止该任务。")
+            self.promoteQueuedDispatchIfPossible()
+        }
     }
 
     /// 用户在队列区删除一条**尚未派发**的排队任务。
@@ -52,6 +113,10 @@ extension LingShuState {
         guard let idx = queuedDispatchTasks.firstIndex(where: { $0.id == id }) else { return }
         let removed = queuedDispatchTasks.remove(at: idx)
         appendTrace(kind: .route, actor: "派发队列", title: "已从队列区删除", detail: String(removed.prompt.prefix(36)))
+        if let bubbleID = removed.bubbleID, let idx = chatMessages.firstIndex(where: { $0.id == bubbleID }) {
+            chatMessages[idx].text = "已从队列区移除。"
+            chatMessages[idx].isLoading = false
+        }
     }
 
     /// 有空位 → 把队列区最早的一条晋级为真派发(创建记录 + 绑定前置认知 + dispatchIsolatedTask)。
@@ -60,16 +125,21 @@ extension LingShuState {
         guard !queuedDispatchTasks.isEmpty else { return }
         Task { @MainActor [weak self] in
             guard let self else { return }
-            let running = await self.agentOrchestrator.runningCount()
             let cap = await self.agentOrchestrator.capacity()
-            guard !Self.shouldQueueDispatch(running: running, capacity: cap), !self.queuedDispatchTasks.isEmpty else { return }
+            self.pruneInactiveDispatchedTaskBubbles()
+            // **竞态修(2026-06-23,监工"两条任务同时在跑/TASK_NONSERIAL"):**晋级容量判定改用**同步活跃派发气泡数**
+            // (dispatchIsolatedTask 同步置 dispatchedTaskBubbles),而非 `await runningCount()`。原 await 是交错点:
+            // 每个编排器事件都触发一次 promote,两个并发 promote 都在 dispatch 前读到 running=0 → 双双 removeFirst+派发 →
+            // 同时两条在跑(违反串行)。改后:capacity 的 await 之后到派发之间**无 await**,MainActor 串行执行使
+            // 每个 promote 的"读计数→派发(计数+1)"原子完成,第二个 promote 读到已满 → 不再双派发。
+            guard self.dispatchedTaskBubbles.count < max(1, cap), !self.queuedDispatchTasks.isEmpty else { return }
             let next = self.queuedDispatchTasks.removeFirst()
             let rid = self.createTaskExecutionRecord(for: next.prompt)
             self.bindGoalSpec(next.goalSpec, to: rid)
             self.bindGapAnalysis(next.gap, to: rid)
             self.bindCapabilityRequirements(next.requirements, to: rid)
             self.appendTrace(kind: .route, actor: "派发队列", title: "晋级派发", detail: "有空位,队列区最早一条开始执行:\(String(next.prompt.prefix(28)))")
-            self.dispatchIsolatedTask(prompt: next.prompt, taskRecordID: rid, goal: next.goal)
+            self.dispatchIsolatedTask(prompt: next.prompt, taskRecordID: rid, goal: next.goal, existingBubbleID: next.bubbleID)
             // 可能还有空位 + 更多排队 → 继续晋级下一条。
             self.promoteQueuedDispatchIfPossible()
         }

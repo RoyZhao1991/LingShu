@@ -42,4 +42,68 @@ enum LingShuVerifierGate {
         guard pureCode else { return .runLLMReview }
         return codeGatePassed ? .skipPassedByDeterministicGate : .skipFailedByDeterministicGate
     }
+
+    /// 工具/命令型目标的 P3 短路:如果成功标准已经全部由执行记录确定性证明达成,
+    /// 且没有文件/内容质量/设备效果这类主观或外部状态标准,就不再调用 LLM 评审官反复挑话术。
+    ///
+    /// 这不是降低验收,而是把「事实已证明」与「主观交付物质量」分层:
+    /// - command_succeeds 全部 met → 可直接通过;
+    /// - file_exists / content_quality / device / environment / user_confirmation → 仍需后续评审或用户/设备回读。
+    static func deterministicAcceptanceCanSkipLLM(_ report: LingShuAcceptanceReport) -> Bool {
+        guard !report.isEmpty else { return false }
+        guard report.verdicts.allSatisfy({ $0.status == .met }) else { return false }
+        return report.verdicts.allSatisfy { $0.kind == .commandSucceeds }
+    }
+
+    /// 独立评审官有时会返回“评审器未返回有效意见/缺少证据”这类**评审链路自身的失败文本**。
+    /// 这不是对交付物的具体审查意见,不能当作 maker 的返工需求无限回灌;否则会出现“修正评审器失败提示”
+    /// 的伪返工循环。这里只识别协议/链路层的无效意见,真实的 PASS/FAIL 统计或明确结论仍按正常评审处理。
+    static func isNonActionableReviewCritique(_ text: String) -> Bool {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty { return true }
+
+        let verdict = LingShuChecklistVerdict.parse(trimmed)
+        if verdict.declaredPass || verdict.passedCount > 0 || verdict.failedCount > 0 {
+            return false
+        }
+
+        let normalized = trimmed
+            .replacingOccurrences(of: " ", with: "")
+            .replacingOccurrences(of: "\n", with: "")
+            .lowercased()
+        let protocolFailurePhrases = [
+            "评审器未返回有效意见",
+            "未返回有效意见",
+            "没有返回有效意见",
+            "缺少可核验的确定性证据",
+            "未返回可执行意见",
+            "noactionablecritique",
+            "novalidcritique",
+            "invalidreview",
+            "reviewerfailed"
+        ]
+        if protocolFailurePhrases.contains(where: { normalized.contains($0.lowercased()) }) {
+            return true
+        }
+
+        // 人机输入信封/授权信封泄漏到回复区时,也不是交付物审查意见。
+        if normalized.contains("lingshu_human_input") || normalized.contains("human_input") {
+            return true
+        }
+
+        return false
+    }
+
+    /// 当评审输出无效时,是否允许宿主侧确定性证据接管。
+    /// 只在代码门干净、没有确定性失败,且至少有一种真实证据(文件/动作/已达成成功标准)时放行;
+    /// 纯口头声称、纯用户确认/设备效果这类不可核验目标不会被误放行。
+    static func hostDeterministicEvidenceCanReplaceInvalidReview(
+        codeEvidenceClean: Bool,
+        realFiles: [String],
+        hadAction: Bool,
+        acceptance: LingShuAcceptanceReport
+    ) -> Bool {
+        guard codeEvidenceClean, !acceptance.hasDeterministicFailure else { return false }
+        return !realFiles.isEmpty || hadAction || !acceptance.deterministicallyMet.isEmpty
+    }
 }

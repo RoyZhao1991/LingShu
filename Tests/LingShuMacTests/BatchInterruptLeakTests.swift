@@ -86,4 +86,47 @@ final class BatchInterruptLeakTests: XCTestCase {
         state.batchInterruptRequested = true    // 本回合中途真打断
         XCTAssertTrue(state.batchInterruptRequested, "回合中途的真打断应保留,供验收门中途检查中止")
     }
+
+    func testCancelCurrentCallCancelsTaskEvenWhenModelFlagAlreadyFalse() {
+        let state = LingShuState()
+        state.isModelReplying = false
+        state.isModelExecuting = false
+        state.activeAgentTurnTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 5_000_000_000)
+        }
+
+        state.cancelCurrentCall()
+
+        XCTAssertNil(state.activeAgentTurnTask, "停止必须按真实 Task 判定,不能因 hasActiveModelCall=false 早退")
+        XCTAssertTrue(state.batchInterruptRequested, "停止应留下批量打断信号,让 run_steps/验收循环在边界退出")
+    }
+
+    func testStandingPersonOnDutyDoesNotDependOnSessionHolderStartupRace() {
+        let state = LingShuState()
+        var run = LingShuAutonomousRunSnapshot.idle
+        run.objective = ""
+        run.phase = .running
+        state.autonomousRun = run
+        state.autonomousSessionHolder = nil
+
+        XCTAssertTrue(state.isStandingPersonOnDuty,
+                      "上岗状态应由状态机决定;会话对象异步构造期间不能误报 off")
+    }
+
+    func testTurnBoundaryBlocksHistoryBleedForFreshPrompt() {
+        let guidance = LingShuState.turnBoundaryGuidance(for: "打断后恢复测试:1+1 等于几?一句话回答。", base: "基础策略")
+
+        XCTAssertTrue(guidance.contains("只回答或处理下面这条最新输入"))
+        XCTAssertTrue(guidance.contains("不要主动补答旧问题"))
+        XCTAssertTrue(guidance.contains("不要续跑旧任务"))
+        XCTAssertTrue(guidance.contains("基础策略"))
+    }
+
+    func testTurnBoundaryAllowsExplicitHistoryResume() {
+        let guidance = LingShuState.turnBoundaryGuidance(for: "继续上次那个爬虫任务", base: nil)
+
+        XCTAssertTrue(guidance.contains("可能在续接历史任务"))
+        XCTAssertTrue(guidance.contains("多个候选"))
+        XCTAssertFalse(guidance.contains("只回答或处理下面这条最新输入"))
+    }
 }

@@ -22,6 +22,26 @@ final class ChoiceParsingTests: XCTestCase {
         XCTAssertEqual(LingShuChoiceParsing.parse("1) 接入\n2) 暂不")?.options.count, 2)
     }
 
+    func testParsesHumanInputEnvelopeChoice() throws {
+        let payload: [String: Any] = [
+            "question": "这一步需要授权才能继续",
+            "options": [
+                ["label": "已授权，继续", "detail": "我已完成授权"],
+                ["label": "暂不授权", "detail": "先停在这里"]
+            ]
+        ]
+        let data = try JSONSerialization.data(withJSONObject: payload)
+        let envelope = LingShuHumanInputEnvelope(
+            tool: "ask_choice",
+            argumentsJSON: String(data: data, encoding: .utf8) ?? "{}"
+        )
+
+        let p = LingShuChoiceParsing.parse("⏸ 这条任务需要你定一下:\(envelope.encodedPrompt)")
+
+        XCTAssertEqual(p?.question, "这一步需要授权才能继续")
+        XCTAssertEqual(p?.options.map(\.label), ["已授权，继续", "暂不授权"])
+    }
+
     func testRejectsNonChoice() {
         XCTAssertNil(LingShuChoiceParsing.parse("床头灯已打开。"), "普通回复不是选择题")
         XCTAssertNil(LingShuChoiceParsing.parse("只有一个选项:\n1. 仅此一项"), "不足 2 项")

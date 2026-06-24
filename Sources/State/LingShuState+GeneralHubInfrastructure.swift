@@ -25,6 +25,7 @@ extension LingShuState {
             "role": "general_agent_hub",
             "scope": "goal_understanding,planning,orchestration,verification"
         ]))
+        recordCapabilityNodesInWorldModel()
         recordWorldEvent(kind: .system, source: "灵枢", summary: "通用中枢基础设施已装载")
     }
 
@@ -74,6 +75,8 @@ extension LingShuState {
     func probedCapabilityEntries() -> [LingShuCapabilityEntry] {
         taskExecutionRecords
             .flatMap { $0.capabilityProbeObservations ?? [] }
+            .filter { LingShuCapabilityVerb.parse($0.verb) != .humanConfirm }
+            .filter { !Self.referencesKnownNoCredentialBuiltInCapability("\($0.capabilityID) \($0.description)") }
             .map { observation in
                 let status = observation.status
                 let permission: LingShuCapabilityPermissionState = status == .requiresAuth ? .needsAuth : .unknown
@@ -91,13 +94,15 @@ extension LingShuState {
     }
 
     func probeCapabilityRequirements(_ requirements: [LingShuCapabilityRequirement], recordID: String?) async {
-        guard let recordID, !requirements.isEmpty else { return }
+        let activeRequirements = normalizeCapabilityRequirementsForBuiltIns(requirements)
+            .filter { $0.verb != .humanConfirm }
+        guard let recordID, !activeRequirements.isEmpty else { return }
         // installGeneralHubInfrastructure also registers this probe, but that happens through
         // an unstructured Task during app boot. Re-register here so an immediate first user
         // command cannot race the registry and silently skip capability discovery.
         await capabilityProbeRegistry.register(LingShuGeneralCapabilityProbe())
         let graph = capabilityGraph()
-        let targets = requirements.compactMap { req -> LingShuProbeTarget? in
+        let targets = activeRequirements.compactMap { req -> LingShuProbeTarget? in
             switch graph.match(req) {
             case .satisfied:
                 return nil
@@ -123,7 +128,7 @@ extension LingShuState {
             recordWorldEvent(kind: .capability, source: "能力探测", summary: "完成 \(observations.count) 条能力探测观察", payload: [
                 "recordID": recordID
             ])
-            mergeCapabilityRequirementGaps(requirements, graph: capabilityGraph(), into: recordID)
+            mergeCapabilityRequirementGaps(activeRequirements, graph: capabilityGraph(), into: recordID)
         }
     }
 
@@ -137,6 +142,7 @@ extension LingShuState {
         }
         taskExecutionRecords[index].capabilityProbeObservations = existing
         persistTaskExecutionRecords()
+        recordCapabilityNodesInWorldModel()
     }
 
     nonisolated static func probeTargetKind(for verb: LingShuCapabilityVerb) -> LingShuProbeTargetKind {
@@ -336,6 +342,18 @@ struct LingShuGeneralCapabilityProbe: LingShuCapabilityProbe {
         let status: LingShuCapabilityProbeStatus
         let confidence: Double
         let description: String
+        let targetText = "\(target.name) \(target.metadata["detail"] ?? "") \(verb)"
+        if LingShuState.referencesKnownNoCredentialBuiltInCapability(targetText) {
+            return [.init(
+                targetID: target.id,
+                capabilityID: "\(verb):\(target.name)",
+                verb: LingShuCapabilityVerb.localFileScan.rawValue,
+                description: "本机内置能力可覆盖:\(target.name)",
+                status: .available,
+                confidence: 0.9,
+                evidence: ["builtin-local-capability"]
+            )]
+        }
         switch LingShuCapabilityVerb.parse(verb) {
         case .localFileScan, .documentGenerate, .compute, .browserOperate, .deviceDiscover:
             status = .available
@@ -350,9 +368,7 @@ struct LingShuGeneralCapabilityProbe: LingShuCapabilityProbe {
             confidence = 0.7
             description = "设备控制需要先发现设备、确认驱动和安全权限:\(target.name)"
         case .humanConfirm:
-            status = .requiresAuth
-            confidence = 0.65
-            description = "需要用户确认或提供凭据:\(target.name)"
+            return []
         case .unknown:
             status = .unknown
             confidence = 0.4

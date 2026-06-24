@@ -44,8 +44,134 @@ final class CoreBoundaryTests: XCTestCase {
         XCTAssertEqual(answer, "今天是 2026年6月10日，星期三，现在 08:41。")
     }
 
+    func testLocalIntentResolverAnswersNaturalDateWeekdayQuestion() {
+        let timeZone = TimeZone(identifier: "Asia/Shanghai")!
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = timeZone
+        let now = calendar.date(from: DateComponents(
+            year: 2026,
+            month: 6,
+            day: 24,
+            hour: 12,
+            minute: 6
+        ))!
+
+        let answer = LingShuLocalIntentResolver.answer(
+            for: "现在是几月几日星期几？只回答当前日期。",
+            now: now,
+            timeZone: timeZone
+        )
+
+        XCTAssertEqual(answer, "今天是 2026年6月24日，星期三，现在 12:06。")
+    }
+
     func testLocalIntentResolverIgnoresNonDeterministicRequests() {
         XCTAssertNil(LingShuLocalIntentResolver.answer(for: "帮我设计一个任务调度架构"))
+    }
+
+    func testModelServiceFailureClassifiesQuotaAsNonRecoverable() {
+        let failure = LingShuModelServiceFailure.classify(
+            statusCode: 402,
+            body: #"{"error":{"message":"账户余额不足，请充值后继续使用"}}"#
+        )
+
+        XCTAssertEqual(failure.kind, .quota)
+        XCTAssertFalse(failure.shouldRetryRequest)
+        XCTAssertFalse(failure.shouldAutoResume)
+        XCTAssertEqual(failure.taskStatus, .waitingForUser)
+        XCTAssertTrue(failure.userFacingMessage.contains("额度"))
+    }
+
+    func testModelServiceFailureClassifiesAuthAsNonRecoverable() {
+        let failure = LingShuModelServiceFailure.classify(
+            LingShuModelGatewayError.requestFailed(401, #"{"error":"invalid api key"}"#)
+        )
+
+        XCTAssertEqual(failure.kind, .auth)
+        XCTAssertFalse(failure.shouldRetryRequest)
+        XCTAssertEqual(failure.taskStatus, .waitingForUser)
+    }
+
+    func testModelServiceFailureClassifiesNetworkAsRecoverable() {
+        let failure = LingShuModelServiceFailure.classify(
+            LingShuModelGatewayError.requestFailed(-1, "模型网关返回了非 HTTP 响应。")
+        )
+
+        XCTAssertEqual(failure.kind, .network)
+        XCTAssertTrue(failure.shouldRetryRequest)
+        XCTAssertTrue(failure.shouldAutoResume)
+        XCTAssertEqual(failure.taskStatus, .suspended)
+    }
+
+    func testModelServiceFailureEncodedReasonRoundTrips() {
+        let original = LingShuModelServiceFailure.classify(
+            statusCode: 429,
+            body: #"{"error":"rate limit exceeded"}"#
+        )
+        let decoded = LingShuModelServiceFailure.decodeReason(original.encodedReason)
+
+        XCTAssertEqual(decoded?.kind, .rateLimited)
+        XCTAssertEqual(decoded?.statusCode, 429)
+        XCTAssertFalse(LingShuModelServiceFailure.isNonRecoverableReason(original.encodedReason))
+        XCTAssertTrue(LingShuModelServiceFailure.userFacingReason(original.encodedReason).contains("限流"))
+    }
+
+    func testLocalIntentResolverAnswersSelfIdentityWithoutRemoteBrain() {
+        XCTAssertEqual(
+            LingShuLocalIntentResolver.answer(for: "你是谁"),
+            "我是灵枢，有什么可以帮你的？"
+        )
+
+        let intro = LingShuLocalIntentResolver.answer(for: "我是第一次见你。用一句话介绍你自己，不要列能力清单。")
+        XCTAssertNotNil(intro)
+        XCTAssertTrue(intro?.contains("我是灵枢") == true)
+        XCTAssertFalse(intro?.contains("工具") == true)
+    }
+
+    @MainActor
+    func testSubmitTextInputUsesLocalWeakBrainForDeterministicSelfAnswer() {
+        let state = LingShuState()
+        let returned = state.submitTextInput("你是谁")
+
+        XCTAssertEqual(returned, "我是灵枢，有什么可以帮你的？")
+        XCTAssertEqual(state.pendingChatTurnIDs.count, 0)
+        XCTAssertFalse(state.hasActiveModelCall)
+        XCTAssertEqual(state.chatMessages.suffix(2).map(\.isUser), [true, false])
+        XCTAssertEqual(state.chatMessages.last?.text, "我是灵枢，有什么可以帮你的？")
+        XCTAssertEqual(state.taskExecutionRecords.first?.status, .answered)
+    }
+
+    @MainActor
+    func testSubmitTextInputUsesLocalWorkingMemoryForExplicitRememberAndRecall() {
+        let state = LingShuState()
+        let code = "JARVIS-LOCAL-42"
+
+        let remembered = state.submitTextInput("记住一个临时偏好:今天的长跑代号是 \(code)。只回复已记录。")
+        let recalled = state.submitTextInput("刚才我说的长跑代号是什么?只回答代号。")
+
+        XCTAssertEqual(remembered, "已记录。")
+        XCTAssertEqual(recalled, code)
+        XCTAssertEqual(state.pendingChatTurnIDs.count, 0)
+        XCTAssertFalse(state.hasActiveModelCall)
+        XCTAssertEqual(state.taskExecutionRecords.prefix(2).map(\.status), [.answered, .answered])
+    }
+
+    func testAttachmentContextDoesNotTriggerLocalMemoryShortcut() {
+        let combined = """
+        用户上传了以下文件，请基于它们的真实内容来理解或修改，并按交付物落地：
+        【演示文稿：灵枢自我介绍_新版.pptx】
+        这一页包含记录一下、记住、已记录等普通正文，但它们只是素材内容。
+
+        用户指令：
+        演示一下这个 PPT
+        """
+
+        XCTAssertEqual(
+            LingShuState.visibleUserInstructionForDeterministicRouting(from: combined),
+            "演示一下这个 PPT"
+        )
+        XCTAssertNil(LingShuState.explicitLocalMemoryFact(from: combined))
+        XCTAssertNil(LingShuState.explicitLocalMemoryFact(from: "我把记录一下写在材料里, 不是让你记忆。"))
     }
 
     func testRemoteSessionPoolReusesWarmCodexRoutingSession() {

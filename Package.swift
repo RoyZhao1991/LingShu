@@ -15,6 +15,7 @@ let package = Package(
     targets: [
         .executableTarget(
             name: "LingShuMac",
+            dependencies: ["LingShuAudioExceptionCatcher"],
             path: "Sources",
             linkerSettings: [
                 // 把 Info.plist 嵌入可执行文件的 __TEXT,__info_plist 段，
@@ -27,6 +28,11 @@ let package = Package(
                     "-Xlinker", "Resources/LingShuMac-Info.plist"
                 ])
             ]
+        ),
+        .target(
+            name: "LingShuAudioExceptionCatcher",
+            path: "SourcesObjC/LingShuAudioExceptionCatcher",
+            publicHeadersPath: "include"
         ),
         .testTarget(
             name: "LingShuMacTests",

@@ -48,16 +48,15 @@ struct LingShuAutonomousOrbOnlyView: View {
     var body: some View {
         let snapshot = state.digitalHumanSnapshot(voice: voice, vision: vision, perceptionGateway: perceptionGateway)
         VStack(spacing: 8) {
-            TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { tl in
-                let bob = paused ? 0 : sin(tl.date.timeIntervalSinceReferenceDate * 1.4) * 3   // 暂停=冻结不浮动
+            ZStack {
                 LingShuDigitalHumanMiniOrb(snapshot: snapshot, audioLevel: paused ? 0 : Double(voice.outputLevel))
                     .frame(width: 96, height: 96)
                     .opacity(paused ? 0.4 : 0.95)        // 暂停=冻结变暗
                     .saturation(paused ? 0.25 : 1)
-                    .shadow(color: Color.lingHolo.opacity(paused ? 0.15 : 0.6), radius: 18)
-                    .offset(y: bob)
+                    .shadow(color: Color.lingHolo.opacity(paused ? 0.15 : 0.58), radius: 14)
                     .overlay { if paused { Image(systemName: "pause.fill").font(.system(size: 22, weight: .heavy)).foregroundStyle(.white.opacity(0.85)) } }
             }
+            .frame(width: 124, height: 124)
             phaseLabel
             controlBar
         }
@@ -166,10 +165,10 @@ struct LingShuAutonomousWindowController: NSViewRepresentable {
         w.backgroundColor = .clear
         w.hasShadow = false
         w.isMovableByWindowBackground = true                  // 拖本体即可挪动这颗悬浮球
-        w.minSize = NSSize(width: 100, height: 120)
+        w.minSize = NSSize(width: 150, height: 210)
         w.level = .floating
         if let screen = w.screen ?? NSScreen.main {
-            let width: CGFloat = 150, height: CGFloat = 198, margin: CGFloat = 24   // 加高容纳 LOOP 相位标签(理解/规划/执行/验收中)
+            let width: CGFloat = 168, height: CGFloat = 224, margin: CGFloat = 24   // 固定留白容纳光晕与 LOOP 相位标签,避免本体被裁切
             let vf = screen.visibleFrame
             w.setFrame(NSRect(x: vf.maxX - width - margin, y: vf.maxY - height - margin, width: width, height: height), display: true, animate: true)
         }
@@ -189,6 +188,7 @@ struct LingShuAutonomousWindowController: NSViewRepresentable {
         private var level: NSWindow.Level = .normal
         private var minSize = NSSize.zero
 
+        @MainActor
         func capture(_ w: NSWindow) {
             frame = w.frame; opaque = w.isOpaque; bg = w.backgroundColor; shadow = w.hasShadow
             styleMask = w.styleMask
@@ -196,6 +196,7 @@ struct LingShuAutonomousWindowController: NSViewRepresentable {
             level = w.level; minSize = w.minSize
         }
 
+        @MainActor
         func restore(_ w: NSWindow) {
             w.styleMask = styleMask                                       // 恢复 .titled 等(标题栏回来)
             w.isOpaque = opaque; w.backgroundColor = bg; w.hasShadow = shadow

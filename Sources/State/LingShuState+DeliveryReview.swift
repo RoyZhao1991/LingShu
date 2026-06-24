@@ -15,8 +15,26 @@ extension LingShuState {
         // 真实落盘 = 已登记产出物(write_file 自动登记)∪ **回复里提到且盘上确实存在的文件**。
         // 关键:run_command 产出的文件(如 python 生成的 .pptx)不会被 write_file 登记,
         // 只认登记表会让 verifier 误判"主交付物不存在",对真实存在的文件反复打回——这正是 PPT 评审死循环的根因。
-        var realPaths = Set((taskExecutionRecords.first { $0.id == taskRecordID }?.artifacts ?? []).map(\.location))
+        let taskRecord = taskExecutionRecords.first { $0.id == taskRecordID }
+        var realPaths = Set((taskRecord?.artifacts ?? []).map(\.location))
         for path in Self.extractFilePaths(from: reply) { realPaths.insert(path) }
+        if let taskRecord {
+            // run_command/外部工具经常在 stdout 或调用参数里产生文件,但不一定会被 write_file 登记。
+            // 验收门必须以整条任务记录为证据池,而不是只看最终答复,否则会把“真实做了但没复述路径”
+            // 误判成无产出,引发无意义返工。
+            for message in taskRecord.messages {
+                for path in Self.extractFilePaths(from: message.text) { realPaths.insert(path) }
+                switch message.detail {
+                case let .toolCall(_, summary, arguments):
+                    for path in Self.extractFilePaths(from: summary) { realPaths.insert(path) }
+                    for path in Self.extractFilePaths(from: arguments) { realPaths.insert(path) }
+                case let .toolResult(_, _, output):
+                    for path in Self.extractFilePaths(from: output) { realPaths.insert(path) }
+                default:
+                    break
+                }
+            }
+        }
         let realFiles = realPaths.filter { FileManager.default.fileExists(atPath: $0) }.sorted()
         let filesBlock = realFiles.isEmpty
             ? "真实落盘文件:(无——盘上没有任何本回合产出文件)"
@@ -51,6 +69,10 @@ extension LingShuState {
         let ranWithVisibleOutput = codeTaskHasVisibleRunOutput(taskRecordID: taskRecordID)
         let codeGatePassed = LingShuVerifierGate.codeDeterministicGatePasses(
             hasCodeFiles: !codeFiles.isEmpty, testsGreen: testGate.passed, ranWithVisibleOutput: ranWithVisibleOutput, runCrashed: runGateBlocks)
+
+        if let deterministicDelivery = deterministicAcceptanceDeliveryIfReady(acceptance, codeFiles: codeFiles) {
+            return deterministicDelivery
+        }
 
         // **差距2:按交付物类型 gate 贵 LLM 评审**(确定性门照跑、只省 LLM 自评)。纯代码交付——确定性门(测试/运行)
         // 已**权威定正确性**:过则直接通过、跳过冗余 LLM(省一次贵调用 + 往返延迟,差距2/7);不过则按确定性失败直接返工。
@@ -129,12 +151,30 @@ extension LingShuState {
             id: "verifier-\(UUID().uuidString.prefix(6))",
             system: reviewer.promptBlock,
             tools: [],
-            model: controlPlaneModelAdapter(.deliveryReview, taskRecordID: taskRecordID),
+            model: checkerAdapter(taskRecordID: taskRecordID),   // 异源绑定 → 真用 checker 复核;否则原验收脑
             maxTurns: 1
         )
         let result = await verifier.send(prompt)
         let critique: String
-        if case .completed(let value) = result { critique = value } else { critique = "" }
+        if case .completed(let value) = result {
+            critique = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        } else {
+            critique = ""
+        }
+        if LingShuVerifierGate.isNonActionableReviewCritique(critique) {
+            let codeEvidenceClean = codeFiles.isEmpty || codeGatePassed
+            let hasDeterministicEvidence = LingShuVerifierGate.hostDeterministicEvidenceCanReplaceInvalidReview(
+                codeEvidenceClean: codeEvidenceClean,
+                realFiles: realFiles,
+                hadAction: hadAction,
+                acceptance: acceptance
+            )
+            if hasDeterministicEvidence {
+                appendTrace(kind: .result, actor: "验收", title: "评审无有效意见·采用确定性证据", detail: "独立评审未返回可执行意见；宿主已确认产出物/动作/成功标准无硬失败，避免无理由返工循环。")
+                return (true, "评审器未返回有效意见；宿主确定性证据已通过，跳过无理由返工。")
+            }
+            return (false, "评审器未返回有效意见，且缺少可核验的确定性证据；请补充真实产出物、动作结果或成功标准证据后再交付。")
+        }
         let verdict = LingShuChecklistVerdict.parse(critique)
         // 代码门是**确定性硬门**:代码任务未满足「有测试且全绿」或「程序构建/运行不崩」→ 即使 LLM 评审放行也判未达标,
         // 把缺哪条 + 崩溃片段回灌给 maker,逼它修到真跑通(执行恢复力),而不是把异常当交付。
@@ -361,133 +401,4 @@ extension LingShuState {
         return makerText
     }
 
-    /// 内部受信 shell 抓取(**不走 run_command 审批门**;仅供验收门提取/渲染自己的产出物)。
-    nonisolated static func runCapturing(_ launchPath: String, _ args: [String], timeout: TimeInterval = 120) async -> String {
-        guard FileManager.default.isExecutableFile(atPath: launchPath) else { return "" }
-        return await withCheckedContinuation { (cont: CheckedContinuation<String, Never>) in
-            DispatchQueue.global(qos: .userInitiated).async {
-                let proc = Process()
-                proc.executableURL = URL(fileURLWithPath: launchPath)
-                proc.arguments = args
-                let out = Pipe()
-                proc.standardOutput = out
-                proc.standardError = Pipe()
-                do { try proc.run() } catch { cont.resume(returning: ""); return }
-                DispatchQueue.global().asyncAfter(deadline: .now() + timeout) { if proc.isRunning { proc.terminate() } }
-                let data = out.fileHandleForReading.readDataToEndOfFile()
-                proc.waitUntilExit()
-                cont.resume(returning: String(data: data, encoding: .utf8) ?? "")
-            }
-        }
-    }
-
-    /// 提取产出物可读正文供事实/完整性核查。pptx/docx/xlsx 走 unzip 取 OOXML 正文;文本类直接读。
-    func extractArtifactContent(path: String, maxChars: Int = 5000) async -> String {
-        let ext = (path as NSString).pathExtension.lowercased()
-        switch ext {
-        case "pptx", "docx", "xlsx":
-            let raw = await Self.runCapturing("/usr/bin/unzip", ["-p", path, "ppt/slides/slide*.xml", "word/document.xml", "xl/sharedStrings.xml"], timeout: 30)
-            let texts = Self.matchAll(raw, pattern: "<a:t>(.*?)</a:t>") + Self.matchAll(raw, pattern: "<t[^>]*>(.*?)</t>")
-            return String(texts.joined(separator: " ").prefix(maxChars))
-        case "md", "txt", "html", "htm", "csv", "json", "py", "sh", "swift":
-            return String(((try? String(contentsOfFile: path, encoding: .utf8)) ?? "").prefix(maxChars))
-        default:
-            return ""
-        }
-    }
-
-    /// 渲染产出物并用云端 VL「看图」评审版式(重叠/截断/溢出/空白)+ 内容。VL 或渲染器缺失 → nil(降级)。
-    func visuallyReviewArtifact(path: String, maxPages: Int = 4) async -> String? {
-        guard let vl = cloudPerceptionClient else { return nil }
-        let ext = (path as NSString).pathExtension.lowercased()
-        var pdfPath = path
-        if ext != "pdf" {
-            let soffice = "/Applications/LibreOffice.app/Contents/MacOS/soffice"
-            guard FileManager.default.isExecutableFile(atPath: soffice) else { return nil }
-            let outDir = (path as NSString).deletingLastPathComponent
-            _ = await Self.runCapturing(soffice, ["--headless", "--convert-to", "pdf", "--outdir", outDir, path], timeout: 120)
-            pdfPath = (path as NSString).deletingPathExtension + ".pdf"
-        }
-        guard FileManager.default.fileExists(atPath: pdfPath),
-              let doc = PDFDocument(url: URL(fileURLWithPath: pdfPath)) else { return nil }
-        var critiques: [String] = []
-        for idx in 0..<min(doc.pageCount, maxPages) {
-            guard let page = doc.page(at: idx), let b64 = Self.pdfPageBase64PNG(page) else { continue }
-            let prompt = "这是一页演示文稿。严格检查版式:① 文字是否重叠 ② 是否被页面边缘截断/溢出 ③ 是否有错位空白 ④ 标题与正文是否清晰可读。逐条指出(没问题就答「版式正常」);并指出页面文字里明显的事实错误。"
-            if let r = try? await vl.analyzeImage(imageBase64: b64, prompt: prompt, includeGrounding: false), r.success {
-                let s = r.semanticSuggestions.trimmingCharacters(in: .whitespacesAndNewlines)
-                if !s.isEmpty { critiques.append("第\(idx + 1)页:\(s.prefix(280))") }
-            }
-        }
-        return critiques.isEmpty ? nil : critiques.joined(separator: "\n")
-    }
-
-    /// 把 PDF 页渲染成 PNG 的 base64(PDFKit 原生,无外部依赖)。
-    nonisolated static func pdfPageBase64PNG(_ page: PDFPage, scale: CGFloat = 1.5) -> String? {
-        let rect = page.bounds(for: .mediaBox)
-        guard rect.width > 0, rect.height > 0 else { return nil }
-        let size = NSSize(width: rect.width * scale, height: rect.height * scale)
-        let image = NSImage(size: size)
-        image.lockFocus()
-        NSColor.white.setFill()
-        NSRect(origin: .zero, size: size).fill()
-        if let ctx = NSGraphicsContext.current?.cgContext {
-            ctx.saveGState()
-            ctx.scaleBy(x: scale, y: scale)
-            ctx.translateBy(x: -rect.minX, y: -rect.minY)
-            page.draw(with: .mediaBox, to: ctx)
-            ctx.restoreGState()
-        }
-        image.unlockFocus()
-        guard let tiff = image.tiffRepresentation,
-              let rep = NSBitmapImageRep(data: tiff),
-              let png = rep.representation(using: .png, properties: [:]) else { return nil }
-        return png.base64EncodedString()
-    }
-
-    /// 从命令/输出抽取交付型文件(绝对或相对路径,相对则相对工作目录解析)。只认交付型扩展名,
-    /// 不收脚本/中间数据(.py/.json/.sh),避免「任务产出文件」被噪声塞满。供 run_command 补登产出物。
-    nonisolated static func extractRunCommandArtifacts(_ text: String, workingDirectory: String) -> [String] {
-        // 扩展名白名单:文档/媒体 + **源码/配置/构建产物**(根治"run_command 写的工程文件如 pom.xml/*.java/*.yml 不进产出物")。
-        // 误登记由调用处 mtime 过滤兜住(只登「本次命令真创建/改动」的);`\b` 防 cpp/jsx 等被前缀(c/js)截短误匹配。
-        let pattern = "[\\w\\u4e00-\\u9fff./~_-]+\\.(?:pptx|docx|xlsx|pdf|html?|md|csv|png|jpe?g|java|kt|swift|py|jsx|js|tsx|ts|go|rs|rb|cpp|cc|c|hpp|h|cs|php|scala|vue|sql|xml|yaml|yml|json|toml|ini|properties|gradle|sh|bash|env|conf|cfg|txt|jar)\\b"
-        guard let re = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else { return [] }
-        let range = NSRange(text.startIndex..., in: text)
-        var out: [String] = []
-        for m in re.matches(in: text, range: range) {
-            guard let r = Range(m.range, in: text) else { continue }
-            var path = String(text[r])
-            if !path.hasPrefix("/") { path = (workingDirectory as NSString).appendingPathComponent(path) }
-            if !out.contains(path) { out.append(path) }
-        }
-        return out
-    }
-
-    /// 从回复文本抽取提到的绝对文件路径(常见产出物扩展名;允许中文文件名)。供验收门核实"真有这个文件"。
-    nonisolated static func extractFilePaths(from text: String) -> [String] {
-        let pattern = "/[^\\s`\"'）)，。、；;】]+?\\.(?:pptx|docx|xlsx|pdf|html?|md|csv|txt|py|json|sh|png|jpe?g)"
-        guard let re = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else { return [] }
-        let range = NSRange(text.startIndex..., in: text)
-        var out: [String] = []
-        for m in re.matches(in: text, range: range) {
-            guard let r = Range(m.range, in: text) else { continue }
-            let p = String(text[r])
-            if !out.contains(p) { out.append(p) }
-        }
-        return out
-    }
-
-    nonisolated static func matchAll(_ text: String, pattern: String) -> [String] {
-        guard let re = try? NSRegularExpression(pattern: pattern, options: [.dotMatchesLineSeparators]) else { return [] }
-        let range = NSRange(text.startIndex..., in: text)
-        return re.matches(in: text, range: range).compactMap { m in
-            guard m.numberOfRanges > 1, let r = Range(m.range(at: 1), in: text) else { return nil }
-            let s = String(text[r])
-                .replacingOccurrences(of: "&amp;", with: "&")
-                .replacingOccurrences(of: "&lt;", with: "<")
-                .replacingOccurrences(of: "&gt;", with: ">")
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            return s.isEmpty ? nil : s
-        }
-    }
 }

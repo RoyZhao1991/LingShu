@@ -31,6 +31,12 @@ extension LingShuState {
         if LingShuSelfReferenceIntent.isDirectAssistantSelfIntroduction(prompt) {
             return (.chat, nil, nil)
         }
+        // 通用硬门:明确的现实动作/产出物/外部系统操作,先进入任务流。
+        // 模型分诊只处理灰区;否则"同步到未授权外部系统"这类任务会被模型误标 question,
+        // 进而绕过 GoalSpec/缺口/权限/队列整条控制面。
+        if Self.isObviousExecutionRequest(prompt) {
+            return (.task, Self.executionGoalSummary(prompt), nil)
+        }
 
         let ctx = buildTriageContext()
         var threadBlock = ""
@@ -69,6 +75,94 @@ extension LingShuState {
         guard isTask else { return (.chat, nil, nil) }
         let goal = Self.jsonField(text, "goal")?.trimmingCharacters(in: .whitespacesAndNewlines)
         return (.task, (goal?.isEmpty == false) ? goal : nil, nil)
+    }
+
+    /// 是否是明确的执行请求。这里保持**通用范式**:不识别具体平台,只识别动作结构。
+    /// 目标是拦住"把/请/帮我 + 动作 + 对象"、路径/产出物/外设/外部系统操作等清晰任务,
+    /// 同时放过"什么是/解释/为什么"这类纯问答。
+    nonisolated static func isObviousExecutionRequest(_ prompt: String) -> Bool {
+        let text = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return false }
+        let compact = text
+            .lowercased()
+            .replacingOccurrences(of: " ", with: "")
+            .replacingOccurrences(of: "\n", with: "")
+            .replacingOccurrences(of: "\t", with: "")
+
+        if isPureExplanationQuestion(compact) { return false }
+        if isContinuationOnly(compact) { return false }
+        if ["提醒我", "明天提醒", "后提醒", "定时提醒"].contains(where: { compact.contains($0) }) {
+            return true
+        }
+
+        let actionVerbs = [
+            "写", "做", "生成", "创建", "新建", "修改", "修复", "删除", "保存", "导出", "转换",
+            "打开", "关闭", "运行", "执行", "构建", "测试", "部署", "安装", "卸载",
+            "同步", "上传", "下载", "发送", "发布", "提交", "连接", "接入", "调用",
+            "扫描", "检索", "索引", "搜索", "查找", "找出", "定位", "读取", "整理",
+            "总结", "概括", "分析", "提炼", "归纳", "改写", "翻译",
+            "控制", "播放", "朗读", "播报", "设置", "设定", "安排",
+            "write", "create", "make", "generate", "update", "modify", "fix", "delete", "save",
+            "export", "convert", "open", "run", "execute", "build", "test", "deploy", "install",
+            "sync", "upload", "download", "send", "post", "submit", "connect", "call", "scan",
+            "search", "find", "index", "read", "control", "play", "schedule"
+        ]
+        let hasActionVerb = actionVerbs.contains { compact.contains($0) }
+        guard hasActionVerb else { return false }
+
+        let imperativeHints = [
+            "把", "将", "给我", "帮我", "替我", "为我", "请", "需要你", "我要你", "让灵枢",
+            "在目录", "保存到", "输出到", "同步到", "上传到", "发送给", "写入", "运行一下",
+            "please", "can you", "could you", "let's"
+        ]
+        let objectHints = [
+            "/", ".py", ".txt", ".md", ".ppt", ".pptx", ".pdf", ".docx", ".xlsx", ".csv", ".html",
+            "文件", "附件", "上传", "目录", "路径", "项目", "代码", "脚本", "文档", "ppt", "pdf", "网页", "浏览器",
+            "本机", "电脑", "网络", "设备", "摄像头", "麦克风", "音箱", "电视", "盒子",
+            "外部", "第三方", "api", "token", "授权", "凭据", "知识库", "notion", "飞书", "钉钉"
+        ]
+        if imperativeHints.contains(where: { compact.contains($0) }) { return true }
+        if objectHints.contains(where: { compact.contains($0) }) { return true }
+
+        // 祈使短句:以动作开头,通常是任务,比如"扫描局域网设备"、"生成三页PPT"。
+        return actionVerbs.contains { compact.hasPrefix($0) }
+    }
+
+    nonisolated static func executionGoalSummary(_ prompt: String) -> String {
+        let trimmed = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.count > 96 else { return trimmed }
+        return String(trimmed.prefix(96)) + "..."
+    }
+
+    nonisolated private static func isPureExplanationQuestion(_ compact: String) -> Bool {
+        let prefixes = [
+            "什么是", "啥是", "解释一下", "介绍一下", "讲讲", "说说", "为什么", "为何",
+            "如何理解", "怎么理解", "区别是什么", "是什么意思", "你是谁", "我是谁",
+            "what is", "explain", "why"
+        ]
+        if prefixes.contains(where: { compact.hasPrefix($0) }) { return true }
+        let directAnswerMarkers = [
+            "给我一句话", "用一句话", "一句话说明", "一句话解释", "一句话提醒",
+            "只回答", "直接回答", "简要说明", "简单说", "一句话说"
+        ]
+        if directAnswerMarkers.contains(where: { compact.contains($0) }),
+           !["保存到", "写入", "输出到", "同步到", "发送给", "上传到", "运行", "打开", "扫描",
+             "设置提醒", "设定提醒", "提醒我", "定时", "明天提醒", "后提醒"].contains(where: { compact.contains($0) }) {
+            return true
+        }
+        // "能不能/是否/有没有"本身不是任务;但如果后面带"帮我/替我/把/将/在目录/保存到"等动作结构,
+        // 上面的前缀不拦,交给执行硬门判。
+        let capabilityQuestions = ["能不能", "是否可以", "可不可以", "有没有可能"]
+        if capabilityQuestions.contains(where: { compact.hasPrefix($0) }),
+           !["帮我", "替我", "把", "将", "在目录", "保存到", "同步到", "运行"].contains(where: { compact.contains($0) }) {
+            return true
+        }
+        return false
+    }
+
+    nonisolated private static func isContinuationOnly(_ compact: String) -> Bool {
+        let controls = ["继续", "接着", "下一步", "停", "停止", "暂停", "取消", "重试", "用第一个", "选a", "选b"]
+        return controls.contains(compact)
     }
 
     /// 构造分诊上下文:近上下文(最近逐字,派发线程消息打 [Tk] 标签)+ 远上下文(对话摘要压缩)+ 可续派发线程清单。
@@ -142,8 +236,12 @@ extension LingShuState {
         dispatchedTaskBubbles[taskRecordID] = bubbleID
         appendTrace(kind: .route, actor: "主线程分诊", title: "派发隔离任务", detail: "判为执行任务,派生独立隔离 session 并行推进(不进主对话上下文)。")
 
-        // P5 脑分层:据本任务复杂度路由到弱/中/强档脑(配了多脑才有真分层;单脑落回当前脑)。
-        let adapter = routedModelAdapter(taskRecordID: taskRecordID)
+        // 引擎接缝:解析 maker + checker 评审绑定(谁开发 / 谁验收 / 是否异源),存下供验收复用,并**明确标注**。
+        let makerPlan = resolveMakerEngine(taskRecordID: taskRecordID)
+        let adapter = makerPlan.localAdapter ?? routedModelAdapter(taskRecordID: taskRecordID)
+        let reviewBinding = reviewBinding(forMaker: makerPlan.engine)
+        taskReviewBindings[taskRecordID] = reviewBinding
+        appendTrace(kind: .system, actor: "派发引擎", title: "maker / checker 绑定", detail: reviewBinding.label)
         // 边做边想:派发的隔离子任务也要把模型每步动作前的旁白落进**这条任务自己的记录**——否则任务窗口
         // 只见工具调用、缺"运行时思考",看不出每步为什么这么做。记录 id 用本子任务的(主会话用 currentAgentTurnRecordID,
         // 这里不同);后台并行跑,不抢全局 missionStatus。
@@ -217,23 +315,40 @@ extension LingShuState {
 
     /// 回填某条派发任务的加载气泡(完成/失败/背压时用);找不到就追加一条。回填后清掉映射。
     func fillDispatchedBubble(_ recordID: String, text: String) {
-        let choices = LingShuChoiceParsing.parse(text)   // 卡住要你定+枚举选项 → 壳渲染成可点击;否则 nil
+        let shouldAwaitUser = dispatchedRecordNeedsUserInput(recordID)
+        let choices = LingShuChoiceParsing.parse(text)
+            ?? (shouldAwaitUser ? userPrerequisiteChoicePromptIfNeeded(resultText: text, taskRecordID: recordID) : nil)
+        let awaitingRecordID = shouldAwaitUser ? recordID : nil
         if let bubbleID = dispatchedTaskBubbles[recordID],
            let idx = chatMessages.firstIndex(where: { $0.id == bubbleID }) {
             chatMessages[idx].text = text
             chatMessages[idx].isLoading = false
             chatMessages[idx].choices = choices
+            chatMessages[idx].awaitingInputForRecordID = awaitingRecordID
         } else {
-            chatMessages.append(.init(speaker: "灵枢", text: text, isUser: false, taskRecordID: recordID, choices: choices))
+            chatMessages.append(.init(speaker: "灵枢", text: text, isUser: false, taskRecordID: recordID,
+                                      choices: choices, awaitingInputForRecordID: awaitingRecordID))
         }
         dispatchedTaskBubbles[recordID] = nil
+    }
+
+    /// 派发任务是否正处在需要用户补前提/作选择的可续状态。
+    /// 这只读任务记录的 typed 状态,不看具体平台名;目的是让任何授权/凭据/设备/付费边界
+    /// 都回填成同一套 human-in-the-loop 气泡,避免普通文字把队列卡死。
+    func dispatchedRecordNeedsUserInput(_ recordID: String) -> Bool {
+        guard let record = taskExecutionRecords.first(where: { $0.id == recordID }) else { return false }
+        if record.taskOutcome == .waitingForUser || record.taskOutcome == .partial { return true }
+        return [.waitingForUser, .partial, .blocked].contains(record.status)
     }
 
     /// **任务卡住等用户输入 → 把它的气泡标成「待你输入」**(渲染气泡内回复控件:选项/追加信息)。
     /// 这样无论后面堆了多少聊天,回复都从这条气泡发出、**直达该任务隔离会话**(不靠分诊在历史里找回它)。
     func markDispatchedBubbleAwaitingInput(recordID: String, question: String) {
-        let text = "⏸ 这条任务需要你定一下:\(question)"
+        let cleanQuestion = LingShuHumanInputEnvelope.userFacingText(from: question)
+        let text = "⏸ 等待前提:\(cleanQuestion)"
         let choices = LingShuChoiceParsing.parse(question)
+            ?? LingShuChoiceParsing.parse(cleanQuestion)
+            ?? userPrerequisiteChoicePromptIfNeeded(resultText: cleanQuestion, taskRecordID: recordID)
         if let bid = dispatchedTaskBubbles[recordID], let idx = chatMessages.firstIndex(where: { $0.id == bid }) {
             chatMessages[idx].text = text
             chatMessages[idx].isLoading = false
@@ -248,15 +363,16 @@ extension LingShuState {
 
     /// **气泡内直接回答一条等待输入的派发任务**(选项点击 / 追加信息提交):**直达那条隔离会话续跑**——
     /// 不经主输入框/分诊(避免被后续聊天淹没找不回),也**不受问答线活跃阻塞**(双线独立,故不查 hasActiveModelCall)。
-    func answerDispatchedTask(recordID: String, answer: String) {
+    func answerDispatchedTask(recordID: String, answer: String, displayAnswer: String? = nil) {
         let trimmed = answer.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
+        let visibleAnswer = (displayAnswer ?? trimmed).trimmingCharacters(in: .whitespacesAndNewlines)
         if let i = chatMessages.firstIndex(where: { $0.awaitingInputForRecordID == recordID }) {
             chatMessages[i].awaitingInputForRecordID = nil           // 置灰这条"待输入"气泡
-            if chatMessages[i].resolvedChoice == nil { chatMessages[i].resolvedChoice = trimmed }
+            if chatMessages[i].resolvedChoice == nil { chatMessages[i].resolvedChoice = visibleAnswer }
         }
-        chatMessages.append(.init(speaker: "你", text: trimmed, isUser: true))   // 答复显示在气泡处,接上 Q→A
-        appendTaskRecordMessage(recordID, actor: "你", role: "答复", kind: .user, text: trimmed)
+        chatMessages.append(.init(speaker: "你", text: visibleAnswer, isUser: true, taskRecordID: recordID))   // 答复显示在气泡处,接上 Q→A
+        appendTaskRecordMessage(recordID, actor: "你", role: "答复", kind: .user, text: visibleAnswer)
         if recordID == blockedDispatchedRecordID { blockedDispatchedRecordID = nil }
         guard let subID = agentSubTaskRecords.first(where: { $0.value == recordID })?.key else {
             _ = runMainAgentTurn(prompt: trimmed, taskRecordID: recordID, resumeBlocked: true)   // 兜底:非隔离→主会话续
@@ -264,9 +380,12 @@ extension LingShuState {
         }
         installAgentEventSinkIfNeeded()
         let wasWaiting = taskExecutionRecords.first { $0.id == recordID }?.taskOutcome == .waitingForUser
-        if wasWaiting { resolveUserProvidedGaps(recordID: recordID) }
-        let resumeInput = wasWaiting ? trimmed + "\n\n" + capabilityResumePreamble(recordID: recordID) : trimmed
-        let pending = ChatMessage(speaker: "灵枢", text: dialogueAcknowledgement.intake(for: trimmed), isUser: false, isLoading: true, taskRecordID: recordID)
+        let providesPrerequisite = Self.userInputProvidesPrerequisite(trimmed)
+        if wasWaiting && providesPrerequisite { resolveUserProvidedGaps(recordID: recordID) }
+        let resumeInput = wasWaiting && providesPrerequisite
+            ? trimmed + "\n\n" + capabilityResumePreamble(recordID: recordID)
+            : trimmed
+        let pending = ChatMessage(speaker: "灵枢", text: dialogueAcknowledgement.intake(for: visibleAnswer), isUser: false, isLoading: true, taskRecordID: recordID)
         chatMessages.append(pending)
         dispatchedTaskBubbles[recordID] = pending.id
         appendTrace(kind: .route, actor: "任务气泡", title: "气泡内直答", detail: "气泡内回复直达派发任务隔离会话(不经分诊)。")

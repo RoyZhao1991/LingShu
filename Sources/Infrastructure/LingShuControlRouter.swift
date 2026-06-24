@@ -184,6 +184,15 @@ final class LingShuControlRouter {
             ]
         ],
         [
+            "name": "lingshu_attach_file",
+            "description": "兼容旧名:等价 lingshu_attach。按文件路径加附件并等待解析就绪。args: path。",
+            "inputSchema": [
+                "type": "object",
+                "properties": ["path": ["type": "string", "description": "本机文件绝对路径"]],
+                "required": ["path"]
+            ]
+        ],
+        [
             "name": "lingshu_clear_attachments",
             "description": "清空当前待发送附件缓冲。",
             "inputSchema": ["type": "object", "properties": [:] as [String: Any]]
@@ -496,13 +505,19 @@ final class LingShuControlRouter {
             }
             state.undoFileEdit(messageID: messageId, recordID: recordId)
             return (jsonText(["ok": true, "recordId": recordId, "messageId": messageId]), false)
-        case "lingshu_attach":
+        case "lingshu_attach", "lingshu_attach_file":
             // 按路径加附件(等价 📎),走与主输入框同一 ingest 管线。args: path。
             guard let path = arguments["path"] as? String, FileManager.default.fileExists(atPath: path) else {
                 return ("缺少/无效参数 path(文件不存在)", true)
             }
             state.ingestAttachment(at: URL(fileURLWithPath: path))
-            return (jsonText(["ok": true, "pending": state.pendingAttachments.count]), false)
+            let resolved = await waitForAttachmentIngestion(path: path)
+            return (jsonText([
+                "ok": true,
+                "pending": state.pendingAttachments.count,
+                "ready": resolved.ready,
+                "status": resolved.status
+            ]), false)
         case "lingshu_clear_attachments":
             // 清空待发送附件(等价逐个移除)。
             let count = state.pendingAttachments.count
@@ -753,28 +768,20 @@ final class LingShuControlRouter {
     // 只读载荷序列化(statusPayload/ledgerPayload/taskDetailPayload/chatPayload/tracePayload)
     // 已拆到 LingShuControlRouter+Payloads.swift,保持本文件在 ≤800 行硬阈值内。
 
-    // MARK: - 编解码辅助
-
-    private func reply(id: Any?, result: [String: Any]) -> Data {
-        encode(["jsonrpc": "2.0", "id": id ?? NSNull(), "result": result])
-    }
-
-    private func reply(id: Any?, error: [String: Any]) -> Data {
-        encode(["jsonrpc": "2.0", "id": id ?? NSNull(), "error": error])
-    }
-
-    private func encode(_ object: [String: Any]) -> Data {
-        (try? JSONSerialization.data(withJSONObject: object)) ?? Data("{}".utf8)
-    }
-
-    /// 把工具结果对象序列化成文本(MCP tools/call 的 content.text)。
-    private func jsonText(_ object: Any) -> String {
-        guard
-            let data = try? JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .withoutEscapingSlashes]),
-            let text = String(data: data, encoding: .utf8)
-        else {
-            return "{}"
+    private func waitForAttachmentIngestion(path: String) async -> (ready: Bool, status: String) {
+        let url = URL(fileURLWithPath: path)
+        for _ in 0..<80 {   // 最长约 8 秒:文本/PDF/PPT 本地抽取通常很快;图片云感知慢时给清晰状态。
+            if let attachment = state.pendingAttachments.last(where: { $0.localURL?.path == url.path }) {
+                if !attachment.extractedContext.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    return (true, attachment.status ?? "就绪")
+                }
+                if let status = attachment.status, !status.contains("解析中") {
+                    return (false, status)
+                }
+            }
+            try? await Task.sleep(nanoseconds: 100_000_000)
         }
-        return text
+        return (false, "解析超时")
     }
+
 }

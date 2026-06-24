@@ -52,7 +52,7 @@ struct TaskWindowFooter: View {
         .fixedSize()
     }
 
-    private var running: Bool { state.hasActiveModelCall }
+    private var running: Bool { state.canStopTaskWindowRecord(recordID) }
 
     private var followupInput: some View {
         VStack(spacing: 6) {
@@ -64,7 +64,7 @@ struct TaskWindowFooter: View {
                     Text("灵枢正在执行——看到跑偏可直接输入纠正,立即调整方向")
                         .font(.system(size: 10.5, weight: .semibold)).foregroundStyle(.orange.opacity(0.82))
                     Spacer(minLength: 0)
-                    Button(action: state.stopActiveRun) {
+                    Button { state.stopTaskWindowRecord(recordID) } label: {
                         Label("停止", systemImage: "stop.fill")
                             .font(.system(size: 10, weight: .bold)).foregroundStyle(.red.opacity(0.92))
                             .padding(.horizontal, 7).padding(.vertical, 4)

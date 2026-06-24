@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 struct LingShuRootView: View {
@@ -15,6 +16,8 @@ struct LingShuRootView: View {
     @State private var previewSlideshow = false
     /// 全屏演示中检测到手动操作 → 弹"是否退出自主"确认框(并已先退全屏恢复屏幕)。
     @State private var manualTakeover = false
+    /// AppKit alert 正在展示。全屏/预览窗口重排期间避免 SwiftUI sheet/confirmationDialog 参与布局。
+    @State private var manualTakeoverAlertShowing = false
     private var orbActive: Bool { state.isStandingPersonOnDuty && autonomousOrbMode }
 
     var body: some View {
@@ -48,19 +51,8 @@ struct LingShuRootView: View {
             if on {
                 _ = state.previewController.setSlideshow(false)        // 先立刻退全屏,把屏幕还给用户
                 state.pauseActiveFlow(reason: "全屏演示中检测到手动操作(动鼠标/键盘)")  // 真停:批量+TTS 立即暂停(不只退全屏,不再后台偷偷推进)
+                presentManualTakeoverDecision()
             }
-        }
-        .confirmationDialog("检测到你在手动操作", isPresented: $manualTakeover, titleVisibility: .visible) {
-            Button("停止,回到正常界面", role: .destructive) {
-                state.abortActiveFlow(reason: "演示中手动接管→选择停止")
-                if state.isStandingPersonOnDuty { state.stopAutonomousRun() }
-            }
-            Button("继续演示", role: .cancel) {
-                _ = state.previewController.setSlideshow(true)         // 重进全屏
-                _ = state.submitVoiceTranscript("从当前这一页继续演示,接着往下讲")   // 让大脑从当前页续讲
-            }
-        } message: {
-            Text("已暂停并退出全屏。停止本任务,还是从当前页继续演示?")
         }
         .onAppear {
             // 关任一演示窗 = 硬中断流程(防大脑下一步又把窗弹回来)。幂等设置,多次 onAppear 无碍。
@@ -201,6 +193,37 @@ struct LingShuRootView: View {
         }
         .onReceive(state.$chatMessages) { messages in
             speakLatestReplyIfNeeded(messages)
+        }
+    }
+
+    /// 全屏演示期间的手动接管确认。
+    ///
+    /// 这里刻意不用 SwiftUI `confirmationDialog`/`sheet`:演示窗正在撑满/还原尺寸时,
+    /// SwiftUI sheet 会跟随父窗口安全区与尺寸变化重算,macOS 26 下曾触发
+    /// `SheetPresentationWindow.parentWindowSizeChanged` / `_postWindowNeedsUpdateConstraints`
+    /// 崩溃。AppKit `NSAlert.runModal()` 是独立 app-modal,不会挂在主窗口布局树上。
+    private func presentManualTakeoverDecision() {
+        guard !manualTakeoverAlertShowing else { return }
+        manualTakeoverAlertShowing = true
+        DispatchQueue.main.async {
+            NSApp.activate(ignoringOtherApps: true)
+            let alert = NSAlert()
+            alert.messageText = "检测到你在手动操作"
+            alert.informativeText = "我已经暂停当前演示并退出全屏。要停止本任务,还是从当前页继续?"
+            alert.addButton(withTitle: "停止,回到正常界面")
+            alert.addButton(withTitle: "继续演示")
+            let response = alert.runModal()
+            Task { @MainActor in
+                manualTakeoverAlertShowing = false
+                manualTakeover = false
+                if response == .alertFirstButtonReturn {
+                    state.abortActiveFlow(reason: "演示中手动接管→选择停止")
+                    if state.isStandingPersonOnDuty { state.stopAutonomousRun() }
+                } else {
+                    _ = state.previewController.setSlideshow(true)         // 重进全屏
+                    _ = state.submitVoiceTranscript("从当前这一页继续演示,接着往下讲")   // 让大脑从当前页续讲
+                }
+            }
         }
     }
 

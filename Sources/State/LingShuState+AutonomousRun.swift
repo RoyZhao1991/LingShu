@@ -280,6 +280,16 @@ extension LingShuState {
         autonomousRunTask = nil
         switch result {
         case .completed(let text):
+            if Self.isCancellationSentinel(text) {
+                settleStandingStreamBubble(text: "", recordID: recordID)
+                updateAutonomousRun(phase: autonomousRun.objective.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? .running : .paused,
+                                    statusLine: "上一轮已中断。")
+                missionTitle = autonomousRun.objective.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "灵枢在岗" : "独立运行已暂停"
+                missionStatus = "上一轮已中断,等待下一步指令。"
+                appendTaskRecordMessage(recordID, actor: "运行时", role: "取消收口", kind: .warning, text: "上一轮被新指令或停止动作取消,取消哨兵已吞掉,不作为正式回复展示。")
+                enterCoreState(.standby, resetTimer: false)
+                return
+            }
             // 常驻灵枢：一段处理完后**保持在岗**，不收工——会话/记录留存，等下一句对话/语音。
             if autonomousRun.objective.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 updateAutonomousRun(phase: .running, statusLine: "在岗待命。")
@@ -316,15 +326,16 @@ extension LingShuState {
             enterCoreState(.standby, resetTimer: false)
             appendTrace(kind: .result, actor: "独立运行", title: "完成", detail: String(text.prefix(80)))
         case .blocked(let question):
+            let cleanQuestion = LingShuHumanInputEnvelope.userFacingText(from: question)
             autonomousPendingQuestion = question
             updateAutonomousRun(phase: .paused, statusLine: "需要你确认后继续。")
             missionTitle = "独立运行待答复"
-            missionStatus = question
-            appendTaskRecordMessage(recordID, actor: "独立运行", role: "待答复", kind: .warning, text: question)
+            missionStatus = cleanQuestion
+            appendTaskRecordMessage(recordID, actor: "独立运行", role: "待答复", kind: .warning, text: cleanQuestion)
             settleStandingStreamBubble(text: "", recordID: recordID)   // 移除流式 partial,改用带选项的待答复气泡
-            chatMessages.append(.init(speaker: "灵枢", text: "⏸ 独立运行需要你定一下：\(question)\n（直接在对话里回复，我就继续推进）", isUser: false, taskRecordID: recordID, choices: LingShuChoiceParsing.parse(question)))
+            chatMessages.append(.init(speaker: "灵枢", text: "⏸ 独立运行需要你定一下：\(cleanQuestion)\n（直接在对话里回复，我就继续推进）", isUser: false, taskRecordID: recordID, choices: LingShuChoiceParsing.parse(question) ?? LingShuChoiceParsing.parse(cleanQuestion)))
             enterCoreState(.standby, resetTimer: false)
-            appendTrace(kind: .warning, actor: "独立运行", title: "卡住待答复", detail: question)
+            appendTrace(kind: .warning, actor: "独立运行", title: "卡住待答复", detail: cleanQuestion)
         case .maxTurnsReached(let text):
             // **在岗(空 objective)特例(2026-06-19 修"问天气撞顶后退岗+无回复"):**在岗的一句对话/查询若没在限定步数内
             // 收尾(如外部数据源不可用反复重试),**绝不退岗、绝不当"独立运行失败"**——把已有的最好结果当回复贴给主人,保持在岗待命。
@@ -358,6 +369,21 @@ extension LingShuState {
             enterCoreState(.standby, resetTimer: false)
             appendTrace(kind: .warning, actor: "独立运行", title: "步数上限", detail: String(text.prefix(80)))
         case .interrupted(let reason):
+            if LingShuModelServiceFailure.isNonRecoverableReason(reason) {
+                let message = LingShuModelServiceFailure.userFacingReason(reason)
+                let status = LingShuModelServiceFailure.decodeReason(reason)?.taskStatus ?? .failed
+                settleStandingStreamBubble(text: "", recordID: recordID)
+                suspendedAutonomousRecordID = nil
+                updateAutonomousRun(phase: .blocked, statusLine: message)
+                missionTitle = status == .waitingForUser ? "等待模型配置" : "模型服务异常"
+                missionStatus = String(message.prefix(120))
+                appendTaskRecordMessage(recordID, actor: "模型通道", role: "不可自动恢复", kind: .warning, text: message)
+                finishTaskRecord(recordID, status: status, summary: message)
+                chatMessages.append(.init(speaker: "灵枢", text: "⚠️ \(message)", isUser: false, taskRecordID: recordID))
+                enterCoreState(.abnormal, resetTimer: false)
+                appendTrace(kind: .warning, actor: "独立运行", title: "模型服务异常", detail: String(message.prefix(120)))
+                return
+            }
             // 网络中断:**非失败**——独立运行挂起,登记重连后自动续跑;会话上下文保留在 autonomousSessionHolder。
             settleStandingStreamBubble(text: "", recordID: recordID)   // 移除流式 partial(续跑时重建),不留 loading 气泡
             suspendedAutonomousRecordID = recordID
@@ -370,6 +396,11 @@ extension LingShuState {
             appendTrace(kind: .warning, actor: "独立运行", title: "网络中断暂停", detail: String(reason.prefix(80)))
             startNetworkRetryLoopIfNeeded()   // 启动主动重试(对话框可见进度)
         }
+    }
+
+    nonisolated static func isCancellationSentinel(_ text: String) -> Bool {
+        let compact = text.replacingOccurrences(of: "\\s+", with: "", options: .regularExpression)
+        return compact.contains("本轮已被取消") || compact.contains("任务已取消")
     }
 
     /// 重连后续跑被网络中断挂起的独立运行(从中断处 continueLoop + 复用收尾)。
@@ -403,94 +434,4 @@ extension LingShuState {
         autonomousRun = run
     }
 
-    func tickAutonomousRun(now: Date = Date()) {
-        guard autonomousRun.phase == .running else { return }
-        var run = autonomousRun
-        run.updatedAt = now
-        if let startedAt = run.startedAt {
-            run.statusLine = "独立运行中 \(formatElapsed(Int(now.timeIntervalSince(startedAt))))"
-        }
-        autonomousRun = run
-    }
-
-    func handleAutonomousRunCommandIfNeeded(
-        prompt: String,
-        taskRecordID: String?
-    ) -> String? {
-        guard isAutonomousRunCommand(prompt) else { return nil }
-        let recordID = taskRecordID ?? createTaskExecutionRecord(for: prompt)   // 按需建(主入口不再 eager 建,避免空记录)
-
-        let snapshot = prepareAutonomousRun(objective: prompt)
-        let missing = snapshot.runbook?.missingInformation ?? []
-        let response: String
-        if snapshot.phase == .blocked {
-            response = "独立运行模式已准备，但环境存在阻断项。先看运行态里的自检报告，把不可用项处理掉，我再接手推进。"
-        } else if missing.isEmpty {
-            response = "已进入独立运行模式。我完成了环境检测、自检和动态 runbook，等待你授权执行。"
-        } else {
-            response = "已进入独立运行模式。我先生成了动态 runbook，但还建议确认：\(missing.joined(separator: "、"))。你也可以直接授权我按当前假设推进。"
-        }
-
-        appendTaskRecordMessage(recordID, actor: "独立运行", role: "环境检测", kind: .core, text: snapshot.environment?.summaryLine ?? "环境检测完成")
-        appendTaskRecordMessage(recordID, actor: "独立运行", role: "动态规划", kind: .router, text: snapshot.runbook?.summaryLine ?? "动态规划完成")
-        appendTaskRecordMessage(recordID, actor: "灵枢", role: "中枢", kind: .result, text: response)
-        applyTaskRecordRoute(
-            recordID,
-            route: .init(
-                needsAgents: false,
-                agents: [],
-                directAnswer: response,
-                finalAnswer: response,
-                summary: "进入独立运行模式，已完成环境检测、自检和动态 runbook。"
-            )
-        )
-        finishTaskRecord(recordID, status: snapshot.phase == .blocked ? .blocked : .answered, summary: response)
-        chatMessages.append(.init(speaker: "灵枢", text: response, isUser: false, taskRecordID: recordID))
-        rememberMainThreadTurn(prompt: prompt, reply: response)
-        return response
-    }
-
-    func autonomousEnvironmentInput() -> LingShuAutonomousEnvironmentInput {
-        .init(
-            workingDirectory: codexWorkingDirectory,
-            modelProvider: modelProvider,
-            modelName: modelName,
-            isModelConnected: isModelConnected,
-            modelConnectionState: modelConnectionState,
-            codexPermissionMode: codexPermissionMode,
-            requireHumanApproval: requireHumanApproval,
-            permissionLevel: autonomousPermissionLevel,
-            voiceOutputEnabled: voiceOutputEnabled,
-            voiceWakeListeningEnabled: voiceWakeListeningEnabled,
-            memoryDigestAvailable: !persistedConversationDigest.isEmpty || hasMoreColdChatHistory,
-            onlineAgentCount: agentRuntimeCounts.online,
-            runningAgentCount: agentRuntimeCounts.running,
-            pendingAgentCount: agentRuntimeCounts.pendingStart
-        )
-    }
-
-    private func normalizedAutonomousObjective(from rawObjective: String?) -> String {
-        // 优先用传入目标(独立运行专门输入框 / 命令解析);为空再退到对话主输入框。
-        // **不再填占位串**——空就返回空,由 prepareAutonomousRun 拒绝启动(计划 §1)。
-        let raw = rawObjective?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let fallback = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
-        let text = (raw?.isEmpty == false ? raw : nil) ?? fallback
-        guard !text.isEmpty else { return "" }
-        let separators = ["目标是", "目标：", "目标:", "任务是", "任务：", "任务:"]
-        for separator in separators where text.contains(separator) {
-            let parts = text.components(separatedBy: separator)
-            if let last = parts.last?.trimmingCharacters(in: .whitespacesAndNewlines), !last.isEmpty {
-                return last
-            }
-        }
-        return text
-    }
-
-    private func isAutonomousRunCommand(_ prompt: String) -> Bool {
-        let normalized = normalizeMemoryText(prompt)
-        let modeSignals = ["独立运行模式", "独立运行", "自主运行", "托管模式", "autopilot"]
-        let actionSignals = ["进入", "启动", "开启", "准备", "开始"]
-        return modeSignals.contains { normalized.contains($0) }
-            && actionSignals.contains { normalized.contains($0) }
-    }
 }

@@ -315,18 +315,7 @@ struct ModelProviderPreset: Identifiable {
         "\(name) · \(region)"
     }
 
-    static let codexAuth = ModelProviderPreset(
-        id: "codex-auth",
-        name: "Codex Auth",
-        region: "OpenAI 登录",
-        category: "授权通道",
-        endpoint: "codex://local-cli",
-        protocolName: "Codex CLI",
-        authMode: "ChatGPT / Codex 登录",
-        defaultModels: ["gpt-5.5", "Codex 默认模型"],
-        note: "复用本机 Codex 登录状态，不读取 token。"
-    )
-
+    // Codex 已从脑池删除——它是工具 agent,不是大脑。接入见 LingShuAgentEngine / CodexBridge。
     static let minimaxOfficial = ModelProviderPreset(
         id: "minimax-official",
         name: "MiniMax 官方",
@@ -371,7 +360,8 @@ struct ModelProviderPreset: Identifiable {
         .init(id: "deepseek", name: "DeepSeek", region: "国内", category: "OpenAI 兼容", endpoint: "https://api.deepseek.com", protocolName: "OpenAI 兼容", authMode: "API Key", defaultModels: ["deepseek-chat", "deepseek-reasoner"], note: "适合中文推理、代码和成本敏感任务。"),
         .init(id: "qwen-dashscope", name: "阿里通义千问 / 百炼", region: "国内", category: "OpenAI 兼容", endpoint: "https://dashscope.aliyuncs.com/compatible-mode/v1", protocolName: "OpenAI 兼容 / DashScope", authMode: "API Key", defaultModels: ["qwen-max", "qwen-plus", "qwen-turbo", "qwen3-coder-plus"], note: "适合中文、多模态、企业百炼平台。"),
         .init(id: "kimi", name: "Moonshot Kimi", region: "国内", category: "OpenAI 兼容", endpoint: "https://api.moonshot.cn/v1", protocolName: "OpenAI 兼容", authMode: "API Key", defaultModels: ["kimi-k2-0905-preview", "kimi-k2-0711-preview", "moonshot-v1-128k", "moonshot-v1-32k"], note: "适合长文本、中文材料分析和研究助手。"),
-        .init(id: "zhipu", name: "智谱 GLM", region: "国内", category: "OpenAI 兼容", endpoint: "https://open.bigmodel.cn/api/paas/v4", protocolName: "OpenAI 兼容", authMode: "API Key", defaultModels: ["glm-4.5", "glm-4.5-air", "glm-4-plus", "glm-z1-air"], note: "适合中文通用、工具调用和政企场景。"),
+        .init(id: "zhipu", name: "智谱 GLM", region: "国内", category: "OpenAI 兼容", endpoint: "https://open.bigmodel.cn/api/paas/v4", protocolName: "OpenAI 兼容", authMode: "API Key", defaultModels: ["glm-5.2", "glm-4.5", "glm-4.5-air", "glm-4-plus", "glm-z1-air"], note: "适合中文通用、工具调用和政企场景。"),
+        .init(id: "zhipu-coding", name: "智谱 GLM Coding", region: "国内", category: "OpenAI 兼容 / Coding Plan", endpoint: "https://open.bigmodel.cn/api/coding/paas/v4", protocolName: "OpenAI 兼容", authMode: "API Key", defaultModels: ["glm-5.2"], note: "智谱 Coding Plan 官方通道,适合长上下文、代码和智能体工作流。"),
         .init(id: "doubao", name: "火山引擎豆包", region: "国内", category: "OpenAI 兼容", endpoint: "https://ark.cn-beijing.volces.com/api/v3", protocolName: "OpenAI 兼容 / Ark", authMode: "API Key", defaultModels: ["doubao-seed-1.6", "doubao-1.5-pro", "doubao-1.5-lite"], note: "适合国内低延迟、多模态和企业接入。"),
         .init(id: "hunyuan", name: "腾讯混元", region: "国内", category: "OpenAI 兼容", endpoint: "https://api.hunyuan.cloud.tencent.com/v1", protocolName: "OpenAI 兼容 / 腾讯云", authMode: "API Key", defaultModels: ["hunyuan-turbos-latest", "hunyuan-large", "hunyuan-standard"], note: "适合腾讯云生态和中文任务。"),
         .init(id: "baidu-qianfan", name: "百度文心 / 千帆", region: "国内", category: "云厂商托管", endpoint: "https://qianfan.baidubce.com/v2", protocolName: "千帆 / OpenAI 兼容", authMode: "API Key", defaultModels: ["ernie-4.5-turbo", "ernie-4.0-turbo", "ernie-x1-turbo"], note: "适合百度云生态、中文知识和企业应用。"),
@@ -388,7 +378,7 @@ struct ModelProviderPreset: Identifiable {
         .init(id: "custom-compatible", name: "自定义兼容接口", region: "任意", category: "自定义", endpoint: "https://your-gateway.example.com/v1", protocolName: "OpenAI 兼容 / 自定义", authMode: "按网关配置", defaultModels: ["custom-model"], note: "用于未来新模型、学校/企业私有网关和代理服务。")
     ]
 
-    static let catalog: [ModelProviderPreset] = [codexAuth] + apiCatalog
+    static let catalog: [ModelProviderPreset] = apiCatalog
 }
 
 struct ChatMessage: Identifiable, Codable, Equatable, Sendable {

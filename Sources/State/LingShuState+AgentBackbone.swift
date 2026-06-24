@@ -8,6 +8,16 @@ enum LingShuAgentExecutionPolicy: Equatable {
     case autoAllowShell  // 直接放行:全工具,run_command 不再弹审批(完整授权)
 }
 
+/// 主问答线的一条待执行回合。UI 队列只保存气泡 id;执行需要这些边界数据来保证一问一答不串台。
+struct LingShuPendingMainTurn: Sendable {
+    let bubbleID: UUID
+    let prompt: String
+    let taskRecordID: String?
+    let resumeBlocked: Bool
+    let originalPromptForVerification: String?
+    let startedAt: Date
+}
+
 /// 范式骨干接线:把统一 agent 循环接到真模型、设为常规对话主入口;主会话带 spawn_task 可自主派生真并行隔离子会话(经编排器+账本)。
 @MainActor
 extension LingShuState {
@@ -15,10 +25,13 @@ extension LingShuState {
     /// 语音通话"真指令打断":取消在飞的 agent 回合(模型调用随之中止),让新指令接管。
     func interruptActiveModelCall() {
         guard activeAgentTurnTask != nil else { return }
+        if let executingChatTurnID { cancelledChatTurnIDs.insert(executingChatTurnID) }
         activeAgentTurnTask?.cancel()
         activeAgentTurnTask = nil
+        activeAgentTurnBubbleID = nil
         isModelReplying = false
         appendTrace(kind: .warning, actor: "语音", title: "指令打断", detail: "检测到新语音指令,已中止当前回合。")
+        scheduleNextMainTurnIfIdle()
     }
 
     /// 用当前模型配置构造真实模型适配器(@unchecked Sendable,可被工具/会话捕获)。
@@ -40,6 +53,8 @@ extension LingShuState {
         switch result {
         case .completed(let value): return value
         case .blocked(let question):
+            let cleaned = LingShuHumanInputEnvelope.userFacingText(from: question)
+            if cleaned != question { return cleaned }
             if let envelope = LingShuHumanInputEnvelope.decode(from: question) {
                 switch envelope.tool {
                 case "ask_form":
@@ -95,6 +110,7 @@ extension LingShuState {
           · **大脑 = 你的推理本身**:思考、分析、拆解、规划、推进、决策、纠错,全部你自己结合上下文完成。任务丢给你 = 你自己想清楚怎么做并一步步做完,像 codex 那样"没有搞不定的事"(除非硬性网络/权限/物理限制,那就如实说明并指出需要什么组件)。**别把本该自己想的甩回给用户、别动不动说"做不了/需要你来"。**
           · **四肢 = 你的各项能力(工具)**:听(语音/会议转写)、说(TTS)、读(文件/网页/屏幕)、写(文件/代码)、改代码、跑命令、联网、做产出物、演示、**直接操作电脑(授权后:screen_capture 看屏 / list_ui_elements 拿可点元素坐标 / click·type_text·press_key·scroll 操作)**…… 这些只是你实现意图的手段,由你的大脑按需调用、自由组合。需要点界面时**先 list_ui_elements 拿元素中心坐标再 click**(比从截图猜坐标可靠)。
           · **用户只提供"组件"**:证书、硬件、权限、素材这类你拿不到的外部资源。**怎么用这些把事做成,是你的事。** 例:丢给你一个 PPT 让你独立演讲,你就自己读懂它、逐页讲、并实时回答提问——这是你的通用能力,不需要被一步步指挥。
+          · **附件是用户已经交到你手里的文件句柄**:用户上传/拖入/粘贴文件时,输入里会给出附件的【本机路径】。要读取、预览、演示、修改或基于附件继续工作,**直接把这个路径交给 read_file/open_preview 等工具**;不要再用 shell/find/ls 去工作目录或全盘搜索同名文件。只有路径为空、失效,或工具明确返回无法打开时,才定位替代文件。
           · **占屏实时演示/互动前先申请托管**:要**当面占屏实时演示**、或**与主人实时互动答疑**、或**接管屏幕操作**时,**先调 `enter_managed_mode`**(弹窗征主人同意),同意后才进入托管(本体在位)实时演示/互动——别一上来就占屏。普通做事(生成 PPT/写文件/查资料)不必调它,自己想清楚何时真需要(不固化、由你判断)。
           · **演示/带人看文档(铁律:先理解全篇→一次性规划好讲稿→批量顺滑播,绝不逐页临场解析)**:`open_preview(文件)` 打开 → `preview_document_text` **一次性把整篇读完、把每页要讲什么都想好** → `present_fullscreen(true)` 进全屏放映 → **`run_steps` 一次性排上 [speak 第1页讲稿 → preview_next → speak 第2页讲稿 → preview_next → … → speak 末页]批量播完**(逐页一步步往返会让每次翻页都卡顿,批量则一气呵成)→ `present_fullscreen(false)` 退出。讲稿**必须照 preview_document_text 的【本页实际内容】写,和屏幕对得上,绝不凭记忆瞎讲**(图片页 `screen_capture` 看一眼)。中途主人插话会**自动打断批量**并把这句交给你:正面答完、问一句"要继续吗",他说继续就**从断点那页 run_steps 续上**。**全程你自己掌节奏,这就是"独立演讲"。**
           · **身体表现 = 灵枢光球**:需要让用户感知到你正在听、想、说、执行、警戒、确认或演示时,调用 `set_digital_human` 调度身体表现。它只改变表现层,不替代你的思考和执行。
@@ -149,7 +165,15 @@ extension LingShuState {
         batchInterruptRequested = false   // 打断标志粘滞泄漏修复(经典引擎,见 [[verify-gate-bypass-batchinterrupt-leak]]):新驱动入口复位,杜绝上回合打断泄漏旁路本回合验收门(复位在 send 前→本回合自身打断照常生效)
         // P1 目标认知消费:记录里有 typed GoalSpec(含重启后从盘加载的)则注入执行引导(据目标/约束/边界/风险/成功标准推进,别跑偏)。
         // P2 能力缺口消费:有缺口分析则在目标引导之上再叠加"缺口与补齐计划"(先按补齐路径取得能力再推进,真补不了如实告知)。
-        let effectiveGuidance = assembledExecutionGuidance(base: guidance, taskRecordID: taskRecordID)
+        let turnGuidance = Self.turnBoundaryGuidance(for: prompt, base: guidance)
+        let contextualGuidance = [turnGuidance, currentVisibleInteractionGuidance(for: prompt)]
+            .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .joined(separator: "\n\n")
+        let effectiveGuidance = assembledExecutionGuidance(
+            base: contextualGuidance,
+            taskRecordID: taskRecordID
+        )
         // 发给本轮的文本 = guidance + 每轮自动召回的长期记忆 + prompt。**`.nested` 例外**:见 `nestedPlanningSendText`
         // (规划器把整段当待拆解请求→不能混进记忆召回块,否则把召回到的旧 PPT 误当本次任务凭空重做,2026-06-19 修)。
         let sent = agentLoopVariant == .nested ? nestedPlanningSendText(prompt: prompt, guidance: effectiveGuidance)
@@ -167,6 +191,61 @@ extension LingShuState {
         appendTrace(kind: .model, actor: "Agent循环", title: "分析", detail: String(trimmed.prefix(90)))
         // 派发的后台子任务并行跑,别抢全局 missionStatus(那是主线程气泡的);它的进展由任务窗口的「分析」行体现。
         if updateMissionStatus { missionStatus = String(trimmed.prefix(48)) }
+    }
+
+    /// 新回合边界:主会话是常驻的,历史上下文会自然存在;每一轮仍必须明确"这次只处理最新输入"。
+    /// 只有用户显式要求回到历史任务/继续旧任务时,才允许把历史从背景提升为当前目标。
+    nonisolated static func turnBoundaryGuidance(for prompt: String, base: String?) -> String {
+        let trimmedBase = base?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let wantsHistory = LingShuMemoryTextToolkit.isExplicitResumeRequest(prompt)
+            || LingShuMemoryTextToolkit.isAmbiguousTaskResumeRequest(prompt)
+            || LingShuMemoryTextToolkit.shouldRecallHistory(for: prompt)
+        let boundary: String
+        if wantsHistory {
+            boundary = """
+            【当前回合边界】
+            用户这轮可能在续接历史任务。先识别最相关的未完成/可续目标,只续接那一件;如果有多个候选或意图不清,先给用户可选项确认。不要把无关旧任务混进本轮答复。
+            """
+        } else {
+            boundary = """
+            【当前回合边界】
+            只回答或处理下面这条最新输入。历史对话、旧任务、队列残留和自动召回内容只作背景参考;不要主动补答旧问题,不要续跑旧任务,不要把上一条/上一批未完成的内容混进本轮。只有用户明确说继续、补答、接着上次或点名历史任务时,才回到历史。
+            """
+        }
+        return [trimmedBase, boundary]
+            .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+            .joined(separator: "\n\n")
+    }
+
+    /// 当前正在"给人看/讲/答疑"时,把可见材料上下文显式放回本轮。
+    /// 这是通用交互态,不绑定 PPT:任何预览中的文档、网页、表格、图片都应能支撑追问/翻页/继续。
+    func currentVisibleInteractionGuidance(for prompt: String) -> String? {
+        guard previewController.isPresented else { return nil }
+        let title = previewController.title.isEmpty ? "当前材料" : previewController.title
+        let page = previewController.displayedPageNumber
+        let total = previewController.pageCount > 0 ? "\(previewController.pageCount)" : "连续页面"
+        let mode = previewController.slideshow ? "全屏演示中" : "普通预览中"
+        let currentPageText: String
+        if previewController.isHTML {
+            currentPageText = "当前材料是网页/连续预览,需要时用 preview_document_text 或 preview_scroll 获取实际正文。"
+        } else {
+            currentPageText = previewController.pageText(max(0, page - 1))
+        }
+        let spoken = recentSpokenLines.suffix(4)
+            .map { LingShuInteractionFulfillment.cleanSpokenLine($0) }
+            .filter { !$0.isEmpty }
+            .joined(separator: "\n")
+        return """
+        【当前可视交互上下文】
+        灵枢现在正打开材料「\(title)」,\(mode),当前第 \(page)/\(total) 页。用户此轮若在问"刚才/这页/继续/下一页/老师提问/答疑/收尾",默认就是围绕这个可视材料继续互动,不要重新生成材料、不要切到无关旧任务。
+        \(currentPageText.isEmpty ? "" : "当前页可读内容:\n\(String(currentPageText.prefix(1200)))")
+        \(spoken.isEmpty ? "" : "最近已经口头讲过:\n\(String(spoken.prefix(1200)))")
+
+        交互铁律:
+        - 答疑必须把**实质答案**写进最终回复;如果用 speak 朗读,聊天最终回复也要包含同一实质内容,不能只写"已完成答疑/等待后续问题"。
+        - 继续演示/汇报时,保持同一上下文:preview_document_text 读实际内容,用 speak 讲,用 preview_next/preview_scroll 推进;需要占屏连续演示就进入/保持自主模式。
+        - 收尾/退出时明确关闭预览或退出全屏,并用一句话确认。
+        """
     }
 
     /// 主入口:常规输入交给主 agent 会话(异步跑循环,结果回填气泡)。
@@ -188,88 +267,164 @@ extension LingShuState {
             chatMessages.append(pending)
             pendingID = pending.id
         }
-        // 问答线可删等待队列:登记这条问答(轮到才执行;等待中可删)。
+        let turn = LingShuPendingMainTurn(
+            bubbleID: pendingID,
+            prompt: prompt,
+            taskRecordID: taskRecordID,
+            resumeBlocked: resumeBlocked,
+            originalPromptForVerification: originalPromptForVerification,
+            startedAt: turnStartedAt
+        )
+        pendingMainTurns[pendingID] = turn
+        // 问答线可删等待队列:登记这条问答(队首才执行;等待中可删)。
         if !pendingChatTurnIDs.contains(pendingID) { pendingChatTurnIDs.append(pendingID) }
-        appendTrace(kind: .route, actor: "Agent循环", title: "主会话", detail: "经统一 agent 循环处理(真模型 + 工具 + 隔离子会话 + 账本)。")
-        currentAgentTurnRecordID = taskRecordID   // 工具桥据此把产出文件登记到本回合记录
-        // 置"模型在飞"状态:驱动语音通话显示"灵枢在思考…"+暂停麦克风(否则无状态、麦克风不停会打断回复)。
-        // 同步刷新 missionTitle——加载气泡显示的就是它,不刷会一直停在旧的"待机中"(看着像卡死)。
+        appendTrace(kind: .route, actor: "Agent循环", title: "主会话入队", detail: "问答进入主线程队列,队首独立执行。")
+        scheduleNextMainTurnIfIdle()
+        return ""   // 即时 ack(占位气泡正文留空,真回复经气泡流式/回填)
+    }
+
+    /// 主问答线调度器:只启动队首 worker。`activeAgentTurnTask` 始终代表**当前执行中的那条**,
+    /// 不再代表“最新排队项”,因此 stop/语音打断不会误杀后续排队问答。
+    func scheduleNextMainTurnIfIdle() {
+        guard activeAgentTurnTask == nil else { return }
+        while let nextID = pendingChatTurnIDs.first {
+            if cancelledChatTurnIDs.contains(nextID) || pendingMainTurns[nextID] == nil {
+                cancelledChatTurnIDs.remove(nextID)
+                pendingMainTurns.removeValue(forKey: nextID)
+                pendingChatTurnIDs.removeAll { $0 == nextID }
+                continue
+            }
+            guard let turn = pendingMainTurns[nextID] else { continue }
+            activeAgentTurnBubbleID = nextID
+            activeAgentTurnTask = Task { @MainActor [weak self] in
+                await self?.executeMainTurn(turn)
+            }
+            return
+        }
+    }
+
+    private func executeMainTurn(_ turn: LingShuPendingMainTurn) async {
+        let pendingID = turn.bubbleID
+        guard !cancelledChatTurnIDs.contains(pendingID) else {
+            completeMainTurnQueueSlot(pendingID)
+            return
+        }
+        executingChatTurnID = pendingID
+        currentAgentTurnRecordID = turn.taskRecordID
         isModelReplying = true
-        missionTitle = "理解需求"   // 进度显示当前活动而非笼统"思考中";有计划后随计划步走(currentActivityLabel)
+        missionTitle = "理解需求"
         missionStatus = "正在推进这件事(按需读写文件、跑命令、联网查证)。"
         enterCoreState(.thinking)
-        let previousTurn = activeAgentTurnTask
-        activeAgentTurnTask = Task { @MainActor [weak self] in
-            // 串行:等上一轮彻底跑完再开始——杜绝 actor 重入导致多条 user 消息堆进同一上下文、
-            // 模型把多轮揉在一起答(串台)+ 并发模型调用。
-            await previousTurn?.value
-            guard let self else { return }
-            // 问答线可删:轮到执行时若这条已被用户删除 → 跳过(不真跑、不进会话上下文),让下一条接上(线性不断)。
-            guard !self.cancelledChatTurnIDs.contains(pendingID) else {
-                self.cancelledChatTurnIDs.remove(pendingID)
-                self.pendingChatTurnIDs.removeAll { $0 == pendingID }
-                self.isModelReplying = false
-                self.enterCoreState(.standby, resetTimer: false)
-                return
-            }
-            self.executingChatTurnID = pendingID   // 标记"执行中"(此条不可删)
-            defer {
-                self.isModelReplying = false
-                self.missionTitle = "待机中"
-                self.enterCoreState(.standby, resetTimer: false)
-                self.pendingChatTurnIDs.removeAll { $0 == pendingID }
-                if self.executingChatTurnID == pendingID { self.executingChatTurnID = nil }
-            }
-            let session = await self.mainAgentSession()   // 首次构造会蒸馏记忆做 seed
-            // 真流式:最终答复逐字进本回合气泡(+ 按句早读 TTS)。捕获本轮 pendingID;回合串行执行保证不并发。
-            // delta 闭包 async 串行 hop 到 MainActor → 保证逐字顺序。子会话/自主不设 sink,行为不变。
-            await session.setTextDeltaSink { [weak self] delta in
-                await MainActor.run { self?.appendStreamingBubbleText(delta, to: pendingID) }
-            }
-            // 极简对话模式:整轮按**纯对话**处理——直接口语作答,不派生子任务、不写文件/跑命令、不走固化 skill
-            // (那些是任务交付的套路,聊天用不上)。其余模式照常:命中固化 skill 回合开头广播其存在。
-            let guidance: String
-            if self.isMinimalVoiceMode {
-                guidance = "【对话模式】当前是语音对话,请像聊天一样直接、口语化、简洁地回答。不要派生子任务、不要写文件或跑命令、不要套用 PPT/文档等交付模板——这只是对话。"
-            } else {
-                guidance = [
-                    self.matchedSkillHint(for: prompt),
-                    LingShuSelfReferenceIntent.directIntroductionGuidance(for: prompt)
-                ]
-                .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
-                .filter { !$0.isEmpty }
-                .joined(separator: "\n\n")
-            }
-            // 主会话=编排器(重活派发各自验收),自己回复提到既有文件别误进验收空转(trustReplyClaim:false,同常驻路径)。
-            let result: LingShuAgentRunResult
-            if resumeBlocked, await session.isBlocked {
-                let initial = await session.resume(prompt)
-                result = await self.verifyAndContinue(
-                    session: session,
-                    result: initial,
-                    userRequest: originalPromptForVerification ?? prompt,
-                    taskRecordID: taskRecordID,
-                    trustReplyClaim: false
-                )
-            } else {
-                result = await self.driveAgentDelivery(session: session, prompt: prompt, guidance: guidance, taskRecordID: taskRecordID, trustReplyClaim: false)
-            }
-            // 网络中断:**不收尾**——挂起本回合(气泡显示已暂停),保存续跑上下文,联网后 resumeSuspendedMainTurnIfNeeded 从中断处续跑。
-            if case .interrupted(let reason) = result {
-                self.suspendedMainTurn = (bubbleID: pendingID, recordID: taskRecordID, prompt: prompt, startedAt: turnStartedAt)
-                if let index = self.chatMessages.firstIndex(where: { $0.id == pendingID }) {
-                    self.chatMessages[index].text = "🌐 网络中断,已暂停——联网后我会自动接着把这条跑完。\n(\(reason))"
-                    self.chatMessages[index].isLoading = false
-                }
-                self.appendTaskRecordMessage(taskRecordID, actor: "灵枢", role: "暂停", kind: .warning, text: "网络中断,已暂停,联网后自动续。")
-                self.finishTaskRecord(taskRecordID, status: .suspended, summary: "网络中断已暂停,联网后自动续跑。")
-                self.startNetworkRetryLoopIfNeeded()   // 启动主动重试(对话框可见进度)
-                return
-            }
-            self.finalizeMainTurn(result: result, bubbleID: pendingID, recordID: taskRecordID, prompt: originalPromptForVerification ?? prompt, startedAt: turnStartedAt)
-            // 朗读由根视图的 speakLatestReplyIfNeeded(监听 chatMessages)统一负责,这里不再重复播报(否则双声线)。
+        defer {
+            isModelReplying = false
+            missionTitle = "待机中"
+            enterCoreState(.standby, resetTimer: false)
+            if executingChatTurnID == pendingID { executingChatTurnID = nil }
+            completeMainTurnQueueSlot(pendingID)
+            if currentAgentTurnRecordID == turn.taskRecordID { currentAgentTurnRecordID = nil }
+            scheduleNextMainTurnIfIdle()
         }
-        return ""   // 即时 ack(占位气泡正文留空,真回复经气泡流式/回填)
+
+        let session: any LingShuAgentSessioning
+        if turn.resumeBlocked, let existing = mainAgentSessionHolder, await existing.isBlocked {
+            session = existing
+        } else {
+            // 普通问答按 record 隔离执行。主线程仍常驻于记忆/状态层,但模型消息数组不复用,
+            // 避免 rapid 连发时把尚未轮到的“未来问题”带进当前答复。
+            mainAgentSessionHolder = nil
+            session = await mainAgentSession()
+        }
+
+        await session.setTextDeltaSink { [weak self] delta in
+            await MainActor.run {
+                guard let self, !self.cancelledChatTurnIDs.contains(pendingID) else { return }
+                self.appendStreamingBubbleText(delta, to: pendingID)
+            }
+        }
+
+        let spokenBaseline = recentSpokenLines.count
+
+        let guidance: String
+        if isMinimalVoiceMode {
+            guidance = "【对话模式】当前是语音对话,请像聊天一样直接、口语化、简洁地回答。不要派生子任务、不要写文件或跑命令、不要套用 PPT/文档等交付模板——这只是对话。"
+        } else {
+            guidance = [
+                matchedSkillHint(for: turn.prompt),
+                LingShuSelfReferenceIntent.directIntroductionGuidance(for: turn.prompt)
+            ]
+            .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .joined(separator: "\n\n")
+        }
+
+        let result: LingShuAgentRunResult
+        if turn.resumeBlocked, await session.isBlocked {
+            let initial = await session.resume(turn.prompt)
+            result = await verifyAndContinue(
+                session: session,
+                result: initial,
+                userRequest: turn.originalPromptForVerification ?? turn.prompt,
+                taskRecordID: turn.taskRecordID,
+                trustReplyClaim: false
+            )
+        } else {
+            result = await driveAgentDelivery(session: session, prompt: turn.prompt, guidance: guidance, taskRecordID: turn.taskRecordID, trustReplyClaim: false)
+        }
+
+        guard !Task.isCancelled, !cancelledChatTurnIDs.contains(pendingID) else { return }
+        if case .interrupted(let reason) = result {
+            if LingShuModelServiceFailure.isNonRecoverableReason(reason) {
+                let message = LingShuModelServiceFailure.userFacingReason(reason)
+                if let index = chatMessages.firstIndex(where: { $0.id == pendingID }) {
+                    chatMessages[index].text = "⚠️ \(message)"
+                    chatMessages[index].isLoading = false
+                }
+                appendTaskRecordMessage(turn.taskRecordID, actor: "模型通道", role: "不可自动恢复", kind: .warning, text: message)
+                let status = LingShuModelServiceFailure.decodeReason(reason)?.taskStatus ?? .failed
+                finishTaskRecord(turn.taskRecordID, status: status, summary: message)
+                missionTitle = status == .waitingForUser ? "等待模型配置" : "模型服务异常"
+                missionStatus = String(message.prefix(120))
+                enterCoreState(.abnormal, resetTimer: false)
+                return
+            }
+            suspendedMainTurn = (bubbleID: pendingID, recordID: turn.taskRecordID, prompt: turn.prompt, startedAt: turn.startedAt)
+            if let index = chatMessages.firstIndex(where: { $0.id == pendingID }) {
+                chatMessages[index].text = "🌐 网络中断,已暂停——联网后我会自动接着把这条跑完。\n(\(reason))"
+                chatMessages[index].isLoading = false
+            }
+            appendTaskRecordMessage(turn.taskRecordID, actor: "灵枢", role: "暂停", kind: .warning, text: "网络中断,已暂停,联网后自动续。")
+            finishTaskRecord(turn.taskRecordID, status: .suspended, summary: "网络中断已暂停,联网后自动续跑。")
+            startNetworkRetryLoopIfNeeded()
+            return
+        }
+        let finalResult = await fulfillVisibleInteractionIfNeeded(
+            result: result,
+            recordID: turn.taskRecordID,
+            prompt: turn.originalPromptForVerification ?? turn.prompt
+        )
+        let userFacingResult = reconcileVisibleInteractionReply(
+            finalResult,
+            prompt: turn.originalPromptForVerification ?? turn.prompt,
+            spokenBaseline: spokenBaseline,
+            recordID: turn.taskRecordID
+        )
+        finalizeMainTurn(
+            result: userFacingResult,
+            bubbleID: pendingID,
+            recordID: turn.taskRecordID,
+            prompt: turn.originalPromptForVerification ?? turn.prompt,
+            startedAt: turn.startedAt
+        )
+    }
+
+    private func completeMainTurnQueueSlot(_ bubbleID: UUID) {
+        pendingMainTurns.removeValue(forKey: bubbleID)
+        cancelledChatTurnIDs.remove(bubbleID)
+        pendingChatTurnIDs.removeAll { $0 == bubbleID }
+        if activeAgentTurnBubbleID == bubbleID {
+            activeAgentTurnTask = nil
+            activeAgentTurnBubbleID = nil
+        }
     }
 
     /// 问答线:删除一条**等待中(未执行)**的问答(连同它的问题与答复占位)。**执行中的那条不可删**(线性,删了会断流)。
@@ -305,6 +460,7 @@ extension LingShuState {
             concludeStreamedSpeech(for: bubbleID, streamedText: chatMessages[index].text)
             chatMessages[index].text = displayText
             chatMessages[index].isLoading = false
+            chatMessages[index].taskRecordID = recordID
             if case .blocked = result { chatMessages[index].choices = LingShuChoiceParsing.parse(text) }   // 卡住+枚举→壳渲染可点击
         }
         lingShuControlLog("agent: 回合完成 bubbleID=\(bubbleID.uuidString.prefix(8)) prompt「\(prompt.prefix(20))」→ reply「\(String(text.prefix(40)))」")
@@ -319,134 +475,5 @@ extension LingShuState {
         if case .blocked = result { pendingMainQuestionRecordID = recordID } else { pendingMainQuestionRecordID = nil }
         recordDeliverable(recordID: recordID, title: prompt, summary: text)   // 主线程任务也登记产出物
         rememberMainThreadTurn(prompt: prompt, reply: text)
-    }
-
-    // MARK: - 工具
-    /// 通用工具桥(非补丁):把既有 5 个通用原语(read_file/write_file/list_directory/fetch_url/run_command,
-    /// 经 LingShuToolExecutor 带权限门控)一次性映射成 agent 工具。模型用它们组合产出任何产出物——
-    /// 做 PPT=写 HTML/脚本跑出来,做爬虫=写 .py 跑出来,不再按能力加专用工具。
-    func agentBuiltinTools(
-        recordIDProvider: @escaping @MainActor @Sendable () -> String?,
-        executionPolicy: LingShuAgentExecutionPolicy = .standard
-    ) -> [LingShuAgentTool] {
-        let workingDir = codexWorkingDirectory
-        let allowShell: Bool
-        switch executionPolicy {
-        case .standard:       allowShell = developmentPhaseFullAccess || !requireHumanApproval || sessionShellAlwaysAllowed
-        case .readOnly:       allowShell = false
-        case .autoAllowShell: allowShell = true
-        }
-        // 已连接的外部 MCP/连接器工具(与旧管线同源 connectorRegistry.discoveredTools)一并纳入主会话:
-        // 不为每种外部能力另写桥,统一走 runAgenticTool 按名路由(命中 mcpToolNames → 转发连接器客户端)。
-        // 只读模式不暴露外部工具(可能有副作用)。
-        let mcpTools = executionPolicy == .readOnly ? [] : connectorRegistry.discoveredTools
-        let mcpToolNames = Set(mcpTools.map(\.name))
-        let bridge: @MainActor @Sendable (String, [String: String]) async -> String = { [weak self] tool, args in
-            guard let self else { return "执行环境不可用" }
-            // 动态解析当前回合/子会话的记录 id,让产出文件登记到正确任务记录。
-            let recordID = recordIDProvider()
-            // 加载气泡实时显示当前在干什么(执行中:<工具>),不再是静态"思考中"——看得见进展不像卡死。
-            self.missionTitle = "执行中：\(Self.toolDisplayName(tool))"
-            defer { self.missionTitle = self.currentActivityLabel }   // 工具间隙显示当前计划步,不再笼统"思考中"
-            let result = await self.runAgenticTool(
-                tool: tool,
-                arguments: args,
-                stageActor: "Agent循环",
-                taskRecordID: recordID,
-                workingDirectory: workingDir,
-                mcpToolNames: mcpToolNames,
-                baseAllowShell: allowShell
-            )
-            return result.modelText   // 回模型用完整输出(各工具已按需截断);绝不用 journalText 的 400 字展示版,否则模型看不全→反复重跑(过度迭代根因)
-        }
-        // 只读模式仅暴露读类原语(不含 write_file/run_command);其余模式暴露全部内建原语。
-        let builtinDefs = executionPolicy == .readOnly
-            ? LingShuFunctionCallingCatalog.builtin.filter { ["read_file", "list_directory", "fetch_url"].contains($0.name) }
-            : LingShuFunctionCallingCatalog.builtin
-        let builtinTools = builtinDefs.map { def in
-            LingShuAgentTool(name: def.name, description: def.description, parametersJSON: Self.schemaJSON(for: def)) { argsJSON in
-                await bridge(def.name, Self.parseArgs(argsJSON))
-            }
-        }
-        // 外部工具复用 definition(forMCPTool:) 的 arguments_json 信封 schema(描述符无 inputSchema);
-        // 信封在 runAgenticTool 的 MCP 分支统一解包,新旧路径共用。
-        let externalTools = mcpTools.map { descriptor -> LingShuAgentTool in
-            let def = LingShuFunctionCallingCatalog.definition(forMCPTool: descriptor.name, description: descriptor.description)
-            return LingShuAgentTool(name: def.name, description: def.description, parametersJSON: Self.schemaJSON(for: def)) { argsJSON in
-                await bridge(def.name, Self.parseArgs(argsJSON))
-            }
-        }
-        // 本地固化 skill(组合注册表:用户 > 策展 > 内置)经 apply_skill 暴露给所有 agent 会话;
-        // 只读模式不挂(物化生成器=写盘)。详见 LingShuState+AgentSkills。
-        let skillTools = executionPolicy == .readOnly ? [] : [applySkillTool(), applyPatchAgentTool(recordIDProvider: recordIDProvider, workingDirectory: workingDir)]
-        // P2:启用的用户 skill 的 provides 工具(runner 子进程 + P3 沙箱);放这里 → 所有会话共享;只读不挂(脚本=副作用)。
-        let pluginTools = executionPolicy == .readOnly ? [] : userSkillProvidedTools()
-        // 末尾 localKnowledgeTools():本机知识检索四肢(recall_local/index_local_knowledge,全本地零上传),所有会话共享。
-        // list_capabilities(#6 能力注册表接线):只读枚举可调度扩展能力,所有会话/模式可用(无副作用)。
-        return builtinTools + externalTools + skillTools + pluginTools + localKnowledgeTools() + [listCapabilitiesTool()]
-    }
-
-    nonisolated static func schemaJSON(for def: LingShuToolDefinition) -> String {
-        var props: [String: Any] = [:]
-        for property in def.properties {
-            props[property.name] = ["type": property.type, "description": property.description]
-        }
-        let schema: [String: Any] = ["type": "object", "properties": props, "required": def.required]
-        let data = (try? JSONSerialization.data(withJSONObject: schema)) ?? Data("{}".utf8)
-        return String(data: data, encoding: .utf8) ?? "{}"
-    }
-
-    nonisolated static func parseArgs(_ json: String) -> [String: String] {
-        guard
-            let data = json.data(using: .utf8),
-            let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-        else { return [:] }
-        return object.reduce(into: [String: String]()) { result, pair in
-            result[pair.key] = pair.value as? String ?? String(describing: pair.value)
-        }
-    }
-
-    // 联网搜索子域已拆至 LingShuState+WebSearch.swift;时间/定位工具已拆至 LingShuState+InfoTools.swift。
-    /// 阻塞工具:loop 截获,不真正执行(handler 仅占位)。
-    nonisolated static func askUserTool() -> LingShuAgentTool {
-        LingShuAgentTool(
-            name: "ask_user",
-            description: "信息不足、无法继续时,向用户提一个明确问题。",
-            parametersJSON: "{\"type\":\"object\",\"properties\":{\"question\":{\"type\":\"string\",\"description\":\"要问用户的问题\"}},\"required\":[\"question\"]}"
-        ) { _ in "" }
-    }
-
-    /// recall_memory:让模型主动从长期记忆召回相关历史事实/任务/偏好(超出当前 seed 时用)。
-    /// "嘴"这条四肢:让大脑在执行中**主动出声**(立即 TTS 播报),用于演示/汇报/会议里逐句讲、实时应答——
-    /// 不必等回合最终答复才被动朗读。会议模式配虚拟麦时,这就是灵枢"说话给对方听"。
-    func speakTool() -> LingShuAgentTool {
-        LingShuAgentTool(
-            name: "speak",
-            description: "出声说一句话(TTS 播报,这是你的'嘴')。**这句念完才会返回**——讲 PPT/演示时,先 speak 把本页讲完、它返回后你再 next 翻页,逐页自然停顿、不会抢拍(别在一句还没念完就连着翻页)。做演示/讲 PPT/会议应答都用它一句句讲;纯文字任务不必用。",
-            parametersJSON: "{\"type\":\"object\",\"properties\":{\"text\":{\"type\":\"string\",\"description\":\"要说出口的话(一句或一段)\"}},\"required\":[\"text\"]}"
-        ) { [weak self] argumentsJSON in
-            let text = (Self.jsonField(argumentsJSON, "text") ?? argumentsJSON).trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !text.isEmpty else { return "(没有要说的内容)" }
-            let voice: VoiceIOManager? = await MainActor.run { self?.voiceManager }
-            guard let voice else { return "语音未就绪(UI 未注入),本次无法出声。" }
-            await MainActor.run {
-                lingShuControlLog("TTS来源①: speak工具(模型主动) 文本「\(text.prefix(40))」")
-                voice.speak(text)
-                self?.recordSpokenLine(text)   // 留痕:演示/讲解的文字稿可被脚本核验(对得上画面)
-            }
-            await voice.awaitPlaybackDone()   // **等这句念完再返回**:逐页讲不抢拍(否则只有第一页有声)
-            return "(已说完:\(text.prefix(40)))"
-        }
-    }
-
-    // recordSpokenLine 已移至 LingShuState+SpokenReply.swift(属"朗读内容"职责 + 守 ≤500 行架构守卫)。
-    // recall_memory 工具 + recallMemoryText 已移至 LingShuState+Recall.swift(#4 多源召回门面 + 守 ≤500 行架构守卫)。
-
-    nonisolated static func jsonField(_ json: String, _ key: String) -> String? {
-        guard
-            let data = json.data(using: .utf8),
-            let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-        else { return nil }
-        return object[key] as? String
     }
 }

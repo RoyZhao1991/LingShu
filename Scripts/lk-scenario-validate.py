@@ -1,9 +1,27 @@
 #!/usr/bin/env python3
 """本机知识中枢·全场景 live 验证:驱动运行中的灵枢(8917)跑各场景,按对话/轨迹判 pass/fail。
-前置:灵枢 .app 已运行;测试目录 ~/lk-val 含 notes.md(VALFILE-7001)+ shot.png(VALPHOTO 7002)。"""
+前置:灵枢 .app 已运行;脚本会自动准备 ~/lk-val 测试夹具。"""
 import json, time, urllib.request, os, sys
 
 BASE = "http://127.0.0.1:8917/"
+FIXTURE_DIR = os.path.expanduser("~/lk-val")
+
+def ensure_fixtures():
+    os.makedirs(FIXTURE_DIR, exist_ok=True)
+    with open(os.path.join(FIXTURE_DIR, "notes.md"), "w", encoding="utf-8") as f:
+        f.write("本机知识验证文件,独特标记 VALFILE-7001。\n")
+    try:
+        from PIL import Image, ImageDraw, ImageFont
+        image = Image.new("RGB", (760, 260), "white")
+        draw = ImageDraw.Draw(image)
+        try:
+            font = ImageFont.truetype("/System/Library/Fonts/Supplemental/Arial Unicode.ttf", 42)
+        except Exception:
+            font = ImageFont.load_default()
+        draw.text((32, 86), "VALPHOTO 7002", fill="black", font=font)
+        image.save(os.path.join(FIXTURE_DIR, "shot.png"))
+    except Exception as exc:
+        print(f"⚠️ 无法生成 OCR 图片夹具: {exc}")
 
 def rpc(method, params, timeout=25):
     body = json.dumps({"jsonrpc": "2.0", "id": 1, "method": method, "params": params}).encode()
@@ -55,6 +73,8 @@ def scenario(name, prompt, pass_when, timeout=75, setup=None):
     print("   最近对话:", last[-300:].replace("\n", " "))
     return False
 
+ensure_fixtures()
+
 results = {}
 
 # S1 文件源:索引 + recall 命中独特 token
@@ -102,6 +122,7 @@ results["S6 邮件工具"] = scenario(
 
 # S7 FSEvents 自动增量:偷偷加新文件不手动索引,等几秒后 recall 能找到
 def add_file():
+    os.makedirs(FIXTURE_DIR, exist_ok=True)
     with open(os.path.expanduser("~/lk-val/added.md"), "w") as f:
         f.write("FSEvents 自动增量验证,独特标记 VALFS-7003。\n")
     time.sleep(9)  # 去抖2s+重索引

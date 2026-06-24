@@ -36,6 +36,7 @@ extension LingShuState {
         // P2 真闭环:已获取并最小验证通过的能力 → 进快照供**复用**(同类目标不必重新获取)。
         let reusable = acquiredCapabilitiesContext()
         if !reusable.isEmpty { lines.append(reusable) }
+        lines.append(capabilityNodeSnapshot(limit: 20))
         return lines.joined(separator: "\n")
     }
 
@@ -61,20 +62,23 @@ extension LingShuState {
     func listCapabilitiesTool() -> LingShuAgentTool {
         LingShuAgentTool(
             name: "list_capabilities",
-            description: "列出你当前可调度的扩展能力(已连接的 MCP 工具 / 固化技能 等),按来源归类。用于自检『我现在都能干什么』或判断『有没有现成能力做 X,不必从零造』。返回只读清单,不执行任何动作。",
+            description: "列出当前能力节点:内核能力、MCP/技能、已获取能力、模型、语音视觉、外部 agent 等,包含状态、风险、权限和是否可调度。用于自检『我现在都能干什么』或判断『有没有现成能力做 X,不必从零造』。返回只读清单,不执行任何动作。",
             parametersJSON: "{\"type\":\"object\",\"properties\":{},\"required\":[]}"
         ) { [weak self] _ in
-            let caps = await MainActor.run { [weak self] in self?.enumerateCapabilities() ?? [] }
-            guard !caps.isEmpty else {
-                return "当前没有注册的扩展能力(基础工具——读写改/命令/联网/本机知识等——仍始终可用)。"
+            let nodes = await MainActor.run { [weak self] in self?.capabilityNodes() ?? [] }
+            guard !nodes.isEmpty else {
+                return "当前没有注册的能力节点。"
             }
-            let bySource = Dictionary(grouping: caps, by: \.source)
-            let order = ["mcp", "skill", "team", "authored", "external"]
-            let sourceName = ["mcp": "已连 MCP 工具", "skill": "固化技能", "team": "命名角色", "authored": "自编组件", "external": "外部 agent"]
-            var lines: [String] = ["当前可调度扩展能力(共 \(caps.count) 项):"]
-            for src in order where bySource[src] != nil {
-                lines.append("【\(sourceName[src] ?? src)】")
-                for cap in bySource[src]! { lines.append("  · \(cap.description)") }
+            let ready = nodes.filter(\.isSchedulable).count
+            let grouped = Dictionary(grouping: nodes, by: \.kind)
+            var lines: [String] = ["当前能力节点共 \(nodes.count) 项,可调度 \(ready) 项,待补齐 \(nodes.count - ready) 项:"]
+            for kind in LingShuCapabilityNodeKind.allCases {
+                guard let items = grouped[kind], !items.isEmpty else { continue }
+                lines.append("【\(kind.rawValue)】")
+                for node in items {
+                    let state = node.isSchedulable ? "可调度" : node.status.rawValue
+                    lines.append("  · \(node.name) [\(state), risk=\(node.risk.rawValue), permission=\(node.permissionSummary)]")
+                }
             }
             return lines.joined(separator: "\n")
         }

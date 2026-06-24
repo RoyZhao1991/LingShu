@@ -45,7 +45,7 @@ extension LingShuState {
                 description: "在当前标签页**执行 JavaScript 并返回结果**(网页自动化核心):读 DOM(如 document.title、document.querySelector('h1').innerText)、点按钮(document.querySelector('#btn').click())、填表单、取数据。返回 JS 表达式的值。",
                 parametersJSON: "{\"type\":\"object\",\"properties\":{\"js\":{\"type\":\"string\",\"description\":\"要执行的 JavaScript(返回值会回给你)\"}},\"required\":[\"js\"]}"
             ) { [weak self] args in
-                let js = Self.jsonField(args, "js") ?? args
+                let js = Self.jsonField(args, "js") ?? Self.jsonField(args, "script") ?? args
                 guard let self else { return "浏览器不可用" }
                 return await self.browserController.eval(js)
             },

@@ -152,16 +152,14 @@ enum LingShuAcceptancePlanner {
     /// 容错解析:剥围栏 + 取首个 [...] 数组 + 逐项解析。
     /// 铁律:模型少返/漏返/乱返时,仍按原成功标准逐条返回检查项,缺失项回退为 content_quality,绝不静默丢条。
     static func parse(_ raw: String, fallbackCriteria: [String]) -> [LingShuAcceptanceCheck] {
-        let cleaned = fallbackCriteria
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty }
+        let cleaned = sanitizedCriteria(fallbackCriteria)
         let fallback = cleaned.map(Self.heuristicCheck)
 
         guard let start = raw.firstIndex(of: "["), let end = raw.lastIndex(of: "]"), start < end,
               let data = String(raw[start...end]).data(using: .utf8),
               let arr = try? JSONSerialization.jsonObject(with: data) as? [Any] else { return fallback }
 
-        let parsed: [LingShuAcceptanceCheck] = arr.compactMap { item in
+        let parsedRaw: [LingShuAcceptanceCheck] = arr.compactMap { item in
             guard let obj = item as? [String: Any] else { return nil }
             let criterion = ((obj["criterion"] as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
             guard !criterion.isEmpty else { return nil }
@@ -169,6 +167,7 @@ enum LingShuAcceptancePlanner {
             return LingShuAcceptanceCheck(kind: parseKind(obj["kind"] as? String), criterion: criterion,
                                           probe: probeRaw.isEmpty ? nil : probeRaw)
         }
+        let parsed = filterDeliveryCommunicationChecks(parsedRaw)
         guard !parsed.isEmpty else { return fallback }
         guard !cleaned.isEmpty else { return parsed }
 
@@ -206,6 +205,49 @@ enum LingShuAcceptancePlanner {
             return .init(kind: .commandSucceeds, criterion: c, probe: probe)
         }
         return .init(kind: .contentQuality, criterion: c, probe: nil)
+    }
+
+    /// 交付沟通类标准不是任务本体,而是最终回复的职责:例如"把结果告诉我/告知用户文件路径"。
+    /// 它们不能进入硬验收,否则真实文件/测试都已完成时也会被误判为"还需用户确认"。
+    static func sanitizedCriteria(_ criteria: [String]) -> [String] {
+        criteria
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty && !isDeliveryCommunicationCriterion($0) }
+    }
+
+    static func filterDeliveryCommunicationChecks(_ checks: [LingShuAcceptanceCheck]) -> [LingShuAcceptanceCheck] {
+        checks.filter { !isDeliveryCommunicationCriterion($0.criterion) }
+    }
+
+    static func isDeliveryCommunicationCriterion(_ text: String) -> Bool {
+        let value = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty else { return false }
+        // 如果标准里已经有明确产物路径或测试/构建探针,优先保留为任务验收项,避免把"生成 X 并告知"整句误删。
+        if firstFileProbe(in: value) != nil { return false }
+        if firstCommandProbe(in: value) != nil { return false }
+
+        let lower = value.lowercased()
+        let deliveryVerbs = [
+            "告诉我", "告知", "回复", "回答给", "说明给", "汇报", "反馈",
+            "播报", "交付说明", "最终回复", "最终回答", "最终说明", "一句话交付",
+            "结果告诉", "路径告知", "tell me", "inform", "reply", "final answer",
+            "final response", "communicate", "message the user"
+        ]
+        let deliveryObjects = [
+            "用户", "我", "主人", "结果", "最终结果", "文件路径", "产出物路径",
+            "路径", "交付", "对话", "回复", "回答", "summary", "result", "path", "user"
+        ]
+        let hasVerb = deliveryVerbs.contains { lower.contains($0.lowercased()) }
+        let hasObject = deliveryObjects.contains { lower.contains($0.lowercased()) }
+        guard hasVerb && hasObject else { return false }
+
+        // "用户确认灯已亮/确认付款/确认授权"属于真实人类确认或权限边界,不能当成交付播报丢掉。
+        let blockingConfirmSignals = ["授权", "凭据", "token", "付款", "支付", "扣款", "删除", "物理", "设备", "开灯", "关灯", "机器人", "确认是否允许"]
+        if lower.contains("确认"),
+           blockingConfirmSignals.contains(where: { lower.contains($0.lowercased()) }) {
+            return false
+        }
+        return true
     }
 
     private static func preferDeterministicHeuristic(original: String, parsed: LingShuAcceptanceCheck) -> LingShuAcceptanceCheck {

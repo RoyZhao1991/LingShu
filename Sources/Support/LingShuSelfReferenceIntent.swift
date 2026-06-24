@@ -21,7 +21,7 @@ enum LingShuSelfReferenceIntent {
         if directIdentity.contains(where: { normalized.contains($0) }) { return true }
 
         let introVerbs = ["介绍", "讲讲", "说说", "描述", "说明"]
-        let assistantTargets = ["你自己", "你本人", "灵枢", "你"]
+        let assistantTargets = ["你自己", "你本人", "灵枢", "自己"]
         let hasIntro = introVerbs.contains { normalized.contains($0) }
         let hasAssistantTarget = assistantTargets.contains { normalized.contains($0) }
         if hasIntro && hasAssistantTarget { return true }

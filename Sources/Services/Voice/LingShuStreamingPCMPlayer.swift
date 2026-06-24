@@ -2,6 +2,7 @@
 import AudioToolbox
 import CoreAudio
 import Foundation
+import LingShuAudioExceptionCatcher
 
 /// 流式 PCM 播放器：边收边播，首块音频一到就出声——豆包式超低延迟语音流的播放端。
 ///
@@ -65,7 +66,22 @@ final class LingShuStreamingPCMPlayer: @unchecked Sendable {
             do { try engine.start() } catch { return }   // 重启失败就放弃本次,不崩
         }
         guard engine.isRunning else { return }
-        node.play()
+        let played = LingShuCatchNSException { [node] in
+            node.play()
+        }
+        if !played {
+            stopped = true
+            outstanding = 0
+            leftover = Data()
+            let continuation = drainContinuation
+            drainContinuation = nil
+            lock.unlock()
+            node.stop()
+            engine.stop()
+            onOutputLevel?(0)
+            continuation?.resume()
+            lock.lock()
+        }
     }
 
     /// 若设置了首选输出设备(如虚拟麦),把引擎输出单元定向到它;否则用系统默认。

@@ -26,6 +26,18 @@ final class SelfReferenceIntentTests: XCTestCase {
         )
     }
 
+    func testComparisonAboutAssistantIsNotCapturedBySelfIntroShortcut() {
+        XCTAssertFalse(
+            LingShuSelfReferenceIntent.isDirectAssistantSelfIntroduction("说明一下你和 cloud 还有 codes 的核心区别在哪")
+        )
+        XCTAssertFalse(
+            LingShuSelfReferenceIntent.isDirectAssistantSelfIntroduction("你和 Claude Code 相比有什么不同")
+        )
+        XCTAssertNil(
+            LingShuLocalIntentResolver.answer(for: "说明一下你和 cloud 还有 codes 的核心区别在哪")
+        )
+    }
+
     @MainActor
     func testAskFormIsSuppressedForKnownSelfIntroductionTurn() async {
         let state = LingShuState()

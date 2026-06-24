@@ -153,6 +153,67 @@ final class GeneralHubInfrastructureTests: XCTestCase {
         }
     }
 
+    func testGeneralProbeTreatsLocalKnowledgeAsAvailableBuiltin() async {
+        let probe = LingShuGeneralCapabilityProbe()
+        let observations = await probe.probe(.init(
+            id: "target:external_system.read:local",
+            kind: .service,
+            name: "本地知识检索服务",
+            metadata: [
+                "verb": LingShuCapabilityVerb.externalSystemRead.rawValue,
+                "detail": "调用 recall_local 查询本地知识库"
+            ]
+        ))
+
+        XCTAssertEqual(observations.first?.status, .available)
+        XCTAssertEqual(observations.first?.verb, LingShuCapabilityVerb.localFileScan.rawValue)
+        XCTAssertEqual(observations.first?.evidence, ["builtin-local-capability"])
+    }
+
+    @MainActor
+    func testHumanConfirmProbeObservationsDoNotPoisonCapabilityGraph() {
+        let state = LingShuState()
+        let recordID = state.createTaskExecutionRecord(for: "集成测试:交付确认不应污染能力图谱")
+        defer {
+            state.taskExecutionRecords.removeAll { $0.id == recordID }
+            state.persistTaskExecutionRecords()
+            state.taskExecutionJournal.flush()
+        }
+        let observation = LingShuCapabilityProbeObservation(
+            targetID: "target:human",
+            capabilityID: "human.confirm:用户",
+            verb: LingShuCapabilityVerb.humanConfirm.rawValue,
+            description: "需要用户确认或提供凭据:用户",
+            status: .requiresAuth,
+            confidence: 0.65
+        )
+
+        state.bindCapabilityProbeObservations([observation], to: recordID)
+
+        let record = state.taskExecutionRecords.first(where: { $0.id == recordID })
+        XCTAssertEqual(record?.capabilityProbeObservations?.first?.capabilityID, "human.confirm:用户",
+                       "历史记录可以保留原始观察,但不能投影成能力")
+        XCTAssertFalse(state.capabilityNodes().contains { $0.id == "probe:human.confirm:用户" },
+                       "human.confirm 探测观察不应变成能力节点")
+        if case .missing = state.capabilityGraph().match(.init(verb: .humanConfirm, target: "用户", detail: "告知结果")) {
+            // expected
+        } else {
+            XCTFail("human.confirm 探测观察不应让图谱返回 needsAuth")
+        }
+    }
+
+    func testGeneralProbeSkipsHumanConfirmationTargets() async {
+        let probe = LingShuGeneralCapabilityProbe()
+        let observations = await probe.probe(.init(
+            id: "target:human",
+            kind: .unknown,
+            name: "用户",
+            metadata: ["verb": LingShuCapabilityVerb.humanConfirm.rawValue]
+        ))
+
+        XCTAssertTrue(observations.isEmpty, "human.confirm 是交互边界,不是可探测能力")
+    }
+
     @MainActor
     func testStateEffectVerificationReportPersistsAndPublishesWorldEvent() {
         let state = LingShuState()

@@ -73,6 +73,21 @@ struct TaskExecutionRecordSheet: View {
 
                 Spacer()
 
+                if state.canStopTaskWindowRecord(record.id) {
+                    Button {
+                        state.stopTaskWindowRecord(record.id)
+                    } label: {
+                        Label("停止", systemImage: "stop.fill")
+                            .font(.system(size: 11, weight: .bold))
+                            .foregroundStyle(.red.opacity(0.94))
+                            .padding(.horizontal, 9)
+                            .frame(height: 30)
+                            .background(Color.red.opacity(0.13), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    }
+                    .buttonStyle(.plain)
+                    .help("停止当前任务")
+                }
+
                 // 右栏显隐切换(对齐 Codex 可隐藏右侧面板):隐藏后时间线独占整窗。
                 Button {
                     withAnimation(.easeInOut(duration: 0.16)) { panelHidden.toggle() }

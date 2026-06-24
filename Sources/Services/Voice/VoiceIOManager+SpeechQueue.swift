@@ -15,10 +15,10 @@ extension VoiceIOManager {
     func awaitPlaybackDone() async {
         let start = Date()
         while Date().timeIntervalSince(start) < 3, !isSpeakingOrQueued {
-            try? await Task.sleep(nanoseconds: 120_000_000)
+            try? await Task.sleep(nanoseconds: 50_000_000)
         }
         while Date().timeIntervalSince(start) < 90, isSpeakingOrQueued {
-            try? await Task.sleep(nanoseconds: 150_000_000)
+            try? await Task.sleep(nanoseconds: 60_000_000)
         }
     }
 

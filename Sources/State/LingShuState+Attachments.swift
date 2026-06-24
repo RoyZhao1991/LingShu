@@ -110,17 +110,45 @@ extension LingShuState {
     }
 
     /// 把当前待发送附件拼成一段上下文，注入到用户消息前；交付落地时模型据此理解/改写。
+    ///
+    /// 关键约束:附件的**本机路径**也是上下文的一部分。正文抽取是异步的,用户可能在解析完成前就发送;
+    /// 只要文件句柄还在,大脑就应该直接用这个路径读取/预览/演示/修改,而不是再去工作目录里猜文件。
     func attachmentContextBlock() -> String {
-        let ready = pendingAttachments.filter { !$0.extractedContext.isEmpty }
+        let ready = pendingAttachments.filter { !$0.extractedContext.isEmpty || $0.localURL != nil }
         guard !ready.isEmpty else { return "" }
         let blocks = ready.map { attachment -> String in
-            """
+            let path = attachment.localURL?.path.trimmingCharacters(in: .whitespacesAndNewlines)
+            let pathLine: String
+            if let path = path, !path.isEmpty {
+                pathLine = "本机路径：\(path)"
+            } else {
+                pathLine = "本机路径：未提供"
+            }
+            let sizeLine: String
+            if attachment.byteCount > 0 {
+                sizeLine = "大小：\(ByteCountFormatter.string(fromByteCount: Int64(attachment.byteCount), countStyle: .file))"
+            } else {
+                sizeLine = "大小：未知"
+            }
+            let statusLine = attachment.status?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let extracted = attachment.extractedContext.trimmingCharacters(in: .whitespacesAndNewlines)
+            return """
             【\(attachment.kind.label)：\(attachment.filename)】
-            \(attachment.extractedContext)
+            \(pathLine)
+            \(sizeLine)
+            解析状态：\((statusLine?.isEmpty == false) ? statusLine! : "就绪")
+            内容摘要：
+            \(extracted.isEmpty ? "(正文尚未抽取完成；如需读取、预览、演示或修改，请直接使用本机路径调用对应工具。)" : extracted)
             """
         }
         return """
-        用户上传了以下文件，请基于它们的真实内容来理解或修改，并按交付物落地：
+        用户上传了以下文件，请基于它们的真实内容来理解、读取、修改、预览、演示或按需交付：
+
+        附件使用规则：
+        - 如果用户要求读取、预览、演示、修改或基于附件继续工作，优先直接使用附件的「本机路径」调用工具。
+        - 不要为了定位已上传附件再搜索工作目录或全盘；只有本机路径为空、失效，或工具明确返回无法打开时，才查找替代文件。
+        - 如果正文摘要尚未抽取完成，仍然可以先用本机路径打开/读取/预览文件，不能把“没抽取完”当成文件不存在。
+
         \(blocks.joined(separator: "\n\n"))
         """
     }

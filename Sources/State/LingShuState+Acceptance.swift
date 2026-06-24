@@ -21,11 +21,16 @@ extension LingShuState {
             bindAcceptanceChecks(derived, to: taskRecordID)
             checks = derived
         }
-        guard let checks, !checks.isEmpty else { return LingShuAcceptanceReport(verdicts: [], note: "") }
+        let originalChecks = checks ?? []
+        let activeChecks = LingShuAcceptancePlanner.filterDeliveryCommunicationChecks(originalChecks)
+        if activeChecks != originalChecks {
+            bindAcceptanceChecks(activeChecks, to: taskRecordID)
+        }
+        guard !activeChecks.isEmpty else { return LingShuAcceptanceReport(verdicts: [], note: "") }
         // **用户指定路径 authoritative(2026-06-23,监工"连文件名都要确认/自建任务被判异常"修)**:
         // 分类器常给 fileExists 编个占位名(如 fibonacci_output.txt),与用户原话指定的路径不符 → 真文件被判"未找到"→
         // 无尽返工/反问。这里把 fileExists 探针**对齐到用户明确指定的输出路径**,不让占位名误判失败。
-        let reconciled = reconcileFileProbesToUserPaths(checks, taskRecordID: taskRecordID)
+        let reconciled = reconcileFileProbesToUserPaths(activeChecks, taskRecordID: taskRecordID)
         return LingShuAcceptanceReport.make(
             checks: reconciled,
             fileExists: { [weak self] probe in self?.acceptanceFileExists(probe, realFiles: realFiles) ?? false },
@@ -65,7 +70,7 @@ extension LingShuState {
     /// 把成功标准分类成验收检查项(模型 1-shot、无工具)。解析失败 → 全部回退 content_quality(交评审官,不丢条目)。
     @discardableResult
     func deriveAcceptanceChecks(criteria: [String]) async -> [LingShuAcceptanceCheck] {
-        let cleaned = criteria.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+        let cleaned = LingShuAcceptancePlanner.sanitizedCriteria(criteria)
         guard !cleaned.isEmpty else { return [] }
         let fallback = cleaned.map { LingShuAcceptanceCheck(kind: .contentQuality, criterion: $0, probe: nil) }
         let session = LingShuAgentSession(
@@ -121,23 +126,41 @@ extension LingShuState {
         return normalizedRealFiles.contains { ($0 as NSString).lastPathComponent.lowercased() == base }
     }
 
-    /// commandSucceeds 探针:扫执行记录里 run_command 配对,看含探针子串的命令是否成功执行过。
-    /// 出现且成功(退出成功且输出无崩溃签名)=true;出现但失败=false;从未出现=nil(无法确定性核验)。
+    /// commandSucceeds 探针:扫执行记录里的真实执行证据。
+    /// - `run_command`:配对 toolCall→toolResult,命令含探针且退出成功/无崩溃=true,失败=false。
+    /// - 其它 agent 工具:探针命中工具名/调用摘要/参数时,用对应 toolResult.success 裁决。
+    ///
+    /// P3 不能只认 shell 命令:用户常说"成功调用 index_calendar/recall_local 工具"。
+    /// 这类成功标准的权威证据是执行记录里的 toolResult,不是 run_command。
     /// 一次成功即判达成(返工里"先失败后修绿"算达成)。
     func commandProbeOutcome(_ probe: String, taskRecordID: String?) -> Bool? {
         guard let record = taskExecutionRecords.first(where: { $0.id == taskRecordID }) else { return nil }
         let needle = probe.lowercased()
         guard !needle.isEmpty else { return nil }
         var lastCmd = ""
+        var pendingToolProbeMatchByTool: [String: Bool] = [:]
         var outcome: Bool? = nil
         for message in record.messages {
             switch message.detail {
             case let .toolCall(tool, summary, args):
-                if tool == "run_command" { lastCmd = (summary + " " + args).lowercased() }
+                if tool == "run_command" {
+                    lastCmd = (summary + " " + args).lowercased()
+                } else {
+                    let haystack = "\(tool) \(summary) \(args)".lowercased()
+                    if tool.lowercased().contains(needle) || haystack.contains(needle) {
+                        pendingToolProbeMatchByTool[tool] = true
+                    }
+                }
             case let .toolResult(tool, success, output):
                 if tool == "run_command", lastCmd.contains(needle) {
                     let ok = success && !Self.outputLooksLikeCrash(output)
                     if ok { outcome = true } else if outcome != true { outcome = false }
+                }
+                if tool != "run_command",
+                   (pendingToolProbeMatchByTool[tool] == true || tool.lowercased().contains(needle)) {
+                    let ok = success && !Self.outputLooksLikeCrash(output)
+                    if ok { outcome = true } else if outcome != true { outcome = false }
+                    pendingToolProbeMatchByTool[tool] = nil
                 }
                 lastCmd = ""
             default:

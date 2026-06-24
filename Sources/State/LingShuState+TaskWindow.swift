@@ -21,6 +21,12 @@ extension LingShuState {
                 : "\(attachmentContext)\n\n用户指令：\n\(trimmed)"
         }
         let display = trimmed.isEmpty ? "[上传了 \(pendingAttachments.count) 个文件]" : trimmed
+        let isWaitingForPrerequisite = taskExecutionRecords.first { $0.id == recordID }?.taskOutcome == .waitingForUser
+        if isWaitingForPrerequisite && Self.userInputDeniesPrerequisite(combined) {
+            clearAttachments()
+            closeDispatchedTaskForDeniedPrerequisite(recordID: recordID, answer: display)
+            return
+        }
         appendTaskRecordMessage(recordID, actor: "你", role: "追问", kind: .user, text: display)
         captureDesignFeedbackForDreaming(trimmed, recordID: recordID)   // 设计任务的追问/改进→dreaming 固化
         clearAttachments()
@@ -32,13 +38,20 @@ extension LingShuState {
             // ① **解除需用户提供的阻断缺口**(用户已给凭据/已指路)——否则静态 gapAnalysis 让完成闸**无限再问同一件事**
             //    (用户反馈"给了 token 仍没完成"的根因);解除后据本回合**真实结果**判完成,而非据陈旧缺口再问。
             // ② 给一段续接引导,逼它真用上/真去试可行路径,别只读文件就说做不了。
-            let wasWaiting = taskExecutionRecords.first { $0.id == recordID }?.taskOutcome == .waitingForUser
-            if wasWaiting { resolveUserProvidedGaps(recordID: recordID) }
-            let resumeInput = wasWaiting ? combined + "\n\n" + capabilityResumePreamble(recordID: recordID) : combined
+            let providesPrerequisite = Self.userInputProvidesPrerequisite(combined)
+            if isWaitingForPrerequisite && providesPrerequisite { resolveUserProvidedGaps(recordID: recordID) }
+            let resumeInput = isWaitingForPrerequisite && providesPrerequisite
+                ? combined + "\n\n" + capabilityResumePreamble(recordID: recordID)
+                : combined
             Task { await agentOrchestrator.resumeWithInput(id: subID, input: resumeInput) }
             return
         }
-        runMainAgentTurn(prompt: combined, taskRecordID: recordID, resumeBlocked: true)
+        let mainProvidesPrerequisite = Self.userInputProvidesPrerequisite(combined)
+        if isWaitingForPrerequisite && mainProvidesPrerequisite { resolveUserProvidedGaps(recordID: recordID) }
+        let mainResumeInput = isWaitingForPrerequisite && mainProvidesPrerequisite
+            ? combined + "\n\n" + capabilityResumePreamble(recordID: recordID)
+            : combined
+        runMainAgentTurn(prompt: mainResumeInput, taskRecordID: recordID, resumeBlocked: true)
     }
 
     /// **流程纠正(干预)**:看到 agent 跑偏时,中途把纠正注入**正在跑的会话**(主/自主)。
@@ -72,6 +85,42 @@ extension LingShuState {
 
     /// 停止当前在飞回合(真停)——供任务窗口"停止"按钮。
     func stopActiveRun() { cancelCurrentCall() }
+
+    /// 任务窗口里的记录是否还可被用户停止。
+    /// 子任务窗口看到的是 record,不一定等同于主线程 `hasActiveModelCall`,所以这里按记录状态 + 编排器映射判断。
+    func canStopTaskWindowRecord(_ recordID: String) -> Bool {
+        guard let record = taskExecutionRecords.first(where: { $0.id == recordID }) else {
+            return agentSubTaskRecords.values.contains(recordID) || dispatchedTaskBubbles[recordID] != nil
+        }
+        guard !record.status.isTerminal else { return false }
+        let stoppable: Set<LingShuTaskExecutionStatus> = [
+            .queued, .running, .dispatched, .analyzing, .acquiringCapability,
+            .ready, .waitingForUser, .blocked, .suspended
+        ]
+        return stoppable.contains(record.status)
+            || agentSubTaskRecords.values.contains(recordID)
+            || dispatchedTaskBubbles[recordID] != nil
+    }
+
+    /// 停止任务窗口当前记录。
+    /// - 派发/子任务:只取消对应隔离子会话,释放队列槽位,不误伤主问答线。
+    /// - 主线程记录:走原有全局停止。
+    /// - 已卡住/待用户但不在编排器内的记录:直接收口成失败,避免窗口和队列长期悬挂。
+    func stopTaskWindowRecord(_ recordID: String) {
+        guard canStopTaskWindowRecord(recordID) else { return }
+        if agentSubTaskRecords.values.contains(recordID) || dispatchedTaskBubbles[recordID] != nil {
+            stopDispatchedTask(recordID: recordID)
+            return
+        }
+        if currentAgentTurnRecordID == recordID || autonomousRunRecordID == recordID {
+            stopActiveRun()
+            return
+        }
+        appendTaskRecordMessage(recordID, actor: "用户", role: "停止", kind: .warning, text: "用户已停止该任务。")
+        if blockedDispatchedRecordID == recordID { blockedDispatchedRecordID = nil }
+        finishTaskRecord(recordID, status: .failed, summary: "用户已停止该任务。")
+        promoteQueuedDispatchIfPossible()
+    }
 
     /// 撤销一次文件改动:新增的删文件、修改的还原改前内容(从 diff 无损重建);截断 diff 不可撤销。
     func undoFileEdit(messageID: String, recordID: String) {

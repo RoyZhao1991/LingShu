@@ -47,6 +47,36 @@ final class AcceptanceTests: XCTestCase {
         XCTAssertEqual(checks[2].kind, .contentQuality)
     }
 
+    func testDeliveryCommunicationCriteriaDoNotEnterHardAcceptance() {
+        let checks = LingShuAcceptancePlanner.parse(
+            "这根本不是 JSON",
+            fallbackCriteria: [
+                "生成 /tmp/lingshu_soak/out.txt",
+                "用户得到最终结果和文件路径的告知",
+                "swift test 全绿"
+            ]
+        )
+        XCTAssertEqual(checks.count, 2, "交付播报类标准不是任务本体,不应进入硬验收")
+        XCTAssertEqual(checks[0].kind, .fileExists)
+        XCTAssertEqual(checks[0].probe, "/tmp/lingshu_soak/out.txt")
+        XCTAssertEqual(checks[1].kind, .commandSucceeds)
+        XCTAssertFalse(LingShuAcceptancePlanner.isDeliveryCommunicationCriterion("用户确认灯已亮"),
+                       "真实设备/权限确认不能被误删")
+    }
+
+    func testPlannerReturnedDeliveryConfirmationIsFiltered() {
+        let raw = """
+        [
+          {"criterion":"把运行结果告诉我","kind":"user_confirmation","probe":""},
+          {"criterion":"生成 report.pdf","kind":"file_exists","probe":"report.pdf"}
+        ]
+        """
+        let checks = LingShuAcceptancePlanner.parse(raw, fallbackCriteria: ["把运行结果告诉我", "生成 report.pdf"])
+        XCTAssertEqual(checks.count, 1)
+        XCTAssertEqual(checks[0].criterion, "生成 report.pdf")
+        XCTAssertEqual(checks[0].kind, .fileExists)
+    }
+
     func testParseNeverDropsMissingCriteriaWhenPlannerReturnsPartialArray() {
         let raw = """
         [
@@ -142,6 +172,96 @@ final class AcceptanceTests: XCTestCase {
         XCTAssertEqual(report.verdicts[1].status, .unmet, "命令出现但失败 → unmet")
         XCTAssertEqual(report.verdicts[2].status, .unverifiable, "命令从未出现 → 无法核验")
         XCTAssertTrue(report.hasDeterministicFailure)
+    }
+
+    @MainActor
+    func testCommandProbeOutcomeAcceptsSuccessfulAgentToolCall() {
+        let state = LingShuState()
+        let taskID = state.createTaskExecutionRecord(for: "索引本机知识")
+        defer {
+            state.taskExecutionRecords.removeAll { $0.id == taskID }
+            state.persistTaskExecutionRecords()
+            state.taskExecutionJournal.flush()
+        }
+
+        state.appendTaskRecordMessage(
+            taskID,
+            actor: "工具",
+            role: "Agent循环",
+            kind: .agent,
+            text: "index_local_knowledge",
+            detail: .toolCall(tool: "index_local_knowledge", summary: "索引 ~/lk-val", arguments: #"{"folder":"~/lk-val"}"#)
+        )
+        state.appendTaskRecordMessage(
+            taskID,
+            actor: "工具",
+            role: "执行结果",
+            kind: .agent,
+            text: "index_local_knowledge 完成",
+            detail: .toolResult(tool: "index_local_knowledge", success: true, output: "已增量索引 1 个目录")
+        )
+
+        XCTAssertEqual(state.commandProbeOutcome("index_local_knowledge", taskRecordID: taskID), true,
+                       "工具调用成功也是确定性执行证据,不能只认 run_command")
+    }
+
+    @MainActor
+    func testRecordedNonPrimitiveToolBecomesAcceptanceEvidence() async {
+        let state = LingShuState()
+        let taskID = state.createTaskExecutionRecord(for: "调用 recall_local 查 VALFS")
+        defer {
+            state.taskExecutionRecords.removeAll { $0.id == taskID }
+            state.persistTaskExecutionRecords()
+            state.taskExecutionJournal.flush()
+        }
+        let rawTool = LingShuAgentTool(
+            name: "recall_local",
+            description: "本机知识检索",
+            parametersJSON: "{\"type\":\"object\",\"properties\":{\"query\":{\"type\":\"string\"}},\"required\":[\"query\"]}"
+        ) { _ in
+            "本机知识检索命中 1 条:\n1. /tmp/VALFS.txt"
+        }
+
+        let tool = state.recordedAgentTool(rawTool, recordIDProvider: { taskID })
+        _ = await tool.handler(#"{"query":"VALFS"}"#)
+
+        let record = state.taskExecutionRecords.first { $0.id == taskID }
+        XCTAssertTrue(record?.messages.contains {
+            if case let .toolCall(name, _, _) = $0.detail { return name == "recall_local" }
+            return false
+        } ?? false)
+        XCTAssertEqual(state.commandProbeOutcome("recall_local", taskRecordID: taskID), true,
+                       "直接挂载的非原语工具也必须成为 P3 可见的确定性执行证据")
+    }
+
+    @MainActor
+    func testCommandProbeOutcomeReportsFailedAgentToolCall() {
+        let state = LingShuState()
+        let taskID = state.createTaskExecutionRecord(for: "索引日历")
+        defer {
+            state.taskExecutionRecords.removeAll { $0.id == taskID }
+            state.persistTaskExecutionRecords()
+            state.taskExecutionJournal.flush()
+        }
+
+        state.appendTaskRecordMessage(
+            taskID,
+            actor: "工具",
+            role: "Agent循环",
+            kind: .agent,
+            text: "index_calendar",
+            detail: .toolCall(tool: "index_calendar", summary: "索引日历", arguments: "{}")
+        )
+        state.appendTaskRecordMessage(
+            taskID,
+            actor: "工具",
+            role: "执行结果",
+            kind: .agent,
+            text: "index_calendar 失败",
+            detail: .toolResult(tool: "index_calendar", success: false, output: "没读到日历事件")
+        )
+
+        XCTAssertEqual(state.commandProbeOutcome("index_calendar", taskRecordID: taskID), false)
     }
 
     func testEvaluateNonDeterministicKindsAreUnverifiableNeverHallucinatedMet() {

@@ -63,7 +63,7 @@ struct LingShuGapAnalysis: Codable, Sendable, Equatable {
 
     /// 有需用户提供的阻断前提(凭据/授权/付费/硬件)——执行前应主动用 ask_user 跟用户确认。
     var needsUserToUnblock: Bool {
-        gaps.contains { $0.blocking && [.humanConfirmation, .permission, .funding, .device].contains($0.kind) }
+        blockingGaps.contains { [.humanConfirmation, .permission, .funding, .device].contains($0.kind) }
     }
 
     /// 人可读摘要(落 trace / 任务记录)。

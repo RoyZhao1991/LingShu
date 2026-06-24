@@ -9,20 +9,11 @@ extension LingShuState {
 
     private static let acquiredCapabilitiesKey = "lingshu.capability.acquired"
 
-    /// 当前能力图谱:现有扁平能力(视为已验证可用)+ 持久化的已获取能力。
+    /// 当前能力图谱:由统一 CapabilityNode 生命周期视图投影而来。
+    /// 具体能力先变成节点,再进入图谱;主流程不再直接依赖某个具体实现清单。
     func capabilityGraph() -> LingShuCapabilityGraph {
         var graph = LingShuCapabilityGraph()
-        for entry in Self.kernelCapabilityEntries() {
-            graph.upsert(entry)
-        }
-        for cap in enumerateCapabilities() {
-            graph.upsert(.init(id: cap.id,
-                               verb: LingShuCapabilityVerb.infer(id: cap.id, description: cap.description, source: cap.source),
-                               description: cap.description, source: cap.source,
-                               online: true, permission: .granted, verified: true, lastVerifiedAt: nil))
-        }
-        for entry in probedCapabilityEntries() { graph.upsert(entry) }
-        for acquired in acquiredCapabilities() { graph.upsert(acquired) }
+        for entry in capabilityEntriesFromNodes() { graph.upsert(entry) }
         return graph
     }
 
@@ -67,6 +58,7 @@ extension LingShuState {
         appendTrace(kind: usable ? .result : .warning, actor: "能力图谱",
                     title: usable ? "已获取能力入图谱(可复用)" : "已获取但未通过最小验证(不可复用)",
                     detail: "\(description)")
+        recordCapabilityNodesInWorldModel()
         return usable
     }
 
@@ -81,30 +73,35 @@ extension LingShuState {
             tools: [], model: controlPlaneModelAdapter(.capabilityRequirement), maxTurns: 1
         )
         guard case .completed(let text) = await session.send(trimmed) else { return [] }
-        return LingShuCapabilityRequirementPlanner.parse(LingShuReasoningText.stripThinkTags(text))
+        return normalizeCapabilityRequirementsForBuiltIns(
+            LingShuCapabilityRequirementPlanner.parse(LingShuReasoningText.stripThinkTags(text)),
+            contextText: trimmed
+        )
     }
 
     /// 绑定能力需求到记录(typed,持久化)+ 查图谱标注未命中(信息性落 trace)。
     func bindCapabilityRequirements(_ reqs: [LingShuCapabilityRequirement], to recordID: String?) {
-        guard !reqs.isEmpty, let recordID, let idx = taskExecutionRecords.firstIndex(where: { $0.id == recordID }) else { return }
+        let activeReqs = normalizeCapabilityRequirementsForBuiltIns(reqs)
+        guard !activeReqs.isEmpty, let recordID, let idx = taskExecutionRecords.firstIndex(where: { $0.id == recordID }) else { return }
         guard taskExecutionRecords[idx].capabilityRequirements == nil else { return }   // 幂等
-        taskExecutionRecords[idx].capabilityRequirements = reqs
+        taskExecutionRecords[idx].capabilityRequirements = activeReqs
         persistTaskExecutionRecords()
         let graph = capabilityGraph()
-        let missing = reqs.filter { if case .missing = graph.match($0) { return true }; return false }
-        mergeCapabilityRequirementGaps(reqs, graph: graph, into: recordID)
+        let missing = activeReqs.filter { if case .missing = graph.match($0) { return true }; return false }
+        mergeCapabilityRequirementGaps(activeReqs, graph: graph, into: recordID)
         if !missing.isEmpty {
             appendTrace(kind: .system, actor: "能力需求", title: "需求查图谱",
-                        detail: "需要 \(reqs.count) 项能力,\(missing.count) 项图谱未命中:" + missing.map { $0.verb.rawValue }.joined(separator: "、"))
+                        detail: "需要 \(activeReqs.count) 项能力,\(missing.count) 项图谱未命中:" + missing.map { $0.verb.rawValue }.joined(separator: "、"))
         }
         Task { @MainActor [weak self] in
-            await self?.probeCapabilityRequirements(reqs, recordID: recordID)
+            await self?.probeCapabilityRequirements(activeReqs, recordID: recordID)
         }
     }
 
     /// P2 补齐:能力需求查图谱后的权威事实要进入 GapAnalysis,让 CompletionGate 能确定性驱动"找能力/要授权"。
     func mergeCapabilityRequirementGaps(_ reqs: [LingShuCapabilityRequirement], graph: LingShuCapabilityGraph, into recordID: String) {
-        let gaps = reqs.compactMap { req -> LingShuCapabilityGap? in
+        let activeReqs = normalizeCapabilityRequirementsForBuiltIns(reqs)
+        let gaps = activeReqs.compactMap { req -> LingShuCapabilityGap? in
             switch graph.match(req) {
             case .satisfied:
                 return nil
@@ -129,6 +126,36 @@ extension LingShuState {
         appendTaskRecordMessage(recordID, actor: "能力图谱", role: "缺口", kind: .core,
                                 text: "能力图谱核验发现 \(gaps.count) 项待补能力,已并入完成闸。")
         persistTaskExecutionRecords()
+    }
+
+    /// 能力需求模型只能产"通用动词",但它会把本地知识/本机索引误写成 external/api/human.confirm。
+    /// 这里用能力池事实把**已注册本地能力**归一到内核可满足的本机扫描/召回,而不是走外部授权探测。
+    func normalizeCapabilityRequirementsForBuiltIns(_ reqs: [LingShuCapabilityRequirement], contextText: String = "") -> [LingShuCapabilityRequirement] {
+        LingShuCapabilityRequirementPlanner.sanitized(reqs).map { req in
+            let text = "\(req.verb.rawValue) \(req.target) \(req.detail)"
+            guard Self.referencesKnownNoCredentialBuiltInCapability(text) else { return req }
+            switch req.verb {
+            case .externalSystemRead, .externalSystemWrite, .apiCall, .humanConfirm, .unknown:
+                return .init(verb: .localFileScan, target: req.target, detail: req.detail)
+            case .localFileScan, .documentGenerate, .browserOperate, .deviceDiscover, .deviceControl, .compute:
+                return req
+            }
+        }.map { req in
+            guard let tool = explicitlySelectedRuntimeTool(covers: "\(req.target) \(req.detail)", in: contextText) else {
+                return req
+            }
+            switch req.verb {
+            case .externalSystemRead, .externalSystemWrite, .apiCall, .humanConfirm, .unknown:
+                let verb = runtimeToolCapabilityVerb(tool) ?? .compute
+                return .init(
+                    verb: verb,
+                    target: tool.name,
+                    detail: req.detail.isEmpty ? "用户已显式指定运行时工具 \(tool.name) 执行。" : req.detail
+                )
+            case .localFileScan, .documentGenerate, .browserOperate, .deviceDiscover, .deviceControl, .compute:
+                return .init(verb: req.verb, target: tool.name, detail: req.detail)
+            }
+        }
     }
 
     nonisolated static func gapFromMissingRequirement(_ req: LingShuCapabilityRequirement) -> LingShuCapabilityGap {

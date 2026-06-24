@@ -132,6 +132,21 @@ actor LingShuAgentOrchestrator {
         return ids.count
     }
 
+    /// 停止**指定一条**正在跑的隔离子任务(「进行中」长条的"停止"用):取消其驱动 Task、释放并发槽并放行排队任务、
+    /// 标记账本、发 `.failed` 让 UI 收尾。**只动这一条**,不波及其它任务与主会话问答(区别于 cancelAllRunning)。
+    /// 返回是否真停了一条(该 id 当前确有在跑的驱动 Task)。
+    @discardableResult
+    func cancel(id: String) -> Bool {
+        guard let task = driveTasks[id] else { return false }
+        task.cancel()
+        driveTasks[id] = nil
+        let objective = objectives[id] ?? entries[id]?.objective ?? ""
+        upsert(id: id, objective: objective, status: .failed, summary: "用户已停止")
+        Task { await self.onEvent?(.failed(id: id, objective: objective, summary: "用户已停止")) }
+        admitNext(after: id)   // 释放槽 + 放行编排器内部排队(状态级队列由 .failed 事件触发晋级)
+        return true
+    }
+
     /// 当前后台正在跑的子任务数(供"是否有可停的派发任务"判断)。
     func activeDriveCount() -> Int { driveTasks.count }
 
@@ -181,8 +196,9 @@ actor LingShuAgentOrchestrator {
             Task { await self.onEvent?(.completed(id: id, objective: objective, summary: text)) }
             admitNext(after: id)
         case .blocked(let question):
-            upsert(id: id, objective: objective, status: .blocked, summary: "等待你补充", blockedOn: question)
-            pushes.append("子任务「\(objective)」卡住,需要你定:\(question)")
+            let cleanQuestion = LingShuHumanInputEnvelope.userFacingText(from: question)
+            upsert(id: id, objective: objective, status: .blocked, summary: "等待你补充", blockedOn: cleanQuestion)
+            pushes.append("子任务「\(objective)」卡住,需要你定:\(cleanQuestion)")
             Task { await self.onEvent?(.blocked(id: id, objective: objective, question: question)) }
             // **卡住=等人(无界延迟),不该占用并发槽**——释放槽位 + 放行排队任务(修死锁:多条"等你补充"
             // 占满 3 槽→新任务永远派不出去、系统卡死,看着像"两个子任务处理同一件事死锁")。会话与账本保留,

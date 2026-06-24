@@ -69,7 +69,7 @@ extension LingShuState {
                 deliverOrQueueSubtaskReport(recordID: recordID, objective: objective, summary: summary)
             } else {
                 // 未真完成:如实回灌(summary 已含完成闸的诚实补尾),不入"做好了"汇报队列。
-                let label = status == .waitingForUser ? "⏸ 需要你配合" : (status == .partial ? "⚠️ 部分完成" : "⚠️ 未能完成")
+                let label = status == .waitingForUser ? "⏸ 等待前提" : (status == .partial ? "⚠️ 部分完成" : "⚠️ 未能完成")
                 postOrchestratorChat(recordID: recordID, dispatched: summary, spawned: "\(label):子任务「\(objective)」——\(summary.prefix(200))")
                 briefMainThread("子任务「\(objective)」\(label):\(summary.prefix(180))")
                 // 续接优先恢复:待用户/部分完成的派发任务 → 指向它,用户下条消息直接续这条隔离会话(spec 第14条)。
@@ -77,9 +77,21 @@ extension LingShuState {
             }
         case .blocked(let id, let objective, let question):
             guard !isRoleAgentEventID(id) else { return }
+            let cleanQuestion = LingShuHumanInputEnvelope.userFacingText(from: question)
             let recordID = agentSubTaskRecords[id]
+            if isBogusBuiltInCapabilityHandback(question) {
+                let correction = builtInCapabilityCorrection(for: question)
+                if let recordID {
+                    appendTaskRecordMessage(recordID, actor: "能力图谱", role: "纠偏", kind: .router,
+                                            text: "子任务误把已注册本地能力交还用户授权,已自动纠偏并继续执行。")
+                }
+                briefMainThread("子任务「\(objective)」误判本地能力授权,已纠偏继续执行。")
+                let orchestrator = agentOrchestrator
+                Task { await orchestrator.resumeWithInput(id: id, input: correction) }
+                return
+            }
             if let recordID, let idx = taskExecutionRecords.firstIndex(where: { $0.id == recordID }) {
-                appendTaskRecordMessage(recordID, actor: "灵枢", role: "卡住", kind: .warning, text: question)
+                appendTaskRecordMessage(recordID, actor: "灵枢", role: "卡住", kind: .warning, text: cleanQuestion)
                 blockedDispatchedRecordID = recordID   // 等用户回答→下条主输入直接续这条隔离会话(不重新分诊)
                 // P2 真闭环:ask_user 阻塞=在等用户 → 状态显示「待用户」而非笼统「执行中」(修"状态很怪");不 finishTaskRecord(保留续接语义)。
                 taskExecutionRecords[idx].status = .waitingForUser
@@ -91,9 +103,9 @@ extension LingShuState {
             if let recordID {
                 markDispatchedBubbleAwaitingInput(recordID: recordID, question: question)
             } else {
-                chatMessages.append(.init(speaker: "灵枢", text: "⏸ 子任务「\(objective)」卡住,需要你定:\(question)", isUser: false, choices: LingShuChoiceParsing.parse(question)))
+                chatMessages.append(.init(speaker: "灵枢", text: "⏸ 等待前提:子任务「\(objective)」——\(cleanQuestion)", isUser: false, choices: LingShuChoiceParsing.parse(question) ?? LingShuChoiceParsing.parse(cleanQuestion)))
             }
-            briefMainThread("子任务「\(objective)」卡住,等待用户补充:\(question.prefix(160))")
+            briefMainThread("子任务「\(objective)」卡住,等待用户补充:\(cleanQuestion.prefix(160))")
         case .failed(let id, let objective, let summary):
             guard !isRoleAgentEventID(id) else { return }
             let recordID = agentSubTaskRecords[id]
@@ -108,11 +120,25 @@ extension LingShuState {
                 finishTaskRecord(recordID, status: status, summary: honest)
                 if status == .waitingForUser || status == .partial { blockedDispatchedRecordID = recordID }
             }
-            let head = status == .waitingForUser ? "⏸ 需要你配合" : (status == .partial ? "⚠️ 部分完成" : "⚠️ 未能自行收尾")
+            let head = status == .waitingForUser ? "⏸ 等待前提" : (status == .partial ? "⚠️ 部分完成" : "⚠️ 未能自行收尾")
             postOrchestratorChat(recordID: recordID, dispatched: honest, spawned: "\(head):子任务「\(objective)」——\(honest.prefix(220))")
             briefMainThread("子任务「\(objective)」\(head):\(honest.prefix(160))")
         case .interrupted(let id, let objective, let reason):
             guard !isRoleAgentEventID(id) else { return }
+            if LingShuModelServiceFailure.isNonRecoverableReason(reason) {
+                let message = LingShuModelServiceFailure.userFacingReason(reason)
+                let status = LingShuModelServiceFailure.decodeReason(reason)?.taskStatus ?? .failed
+                let recordID = agentSubTaskRecords[id]
+                if let recordID {
+                    appendTaskRecordMessage(recordID, actor: "模型通道", role: "不可自动恢复", kind: .warning, text: message)
+                    finishTaskRecord(recordID, status: status, summary: message)
+                    if status == .waitingForUser { blockedDispatchedRecordID = recordID }
+                }
+                let head = status == .waitingForUser ? "⏸ 需要处理模型配置" : "⚠️ 模型服务异常"
+                postOrchestratorChat(recordID: recordID, dispatched: message, spawned: "\(head):子任务「\(objective)」——\(message.prefix(220))")
+                briefMainThread("子任务「\(objective)」\(head):\(message.prefix(160))")
+                return
+            }
             // 网络/网关中断:**非失败**,标"已暂停",启动主动重试循环(它在主对话框统一展示重试进度,故这里不另发对话气泡)。
             _ = objective
             let recordID = agentSubTaskRecords[id]
@@ -225,15 +251,33 @@ extension LingShuState {
         await resumeSuspendedAutonomousIfNeeded()
     }
 
-    /// 续跑因断网挂起的**主会话**回合:从中断处 continueLoop() + 再过验收,把结果填回原气泡;
+    /// 续跑因断网挂起的**主会话**回合:按记录边界重放当前 prompt + 再过验收,把结果填回原气泡;
     /// 若续跑又因网络 .interrupted,则保留挂起态等下次重连。
     func resumeSuspendedMainTurnIfNeeded() async {
         guard let pending = suspendedMainTurn else { return }
         suspendedMainTurn = nil
         appendTrace(kind: .route, actor: "网络", title: "续跑主回合", detail: "网络恢复,接着把上一条跑完。")
+        // 共享主会话在网络中断时可能已经累积多条未收口输入。恢复时如果直接 continueLoop(),
+        // 模型会把多个暂停问答揉到同一个气泡里补答。这里重建主会话,按本记录边界重放当前 prompt:
+        // 保留长期记忆 seed,但丢弃断流期间的悬空轮次,确保一问一答不串台。
+        mainAgentSessionHolder = nil
         let session = await mainAgentSession()
-        var result = await session.continueLoop()
-        result = await verifyAndContinue(session: session, result: result, userRequest: pending.prompt, taskRecordID: pending.recordID)
+        await session.setTextDeltaSink { [weak self] delta in
+            await MainActor.run { self?.appendStreamingBubbleText(delta, to: pending.bubbleID) }
+        }
+        let recoveryGuidance = """
+        【网络恢复续跑边界】
+        这次只恢复当前这一条被暂停的请求,不要回答其它历史问题、排队问题或其它暂停记录。
+        当前请求如下:
+        \(pending.prompt)
+        """
+        let result = await driveAgentDelivery(
+            session: session,
+            prompt: pending.prompt,
+            guidance: recoveryGuidance,
+            taskRecordID: pending.recordID,
+            trustReplyClaim: false
+        )
         if case .interrupted = result {
             suspendedMainTurn = pending   // 还是连不上,继续挂起等下次重连
             return

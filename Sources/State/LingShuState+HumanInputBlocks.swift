@@ -17,9 +17,38 @@ extension LingShuState {
             return renderFormBlock(envelope.argumentsJSON, bubbleID: bubbleID, recordID: recordID, context: context, prompt: prompt, elapsed: elapsed)
         case "ask_choice":
             return renderChoiceBlock(envelope.argumentsJSON, bubbleID: bubbleID, recordID: recordID, context: context, prompt: prompt, elapsed: elapsed)
+        case "ask_user":
+            return renderUserQuestionBlock(envelope.argumentsJSON, bubbleID: bubbleID, recordID: recordID, context: context, prompt: prompt, elapsed: elapsed)
         default:
             return false
         }
+    }
+
+    private func renderUserQuestionBlock(_ argsJSON: String, bubbleID: UUID, recordID: String?, context: LingShuPendingHumanInputContext, prompt: String, elapsed: TimeInterval) -> Bool {
+        let question = Self.userQuestion(from: argsJSON)
+        let cleanQuestion = LingShuHumanInputEnvelope.userFacingText(
+            for: .init(tool: "ask_user", argumentsJSON: argsJSON)
+        )
+        let displayQuestion = question.isEmpty ? cleanQuestion : question
+        let choices = LingShuChoiceParsing.parse(displayQuestion)
+            ?? userPrerequisiteChoicePromptIfNeeded(resultText: displayQuestion, taskRecordID: recordID)
+        if let index = chatMessages.firstIndex(where: { $0.id == bubbleID }) {
+            concludeStreamedSpeech(for: bubbleID, streamedText: chatMessages[index].text)
+            chatMessages[index].text = "\(displayQuestion)\n\n⏱ 总用时 \(Self.formatElapsed(elapsed))"
+            chatMessages[index].isLoading = false
+            chatMessages[index].taskRecordID = recordID
+            chatMessages[index].choices = choices
+            chatMessages[index].form = nil
+            chatMessages[index].thinkingPreview = nil
+        }
+        if choices != nil { pendingChoiceContexts[bubbleID] = context }
+        pendingMainQuestionRecordID = recordID
+        let summary = "等待用户补充: \(displayQuestion)"
+        appendTaskRecordMessage(recordID, actor: "灵枢", role: "待用户", kind: .warning, text: summary)
+        appendTrace(kind: .warning, actor: "Agent循环", title: choices == nil ? "等待用户" : "等待授权/选择", detail: String(displayQuestion.prefix(80)))
+        finishTaskRecord(recordID, status: .waitingForUser, summary: summary)
+        rememberMainThreadTurn(prompt: prompt, reply: summary)
+        return true
     }
 
     private func renderFormBlock(_ argsJSON: String, bubbleID: UUID, recordID: String?, context: LingShuPendingHumanInputContext, prompt: String, elapsed: TimeInterval) -> Bool {
@@ -96,5 +125,16 @@ extension LingShuState {
         finishTaskRecord(recordID, status: .waitingForUser, summary: summary)
         rememberMainThreadTurn(prompt: prompt, reply: summary)
         return true
+    }
+
+    nonisolated static func userQuestion(from argsJSON: String) -> String {
+        guard let data = argsJSON.data(using: .utf8),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return "" }
+        return ((obj["question"] as? String)
+                ?? (obj["prompt"] as? String)
+                ?? (obj["message"] as? String)
+                ?? (obj["title"] as? String)
+                ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }
