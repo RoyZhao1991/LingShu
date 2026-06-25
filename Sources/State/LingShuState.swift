@@ -1168,7 +1168,10 @@ final class LingShuState: ObservableObject {
 
     @discardableResult
     func submitVoiceTranscript(_ text: String) -> String {
-        submitTextInput(text, source: .voice)
+        // 演示中语音=barge-in:**先暂停演示循环**(requestPauseForQA 含掐音频+置停止位)再走下游,
+        // 保证"先暂停、后掐音频"的顺序——否则先掐音频会让循环以为念完、抢翻下一页(实测翻页残留根因)。
+        if presentationController.isActive { presentationController.requestPauseForQA() }
+        return submitTextInput(text, source: .voice)
     }
 
     @discardableResult
