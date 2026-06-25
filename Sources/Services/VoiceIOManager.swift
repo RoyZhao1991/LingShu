@@ -161,10 +161,10 @@ final class VoiceIOManager: ObservableObject {
     var streamingSpeechEnded = false     // 已收到结束信号(没有更多句子)
     var streamingSpeechFirstSampleRate: Double = 0           // 首段采样率;后续段不一致则跳过(防音高/噪音)
     var streamingSpeechConfig: (provider: LingShuSpeechOutputProviderDescriptor, endpoint: String, apiKey: String, persona: LingShuSpeechPersona)?
-    /// **演示翻页预合成槽**:当前页念时,后台把下一页讲稿各段 WAV 先合成好;下一页发声命中即时起播,
-    /// 消除翻页「处理中」停顿(云端 TTS 短句也要 3-4s 首包)。逻辑在 VoiceIOManager+PresentationPrefetch.swift。
-    var presentationPrefetchText: String?
-    var presentationPrefetchTasks: [Task<Data, Error>]?
+    /// **演示翻页预合成缓存**(按讲稿文本 key → 全部分段 + 已预合成的前几段任务):当前页念时,后台把下一页**前几段**
+    /// WAV 先合成好;下一页发声命中即时起播(其余段播放时按窗口续取),消除翻页「处理中」停顿(云端 TTS 短句也要 3-4s 首包)。
+    /// 只预合成前几段=并发可控、长讲稿也不爆。逻辑在 VoiceIOManager+PresentationPrefetch.swift。
+    var presentationPrefetch: [String: (segs: [String], leadTasks: [Task<Data, Error>])] = [:]
     let bundledRuntimeConfig = LingShuBundledRuntimeConfig()
     let credentialStore = LingShuCredentialStore()
 
