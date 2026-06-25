@@ -941,6 +941,7 @@ final class LingShuState: ObservableObject {
     /// 故全屏演示中任何输入=用户在夺回控制(计算机控制类占屏因灵枢自身会动鼠标,不走此暂停)。
     func pauseActiveFlow(reason: String) {
         lingShuControlLog("flow/pause: \(reason)")
+        if presentationController.isActive { presentationController.requestPauseForQA() }   // 「演示与答疑」一并暂停(掐音频+不再狂翻)
         batchInterruptRequested = true     // 停 run_steps 自动翻页/连续执行
         interruptSpeechOutput?()            // 停当前朗读
         missionStatus = "已暂停(检测到你在手动操作)。点「继续演示」接着讲,或直接下新指令。"

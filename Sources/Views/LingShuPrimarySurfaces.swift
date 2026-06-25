@@ -49,17 +49,11 @@ struct LingShuRootView: View {
         ) { manualTakeover = true })
         .onChange(of: manualTakeover) { _, on in
             if on {
-                if state.presentationController.isActive {
-                    // 「演示与答疑」在跑:打字/动鼠标=答疑交互,不是夺回控制。**暂停念稿 + 退全屏**(露出聊天框好打字提问,
-                    // 别盖过用户、别一路翻页);问题由 handlePresentationInputIfNeeded 答完 resume 自动重进全屏。复位监听器以便后续再问。
-                    state.presentationController.requestPauseForQA()
-                    _ = state.previewController.setSlideshow(false)
-                    manualTakeover = false
-                } else {
-                    _ = state.previewController.setSlideshow(false)        // 先立刻退全屏,把屏幕还给用户
-                    state.pauseActiveFlow(reason: "全屏演示中检测到手动操作(动鼠标/键盘)")  // 真停:批量+TTS 立即暂停(不只退全屏,不再后台偷偷推进)
-                    presentManualTakeoverDecision()
-                }
+                // 键鼠物理接管(自主演示时用户正常用语音、不碰键鼠;真碰了=夺回控制)→ 退全屏 + 暂停 + 弹框。
+                // pauseActiveFlow 内已让「演示与答疑」控制器一并暂停(不再被掐音频后狂翻页)。
+                _ = state.previewController.setSlideshow(false)        // 先立刻退全屏,把屏幕还给用户
+                state.pauseActiveFlow(reason: "全屏演示中检测到手动操作(动鼠标/键盘)")
+                presentManualTakeoverDecision()
             }
         }
         .onAppear {

@@ -145,6 +145,12 @@ extension LingShuState {
             appendTrace(kind: .system, actor: "灵枢", title: "暂停中·忽略输入", detail: String(prompt.prefix(24)))
             return ""
         }
+        // 「演示与答疑」在跑:**语音提问=实时答疑**,走我的演示控制器(暂停念稿→答→续,留全屏、本体在位),
+        // 不甩给大脑、不走旧 run_steps 框架(根治"打断翻到最后一页+不回答")。
+        if presentationController.isActive {
+            _ = handlePresentationInputIfNeeded(prompt)
+            return ""
+        }
         // **"退出演示/关闭演示"= 确定性关掉演示窗(2026-06-19 修"说退出演示却没退")**:实测 DeepSeek 口头答应却不调
         // present_fullscreen(false),故命中显式退出命令 + 预览正开着 → 不走大脑,直接停批量/掐TTS/关预览/抑制重弹 + 出声确认。
         if previewController.isPresented, LingShuNestedStagePlanner.isExitPresentationCommand(prompt) {
