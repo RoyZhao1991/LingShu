@@ -159,12 +159,26 @@ final class LingShuPreviewController: ObservableObject {
         return "已\(lines >= 0 ? "向下" : "向上")滚动 \(max(1, n)) 行。"
     }
 
+    /// 只 resume 一次的守卫(带锁、可 Sendable):正常回调 / 超时兜底谁先到谁 resume,另一个空转,杜绝双 resume 崩溃。
+    private final class LingShuResumeOnce: @unchecked Sendable {
+        private var done = false
+        private let lock = NSLock()
+        func claim() -> Bool { lock.lock(); defer { lock.unlock() }; if done { return false }; done = true; return true }
+    }
+
     /// HTML 整页可见正文(`document.body.innerText`),供大脑一次取全照着讲(免逐屏 screen_capture)。仅 isHTML 有效。
+    /// **超时护栏(2026-06-25)**:生成的网页若带死循环/卡死 JS,WebKit 内容进程可能卡住→`evaluateJavaScript` 回调
+    /// 永不触发→`await` 永挂→把演示/生成流程一并拖死(实测「生成并演示」卡死的一类根因)。8s 取不到就放行返回空,
+    /// 那页以图为主看着讲即可,**绝不让不可信网页内容挂死主流程**。
     func htmlInnerText() async -> String {
         guard isHTML, let wv = webView else { return "" }
-        return await withCheckedContinuation { cont in
+        let resume = LingShuResumeOnce()
+        return await withCheckedContinuation { (cont: CheckedContinuation<String, Never>) in
             wv.evaluateJavaScript("document.body.innerText") { result, _ in
-                cont.resume(returning: (result as? String) ?? "")
+                if resume.claim() { cont.resume(returning: (result as? String) ?? "") }
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 8) {   // 8s 取不到(网页 JS 卡死)就放行,绝不挂死流程
+                if resume.claim() { cont.resume(returning: "") }
             }
         }
     }
