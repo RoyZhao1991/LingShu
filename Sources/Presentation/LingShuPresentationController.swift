@@ -22,6 +22,8 @@ final class LingShuPresentationController: ObservableObject {
         var speak: @MainActor (_ text: String) async -> Void
         /// **预合成下一页讲稿**(可选):当前页念时后台先把下一页 TTS 合成好,翻页即时起播、不再现等首包。
         var prefetchNarration: (@MainActor (_ text: String) -> Void)? = nil
+        /// **演示元提示**(可选,篇间「说继续切下一篇」/ 全部收尾):与逐页讲稿 speak 区分,出声 + 进聊天。
+        var announce: (@MainActor (_ text: String) async -> Void)? = nil
         /// 进/退全屏演示。
         var setFullscreen: @MainActor (_ on: Bool) async -> Void
         /// 落一条状态/旁白(trace),供观测。
@@ -142,8 +144,11 @@ final class LingShuPresentationController: ObservableObject {
                 phase = .awaitingNextDoc
                 let (cur, total) = queue.position
                 hooks.note("一篇演完", "「\(script.title)」演示完毕(\(cur)/\(total) 篇);等你确认后切下一篇。")
+                // **出声告诉用户**(否则篇间静默,用户不知道要说「继续」=串行演示像卡住了)。
+                await hooks.announce?("这一篇就讲到这儿,\(total) 篇里的第 \(cur) 篇。你说「继续」我接着演下一篇。")
                 return
             } else {
+                await hooks.announce?("好,演示就到这儿,全部讲完了。还有想细看的随时跟我说。")   // 出声收尾(别静默退场)
                 phase = .finished
                 await hooks.setFullscreen(false)
                 hooks.note("全部演完", "演示队列全部完成。")

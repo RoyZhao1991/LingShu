@@ -45,6 +45,14 @@ extension LingShuState {
                 await voice.awaitPlaybackDone(maxSeconds: cap)
             },
             prefetchNarration: { [weak self] text in self?.voiceManager?.prefetchSpeech(text) },
+            announce: { [weak self] text in
+                guard let self else { return }
+                self.appendPresentationLine(text)
+                guard let voice = self.voiceManager else { return }
+                voice.speakPresentationNarration(text)
+                self.recordSpokenLine(text)
+                await voice.awaitPlaybackDone(maxSeconds: 60)
+            },
             setFullscreen: { [weak self] on in _ = self?.previewController.setSlideshow(on) },
             note: { [weak self] title, detail in
                 self?.appendTrace(kind: .system, actor: "演示与答疑", title: title, detail: detail)
