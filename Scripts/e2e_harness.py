@@ -149,6 +149,13 @@ if __name__ == "__main__":
             ("A5","A-主线程规划", "dispatch", "@Codex 写一个 Python 罗马数字转整数函数 roman.py(roman_to_int)并写 pytest 测试", 480, "Codex", "roman.py"),
             ("B2","B-子线程续接", "followup", "@Codex 写一个 Python 单向链表 linkedlist.py(append/find/delete)并写 pytest 测试", "加一个 reverse() 反转方法并补测试", 540, "Codex"),
         ],
+        # 第五批:数据处理/结构变换 + 概念直答 + 退订型续接
+        "batch5": [
+            ("A11","A-主线程规划", "dispatch", "@Codex 写一个 Python CSV 解析函数 csvparse.py(parse(text) 返回字典列表,正确处理带引号和逗号的字段)并写 pytest 测试", 600, "Codex", "csvparse.py"),
+            ("A12","A-主线程规划", "direct",   "Python 的 list 和 tuple 有什么区别?", 90),
+            ("A13","A-主线程规划", "dispatch", "@Codex 写一个 Python 嵌套字典扁平化函数 flatten.py(flatten(d) 用点号连接键)并写 pytest 测试", 540, "Codex", "flatten.py"),
+            ("B5","B-子线程续接", "followup", "@Codex 写一个 Python 发布订阅事件总线 eventbus.py(subscribe/publish)并写 pytest 测试", "加一个 unsubscribe 退订方法并补测试", 600, "Codex"),
+        ],
         # 第四批:数据处理/校验类 + 比较推理直答 + 精化型续接
         "batch4": [
             ("A9","A-主线程规划", "dispatch", "@Codex 写一个 Python 统计文本词频函数 wordfreq.py(top_words(text,n) 返回前n高频词)并写 pytest 测试", 540, "Codex", "wordfreq.py"),
