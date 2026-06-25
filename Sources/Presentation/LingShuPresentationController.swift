@@ -105,6 +105,8 @@ final class LingShuPresentationController: ObservableObject {
                 if stopRequested || Task.isCancelled { phase = .finished; return }   // speak 被掐后立刻停,不 advance/念下一拍
                 _ = script.advance()
                 queue.updateCurrent(script)
+                // 注:被答疑打断(requestPauseForQA 置 pauseRequested)→ 顶部 pauseRequested 检查会在翻一页后暂停,
+                // 不再狂翻到底(根治"打断后一路翻到最后一页";真正的修复在 PrimarySurfaces 手动接管→requestPauseForQA)。
             }
             // 这一篇念完了。
             if queue.hasNext {
