@@ -77,12 +77,13 @@ final class LingShuPresentationController: ObservableObject {
         defer { playing = false }
         pauseRequested = false
         phase = .playing
-        await hooks.setFullscreen(true)
 
         while var script = queue.currentScript {
-            // 演这篇前先把它显示出来(多文档连播必需;同一篇续演不重复开窗)。
+            // 演这篇前先把它显示出来(多文档连播必需;同一篇续演不重复开窗),**open 之后再进全屏单页模式**——
+            // 否则 open() 会把 slideshow 重置成连续滚动,goto 只滚动不翻页(实测 bug 2026-06-25)。
             if shownDocumentPath != script.documentPath {
                 await hooks.showDocument(script.documentPath)
+                await hooks.setFullscreen(true)
                 shownDocumentPath = script.documentPath
             }
             // 念当前脚本剩余的拍。
