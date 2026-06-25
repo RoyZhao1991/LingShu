@@ -20,11 +20,11 @@ extension LingShuState {
                 return (0..<n).map { self.previewController.pageText($0) }
             },
             showDocument: { [weak self] path in _ = await self?.previewController.open(path: path) },
-            narrate: { [weak self] verbatim, n, total, title in
+            narrate: { [weak self] verbatim, n, total, title, pace in
                 guard let self else { return verbatim }
                 let clean = verbatim.trimmingCharacters(in: .whitespacesAndNewlines)
                 guard !clean.isEmpty else { return "（这一页以图为主，我看着画面讲。）" }
-                let sys = "你是演示讲稿撰写者。把给定这一页的真实内容,改写成一段**口语化、可直接念出来**的讲解词(约60-160字),像真人当面讲这一页:自然、抓重点、不照本宣科逐字念。**只输出讲解词本身**,不要任何前后缀/页码/「这一页」之类开头,**绝不编造页面没有的事实**。"
+                let sys = "你是演示讲稿撰写者。把给定这一页的真实内容,改写成一段**口语化、可直接念出来**的讲解词(\(pace.narrationGuidance)),像真人当面讲这一页:自然、抓重点、不照本宣科逐字念。**只输出讲解词本身**,不要任何前后缀/页码/「这一页」之类开头,**绝不编造页面没有的事实**。"
                 let session = LingShuAgentSession(id: "narrate-\(UUID().uuidString.prefix(5))", system: sys, tools: [],
                                                   model: self.controlPlaneModelAdapter(.deliveryComposer), maxTurns: 1)
                 let r = await session.send("文档《\(title)》第 \(n)/\(total) 页的内容:\n\(String(clean.prefix(1200)))")
@@ -152,6 +152,8 @@ extension LingShuState {
                     await c.stop(); self.appendPresentationLine("好,停下了,需要再演随时叫我。")
                 case .pause:
                     self.appendPresentationLine("好,先停在这一页,你说「继续」我接着讲。")   // 停住保持,等「继续」
+                case .pace(let p):
+                    c.setPace(p); self.appendPresentationLine("好,后面我\(p.label)讲。"); await c.resume()   // 切档→续演,后续页按新深度
                 case .question:
                     await self.speakPresentationAnswer(answer)
                     if c.phase == .pausedForQA {
@@ -173,8 +175,8 @@ extension LingShuState {
         }
     }
 
-    /// 听众这句话的语义意图(暂停/继续/停止/提问)——由模型按语义判,不靠关键词枚举。
-    enum PresentationUtteranceIntent { case pause, resume, stop, question }
+    /// 听众这句话的语义意图(暂停/继续/停止/换讲解档/提问)——由模型按语义判,不靠关键词枚举。
+    enum PresentationUtteranceIntent { case pause, resume, stop, question, pace(LingShuPresentationPace) }
 
     /// **模型按语义分类**听众这句话 + 若提问给出回答(一次 LLM 搞定)。失败才回退关键词兜底。
     /// 这样「先暂时停一下」「稍微停会儿」「咱们接着」任何说法都能判对,而不是写死一串词。
@@ -187,6 +189,7 @@ extension LingShuState {
         - 想让你停一下、待会再继续(如「先暂时停一下」「稍微停会儿」「等我一下」)→ {"intent":"pause"}
         - 暂停后想接着往下讲(如「继续」「咱们接着」「往下说吧」)→ {"intent":"resume"}
         - 想结束/退出/不看了(如「不演了」「停了吧」「够了」「先到这」)→ {"intent":"stop"}
+        - 想**换讲解节奏/深度**(如「后面快速讲」「简要过一下就行」「概要说说剩下的」「详细讲」「恢复正常速度」)→ {"intent":"pace","pace":"detailed"或"brief"或"overview"}(快速=brief、概要=overview、详细/正常=detailed)
         - 对内容提问、或说别的话 → {"intent":"question","answer":"结合当前这页内容、像真人当面口语简洁回答(40-140字),不复述整页、不编造页面没有的事"}
         \(context)
         """
@@ -199,6 +202,9 @@ extension LingShuState {
         case "pause":  return (.pause, "")
         case "resume": return (.resume, "")
         case "stop":   return (.stop, "")
+        case "pace":
+            let p = LingShuPresentationPace(rawValue: (Self.jsonField(clean, "pace") ?? "").lowercased()) ?? .brief
+            return (.pace(p), "")
         case "question":
             let a = (Self.jsonField(clean, "answer") ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
             return (.question, a.isEmpty ? "这个问题我先记下,演示后细聊。" : a)

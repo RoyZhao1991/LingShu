@@ -10,18 +10,37 @@ import Foundation
 /// - **多文档连播**:`LingShuPresentationQueue` 是文档队列,一篇演完→用户确认→切下一篇(像多视频连播)。
 /// - **通用**:任何文档(PPT/PDF/Word/HTML…)都走这套,不是 PPT 定制。
 
+/// 讲解档(像视频倍速,但调的是**讲解深度**):用户可中途语音切换,后续页按新档重生成讲稿。
+enum LingShuPresentationPace: String, Codable, Sendable, Equatable, CaseIterable {
+    case detailed   // 详细(默认):约60-160字,展开讲清
+    case brief      // 快速:约30-50字,只抓核心、跳细节
+    case overview   // 概要:约15-25字,一句话带过主旨
+
+    var label: String { switch self { case .detailed: "详细"; case .brief: "快速"; case .overview: "概要" } }
+    /// 喂给讲稿生成器的深度要求。
+    var narrationGuidance: String {
+        switch self {
+        case .detailed: return "约60-160字,自然展开、把这页讲清楚"
+        case .brief:    return "约30-50字,只讲这页的核心要点、跳过细节,语气利落"
+        case .overview: return "约15-25字,一句话带过这页主旨即可,快速过"
+        }
+    }
+}
+
 /// 一个演示节拍 = 一页:该页真实内容 + 预生成讲稿。念 narration,verbatim 用于防漂移/答疑取证。
 struct LingShuPresentationBeat: Codable, Sendable, Equatable {
     let pageIndex: Int        // 0-based,对应预览页索引
     let verbatim: String      // 该页真实文字(从 PDF/正文抽,权威,防大模型凭记忆瞎讲)
-    var narration: String     // 预生成讲稿(演示时念这个)
+    var narration: String     // 当前讲稿(演示时念这个)
+    var narrationPace: LingShuPresentationPace   // 当前讲稿是按哪个档生成的(懒重生成:档不匹配才重讲)
 
     var pageNumber: Int { pageIndex + 1 }   // 1-based 显示页号
 
-    init(pageIndex: Int, verbatim: String, narration: String) {
+    init(pageIndex: Int, verbatim: String, narration: String, narrationPace: LingShuPresentationPace = .detailed) {
         self.pageIndex = pageIndex
         self.verbatim = verbatim
         self.narration = narration
+        self.narrationPace = narrationPace
     }
 }
 
@@ -73,6 +92,13 @@ struct LingShuPresentationScript: Codable, Sendable, Equatable, Identifiable {
     mutating func setNarration(_ text: String, forPageIndex pageIndex: Int) {
         guard let i = beats.firstIndex(where: { $0.pageIndex == pageIndex }) else { return }
         beats[i].narration = text
+    }
+
+    /// 把**当前播放头那页**的讲稿换成按某档重生成的版本(懒重生成用)。
+    mutating func setCurrentNarration(_ text: String, pace: LingShuPresentationPace) {
+        guard beats.indices.contains(playhead) else { return }
+        beats[playhead].narration = text
+        beats[playhead].narrationPace = pace
     }
 }
 

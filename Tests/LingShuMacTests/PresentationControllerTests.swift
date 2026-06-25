@@ -11,6 +11,7 @@ final class PresentationControllerTests: XCTestCase {
         var fullscreen: [Bool] = []
         var shownDocs: [String] = []
         var interrupts = 0
+        var narrateCalls: [LingShuPresentationPace] = []   // 每次生成讲稿用的档(验证切档重生成)
         var stopAfterSpeak: Int?
         var pauseAfterSpeak: Int?
         weak var controller: LingShuPresentationController?
@@ -22,7 +23,7 @@ final class PresentationControllerTests: XCTestCase {
         c.install(.init(
             loadPages: { pages[$0] ?? [] },
             showDocument: { rec.shownDocs.append($0) },
-            narrate: { v, _, _, _ in "讲:\(v)" },
+            narrate: { v, _, _, _, p in rec.narrateCalls.append(p); return "讲:\(v)" },
             navigate: { rec.navigated.append($0) },
             speak: { t in
                 rec.spoken.append(t)
@@ -114,5 +115,16 @@ final class PresentationControllerTests: XCTestCase {
         XCTAssertEqual(rec.spoken, ["讲:p0"], "停止后**不再念下一页**——根治取消后音频还在播")
         XCTAssertEqual(c.phase, .finished)
         XCTAssertGreaterThanOrEqual(rec.interrupts, 1, "停止时掐了当前 TTS")
+    }
+
+    func testSetPaceRegeneratesSubsequentBeatsLazily() async {
+        let rec = Recorder()
+        let c = make(["/a.pdf": ["p0", "p1", "p2"]], rec)
+        await c.buildQueue(documentPaths: ["/a.pdf"])
+        XCTAssertEqual(rec.narrateCalls, [.detailed, .detailed, .detailed], "建队列时按默认详细档逐页生成")
+        c.setPace(.brief)                       // 切快速档
+        XCTAssertEqual(c.pace, .brief)
+        await c.play()                          // 播放时每页 narrationPace(.detailed)!=pace(.brief) → 按快速档重生成
+        XCTAssertEqual(Array(rec.narrateCalls.suffix(3)), [.brief, .brief, .brief], "切快速档后,后续每页都按快速档重生成讲稿")
     }
 }

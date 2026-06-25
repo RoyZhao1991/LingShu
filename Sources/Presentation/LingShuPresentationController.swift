@@ -14,8 +14,8 @@ final class LingShuPresentationController: ObservableObject {
         var loadPages: @MainActor (_ path: String) async -> [String]
         /// 把某篇文档**显示出来**(演示该篇前调,保证窗里是当前这篇——多文档连播必需)。
         var showDocument: @MainActor (_ path: String) async -> Void
-        /// 据一页正文生成该页讲稿(控制面 LLM 一次性,预生成)。
-        var narrate: @MainActor (_ verbatim: String, _ pageNumber: Int, _ total: Int, _ title: String) async -> String
+        /// 据一页正文 + **讲解档**生成该页讲稿(控制面 LLM)。pace 决定深度(详细/快速/概要)。
+        var narrate: @MainActor (_ verbatim: String, _ pageNumber: Int, _ total: Int, _ title: String, _ pace: LingShuPresentationPace) async -> String
         /// 把预览翻到某页(0-based)。
         var navigate: @MainActor (_ pageIndex: Int) async -> Void
         /// 念一段讲稿(**阻塞到念完**,这样答疑能在两拍之间插入)。
@@ -43,8 +43,16 @@ final class LingShuPresentationController: ObservableObject {
     private var playing = false
     /// 当前已显示的文档(避免续演同一篇时重复开窗、回到第0页)。
     private var shownDocumentPath: String?
+    /// **当前讲解档**(详细/快速/概要)。用户中途切换 → 后续页按新档**懒重生成**讲稿(只重讲将念的页)。
+    @Published private(set) var pace: LingShuPresentationPace = .detailed
 
     func install(_ hooks: Hooks) { self.hooks = hooks }
+
+    /// 中途切换讲解档(语音"快速讲/概要过/详细讲"触发)。后续页 play 循环按新档懒重生成。
+    func setPace(_ p: LingShuPresentationPace) {
+        pace = p
+        hooks?.note("讲解档切换", "后续按「\(p.label)」讲(后面的页会用这个深度重生成讲稿)。")
+    }
 
     // MARK: - 1) 通读 + 生成脚本(预生成,演示中不再临时理解)
 
@@ -63,8 +71,8 @@ final class LingShuPresentationController: ObservableObject {
             let title = (path as NSString).lastPathComponent
             var beats: [LingShuPresentationBeat] = []
             for (i, verbatim) in pages.enumerated() {
-                let narration = await hooks.narrate(verbatim, i + 1, pages.count, title)
-                beats.append(.init(pageIndex: i, verbatim: verbatim, narration: narration))
+                let narration = await hooks.narrate(verbatim, i + 1, pages.count, title, pace)
+                beats.append(.init(pageIndex: i, verbatim: verbatim, narration: narration, narrationPace: pace))
             }
             scripts.append(.init(documentPath: path, title: title, beats: beats))
         }
@@ -102,7 +110,14 @@ final class LingShuPresentationController: ObservableObject {
                     return
                 }
                 await hooks.navigate(beat.pageIndex)
-                await hooks.speak(beat.narration)
+                // **据当前讲解档懒重生成本页讲稿**(只在档不匹配时重讲——切档后从这页起按新深度讲)。
+                var narration = beat.narration
+                if beat.narrationPace != pace {
+                    narration = await hooks.narrate(beat.verbatim, beat.pageNumber, script.beatCount, script.title, pace)
+                    script.setCurrentNarration(narration, pace: pace)
+                    queue.updateCurrent(script)
+                }
+                await hooks.speak(narration)
                 if stopRequested || Task.isCancelled { phase = .finished; return }   // speak 被掐后立刻停,不 advance/念下一拍
                 _ = script.advance()
                 queue.updateCurrent(script)
