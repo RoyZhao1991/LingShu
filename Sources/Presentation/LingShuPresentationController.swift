@@ -20,6 +20,8 @@ final class LingShuPresentationController: ObservableObject {
         var navigate: @MainActor (_ pageIndex: Int) async -> Void
         /// 念一段讲稿(**阻塞到念完**,这样答疑能在两拍之间插入)。
         var speak: @MainActor (_ text: String) async -> Void
+        /// **预合成下一页讲稿**(可选):当前页念时后台先把下一页 TTS 合成好,翻页即时起播、不再现等首包。
+        var prefetchNarration: (@MainActor (_ text: String) -> Void)? = nil
         /// 进/退全屏演示。
         var setFullscreen: @MainActor (_ on: Bool) async -> Void
         /// 落一条状态/旁白(trace),供观测。
@@ -117,8 +119,19 @@ final class LingShuPresentationController: ObservableObject {
                     script.setCurrentNarration(narration, pace: pace)
                     queue.updateCurrent(script)
                 }
+                // **念当前页之前,先把下一页讲稿丢去后台预合成**——当前页念的几秒里下一页 TTS 就绪,
+                // 翻到下一页即时起播,消除「翻页卡进处理中几秒」(仅当下一页不需按新档重生成时预取,否则文本会变、白取)。
+                if let next = script.nextBeat, next.narrationPace == pace {
+                    hooks.prefetchNarration?(next.narration)
+                }
                 await hooks.speak(narration)
                 if stopRequested || Task.isCancelled { phase = .finished; return }   // speak 被掐后立刻停,不 advance/念下一拍
+                if pauseRequested {   // **暂停发生在念这页途中 → 停在这页(不前进)**,继续时从这页接着念(根治"继续没从暂停位置开始")
+                    queue.updateCurrent(script)
+                    phase = .pausedForQA
+                    hooks.note("演示暂停", "停在第\(beat.pageNumber)页;继续时从这页接着念。")
+                    return
+                }
                 _ = script.advance()
                 queue.updateCurrent(script)
                 // 注:被答疑打断(requestPauseForQA 置 pauseRequested)→ 顶部 pauseRequested 检查会在翻一页后暂停,

@@ -11,6 +11,7 @@ final class PresentationControllerTests: XCTestCase {
         var fullscreen: [Bool] = []
         var shownDocs: [String] = []
         var interrupts = 0
+        var prefetched: [String] = []                      // 预合成下一页的调用(验证翻页前预取)
         var narrateCalls: [LingShuPresentationPace] = []   // 每次生成讲稿用的档(验证切档重生成)
         var stopAfterSpeak: Int?
         var pauseAfterSpeak: Int?
@@ -30,6 +31,7 @@ final class PresentationControllerTests: XCTestCase {
                 if rec.spoken.count == rec.pauseAfterSpeak { rec.controller?.requestPauseForQA() }
                 if rec.spoken.count == rec.stopAfterSpeak { rec.controller?.requestStop() }
             },
+            prefetchNarration: { rec.prefetched.append($0) },
             setFullscreen: { rec.fullscreen.append($0) },
             note: { _, _ in },
             interruptAudio: { rec.interrupts += 1 }
@@ -63,9 +65,9 @@ final class PresentationControllerTests: XCTestCase {
         let c = make(["/a.pdf": ["p0", "p1", "p2"]], rec)
         await c.buildQueue(documentPaths: ["/a.pdf"])
         await c.play()
-        XCTAssertEqual(rec.spoken, ["讲:p0"], "停在第2拍前,只念了第1页")
+        XCTAssertEqual(rec.spoken, ["讲:p0"], "停在当前页,没继续往后念")
         XCTAssertEqual(c.phase, .pausedForQA)
-        XCTAssertEqual(c.queue.currentScript?.currentBeat?.pageIndex, 1, "播放头停在第2页,不丢位")
+        XCTAssertEqual(c.queue.currentScript?.currentBeat?.pageIndex, 0, "**停在当前页(第1页)不前进**,继续时从这页接着念")
     }
 
     func testResumeContinuesFromPause() async {
@@ -75,8 +77,8 @@ final class PresentationControllerTests: XCTestCase {
         await c.buildQueue(documentPaths: ["/a.pdf"])
         await c.play()
         rec.pauseAfterSpeak = nil                    // 答疑结束,不再暂停
-        await c.resume()                             // 从当前位置(第2页)续
-        XCTAssertEqual(rec.spoken, ["讲:p0", "讲:p1", "讲:p2"])
+        await c.resume()                             // 从暂停页(第1页)续:重念当前页再往后
+        XCTAssertEqual(rec.spoken, ["讲:p0", "讲:p0", "讲:p1", "讲:p2"], "从暂停页p0接着念(p0被打断没念完→重念),再往后")
         XCTAssertEqual(c.phase, .finished)
     }
 
@@ -115,6 +117,15 @@ final class PresentationControllerTests: XCTestCase {
         XCTAssertEqual(rec.spoken, ["讲:p0"], "停止后**不再念下一页**——根治取消后音频还在播")
         XCTAssertEqual(c.phase, .finished)
         XCTAssertGreaterThanOrEqual(rec.interrupts, 1, "停止时掐了当前 TTS")
+    }
+
+    func testPrefetchesNextPageDuringPlayback() async {
+        let rec = Recorder()
+        let c = make(["/a.pdf": ["p0", "p1", "p2"]], rec)
+        await c.buildQueue(documentPaths: ["/a.pdf"])
+        await c.play()
+        // 念每页前预取下一页:念p0时预取p1、念p1时预取p2;最后一页无下一页不预取。
+        XCTAssertEqual(rec.prefetched, ["讲:p1", "讲:p2"], "翻页前逐页预合成下一页(最后一页除外)")
     }
 
     func testSetPaceRegeneratesSubsequentBeatsLazily() async {

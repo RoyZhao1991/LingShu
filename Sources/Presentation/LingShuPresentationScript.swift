@@ -57,6 +57,8 @@ struct LingShuPresentationScript: Codable, Sendable, Equatable, Identifiable {
     var beatCount: Int { beats.count }
     var isComplete: Bool { playhead >= beats.count }
     var currentBeat: LingShuPresentationBeat? { beats.indices.contains(playhead) ? beats[playhead] : nil }
+    /// 下一拍(供翻页前**预合成下一页**;无下一拍=本篇最后一页返回 nil)。
+    var nextBeat: LingShuPresentationBeat? { beats.indices.contains(playhead + 1) ? beats[playhead + 1] : nil }
 
     /// 进度(0…1),供「文本即进度条」渲染。空脚本视为已完成=1。
     var progress: Double {

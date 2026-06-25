@@ -37,10 +37,11 @@ extension LingShuState {
             navigate: { [weak self] idx in _ = self?.previewController.goto(idx) },
             speak: { [weak self] text in
                 guard let self, let voice = self.voiceManager else { return }
-                voice.speak(text)
+                voice.speakPresentationNarration(text)   // 命中下一页预合成则即时起播,消翻页停顿
                 self.recordSpokenLine(text)
                 await voice.awaitPlaybackDone()
             },
+            prefetchNarration: { [weak self] text in self?.voiceManager?.prefetchSpeech(text) },
             setFullscreen: { [weak self] on in _ = self?.previewController.setSlideshow(on) },
             note: { [weak self] title, detail in
                 self?.appendTrace(kind: .system, actor: "演示与答疑", title: title, detail: detail)
@@ -75,6 +76,12 @@ extension LingShuState {
             enteringViaManagedHandoff = true   // 本体立即出现,免入场仪式盖住演示开场
             goLiveAsStandingPerson()
         }
+        // **重演/新演前先彻底停掉在跑的老演示**(取消播放任务 + 停循环 + 清 shownDocumentPath)。
+        // 否则老 play 循环会在下面 buildQueue 通读生成讲稿那十几秒里**继续推画面**,而新演示从第1页念
+        // → 画面跑到前面、语音却在第1页 = 脱节(2026-06-25 用户实测 bug)。必须在 buildQueue 之前停。
+        presentationPlaybackTask?.cancel()
+        presentationPlaybackTask = nil
+        presentationController.requestStop()
         installPresentationHooks()
         await presentationController.buildQueue(documentPaths: paths)
         let n = presentationController.queue.count
@@ -93,6 +100,7 @@ extension LingShuState {
         presentationPlaybackTask?.cancel()
         presentationPlaybackTask = nil
         presentationController.requestStop()
+        voiceManager?.cancelPrefetchedSpeech()   // 清演示翻页预合成槽,别让在飞的合成空耗
         appendTrace(kind: .system, actor: "演示与答疑", title: "停止演示", detail: "取消/退出 → 掐音频 + 停止照稿念。")
     }
 

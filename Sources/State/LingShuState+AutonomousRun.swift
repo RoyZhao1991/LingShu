@@ -78,6 +78,9 @@ extension LingShuState {
 
     func pauseAutonomousRun() {
         guard autonomousRun.phase == .running else { return }
+        // **演示在播 → 把演示 play 循环也暂停**(停在当前页,继续时从这页接着念)。否则只停了自主循环+掐一下 TTS,
+        // 而我的 presentationController.play 循环还在后台推页/念稿,UI 看着「已暂停」声音/画面却继续(2026-06-25 用户实测 bug)。
+        if presentationController.isActive { presentationController.requestPauseForQA() }
         autonomousRunTask?.cancel()
         autonomousRunTask = nil
         // **暂停=立刻安静(2026-06-20 修"已暂停但音频还在输出")**:cancel 任务只停模型循环,**正在播/排队的 TTS 不会因此停**;
@@ -104,6 +107,14 @@ extension LingShuState {
             appendTrace(kind: .warning, actor: "独立运行", title: "等待答复", detail: autonomousPendingQuestion ?? "")
             return
         }
+        // **演示被暂停 → 从暂停页继续演示**(不是去续自主循环)。否则「继续」按钮不会让演示接着念(2026-06-25 bug)。
+        if presentationController.phase == .pausedForQA {
+            enterAutonomousRunningState(statusLine: "继续演示。")
+            appendTrace(kind: .runtime, actor: "演示与答疑", title: "继续演示", detail: "从暂停页接着念。")
+            presentationPlaybackTask?.cancel()
+            presentationPlaybackTask = Task { @MainActor [weak self] in await self?.presentationController.resume() }
+            return
+        }
         enterAutonomousRunningState(statusLine: "已从暂停恢复，继续推进。")
         appendTrace(kind: .runtime, actor: "独立运行", title: "继续运行", detail: "续接已持有的执行会话。")
         launchAutonomousExecution(continuing: autonomousSessionHolder != nil)
@@ -111,6 +122,9 @@ extension LingShuState {
 
     func stopAutonomousRun() {
         guard autonomousRun.phase != .idle else { return }
+        // **退出时也彻底停演示**:否则只关了预览窗、我的 presentationController play 循环还在后台念稿/推页,
+        // 且 presentation 仍 isActive → 之后再发「演示」会被确定性路由挡掉、转给大脑追问(2026-06-25 实测)。
+        stopPresentationIfActive()
         let previousObjective = autonomousRun.objective
         autonomousRunTask?.cancel()
         autonomousRunTask = nil
