@@ -17,12 +17,13 @@ enum LingShuPresentationPace: String, Codable, Sendable, Equatable, CaseIterable
     case overview   // 概要:约15-25字,一句话带过主旨
 
     var label: String { switch self { case .detailed: "详细"; case .brief: "快速"; case .overview: "概要" } }
-    /// 喂给讲稿生成器的深度要求(写狠一点强制档位差异——实测"约X字"太软、模型偏保守不缩短)。
+    /// 喂给讲稿生成器的**详略深度**要求(不按字数硬压——字数不是该拧的旋钮,压字数会把话说不清楚;
+    /// "快速/概要"是少展开、跳细节,长度**随内容自然定**,该讲明白的还是要讲明白)。
     var narrationGuidance: String {
         switch self {
-        case .detailed: return "60-160字,自然展开、把这页讲清楚"
-        case .brief:    return "**严格一句话讲完、最多40字**,只点这页最核心的一条,**跳过所有细节**,利落"
-        case .overview: return "**只用一句话点出这页主旨、最多20字**,快速带过,**绝不展开、绝不举例**"
+        case .detailed: return "把这页讲透:展开要点、必要时补背景或举例,像详细讲解一样讲清楚。"
+        case .brief:    return "**直奔重点、不啰嗦**:把这页最关键的信息说清楚就收,不展开、不举例、不铺垫客套。该讲明白的仍要讲明白——**长度随内容定,绝不为求短把话说得没头没尾、让人听不懂**。"
+        case .overview: return "**只点这页的核心主旨**:一两句说清这页大致在讲什么、想表达什么,跳过具体细节;但**要让人听懂大意,别压到说不清楚**。"
         }
     }
 }
