@@ -57,7 +57,9 @@ extension LingShuState {
             parametersJSON: "{\"type\":\"object\",\"properties\":{\"paths\":{\"type\":\"array\",\"items\":{\"type\":\"string\"},\"description\":\"要依次演示的文档绝对路径(1 篇或多篇)\"}},\"required\":[\"paths\"]}"
         ) { [weak self] argsJSON in
             guard let self else { return "演示不可用" }
-            return await self.startPresentation(paths: Self.parsePresentationPaths(argsJSON))
+            let msg = await self.startPresentation(paths: Self.parsePresentationPaths(argsJSON))
+            // **给大脑的指令只放工具结果里,不进口播**:演示已由插件接管,别再调旧路径重复演示。
+            return msg + "\n(演示已由「演示与答疑」插件接管全屏播放,你这条到此停,别再调 open_preview / present_fullscreen / speak 重复演示。)"
         }
     }
 
@@ -80,7 +82,8 @@ extension LingShuState {
         // 后台照稿播放(每段 speak 阻塞);用户输入由 handlePresentationInputIfNeeded 拦成答疑。
         presentationPlaybackTask?.cancel()
         presentationPlaybackTask = Task { @MainActor [weak self] in await self?.presentationController.play() }
-        return "已开始演示(共 \(n) 篇,讲稿已逐页生成,正照稿进全屏讲)。演示中用户随时可打断提问,我答完接着讲;多篇会一篇篇连播,一篇演完会问要不要继续下一篇。你这条到此停,别再重复 open/present。"
+        // **口播/聊天版只说人话**——给大脑的"别再重复 open/present"指令移到 present_documents 工具结果里,不进口播。
+        return "好的,我开始演示了\(n > 1 ? "(共 \(n) 篇,会一篇篇连着来)" : "")。有问题随时打断我。"
     }
 
     /// 取消/退出路径统一调:演示在跑就**彻底停掉**(掐音频 + 停循环 + 取消播放任务)。
