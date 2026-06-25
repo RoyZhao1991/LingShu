@@ -38,7 +38,7 @@ extension LingShuState {
         let appLine = skill.appHint.map { "主要在「\($0)」里操作。" } ?? ""
         let objective = """
         你现在用计算机控制四肢,**严格按下面步骤逐步操作一个已学会的技能**(不是写代码,是真在界面上点/填)。\(appLine)
-        每一步:**先 screen_capture 或 list_ui_elements 看清当前界面**,再用 click / double_click / type_text / press_key / scroll 操作;**按意图找元素**(界面位置可能和当初录制时不同,认按钮/字段的名字,不靠死坐标)。
+        每一步的可靠做法:**优先用 `list_ui_elements` 直接拿到元素和它的中心坐标**(它会给「按钮'提交' @ (640,480)」这种,比截图猜坐标可靠得多),按意图认出要操作的那个,**直接 click 它的中心 / type_text 输入**。`list_ui_elements` 列不到再 screen_capture 看屏。**别反复截屏不动手——看清一次就动手点/键入,推进下一步。**
         **安全红线**:碰到要花钱、提交订单/付款、删除、发送对外消息、任何不可逆动作,**先停下用 ask_user 跟我确认再做**,绝不擅自提交。
         每步操作前用一句话说你在做什么。全部做完,简短回一句结果(成功/卡在哪)。
 
