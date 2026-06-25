@@ -141,21 +141,23 @@ extension LingShuState {
                 if Self.isPresentationStopIntent(trimmed) { await c.stop(); self.appendPresentationLine("好,演示就到这里。") }
                 else { self.appendPresentationLine("好,继续下一篇。"); await c.confirmAndPlayNext() }
             case .playing, .pausedForQA:
-                // **命令优先,不进答疑**:暂停态下「继续」→ 续演。
-                if c.phase == .pausedForQA, Self.isPresentationResumeIntent(trimmed) {
-                    self.appendPresentationLine("好,接着讲。"); await c.resume(); return
-                }
-                if c.phase == .playing { c.requestPauseForQA(); await self.waitUntilPresentationPaused() }
-                if Self.isPresentationStopIntent(trimmed) { await c.stop(); self.appendPresentationLine("好,停下了,需要再演随时叫我。"); return }
-                // 「暂停/停一下」→ 停在当前页保持,等「继续」再讲(不答疑、不续)。
-                if Self.isPresentationPauseIntent(trimmed) {
-                    self.appendPresentationLine("好,先停在这一页,你说「继续」我接着讲。"); return
-                }
-                // 其余=听众提问 → 答完从打断处(或「从第N页」)续。
-                await self.answerDuringPresentation(trimmed)
-                if c.phase == .pausedForQA {
-                    let seekPage = Self.parsePresentationResumePage(trimmed)   // "从第N页"→seek;否则当前位置续
-                    await c.resume(seekTo: seekPage.map { $0 - 1 })
+                if c.phase == .playing { c.requestPauseForQA(); await self.waitUntilPresentationPaused() }   // 先立刻停念稿
+                // **按语义让模型分类**听众这句话(暂停/继续/停止/提问),不靠硬编码关键词枚举(那覆盖不全)。
+                let beat = c.queue.currentScript?.currentBeat
+                let (intent, answer) = await self.classifyPresentationUtterance(trimmed, beat: beat, title: c.currentTitle)
+                switch intent {
+                case .resume:
+                    self.appendPresentationLine("好,接着讲。"); await c.resume()
+                case .stop:
+                    await c.stop(); self.appendPresentationLine("好,停下了,需要再演随时叫我。")
+                case .pause:
+                    self.appendPresentationLine("好,先停在这一页,你说「继续」我接着讲。")   // 停住保持,等「继续」
+                case .question:
+                    await self.speakPresentationAnswer(answer)
+                    if c.phase == .pausedForQA {
+                        let seekPage = Self.parsePresentationResumePage(trimmed)   // "从第N页"→seek;否则当前位置续
+                        await c.resume(seekTo: seekPage.map { $0 - 1 })
+                    }
                 }
             default:
                 break
@@ -171,21 +173,50 @@ extension LingShuState {
         }
     }
 
-    /// 演示中答疑:据当前页内容 + 问题生成回答并念出来。
-    private func answerDuringPresentation(_ question: String) async {
-        let beat = presentationController.queue.currentScript?.currentBeat
-        let title = presentationController.currentTitle
-        let context = beat.map { "当前在讲《\(title)》第 \($0.pageNumber) 页,这页真实内容:\n\(String($0.verbatim.prefix(800)))" }
+    /// 听众这句话的语义意图(暂停/继续/停止/提问)——由模型按语义判,不靠关键词枚举。
+    enum PresentationUtteranceIntent { case pause, resume, stop, question }
+
+    /// **模型按语义分类**听众这句话 + 若提问给出回答(一次 LLM 搞定)。失败才回退关键词兜底。
+    /// 这样「先暂时停一下」「稍微停会儿」「咱们接着」任何说法都能判对,而不是写死一串词。
+    private func classifyPresentationUtterance(_ input: String, beat: LingShuPresentationBeat?, title: String)
+        async -> (intent: PresentationUtteranceIntent, answer: String) {
+        let context = beat.map { "当前在讲《\(title)》第 \($0.pageNumber) 页,这页真实内容:\n\(String($0.verbatim.prefix(700)))" }
             ?? "正在演示《\(title)》"
-        let sys = "你是正在做演示的灵枢,听众当面提问。**结合当前这页内容**简洁口语地回答(40-140字),像真人答疑;别复述整页、别说'继续演示'之类。只输出回答本身,不编造页面没有的事实。"
+        let sys = """
+        你在主持一场演示,听众刚说了一句话。**按语义**(别只看关键词)判断属于哪类,**只输出一行 JSON**:
+        - 想让你停一下、待会再继续(如「先暂时停一下」「稍微停会儿」「等我一下」)→ {"intent":"pause"}
+        - 暂停后想接着往下讲(如「继续」「咱们接着」「往下说吧」)→ {"intent":"resume"}
+        - 想结束/退出/不看了(如「不演了」「停了吧」「够了」「先到这」)→ {"intent":"stop"}
+        - 对内容提问、或说别的话 → {"intent":"question","answer":"结合当前这页内容、像真人当面口语简洁回答(40-140字),不复述整页、不编造页面没有的事"}
+        \(context)
+        """
         let session = LingShuAgentSession(id: "qa-\(UUID().uuidString.prefix(5))", system: sys, tools: [],
                                           model: controlPlaneModelAdapter(.deliveryComposer), maxTurns: 1)
-        let r = await session.send("\(context)\n\n听众问:\(question)")
-        let answer: String
-        if case .completed(let text) = r {
-            let out = LingShuReasoningText.stripThinkTags(text).trimmingCharacters(in: .whitespacesAndNewlines)
-            answer = out.isEmpty ? "这个问题我先记下,演示后细聊。" : out
-        } else { answer = "这个问题我先记下,演示后细聊。" }
+        let r = await session.send("听众说:\(input)")
+        guard case .completed(let raw) = r else { return Self.fallbackPresentationIntent(input) }
+        let clean = LingShuReasoningText.stripThinkTags(raw)
+        switch (Self.jsonField(clean, "intent") ?? "").lowercased() {
+        case "pause":  return (.pause, "")
+        case "resume": return (.resume, "")
+        case "stop":   return (.stop, "")
+        case "question":
+            let a = (Self.jsonField(clean, "answer") ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            return (.question, a.isEmpty ? "这个问题我先记下,演示后细聊。" : a)
+        default:
+            return Self.fallbackPresentationIntent(input)   // 没解析出 intent → 关键词兜底
+        }
+    }
+
+    /// **仅 LLM 不可用时的关键词兜底**(主路径是上面的语义分类)。
+    nonisolated static func fallbackPresentationIntent(_ s: String) -> (intent: PresentationUtteranceIntent, answer: String) {
+        if isPresentationStopIntent(s)   { return (.stop, "") }
+        if isPresentationResumeIntent(s) { return (.resume, "") }
+        if isPresentationPauseIntent(s)  { return (.pause, "") }
+        return (.question, "这个问题我先记下,演示后细聊。")
+    }
+
+    /// 念出答疑回答(进聊天流 + TTS 念完)。
+    private func speakPresentationAnswer(_ answer: String) async {
         appendPresentationLine(answer)
         if let voice = voiceManager { voice.speak(answer); recordSpokenLine(answer); await voice.awaitPlaybackDone() }
     }
