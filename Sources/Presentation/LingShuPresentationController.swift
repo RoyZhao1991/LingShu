@@ -24,6 +24,8 @@ final class LingShuPresentationController: ObservableObject {
         var setFullscreen: @MainActor (_ on: Bool) async -> Void
         /// 落一条状态/旁白(trace),供观测。
         var note: @MainActor (_ title: String, _ detail: String) -> Void
+        /// **立刻掐掉正在播的 TTS**(取消/答疑打断时用;像视频播放器停止就静音)。
+        var interruptAudio: @MainActor () -> Void
     }
 
     @Published private(set) var phase: LingShuPresentationPhase = .idle
@@ -35,6 +37,8 @@ final class LingShuPresentationController: ObservableObject {
     private var hooks: Hooks?
     /// 答疑/手动打断请求:play 循环在**每拍之间**检查它,置位即停在当前拍(不丢位)。
     private var pauseRequested = false
+    /// **彻底停止**请求(取消/退出):play 循环置位即终止,不再念下一拍(根治"取消后音频还在播")。
+    private var stopRequested = false
     /// 标记一个在飞的播放任务,避免重复 play。
     private var playing = false
     /// 当前已显示的文档(避免续演同一篇时重复开窗、回到第0页)。
@@ -76,6 +80,7 @@ final class LingShuPresentationController: ObservableObject {
         playing = true
         defer { playing = false }
         pauseRequested = false
+        stopRequested = false
         phase = .playing
 
         while var script = queue.currentScript {
@@ -88,6 +93,7 @@ final class LingShuPresentationController: ObservableObject {
             }
             // 念当前脚本剩余的拍。
             while let beat = script.currentBeat {
+                if stopRequested || Task.isCancelled { phase = .finished; return }   // 取消/退出 → 彻底停,不再念
                 if pauseRequested {
                     queue.updateCurrent(script)   // 回写播放头(不丢位)
                     phase = .pausedForQA
@@ -96,6 +102,7 @@ final class LingShuPresentationController: ObservableObject {
                 }
                 await hooks.navigate(beat.pageIndex)
                 await hooks.speak(beat.narration)
+                if stopRequested || Task.isCancelled { phase = .finished; return }   // speak 被掐后立刻停,不 advance/念下一拍
                 _ = script.advance()
                 queue.updateCurrent(script)
             }
@@ -117,10 +124,19 @@ final class LingShuPresentationController: ObservableObject {
 
     // MARK: - 3) 答疑暂停 / 视频流式续演
 
-    /// 实时提问打断:请求在下一拍间隙暂停(主线程随后处理答疑)。
+    /// 实时提问打断:请求在下一拍间隙暂停(主线程随后处理答疑),并**立刻掐当前 TTS**(像视频暂停就静音,别等本页念完)。
     func requestPauseForQA() {
         guard phase == .playing else { return }
         pauseRequested = true
+        hooks?.interruptAudio()
+    }
+
+    /// **同步彻底停止**(供 cancelCurrentCall / abortActiveFlow / 退出演示等同步取消路径调):
+    /// 掐音频 + 置停止位 → play 循环在 speak 返回后随即终止,不再念下一拍。根治"取消后音频还在播"。
+    func requestStop() {
+        stopRequested = true
+        hooks?.interruptAudio()
+        shownDocumentPath = nil
     }
 
     /// 答疑结束后继续:`seekTo` 给了就先拖到那页(视频流式),否则从当前位置续。
@@ -170,10 +186,12 @@ final class LingShuPresentationController: ObservableObject {
         }
     }
 
-    /// 整体收尾(用户喊停/关窗)。
+    /// 整体收尾(用户喊停/关窗):掐音频 + 彻底停 + 退全屏。
     func stop() async {
-        pauseRequested = true
+        stopRequested = true
+        hooks?.interruptAudio()
         phase = .finished
+        shownDocumentPath = nil
         await hooks?.setFullscreen(false)
     }
 

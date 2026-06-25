@@ -44,7 +44,8 @@ extension LingShuState {
             setFullscreen: { [weak self] on in _ = self?.previewController.setSlideshow(on) },
             note: { [weak self] title, detail in
                 self?.appendTrace(kind: .system, actor: "演示与答疑", title: title, detail: detail)
-            }
+            },
+            interruptAudio: { [weak self] in self?.interruptSpeechOutput?() }   // 取消/打断 → 立刻掐 TTS
         ))
     }
 
@@ -73,6 +74,16 @@ extension LingShuState {
         presentationPlaybackTask?.cancel()
         presentationPlaybackTask = Task { @MainActor [weak self] in await self?.presentationController.play() }
         return "已开始演示(共 \(n) 篇,讲稿已逐页生成,正照稿进全屏讲)。演示中用户随时可打断提问,我答完接着讲;多篇会一篇篇连播,一篇演完会问要不要继续下一篇。你这条到此停,别再重复 open/present。"
+    }
+
+    /// 取消/退出路径统一调:演示在跑就**彻底停掉**(掐音频 + 停循环 + 取消播放任务)。
+    /// 供 cancelCurrentCall / abortActiveFlow / 退出演示 复用——根治"取消后音频还在播下一页"。
+    func stopPresentationIfActive() {
+        guard presentationController.isActive else { return }
+        presentationPlaybackTask?.cancel()
+        presentationPlaybackTask = nil
+        presentationController.requestStop()
+        appendTrace(kind: .system, actor: "演示与答疑", title: "停止演示", detail: "取消/退出 → 掐音频 + 停止照稿念。")
     }
 
     /// **确定性路由(实测必需)**:识别「演示/讲解 + 文档路径」的请求,**直接走 present_documents 插件**,

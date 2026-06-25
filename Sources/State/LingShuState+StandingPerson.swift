@@ -247,6 +247,7 @@ extension LingShuState {
     /// 确定性退出演示:停批量 + 掐 TTS + 关预览(抑制重弹)+ 停在飞回合 + 出声确认。不靠大脑(它常口头答应却不真关)。
     /// 出声确认走 chatMessages 追加(根视图 speakLatestReplyIfNeeded 念全文,自主模式主人听得到);保持在岗待命。
     private func exitPresentationDeterministically(prompt: String) -> String {
+        stopPresentationIfActive()                                                // 「演示与答疑」在跑 → 先彻底停(掐音频+停循环)
         batchInterruptRequested = true                                            // run_steps 批量在下一步边界停
         interruptSpeechOutput?()                                                  // 立刻掐当前 TTS
         previewController.suppressAutoReopenUntil = Date().addingTimeInterval(5)  // 5s 内拒绝任何 open/进全屏(防重弹)

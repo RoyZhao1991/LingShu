@@ -10,6 +10,8 @@ final class PresentationControllerTests: XCTestCase {
         var spoken: [String] = []
         var fullscreen: [Bool] = []
         var shownDocs: [String] = []
+        var interrupts = 0
+        var stopAfterSpeak: Int?
         var pauseAfterSpeak: Int?
         weak var controller: LingShuPresentationController?
     }
@@ -25,9 +27,11 @@ final class PresentationControllerTests: XCTestCase {
             speak: { t in
                 rec.spoken.append(t)
                 if rec.spoken.count == rec.pauseAfterSpeak { rec.controller?.requestPauseForQA() }
+                if rec.spoken.count == rec.stopAfterSpeak { rec.controller?.requestStop() }
             },
             setFullscreen: { rec.fullscreen.append($0) },
-            note: { _, _ in }
+            note: { _, _ in },
+            interruptAudio: { rec.interrupts += 1 }
         ))
         return c
     }
@@ -99,5 +103,16 @@ final class PresentationControllerTests: XCTestCase {
         XCTAssertEqual(rec.spoken, ["讲:a0", "讲:a1", "讲:b0"], "确认后演第二篇")
         XCTAssertEqual(c.phase, .finished)
         XCTAssertEqual(rec.shownDocs, ["/a.pdf", "/b.pdf"], "每篇演前都先显示出来,不串台")
+    }
+
+    func testStopHaltsPlaybackAndCutsAudio() async {
+        let rec = Recorder()
+        rec.stopAfterSpeak = 1                       // 念完第1页后请求停止(模拟用户取消)
+        let c = make(["/a.pdf": ["p0", "p1", "p2"]], rec)
+        await c.buildQueue(documentPaths: ["/a.pdf"])
+        await c.play()
+        XCTAssertEqual(rec.spoken, ["讲:p0"], "停止后**不再念下一页**——根治取消后音频还在播")
+        XCTAssertEqual(c.phase, .finished)
+        XCTAssertGreaterThanOrEqual(rec.interrupts, 1, "停止时掐了当前 TTS")
     }
 }

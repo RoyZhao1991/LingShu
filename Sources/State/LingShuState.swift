@@ -855,6 +855,9 @@ final class LingShuState: ObservableObject {
             || activeAgentTurnTask != nil
             || autonomousRunTask != nil
             || pendingShellApproval != nil
+        // 「演示与答疑」在跑 → **先**彻底停掉(置停止位 + 掐音频),必须在下面 interruptSpeechOutput 之前,
+        // 否则音频被掐后 play 循环会抢着念下一页(竞态)→ 用户感知"取消后还在播"。
+        stopPresentationIfActive()
         // 停止时若正在全屏演示:一并关预览 + 设防重弹窗(停止演示=别再让大脑下一步把它弹回来,与关窗硬中断一致)。
         if previewController.slideshow {
             previewController.suppressAutoReopenUntil = Date().addingTimeInterval(5)
@@ -924,6 +927,7 @@ final class LingShuState: ObservableObject {
     /// 设防重弹抑制窗:挡住"关窗瞬间批量还有一步在飞又把预览拉起"的竞态(根治"手动退出后它又自己把 PPT 弹出来")。
     func abortActiveFlow(reason: String) {
         lingShuControlLog("flow/abort: \(reason)")
+        stopPresentationIfActive()               // 「演示与答疑」在跑 → 先彻底停(置停止位 + 掐音频,避免掐后抢念下一页)
         previewController.suppressAutoReopenUntil = Date().addingTimeInterval(5)  // 5s 内拒绝任何 open/进全屏
         batchInterruptRequested = true          // run_steps 批量在下一步边界停,别再翻页/讲
         interruptSpeechOutput?()                 // 立刻掐断当前 TTS 朗读
