@@ -57,33 +57,52 @@ extension LingShuState {
 
 
     /// 顺序执行声明链:agent 步走真委托(后一个 agent 拿到前一步产出→天然 maker≠checker);插件步路由各自插件。
+    /// **同一编排任务=一个气泡换行追加**(不拆成多气泡);每步落 trace,运行时(状态/运维)能看清启动的是哪个 agent。
     private func runInvocationChain(_ steps: [(id: String, segment: String)], plugins: [LingShuInvocablePlugin]) {
+        // 纯插件步(present/record/proc)不进 agent 气泡——它们各自有交互/窗口。
+        let agentSteps = steps.filter { id in plugins.first(where: { $0.id == id.id })?.kind == .agent }
+        for step in steps where plugins.first(where: { $0.id == step.id })?.kind == .plugin {
+            routePlugin(pluginID: step.id, rest: step.segment)
+        }
+        guard !agentSteps.isEmpty else { return }
+
+        // 一个气泡,边跑边换行追加。
+        let bubble = ChatMessage(speaker: "灵枢", text: "🔗 编排执行(\(agentSteps.count) 步):", isUser: false, isLoading: true)
+        chatMessages.append(bubble)
+        let bid = bubble.id
+        func appendToBubble(_ s: String) {
+            guard let i = chatMessages.firstIndex(where: { $0.id == bid }) else { return }
+            chatMessages[i].text += "\n\n" + s
+        }
+        func finishBubble() {
+            guard let i = chatMessages.firstIndex(where: { $0.id == bid }) else { return }
+            chatMessages[i].isLoading = false
+        }
+
         Task { @MainActor [weak self] in
             guard let self else { return }
             var priorOutput = ""
-            for step in steps {
+            for step in agentSteps {
                 guard let inv = plugins.first(where: { $0.id == step.id }) else { continue }
-                switch inv.kind {
-                case .agent:
-                    // 从插件库取这个**已注册 agent**,统一用 Store.run 跑(零硬编码,任何 CLI agent 同一套)。
-                    let agentID = inv.id.hasPrefix("agent:") ? String(inv.id.dropFirst("agent:".count)) : inv.id
-                    guard let plugin = LingShuAgentPluginStore.plugin(id: agentID) else {
-                        self.speakAndChat("agent「\(inv.displayName)」没注册或不可用,跳过。"); continue
-                    }
-                    let obj = step.segment + (priorOutput.isEmpty ? "" : "\n\n【上一步产出,供你参考/复核】\n" + String(priorOutput.prefix(4000)))
-                    self.speakAndChat("交给 \(plugin.displayName):\(step.segment.prefix(50))")
-                    let result = await LingShuAgentPluginStore.run(plugin, objective: obj, workingDirectory: self.codexWorkingDirectory)
-                    let out: String
-                    switch result {
-                    case .completed(let t): out = t
-                    case .failure(let r):   out = "（\(plugin.displayName) 未完成:\(r)）"
-                    }
-                    self.chatMessages.append(.init(speaker: "灵枢", text: "【\(plugin.displayName)】\n\(out)", isUser: false))
-                    priorOutput = out
-                case .plugin:
-                    self.routePlugin(pluginID: inv.id, rest: step.segment)
+                let agentID = inv.id.hasPrefix("agent:") ? String(inv.id.dropFirst("agent:".count)) : inv.id
+                guard let plugin = LingShuAgentPluginStore.plugin(id: agentID) else {
+                    appendToBubble("⚠️ agent「\(inv.displayName)」没注册或不可用,跳过。"); continue
                 }
+                // **运行时可见**:落 trace,状态/运维里能看清确实是这个 agent 插件在跑(不是大脑 freeform)。
+                self.appendTrace(kind: .tool, actor: "agent插件·\(plugin.displayName)", title: "\(plugin.role.rawValue) 执行中",
+                                 detail: "用插件库注册的 \(plugin.executable) 跑:\(step.segment.prefix(50))")
+                appendToBubble("▶ 交给 \(plugin.displayName)(\(plugin.role.rawValue)):\(step.segment.prefix(40))")
+                let obj = step.segment + (priorOutput.isEmpty ? "" : "\n\n【上一步产出,供你参考/复核】\n" + String(priorOutput.prefix(4000)))
+                let result = await LingShuAgentPluginStore.run(plugin, objective: obj, workingDirectory: self.codexWorkingDirectory)
+                let out: String
+                switch result {
+                case .completed(let t): out = t; self.appendTrace(kind: .result, actor: "agent插件·\(plugin.displayName)", title: "完成", detail: String(t.prefix(60)))
+                case .failure(let r):   out = "（\(plugin.displayName) 未完成:\(r)）"; self.appendTrace(kind: .warning, actor: "agent插件·\(plugin.displayName)", title: "未完成", detail: r)
+                }
+                appendToBubble("【\(plugin.displayName)】\n\(out)")
+                priorOutput = out
             }
+            finishBubble()
         }
     }
 
