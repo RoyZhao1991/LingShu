@@ -38,6 +38,7 @@ extension LingShuState {
         let plugins = invocablePlugins()
         // 文本 `@链式`(@Codex 开发X @Claude 验收Y)——「+」菜单选中即往输入框插 @名字,inline 编排,提交时按序解析成链。
         let chain = LingShuDeclarativeInvocation.detectChain(prompt, plugins: plugins)
+        lingShuControlLog("声明式链解析: 输入「\(prompt.prefix(30))」可调=\(plugins.map(\.id)) → 链=\(chain.map { "\($0.id)::\($0.segment.prefix(14))" })")
         if !chain.isEmpty {
             chatMessages.append(.init(speaker: "你", text: prompt, isUser: true))
             appendTrace(kind: .route, actor: "声明式调用", title: "用户显式指定",
