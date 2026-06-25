@@ -504,6 +504,10 @@ final class LingShuState: ObservableObject {
     let presentationController = LingShuPresentationController()
     /// 在飞的演示播放任务(后台照稿念;用户输入经 handlePresentationInputIfNeeded 拦成答疑)。
     var presentationPlaybackTask: Task<Void, Never>?
+    /// **Record & Replay**:正在录制的过程技能会话(用户边做边说、逐步截帧);非录制时为 nil。见 LingShuState+ProcedureRecording。
+    @Published var procedureRecording: LingShuProcedureRecordingSession?
+    /// 在飞的 replay 执行任务(按 SKILL.md 步骤用计算机控制逐步操作)。
+    var procedureReplayTask: Task<Void, Never>?
     /// 内置多 tab 浏览器:大脑用 browser_* 四肢上网/做网页自动化测试(打开URL/多tab/JS执行/滚动/全屏)。
     let browserController = LingShuBrowserController()
     /// 由根视图注入：返回当前实时态势感知上下文（无有效信号时返回空串）。
@@ -1187,8 +1191,13 @@ final class LingShuState: ObservableObject {
         guard !trimmedPrompt.isEmpty else { return "" }
         // 「演示与答疑」进行时:用户开口=实时答疑(**主线程线性**,保真人交互感),拦下来处理,不走常规分诊/派发。
         if appendUserMessage, handlePresentationInputIfNeeded(trimmedPrompt) { return "" }
+        // 「Record & Replay」录制进行时:用户开口=记一步(或完成/取消),拦下来,不走常规分诊。
+        if appendUserMessage, handleProcedureRecordingInputIfNeeded(trimmedPrompt) { return "" }
         // 「演示文档」请求:确定性路由到 present_documents 插件(实测模型会习惯性绕开新插件,故硬路由保证用上)。
         if appendUserMessage, handlePresentationStartIfNeeded(trimmedPrompt) { return "" }
+        // 「记录技能」请求 → 进录制;「用X技能…」请求 → 确定性匹配并 replay(声明式直达,不靠大脑瞎选)。
+        if appendUserMessage, handleProcedureRecordStartIfNeeded(trimmedPrompt) { return "" }
+        if appendUserMessage, handleProcedureReplayIfNeeded(trimmedPrompt) { return "" }
         cancelMainRemoteHealthProbe(reason: "探活让路", detail: "收到用户指令，已停止后台探活，把主通道让给本轮任务。")
 
         // 记录**按需建**(不再在最顶 eager 建):被续答/在岗/答复等早返回接管的轮次用各自的记录,
