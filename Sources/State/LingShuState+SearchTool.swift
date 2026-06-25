@@ -22,7 +22,7 @@ extension LingShuState {
             guard let self else { return "执行环境不可用。" }
             let pattern = (Self.jsonField(argsJSON, "pattern") ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
             guard !pattern.isEmpty else { return "缺少 pattern。" }
-            let root = await MainActor.run { Self.jsonField(argsJSON, "path")?.nonEmptyOrNilSearch ?? self.codexWorkingDirectory }
+            let root = await MainActor.run { Self.jsonField(argsJSON, "path")?.nonEmptyOrNilSearch ?? self.agentWorkingDirectory }
             let glob = Self.jsonField(argsJSON, "glob")?.nonEmptyOrNilSearch
             let cap = Int(Self.jsonNumber(argsJSON, "max_results") ?? 80)
             return await Self.runSearch(pattern: pattern, root: root, glob: glob, cap: max(1, cap))

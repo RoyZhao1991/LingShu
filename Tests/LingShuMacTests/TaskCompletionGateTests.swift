@@ -201,7 +201,7 @@ final class TaskCompletionGateTests: XCTestCase {
         XCTAssertEqual(envelope.tool, "ask_choice", "授权/设备确认应弹可点击选择卡,不能只是普通文字")
         let parsed = LingShuState.parseChoiceArgs(envelope.argumentsJSON)
         XCTAssertTrue(parsed.0.contains("AirPlay") || parsed.0.contains("Chromecast") || parsed.0.contains("无线投屏"))
-        XCTAssertTrue(parsed.1.contains(where: { $0.label.contains("已授权") }))
+        XCTAssertTrue(parsed.1.contains(where: { $0.label.contains("确认授权") }))
         XCTAssertTrue(parsed.1.contains(where: { $0.label.contains("暂不授权") }))
     }
 
@@ -239,7 +239,7 @@ final class TaskCompletionGateTests: XCTestCase {
         XCTAssertFalse(bubble.isLoading)
         XCTAssertEqual(bubble.awaitingInputForRecordID, rid, "待用户气泡的补充/点击必须直达原任务线程")
         XCTAssertNotNil(bubble.choices, "待用户授权边界必须渲染结构化选择入口,不能只显示普通文字")
-        XCTAssertTrue(bubble.choices?.options.contains(where: { $0.label.contains("已授权") }) ?? false)
+        XCTAssertTrue(bubble.choices?.options.contains(where: { $0.label.contains("确认授权") }) ?? false)
     }
 
     @MainActor
@@ -277,7 +277,7 @@ final class TaskCompletionGateTests: XCTestCase {
         let bubble = try XCTUnwrap(state.chatMessages.first(where: { $0.id == pending.id }))
         XCTAssertFalse(bubble.isLoading)
         XCTAssertNotNil(bubble.choices, "主动 ask_user 触达受保护边界时也必须升级成结构化授权入口")
-        XCTAssertTrue(bubble.choices?.options.contains(where: { $0.label.contains("已授权") }) ?? false)
+        XCTAssertTrue(bubble.choices?.options.contains(where: { $0.label.contains("确认授权") }) ?? false)
     }
 
     @MainActor
@@ -310,7 +310,7 @@ final class TaskCompletionGateTests: XCTestCase {
         let bubble = try XCTUnwrap(state.chatMessages.first(where: { $0.id == pending.id }))
         XCTAssertEqual(bubble.awaitingInputForRecordID, rid)
         XCTAssertNotNil(bubble.choices, "派发任务主动 ask_user 时也必须给可点击授权入口")
-        XCTAssertTrue(bubble.choices?.options.contains(where: { $0.label.contains("已授权") }) ?? false)
+        XCTAssertTrue(bubble.choices?.options.contains(where: { $0.label.contains("确认授权") }) ?? false)
     }
 
     @MainActor

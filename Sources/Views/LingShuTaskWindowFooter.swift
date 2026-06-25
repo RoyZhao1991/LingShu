@@ -86,7 +86,7 @@ struct TaskWindowFooter: View {
                 .buttonStyle(.plain)
                 .help("为这条任务上传附件")
 
-                TextField(running ? "干预纠正…（执行中可随时纠偏）" : "要求后续变更…", text: $draft, axis: .vertical)
+                TextField(running ? "回复这条线程…（执行中也会立即采纳）" : "回复这条线程…（发消息就续跑）", text: $draft, axis: .vertical)
                     .textFieldStyle(.plain)
                     .font(.system(size: 12.5))
                     .foregroundStyle(.white)
@@ -115,7 +115,7 @@ struct TaskWindowFooter: View {
         }
     }
 
-    /// 执行中也允许发送——那是"纠正/干预";空闲时是"追问续跑"。只要有文字或附件即可发。
+    /// 只要有文字或附件即可发。子线程=独立隔离线程,发消息就续跑(对齐 codex)。
     private var canSend: Bool {
         !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !state.pendingAttachments.isEmpty
     }
@@ -124,11 +124,9 @@ struct TaskWindowFooter: View {
         guard canSend else { return }
         let text = draft
         draft = ""
-        if running {
-            state.interjectCorrection(text, recordID: recordID)   // 执行中 → 干预纠正(注入在飞会话)
-        } else {
-            state.submitTaskFollowup(text, recordID: recordID)    // 空闲 → 追问续跑
-        }
+        // **统一入口(对齐 codex 子线程):发消息→续这条隔离线程**——在飞就 steer 注入、没在飞就 re-engage 续跑,
+        // 始终产出执行+回复。不再按不可靠的「执行中」标志分「纠正/追问」两套(根治「子线程收到没回复」)。
+        state.continueTaskThread(text, recordID: recordID)
     }
 
     private func feedbackButton(up: Bool) -> some View {

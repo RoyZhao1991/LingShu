@@ -51,12 +51,12 @@ extension LingShuState {
 
     func autonomousEnvironmentInput() -> LingShuAutonomousEnvironmentInput {
         .init(
-            workingDirectory: codexWorkingDirectory,
+            workingDirectory: agentWorkingDirectory,
             modelProvider: modelProvider,
             modelName: modelName,
             isModelConnected: isModelConnected,
             modelConnectionState: modelConnectionState,
-            codexPermissionMode: codexPermissionMode,
+            executionPermissionMode: executionPermissionMode,
             requireHumanApproval: requireHumanApproval,
             permissionLevel: autonomousPermissionLevel,
             voiceOutputEnabled: voiceOutputEnabled,

@@ -2,20 +2,20 @@ import Foundation
 
 /// **确认气泡 → 可点击选项**(壳层渲染,模型无关)。灵枢是"人"、信息交互靠对话文字;但"要你定"的确认应让你**点击**推进
 /// (像 Claude 的允许/拒绝按钮——由壳渲染,不靠模型去调某工具)。本解析把"卡住要你定 + 1./①/1️⃣ 枚举选项"的文本
-/// 解析成 `CodexRouteChoicePrompt`(question + options),供对话气泡渲染成按钮。纯逻辑可单测。
+/// 解析成 `LingShuRouteChoicePrompt`(question + options),供对话气泡渲染成按钮。纯逻辑可单测。
 enum LingShuChoiceParsing {
 
     /// 解析文本里的枚举选项;不足 2 个有效选项返回 nil(不是选择题)。
-    static func parse(_ text: String) -> CodexRouteChoicePrompt? {
+    static func parse(_ text: String) -> LingShuRouteChoicePrompt? {
         if let prompt = parseHumanInputEnvelope(text) { return prompt }
         var questionLines: [String] = []
-        var options: [CodexRouteChoiceOption] = []
+        var options: [LingShuRouteChoiceOption] = []
         var inOptions = false
         for raw in text.components(separatedBy: .newlines) {
             if let content = strippedMarker(raw) {
                 inOptions = true
                 let (label, detail) = splitLabelDetail(content)
-                if !label.isEmpty { options.append(CodexRouteChoiceOption(label: label, detail: detail)) }
+                if !label.isEmpty { options.append(LingShuRouteChoiceOption(label: label, detail: detail)) }
             } else if !inOptions {
                 questionLines.append(raw)
             }
@@ -35,10 +35,10 @@ enum LingShuChoiceParsing {
         if avgLabelLen > 14 { return nil }
         // 保留换行(原来 joined(" ") 会把表格/分段压成一行);question 现不在卡片里渲染,但保持其内容良构。
         let q = questionLines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
-        return CodexRouteChoicePrompt(question: q, options: options)
+        return LingShuRouteChoicePrompt(question: q, options: options)
     }
 
-    private static func parseHumanInputEnvelope(_ text: String) -> CodexRouteChoicePrompt? {
+    private static func parseHumanInputEnvelope(_ text: String) -> LingShuRouteChoicePrompt? {
         guard let envelope = LingShuHumanInputEnvelope.firstEmbedded(in: text)?.envelope,
               envelope.tool == "ask_choice",
               let data = envelope.argumentsJSON.data(using: .utf8),
@@ -50,21 +50,21 @@ enum LingShuChoiceParsing {
                         ?? (obj["prompt"] as? String)
                         ?? "请选择下一步")
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        var options: [CodexRouteChoiceOption] = []
+        var options: [LingShuRouteChoiceOption] = []
         if let arr = obj["options"] as? [[String: Any]] {
             for item in arr {
                 let label = ((item["label"] as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
                 guard !label.isEmpty else { continue }
                 let detail = (item["detail"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
-                options.append(CodexRouteChoiceOption(label: label, detail: detail?.isEmpty == true ? nil : detail))
+                options.append(LingShuRouteChoiceOption(label: label, detail: detail?.isEmpty == true ? nil : detail))
             }
         } else if let arr = obj["options"] as? [String] {
             for raw in arr {
                 let label = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-                if !label.isEmpty { options.append(CodexRouteChoiceOption(label: label)) }
+                if !label.isEmpty { options.append(LingShuRouteChoiceOption(label: label)) }
             }
         }
-        return CodexRouteChoicePrompt(question: question.isEmpty ? "请选择下一步" : question,
+        return LingShuRouteChoicePrompt(question: question.isEmpty ? "请选择下一步" : question,
                                       options: options).sanitized
     }
 

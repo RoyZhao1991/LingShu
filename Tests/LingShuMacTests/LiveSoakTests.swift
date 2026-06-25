@@ -62,7 +62,7 @@ final class LiveSoakTests: XCTestCase {
             .appendingPathComponent("lingshu-soak-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: workDir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: workDir) }
-        state.codexWorkingDirectory = workDir.path
+        state.agentWorkingDirectory = workDir.path
 
         let start = Date()
         let prompt = "写一个 Python 脚本 hello.py：运行时输出今天的日期。把文件保存到工作目录里，并实际运行一次验证输出正常。"

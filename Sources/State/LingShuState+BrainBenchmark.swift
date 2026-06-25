@@ -16,10 +16,10 @@ extension LingShuState {
         // 长链编码题在隔离 benchDir 里写代码(临时把工作目录指过去,让 write_file/run_command 都落这);跑完恢复+清理。
         let benchDir = NSTemporaryDirectory() + "lingshu-brainbench-" + UUID().uuidString.prefix(8)
         try? FileManager.default.createDirectory(atPath: benchDir, withIntermediateDirectories: true)
-        let savedWorkdir = codexWorkingDirectory
-        codexWorkingDirectory = benchDir
+        let savedWorkdir = agentWorkingDirectory
+        agentWorkingDirectory = benchDir
         defer {
-            codexWorkingDirectory = savedWorkdir
+            agentWorkingDirectory = savedWorkdir
             try? FileManager.default.removeItem(atPath: benchDir)
             isRunningBrainBenchmark = false
         }

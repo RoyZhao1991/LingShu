@@ -120,7 +120,7 @@ extension LingShuState {
             let ext = String(base.dropFirst(2))
             return normalizedRealFiles.contains { ($0 as NSString).pathExtension.lowercased() == ext }
         }
-        let abs = trimmed.hasPrefix("/") ? trimmed : (codexWorkingDirectory as NSString).appendingPathComponent(trimmed)
+        let abs = trimmed.hasPrefix("/") ? trimmed : (agentWorkingDirectory as NSString).appendingPathComponent(trimmed)
         let normalizedProbe = (abs as NSString).standardizingPath
         if normalizedRealFiles.contains(normalizedProbe) { return true }
         return normalizedRealFiles.contains { ($0 as NSString).lastPathComponent.lowercased() == base }

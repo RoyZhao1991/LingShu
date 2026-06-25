@@ -315,7 +315,7 @@ struct ModelProviderPreset: Identifiable {
         "\(name) · \(region)"
     }
 
-    // Codex 已从脑池删除——它是工具 agent,不是大脑。接入见 LingShuAgentEngine / CodexBridge。
+    // codex/claude 等 CLI 不在脑池——它们是 agent 插件(被告知→注册→@编排),不是大脑模型。接入见 LingShuAgentPluginStore。
     static let minimaxOfficial = ModelProviderPreset(
         id: "minimax-official",
         name: "MiniMax 官方",
@@ -390,7 +390,7 @@ struct ChatMessage: Identifiable, Codable, Equatable, Sendable {
     var taskRecordID: String?
     var createdAt: Date
     /// 灵枢请用户在有限选项中做选择时的结构化选项；nil 表示普通消息。
-    var choices: CodexRouteChoicePrompt?
+    var choices: LingShuRouteChoicePrompt?
     /// 用户已选中的选项标签（选过之后卡片置为已解决，不再可点）。
     var resolvedChoice: String?
     /// 思考中气泡上实时滚动的推理预览（流式 <think> 增量的尾部）；定稿时清空，不进历史。
@@ -415,7 +415,7 @@ struct ChatMessage: Identifiable, Codable, Equatable, Sendable {
         isLoading: Bool = false,
         taskRecordID: String? = nil,
         createdAt: Date = Date(),
-        choices: CodexRouteChoicePrompt? = nil,
+        choices: LingShuRouteChoicePrompt? = nil,
         resolvedChoice: String? = nil,
         thinkingPreview: String? = nil,
         attachmentNames: [String]? = nil,

@@ -142,7 +142,7 @@ final class TaskSemanticMatchTests: XCTestCase {
         let json = """
         { "label": "继续：杭州PPT", "detail": "三页初稿", "action": "resume:task-hangzhou" }
         """
-        let option = try JSONDecoder().decode(CodexRouteChoiceOption.self, from: Data(json.utf8))
+        let option = try JSONDecoder().decode(LingShuRouteChoiceOption.self, from: Data(json.utf8))
         XCTAssertEqual(option.action, "resume:task-hangzhou")
     }
 
@@ -150,7 +150,7 @@ final class TaskSemanticMatchTests: XCTestCase {
         let json = """
         { "label": "商务简洁", "detail": "深色底" }
         """
-        let option = try JSONDecoder().decode(CodexRouteChoiceOption.self, from: Data(json.utf8))
+        let option = try JSONDecoder().decode(LingShuRouteChoiceOption.self, from: Data(json.utf8))
         XCTAssertNil(option.action, "模型生成的普通选项不应带 action")
     }
 }

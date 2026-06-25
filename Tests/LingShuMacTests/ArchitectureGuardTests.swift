@@ -28,7 +28,6 @@ final class ArchitectureGuardTests: XCTestCase {
             .filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
 
         XCTAssertLessThanOrEqual(executableLines.count, 200)
-        XCTAssertFalse(appEntry.contains("CodexBridge"))
         XCTAssertFalse(appEntry.contains("LingShuModelGateway"))
         XCTAssertFalse(appEntry.contains("LingShuExternalAgentGateway"))
     }
@@ -36,7 +35,6 @@ final class ArchitectureGuardTests: XCTestCase {
     func testViewsDoNotDirectlyCallInfrastructureAdapters() throws {
         let viewFiles = try swiftFiles(under: "Sources/Views")
         let forbiddenTokens = [
-            "CodexBridge",
             "LingShuModelGateway(",
             "LingShuExternalAgentGateway(",
             "URLSession.shared",
@@ -159,7 +157,7 @@ final class ArchitectureGuardTests: XCTestCase {
     }
 
     func testInfrastructureFilesStayBelowHardSplitThreshold() throws {
-        // 800 行硬上限：CodexBridge 已按数据类型 / 诊断过滤 / 子进程支撑拆分。
+        // 800 行硬上限：Infrastructure 适配器按职责拆分,单文件不超 800 行。
         let infraFiles = try swiftFiles(under: "Sources/Infrastructure")
         for file in infraFiles {
             XCTAssertLessThanOrEqual(

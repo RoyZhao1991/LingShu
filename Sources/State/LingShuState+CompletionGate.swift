@@ -126,7 +126,7 @@ extension LingShuState {
     ///
     /// 这是 human-in-the-loop 的通用边界,不关心具体外部服务:只要 typed gap 或回复文本指向
     /// 真实受保护对象,就给 UI 一个可恢复的选择入口;否则继续保持普通文本,避免把"用户"这种抽象词误当授权对象。
-    func userPrerequisiteChoicePromptIfNeeded(resultText: String, taskRecordID: String?) -> CodexRouteChoicePrompt? {
+    func userPrerequisiteChoicePromptIfNeeded(resultText: String, taskRecordID: String?) -> LingShuRouteChoicePrompt? {
         guard let recordID = taskRecordID else { return nil }
         let original = resultText.trimmingCharacters(in: .whitespacesAndNewlines)
         let hasTypedUserGap = !(gapAnalysis(for: recordID)?.blockingGaps.filter { Self.isActionableUserGap($0) } ?? []).isEmpty
@@ -149,19 +149,19 @@ extension LingShuState {
 
         你可以点选下一步;如果要给我 token、账号信息、配对码或具体凭据,也可以直接在输入框发给我,我会接着当前任务继续。
         """
-        return CodexRouteChoicePrompt(
+        return LingShuRouteChoicePrompt(
             question: question,
             options: [
-                .init(label: "已授权，继续", detail: "我已经完成系统/账号/设备授权或准备好前提,灵枢继续执行。"),
-                .init(label: "暂不授权", detail: "本任务停在这里,不要继续访问该资源。"),
-                .init(label: "改用替代方案", detail: "不使用这项授权,让灵枢尝试只读、手动指引或其它可逆方案。")
+                .init(label: "确认授权,继续", detail: "我已按上面要求完成授权 / 给了凭据,灵枢继续执行。"),
+                .init(label: "暂不授权", detail: "先停在这里,不要继续访问该资源。"),
+                .init(label: "改用替代方案", detail: "不走这项授权,让灵枢试只读 / 手动指引等可逆方案。")
             ]
         ).sanitized
     }
 
     /// Human-in-the-loop 选项语义:不是所有按钮都代表"前提已满足"。
     /// 否定/暂停类选项应收口并释放执行槽;替代方案类选项允许续跑,但必须最小可逆,不能扩大任务作用域。
-    nonisolated static func prerequisiteChoiceSemantics(_ option: CodexRouteChoiceOption) -> LingShuPrerequisiteChoiceSemantics {
+    nonisolated static func prerequisiteChoiceSemantics(_ option: LingShuRouteChoiceOption) -> LingShuPrerequisiteChoiceSemantics {
         let text = LingShuMemoryTextToolkit.normalize("\(option.label) \(option.detail ?? "")")
         if ["改用替代方案", "替代方案", "只读", "手动指引", "其它可逆方案", "其他可逆方案"].contains(where: { text.contains($0) }) {
             return .alternative
@@ -169,7 +169,7 @@ extension LingShuState {
         if ["暂不授权", "不授权", "不提供", "拒绝", "取消", "停止", "停在这里", "不要继续", "以后再说", "稍后"].contains(where: { text.contains($0) }) {
             return .denyOrStop
         }
-        if ["已授权", "继续", "已完成授权", "已经授权", "凭据", "token", "apikey", "api_key", "登录好了"].contains(where: { text.contains($0) }) {
+        if ["确认授权", "已授权", "继续", "已完成授权", "已经授权", "凭据", "token", "apikey", "api_key", "登录好了"].contains(where: { text.contains($0) }) {
             return .provided
         }
         return .unknown
@@ -232,7 +232,7 @@ extension LingShuState {
         promoteQueuedDispatchIfPossible()
     }
 
-    nonisolated static func askChoiceEnvelope(_ prompt: CodexRouteChoicePrompt) -> LingShuHumanInputEnvelope {
+    nonisolated static func askChoiceEnvelope(_ prompt: LingShuRouteChoicePrompt) -> LingShuHumanInputEnvelope {
         let data = (try? JSONEncoder().encode(prompt)) ?? Data("{}".utf8)
         let json = String(data: data, encoding: .utf8) ?? "{}"
         return LingShuHumanInputEnvelope(tool: "ask_choice", argumentsJSON: json)
@@ -246,7 +246,8 @@ extension LingShuState {
         let asksUser = [
             "需要你", "需要用户", "请授权", "需要授权", "未授权", "没有权限", "没有授权",
             "登录", "凭据", "token", "api key", "apikey", "oauth", "付费", "付款",
-            "系统设置", "隐私与安全", "授权后", "提供前提"
+            "系统设置", "隐私与安全", "提供前提"
+            // 注:删掉"授权后"——它是**描述性**词(如"授权后我能看屏幕"),会把单纯介绍能力的回答误判成需要授权(自检答案踩过)。
         ].contains { lower.contains($0.lowercased()) }
         guard asksUser else { return false }
         return LingShuHumanBoundarySemantics.containsConcreteProtectedBoundary(clean)

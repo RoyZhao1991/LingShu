@@ -21,27 +21,9 @@ struct LingShuLocalIntentResolver {
             return "今天是 \(date)，\(weekday)，现在 \(time)。"
         }
 
-        if LingShuSelfReferenceIntent.isDirectAssistantSelfIntroduction(prompt) {
-            return selfReferenceAnswer(for: normalized)
-        }
-
+        // **身份/能力问题不再走本机罐头**(用户定调 2026-06-25:要 AGI 真答,不要关键词模板垃圾)——
+        // 「你是谁/介绍自己/能做什么」一律交给大脑结合身份 seed + 真实能力动态回答。这里只保留**事实型**即时快答(时间/日期)。
         return nil
-    }
-
-    private static func selfReferenceAnswer(for normalized: String) -> String {
-        if normalized.contains("你是谁")
-            || normalized.contains("你是什么")
-            || normalized.contains("你叫什么")
-            || normalized.contains("灵枢是谁")
-            || normalized.contains("灵枢是什么") {
-            return "我是灵枢，有什么可以帮你的？"
-        }
-
-        if normalized.contains("能力") || normalized.contains("能做什么") {
-            return "我是灵枢，你身边的通用智能中枢。你只管说目标，判断、分派、执行和复盘交给我。"
-        }
-
-        return "我是灵枢，一个面向真实任务的通用智能中枢。你只管说目标，剩下的判断、分派和推进交给我。"
     }
 
     private static func isTimeQuestion(_ normalized: String) -> Bool {

@@ -7,9 +7,8 @@ final class CompleteVersionSeamTests: XCTestCase {
     // MARK: #1 ModelChannel 续接策略
 
     func testContinuationNativeOnlyWhenSupportedAndNotRewritten() {
-        // 支持原生(Responses/Codex)且没改写上下文 → native。
+        // 支持原生(Responses)且没改写上下文 → native。
         XCTAssertEqual(LingShuModelChannelStrategy.mode(provider: "openai-responses", didRewriteContext: false), .native)
-        XCTAssertEqual(LingShuModelChannelStrategy.mode(provider: "codex", didRewriteContext: false), .native)
         // **改写了上下文 → 强制降级 prefixStable(避开服务端续接 vs 改写冲突)。**
         XCTAssertEqual(LingShuModelChannelStrategy.mode(provider: "openai-responses", didRewriteContext: true), .prefixStable)
     }

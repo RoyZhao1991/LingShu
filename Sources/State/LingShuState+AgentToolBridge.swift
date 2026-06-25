@@ -7,7 +7,7 @@ extension LingShuState {
         recordIDProvider: @escaping @MainActor @Sendable () -> String?,
         executionPolicy: LingShuAgentExecutionPolicy = .standard
     ) -> [LingShuAgentTool] {
-        let workingDir = codexWorkingDirectory
+        let workingDir = agentWorkingDirectory
         let allowShell: Bool
         switch executionPolicy {
         case .standard:       allowShell = developmentPhaseFullAccess || !requireHumanApproval || sessionShellAlwaysAllowed
@@ -51,8 +51,8 @@ extension LingShuState {
         let recordedLocalKnowledgeTools = localKnowledgeTools().map {
             recordedAgentTool($0, recordIDProvider: recordIDProvider)
         }
-        return builtinTools + externalTools + skillTools + pluginTools + recordedLocalKnowledgeTools + [listCapabilitiesTool()]
-            + (executionPolicy == .readOnly ? [] : agentPluginTools())   // 通用 register_agent/run_agent:任何 CLI agent 当插件接入,零硬编码
+        return builtinTools + externalTools + skillTools + pluginTools + recordedLocalKnowledgeTools + [listCapabilitiesTool(), selfInspectTool()]
+            + (executionPolicy == .readOnly ? [] : agentPluginTools(recordIDProvider: recordIDProvider))   // 通用 register_agent/run_agent:任何 CLI agent 当插件接入,零硬编码;委托的 agent 作为任务时间线独立命名参与方
     }
 
     /// 给非原语 Agent 工具补一层结构化执行记录。

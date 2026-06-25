@@ -103,15 +103,9 @@ final class LingShuState: ObservableObject {
             credentialStore.setAPIKey(apiKey, forProvider: preset.id)
         }
     }
-    let defaultCodexCLIPath = CodexBridge.bundledCLIPath
-    @Published var codexCLIPath = CodexBridge.bundledCLIPath
-    @Published var codexWorkingDirectory = "/Users/example/app"
-    @Published var codexPermissionMode: CodexPermissionMode = .sandbox
-    @Published var codexTimeoutSeconds = 180.0
-    @Published var codexFastMode = true
-    @Published var codexAuthStatus = "未检查"
-    @Published var codexAuthDetail = "点击检查 Codex 登录状态"
-    @Published var isCheckingCodexAuth = false
+    @Published var agentWorkingDirectory = "/Users/example/app"
+    @Published var executionPermissionMode: LingShuExecutionPermissionMode = .sandbox
+    @Published var modelTimeoutSeconds = 180.0
     @Published var isModelReplying = false
     @Published var isModelExecuting = false
     @Published var voiceOutputEnabled = true
@@ -258,8 +252,16 @@ final class LingShuState: ObservableObject {
     /// **派发队列区**(用户定调):主界面支持 3 并发,多出来的进**可见队列区等待**(不直接进主窗口/不派发);
     /// 有空位时自动晋级派发;晋级前可在队列区删除。见 LingShuState+DispatchQueue。
     @Published var queuedDispatchTasks: [LingShuQueuedDispatchTask] = []
-    /// **问答线(主会话)可删等待队列**(用户定调 2026-06-23「1+1=2 双线」):问答串行,**只1条在执行**,其余**等待中可删**。
-    /// 与任务线独立并行(1任务+1问答可同时跑;任一卡住不阻另一条)。pending=已排队的答复气泡;executing=正在跑的那条(不可删)。
+    /// **串行输入队列**(用户定调 2026-06-25「砍掉双线并行」):任一回合(问答或任务子线程)在真跑时,
+    /// 所有新顶层输入进这条队列**串行排队**,不再"1任务+1会话双线并行"。子线程/回合完全返回后逐条出队。
+    /// 目的:避免上下文污染——同一时刻只有一个上下文在跑,模型更容易认对当前上下文。见 LingShuState+SerialInputQueue。
+    @Published var pendingSerialInputs: [LingShuPendingSerialInput] = []
+    /// 输入框里被声明式 `@` 到的 agent/插件芯片(输入框上方"将编排"提示条用):让 agent 调用在聊天框里醒目可见。
+    /// 在 `onChange(of: prompt)` 经 `refreshInvocationChips()` 刷新(仅含 `@` 才读盘解析)。
+    @Published var detectedInvocationChips: [LingShuInvocationChip] = []
+    /// **问答线(主会话)执行态**:`executingChatTurnID`=正在跑的那条。
+    /// 注:2026-06-25「砍掉双线并行」后,新顶层输入统一走 `pendingSerialInputs` 串行队列(见上),不再进 `pendingChatTurnIDs` 与任务线并行;
+    /// 这两个字段仍作为问答线当前回合的执行/排队载体(队首独立执行),但**跨线并行已被串行闸门取代**(currentlyExecutingTurn 判忙即入队)。
     @Published var pendingChatTurnIDs: [UUID] = []
     @Published var executingChatTurnID: UUID?
     /// 已删除的问答答复气泡:对应 turn 轮到执行点时**跳过**(不真跑、不进会话上下文)。
@@ -457,12 +459,9 @@ final class LingShuState: ObservableObject {
     var interruptSpeechOutput: (() -> Void)?
     /// 每条流式消息已播报到的字符偏移（分句早读去重，定稿即清）。
     var spokenStreamOffsets: [UUID: Int] = [:]
-    private var activeRouteHandle: CodexExecutionHandle?
-    private var activeExecutionHandle: CodexExecutionHandle?
     var activeAPITask: Task<Void, Never>?
     var isMainRemoteProbeInFlight = false
     var mainRemoteProbeRunID = 0
-    var activeHealthProbeHandle: CodexExecutionHandle?
     var mainRemoteLastProbeAt: Date?
     var mainRemoteLastSuccessAt: Date?
     var mainRemoteConsecutiveFailures = 0
@@ -557,18 +556,12 @@ final class LingShuState: ObservableObject {
         ensureAllModuleBaselines()
     }
 
-    var usesCodexAuth: Bool {
-        modelGatewaySnapshot.connectionKind == .codexAuth
-    }
-
     var modelGatewaySnapshot: LingShuModelGatewaySnapshot {
         modelGateway.snapshot(
             provider: modelProvider,
             model: modelName,
             endpoint: endpoint,
-            apiKey: apiKey,
-            codexAuthStatus: codexAuthStatus,
-            codexAuthDetail: codexAuthDetail
+            apiKey: apiKey
         )
     }
 
@@ -604,7 +597,7 @@ final class LingShuState: ObservableObject {
     }
 
     var shouldUseLocalStreamingDialogue: Bool {
-        guard !usesCodexAuth, localStreamingDialogueEnabled else { return false }
+        guard localStreamingDialogueEnabled else { return false }
         // 本地模型和 MiniMax 官方都走标准 OpenAI 流式（delta.content）。
         return usesLocalModelGateway || selectedModelPreset?.id == ModelProviderPreset.minimaxOfficial.id
     }
@@ -706,32 +699,6 @@ final class LingShuState: ObservableObject {
         ])
     }
 
-    func appendCodexStream(_ rawText: String, actor: String) {
-        let lines = rawText
-            .components(separatedBy: .newlines)
-            .map(cleanTraceText)
-            .filter { !$0.isEmpty }
-        let suppressTrace = isGuardActor(actor)
-
-        for line in lines.prefix(12) {
-            if line.hasPrefix("__LINGSHU_HEARTBEAT__") {
-                let detail = line
-                    .replacingOccurrences(of: "__LINGSHU_HEARTBEAT__", with: "")
-                    .trimmingCharacters(in: .whitespacesAndNewlines)
-                recordModelHeartbeat(source: actor, detail: detail.isEmpty ? "底层进程仍在运行。" : detail, isSynthetic: true)
-            } else if CodexDiagnosticLogFilter.isInternalDiagnosticLine(line) {
-                recordModelHeartbeat(source: actor, detail: "底层流式连接正在自动重试，进程仍保持活跃。", isSynthetic: false)
-                recordRemoteStreamRetryDiagnostic(line, actor: actor)
-            } else {
-                recordModelHeartbeat(source: actor, detail: line, isSynthetic: false)
-                if !suppressTrace {
-                    appendTrace(kind: .tool, actor: actor, title: "底层输出", detail: line, isStream: true)
-                }
-            }
-        }
-    }
-
-
     func enterCoreState(_ newState: LingShuCoreState, resetTimer: Bool = true) {
         let now = Date()
 
@@ -826,14 +793,8 @@ final class LingShuState: ObservableObject {
         }
     }
 
-    func cancelActiveCodexCalls() {
-        activeRouteHandle?.cancel()
-        activeExecutionHandle?.cancel()
-        activeHealthProbeHandle?.cancel()
+    func cancelActiveModelCalls() {
         activeAPITask?.cancel()
-        activeRouteHandle = nil
-        activeExecutionHandle = nil
-        activeHealthProbeHandle = nil
         activeAPITask = nil
         if isMainRemoteProbeInFlight {
             mainRemoteProbeRunID += 1
@@ -845,8 +806,6 @@ final class LingShuState: ObservableObject {
     private func cancelMainRemoteHealthProbe(reason _: String, detail _: String) {
         guard isMainRemoteProbeInFlight else { return }
         mainRemoteProbeRunID += 1
-        activeHealthProbeHandle?.cancel()
-        activeHealthProbeHandle = nil
         isMainRemoteProbeInFlight = false
         refreshMainRemoteConnectionStatus()
     }
@@ -873,7 +832,7 @@ final class LingShuState: ObservableObject {
         if pendingShellApproval != nil {
             resolveShellApproval(.deny)
         }
-        cancelActiveCodexCalls()
+        cancelActiveModelCalls()
         if let currentChatTurnID { cancelledChatTurnIDs.insert(currentChatTurnID) }
         activeAgentTurnTask?.cancel()
         activeAgentTurnTask = nil
@@ -1053,10 +1012,6 @@ final class LingShuState: ObservableObject {
             apiKey = storedKey
         }
 
-        if preset.name == "Codex Auth" {
-            codexCLIPath = CodexBridge.bundledCLIPath
-        }
-
         resetBrainScoreForCurrentBrain()   // 换大模型 → 大脑评分归零(评分只属于某一颗脑)
 
         // 换脑即时生效 + 记忆延续:重建常驻会话(主/自主),下次回合用新模型重新构造 adapter,
@@ -1079,11 +1034,7 @@ final class LingShuState: ObservableObject {
     }
 
     var canShowAgentRuntime: Bool {
-        if usesCodexAuth {
-            return codexAuthStatus == "已登录" && (isModelReplying || isModelExecuting || runtimePhase != .idle || !supervisorEvents.isEmpty)
-        }
-
-        return isModelConnected && runtimePhase != .idle
+        isModelConnected && runtimePhase != .idle
     }
 
     var callChainAgents: [LingShuAgent] {
@@ -1186,7 +1137,8 @@ final class LingShuState: ObservableObject {
         existingTaskRecordID: String? = nil,
         appendUserMessage: Bool = true,
         bypassActiveGate: Bool = false,
-        forcedThreadID: String? = nil
+        forcedThreadID: String? = nil,
+        reusePlaceholderID: UUID? = nil
     ) -> String {
         let trimmedPrompt = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedPrompt.isEmpty else { return "" }
@@ -1281,16 +1233,33 @@ final class LingShuState: ObservableObject {
             return runMainAgentTurn(prompt: resumePrompt, taskRecordID: existing, resumeBlocked: wasWaiting)
         }
 
+        // **串行闸门(2026-06-25「砍掉双线并行」)**:走到这里=新顶层输入(演示/录制/声明式/自主答复/在岗/显式续接/本机直答
+        // 都已在更早返回)。若当前已有回合在真跑(问答线在飞 OR 任务子线程在执行)→ **入串行队列**,不再并行处理;
+        // 当前回合完全返回后由 drainSerialInputsIfIdle 自动逐条出队。reusePlaceholderID!=nil=出队重提交,不再二次入队。
+        if reusePlaceholderID == nil, !bypassActiveGate, existingTaskRecordID == nil, currentlyExecutingTurn() {
+            enqueueSerialInput(prompt: trimmedPrompt, source: source)
+            return ""
+        }
+
         // 新顶层输入:**上下文感知分诊**(近全 + 远压缩 + 可续任务线程)——
         //   reply(在回答/延续某条**派发的隔离任务**,如它问"做什么主题",哪怕隔了几条)→ 续跑**那条隔离会话**(带真上下文);
         //   chat(直答/问答)→ 留主 session(对话连续);
-        //   task(全新执行/落盘/多步)→ 派发**独立隔离 session 并行跑**(不串主上下文)。
+        //   task(全新执行/落盘/多步)→ 派发独立隔离 session(单串行下不会与主会话并行)。
         // 记录**按需建**:reply 续用派发线程自己的记录(不另建),task/chat 各建一条。异步,真回复经气泡给出。
         // **顺序修(2026-06-23,监工"一问一答变成怪格式"):**分诊是异步(控制面往返),若只 append 用户消息、答复气泡
         // 等分诊完才出,rapid 连发就"问题全堆上面、答复全堆下面"。这里**同步先放一个答复占位气泡紧跟用户消息后**,
         // 保持 Q→A 交错;分诊定路由后:chat/派发**复用**它,入队/续接到已有线程则**移除**它。
-        let placeholder = ChatMessage(speaker: "灵枢", text: "", isUser: false, isLoading: true)
-        chatMessages.append(placeholder)
+        // 出队重提交(reusePlaceholderID)时**复用入队那条"已排队"气泡**当占位,不再新建,保持单气泡生命周期。
+        let placeholder: ChatMessage
+        if let reusePlaceholderID, let idx = chatMessages.firstIndex(where: { $0.id == reusePlaceholderID }) {
+            chatMessages[idx].text = ""
+            chatMessages[idx].isLoading = true
+            placeholder = chatMessages[idx]
+        } else {
+            let fresh = ChatMessage(speaker: "灵枢", text: "", isUser: false, isLoading: true)
+            chatMessages.append(fresh)
+            placeholder = fresh
+        }
         let placeholderID = placeholder.id
         Task { @MainActor [weak self] in
             guard let self else { return }
@@ -1381,15 +1350,6 @@ final class LingShuState: ObservableObject {
         return ""
     }
 
-    func refreshCodexAuthStatusIfNeeded() {
-        guard usesCodexAuth, codexAuthStatus == "未检查" else { return }
-        refreshCodexAuthStatus()
-    }
-
-    func forceMainRemoteHealthProbe() {
-        performMainRemoteHealthProbe(reason: "手动探活", force: true)
-    }
-
     func resetAgentRuntime(title: String = "灵枢待命", status: String = "真实模型连接后，我会按任务需要动态展示参与的 agent。") {
         missionRunID += 1
         runtimePhase = .idle
@@ -1415,37 +1375,7 @@ final class LingShuState: ObservableObject {
         }
     }
 
-    func refreshCodexAuthStatus() {
-        guard !isCheckingCodexAuth else { return }
-        isCheckingCodexAuth = true
-        codexAuthStatus = "检查中"
-        codexAuthDetail = "正在执行 codex login status"
-        appendTrace(kind: .tool, actor: "Codex Auth", title: "检查登录", detail: "执行 codex login status。")
-        let cliPath = codexCLIPath
-
-        DispatchQueue.global(qos: .userInitiated).async {
-            let status = CodexBridge.loginStatus(preferredPath: cliPath)
-            DispatchQueue.main.async {
-                self.codexAuthStatus = status.status
-                self.codexAuthDetail = status.detail
-                self.enterCoreState(status.status == "已登录" ? .standby : .abnormal)
-                self.isCheckingCodexAuth = false
-                self.logEvent("现在  Codex Auth 状态：\(status.status) \(status.detail)。")
-                self.appendTrace(kind: status.status == "已登录" ? .result : .warning, actor: "Codex Auth", title: "登录状态", detail: "\(status.status)：\(status.detail)。")
-                if status.status == "已登录" {
-                    self.performMainRemoteHealthProbe(reason: "登录后探活", force: true)
-                } else {
-                    self.mainRemoteConsecutiveFailures = 0
-                    self.mainRemoteLastFailureReason = status.detail
-                    self.mainRemoteLastDiagnosticLog = status.detail
-                    self.refreshMainRemoteConnectionStatus()
-                }
-            }
-        }
-    }
-
-
-    func rememberMainThreadTurn(prompt: String, reply: String, route: CodexRoutePayload? = nil) {
+    func rememberMainThreadTurn(prompt: String, reply: String, route: LingShuRoutePayload? = nil) {
         if let title = memoryService.rememberMainThreadTurn(
             prompt: prompt,
             reply: reply,

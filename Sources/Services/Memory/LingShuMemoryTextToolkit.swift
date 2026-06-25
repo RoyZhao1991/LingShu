@@ -109,7 +109,7 @@ enum LingShuMemoryTextToolkit {
         return ephemeralPrompts.contains(normalized) || (normalized.contains("你是谁") && normalized.count <= 8)
     }
 
-    static func compressedMemorySummary(previous: String, prompt: String, reply: String, route: CodexRoutePayload?) -> String {
+    static func compressedMemorySummary(previous: String, prompt: String, reply: String, route: LingShuRoutePayload?) -> String {
         let routeText: String
         if let route {
             let agents = route.agents.map(\.agent).joined(separator: "、")

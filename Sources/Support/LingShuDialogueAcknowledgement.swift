@@ -8,7 +8,7 @@ struct LingShuDialogueAcknowledgement {
     }
 
     func routeReply(
-        for route: CodexRoutePayload,
+        for route: LingShuRoutePayload,
         fallback: String,
         willExecute: Bool
     ) -> String {

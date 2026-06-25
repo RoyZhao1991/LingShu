@@ -44,7 +44,7 @@ final class FullStackE2E200Tests: XCTestCase {
         }
 
         let state = LingShuState()
-        state.codexWorkingDirectory = tempRoot.path
+        state.agentWorkingDirectory = tempRoot.path
         let scenarios = Self.makeScenarios()
         XCTAssertGreaterThanOrEqual(scenarios.count, 200)
 

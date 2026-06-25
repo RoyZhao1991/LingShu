@@ -25,7 +25,7 @@ extension LingShuState {
     }
 
     /// 用户在选择卡片上点了某个选项：标记已解决，把 label 作为一条输入提交，交 agent 循环推进。
-    func selectRouteChoice(_ option: CodexRouteChoiceOption, for messageID: UUID) {
+    func selectRouteChoice(_ option: LingShuRouteChoiceOption, for messageID: UUID) {
         guard let index = chatMessages.firstIndex(where: { $0.id == messageID }),
               chatMessages[index].resolvedChoice == nil else { return }
         chatMessages[index].resolvedChoice = option.label

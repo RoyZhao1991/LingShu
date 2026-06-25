@@ -67,7 +67,8 @@ enum LingShuToolCatalog {
         "read_file", "write_file", "edit_file", "apply_patch", "run_command", "web_search",
         "ask_user", "ask_form", "speak", "recall_memory", "recall_local", "update_plan", "spawn_task",
         "register_agent", "run_agent",   // agent 即插件(通用):被告知本机有某 CLI agent→注册;把活外包给已注册 agent
-        "present_documents"   // 「演示与答疑」插件:恒可见,做正式文档演示时大脑直接用
+        "present_documents",   // 「演示与答疑」插件:恒可见,做正式文档演示时大脑直接用
+        "self_inspect"   // 自检:随时拉自己的整体架构+实时能力(答自指/规划/自进化用真实自我认知)
     ]
     static let searchToolName = "search_tools"
 

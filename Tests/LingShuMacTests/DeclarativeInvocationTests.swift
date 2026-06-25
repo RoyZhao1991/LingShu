@@ -56,4 +56,16 @@ final class DeclarativeInvocationTests: XCTestCase {
         XCTAssertEqual(chain[0].id, "present")
         XCTAssertEqual(chain[0].segment, "/tmp/a.pdf")
     }
+
+    /// 验收门:agent 输出「没权限/只读」信号识别(声明式调 agent 的授权兜底据此触发)。
+    func testAgentOutputLacksPermissionDetection() {
+        // 复现 codex 的真实只读反馈。
+        XCTAssertTrue(LingShuState.agentOutputLacksPermission("当前环境是只读的，我无法直接在 /Users/example/app 里创建文件。"))
+        XCTAssertTrue(LingShuState.agentOutputLacksPermission("Error: read-only file system"))
+        XCTAssertTrue(LingShuState.agentOutputLacksPermission("mkdir: permission denied"))
+        XCTAssertTrue(LingShuState.agentOutputLacksPermission("没有写入权限,无法创建文件"))
+        // 正常成功输出不应误判。
+        XCTAssertFalse(LingShuState.agentOutputLacksPermission("已创建 tank.html,浏览器打开即可玩。"))
+        XCTAssertFalse(LingShuState.agentOutputLacksPermission("做好了,文件写到 /Users/example/app/tank.html,跑测试全绿。"))
+    }
 }

@@ -52,7 +52,7 @@ extension LingShuState {
     }
 
     @discardableResult
-    func applyTaskRecordRoute(_ recordID: String?, route: CodexRoutePayload) {
+    func applyTaskRecordRoute(_ recordID: String?, route: LingShuRoutePayload) {
         guard let recordID,
               let index = taskExecutionRecords.firstIndex(where: { $0.id == recordID }) else { return }
 
@@ -106,13 +106,13 @@ extension LingShuState {
     /// 非代码任务(无源码产出物)/ 工作目录非 git 仓 / 本任务文件都已提交 → nil,面板不显示该模块。
     func captureCodeChanges(recordID: String) {
         guard let idx = taskExecutionRecords.firstIndex(where: { $0.id == recordID }) else { return }
-        let workingDir = codexWorkingDirectory
+        let workingDir = agentWorkingDirectory
         // 本任务真正产出/改动的**源码/配置/文档**文件(交付物/素材归"产出物"面板,不算代码改动)。
         let taskCodePaths = taskExecutionRecords[idx].artifacts
             .map(\.location)
             .filter { Self.isCodeLikePath($0) }
         guard !taskCodePaths.isEmpty else { return }   // 非代码任务 → 不抓、不显示(治"问时间也有代码改动")
-        // 工程根=代码文件的公共父目录(新工程多半在自己的目录里,不一定是 codexWorkingDirectory)。
+        // 工程根=代码文件的公共父目录(新工程多半在自己的目录里,不一定是 agentWorkingDirectory)。
         // **剔除临时/scratch 输出**(/tmp、/var/folders 这类):一个跑到 /tmp 的输出文件会让公共父目录跨根缩到 "/"→nil,
         // 把整个工程根判丢(实测:清分系统的源码在 ~/app/settlement-system,但一个 /tmp/output.txt 让 codeRoot 失准)。
         let projectPaths = taskCodePaths.filter { p in
@@ -303,7 +303,7 @@ extension LingShuState {
     func commitTaskCodeChanges(recordID: String) {
         guard let idx = taskExecutionRecords.firstIndex(where: { $0.id == recordID }),
               let code = taskExecutionRecords[idx].codeChanges, !code.files.isEmpty else { return }
-        let workingDir = codexWorkingDirectory
+        let workingDir = agentWorkingDirectory
         let relPaths = code.files.map(\.path)
         let title = taskExecutionRecords[idx].title.trimmingCharacters(in: .whitespacesAndNewlines)
         let message = "灵枢:\(title.isEmpty ? "任务改动" : title)"

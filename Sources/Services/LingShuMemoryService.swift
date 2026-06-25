@@ -114,7 +114,7 @@ final class LingShuMemoryService {
     func rememberMainThreadTurn(
         prompt: String,
         reply: String,
-        route: CodexRoutePayload? = nil,
+        route: LingShuRoutePayload? = nil,
         isCapabilityCollaboration: Bool
     ) -> String? {
         guard shouldPersistMainThreadMemory(
@@ -436,7 +436,7 @@ final class LingShuMemoryService {
     private func shouldPersistMainThreadMemory(
         prompt: String,
         reply: String,
-        route: CodexRoutePayload?,
+        route: LingShuRoutePayload?,
         isCapabilityCollaboration: Bool
     ) -> Bool {
         if LingShuMemoryTextToolkit.isEphemeralLocalPrompt(prompt) && prompt.count <= 8 {

@@ -91,7 +91,7 @@ extension LingShuState {
         let prompt = """
         刚结束一场会议。下面是「系统声音」的完整转写(分段带相对时间,可能有识别误差,请据上下文纠正明显错字)。请:
         1) 生成一份结构化中文**会议纪要**:主题 / 时间与时长 / 讨论要点(分条)/ 形成的决议 / 待办事项(尽量标责任人与时限)/ 风险或待跟进问题;
-        2) 用 `write_file` 把纪要**落成本地文档**存到工作目录 \(codexWorkingDirectory),文件名带日期(如 `会议纪要-YYYYMMDD-HHmm`)。**优先 .docx**(可用 run_command 走 python-docx/pandoc 生成;装不了或不可用就存 .md,别卡住);
+        2) 用 `write_file` 把纪要**落成本地文档**存到工作目录 \(agentWorkingDirectory),文件名带日期(如 `会议纪要-YYYYMMDD-HHmm`)。**优先 .docx**(可用 run_command 走 python-docx/pandoc 生成;装不了或不可用就存 .md,别卡住);
         3) 用 `speak` 简短播报一句「会议纪要已生成」,**并调用 `push_notification`** 推一条系统通知(标题「会议纪要已生成」、正文带文件名),这样主人不在电脑前也能看到;最后在回复里给出**纪要要点摘要 + 文件绝对路径**。
 
         完整转写:

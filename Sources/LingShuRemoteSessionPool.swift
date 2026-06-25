@@ -27,17 +27,6 @@ struct LingShuRemoteModelAdapterProfile: Equatable {
             .joined(separator: " ")
             .lowercased()
 
-        if normalized.contains("codex") || normalized.contains("codex://") {
-            return .init(
-                provider: provider,
-                contextMode: .commandResume,
-                supportsStreaming: true,
-                supportsNativeContinuation: true,
-                continuationField: "session_id",
-                notes: "通过 Codex exec resume 复用上一轮会话。"
-            )
-        }
-
         if normalized.contains("responses") || normalized.contains("/responses") {
             return .init(
                 provider: provider,

@@ -211,7 +211,9 @@ extension LingShuState {
     }
 
     @discardableResult
-    func dispatchIsolatedTask(prompt: String, taskRecordID: String, goal: String?, existingBubbleID: UUID? = nil) -> String {
+    func dispatchIsolatedTask(prompt: String, taskRecordID: String, goal: String?, existingBubbleID: UUID? = nil,
+                              makerAgentID: String? = nil, makerName: String? = nil,
+                              checkerAgentID: String? = nil, checkerName: String? = nil) -> String {
         installAgentEventSinkIfNeeded()
         interruptSpeechOutput?()
         let subID = "task-\(UUID().uuidString.prefix(6))"
@@ -237,11 +239,24 @@ extension LingShuState {
         appendTrace(kind: .route, actor: "主线程分诊", title: "派发隔离任务", detail: "判为执行任务,派生独立隔离 session 并行推进(不进主对话上下文)。")
 
         // 引擎接缝:解析 maker + checker 评审绑定(谁开发 / 谁验收 / 是否异源),存下供验收复用,并**明确标注**。
-        let makerPlan = resolveMakerEngine(taskRecordID: taskRecordID)
-        let adapter = makerPlan.localAdapter ?? routedModelAdapter(taskRecordID: taskRecordID)
-        let reviewBinding = reviewBinding(forMaker: makerPlan.engine)
-        taskReviewBindings[taskRecordID] = reviewBinding
-        appendTrace(kind: .system, actor: "派发引擎", title: "maker / checker 绑定", detail: reviewBinding.label)
+        // 灵枢始终用本地脑当编排/验收 session 的模型;**maker 是外部 agent 时**(@Codex 等),开发由灵枢在 LOOP 里
+        // 经 run_agent 委托给该 agent(它才是真 maker),灵枢/另一个 agent 当 checker——maker≠checker 跨厂商验收。
+        let adapter = routedModelAdapter(taskRecordID: taskRecordID)
+        let binding: LingShuReviewBinding
+        if let makerAgentID, let makerName {
+            let makerEngine = LingShuAgentEngineDescriptor(id: "external:\(makerAgentID)", kind: .externalCLI, providerLabel: makerName, available: true)
+            let checkerEngine: LingShuAgentEngineDescriptor
+            if let checkerAgentID, let checkerName {
+                checkerEngine = .init(id: "external:\(checkerAgentID)", kind: .externalCLI, providerLabel: checkerName, available: true)
+            } else {
+                checkerEngine = .init(id: "localBrain:\(modelProvider.lowercased())", kind: .localBrain, providerLabel: modelProvider, available: true)
+            }
+            binding = .init(maker: makerEngine, checker: checkerEngine, crossSource: true)
+        } else {
+            binding = reviewBinding(forMaker: resolveMakerEngine(taskRecordID: taskRecordID).engine)
+        }
+        taskReviewBindings[taskRecordID] = binding
+        appendTrace(kind: .system, actor: "派发引擎", title: "maker / checker 绑定", detail: binding.label)
         // 边做边想:派发的隔离子任务也要把模型每步动作前的旁白落进**这条任务自己的记录**——否则任务窗口
         // 只见工具调用、缺"运行时思考",看不出每步为什么这么做。记录 id 用本子任务的(主会话用 currentAgentTurnRecordID,
         // 这里不同);后台并行跑,不抢全局 missionStatus。
@@ -272,9 +287,25 @@ extension LingShuState {
         if !preflightGuidance.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             initialMessages.append(.init(role: .system, content: preflightGuidance))
         }
+        // **maker 是外部 agent(@Codex 等):把开发委托给它,你只编排+验收(maker≠checker 跨厂商)。**
+        // 这条让 LOOP 以 codex 当 maker 跑——之前 maker 是灵枢自己的 session,现在换成 codex session,LOOP/验收/目标解析全不变。
+        if let makerAgentID, let makerName {
+            let checkerWho = checkerName ?? "异源审查员(独立会话,不同于你)"
+            initialMessages.append(.init(role: .system, content: """
+            【本任务的 maker / checker(用户定调:任何任务都走 LOOP;maker 与 checker 是**两条独立会话**,绝不自评)】
+            开发(maker)= **\(makerName)** agent。验收(checker)= **\(checkerWho)**(由**系统在你交付后自动**调起的独立会话)。你(灵枢)是**编排者**。
+            你**只**做三件事,做完就停:
+            1. **理解 + 规划**:把目标、成功标准想清楚(已有 GoalSpec 就对齐它)。
+            2. **委托 maker 开发**:调 `run_agent(agent:"\(makerAgentID)", objective:"<完整开发目标 + 成功标准 + 要落地的文件/可运行>")`,让 \(makerName) 真写代码、落文件、跑起来。
+            3. **如实汇报 maker 产出**(做了什么、落了哪些文件),然后**结束你的回合**。
+            **铁律(maker≠checker 靠这条落地)**:验收**不归你管**——系统会在你结束后自动让独立 checker(\(checkerWho))复核。
+            所以你**绝不**自己写代码、**绝不**调 `run_agent` 去做"复核/验收"、**绝不**自己跑测试来下"验收通过/不通过"的结论、**绝不**替 checker 拍板。
+            (你顺手 cat/读一眼确认 maker 真落了盘可以,但**判过没过是 checker 的事,不是你的事**。)若你确知 maker 明显没落地/报错,可让它先返工再交回;但绝不假装完成。
+            """))
+        }
         let sub = makeAgentSession(
             id: subID,
-            system: Self.dispatchedTaskSystemPrompt(workingDir: codexWorkingDirectory),
+            system: Self.dispatchedTaskSystemPrompt(workingDir: agentWorkingDirectory),
             initialMessages: initialMessages,
             tools: tools,
             model: adapter,

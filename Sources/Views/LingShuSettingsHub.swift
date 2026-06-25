@@ -14,6 +14,7 @@ struct LingShuSettingsHub: View {
         case plugins = "插件"
         case connectors = "连接器"
         case memory = "记忆"
+        case selfCheck = "自检"
         var id: String { rawValue }
         var icon: String {
             switch self {
@@ -24,6 +25,7 @@ struct LingShuSettingsHub: View {
             case .plugins: "square.grid.2x2"
             case .connectors: "app.connected.to.app.below.fill"
             case .memory: "brain"
+            case .selfCheck: "scope"
             }
         }
         var englishName: String {
@@ -35,6 +37,7 @@ struct LingShuSettingsHub: View {
             case .plugins: "Plugins"
             case .connectors: "Connectors"
             case .memory: "Memory"
+            case .selfCheck: "Self-check"
             }
         }
     }
@@ -110,6 +113,8 @@ struct LingShuSettingsHub: View {
                         LingShuMemoryStatsPanel(state: state)
                             .padding(22)
                     }
+                case .selfCheck:
+                    ScrollView { LingShuSelfCheckPanel(state: state).padding(22) }
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)

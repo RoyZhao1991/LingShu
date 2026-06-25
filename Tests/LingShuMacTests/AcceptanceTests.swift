@@ -286,7 +286,7 @@ final class AcceptanceTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: dir) }
         let stale = dir.appendingPathComponent("report.pdf").path
         FileManager.default.createFile(atPath: stale, contents: Data("old".utf8))
-        state.codexWorkingDirectory = dir.path
+        state.agentWorkingDirectory = dir.path
 
         XCTAssertFalse(state.acceptanceFileExists("report.pdf", realFiles: []),
                        "工作目录里有旧文件但本任务没有登记/声明时,不能算本轮达成")

@@ -2,9 +2,9 @@ import SwiftUI
 
 /// 灵枢请用户在有限选项中做选择时的选择卡片（对话内嵌）。选过之后置为已解决态，不再可点。
 struct LingShuChoiceCard: View {
-    let prompt: CodexRouteChoicePrompt
+    let prompt: LingShuRouteChoicePrompt
     let resolvedChoice: String?
-    let onSelect: (CodexRouteChoiceOption) -> Void
+    let onSelect: (LingShuRouteChoiceOption) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {

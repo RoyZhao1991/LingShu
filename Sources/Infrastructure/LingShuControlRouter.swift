@@ -70,6 +70,11 @@ final class LingShuControlRouter {
             "inputSchema": ["type": "object", "properties": [:] as [String: Any]]
         ],
         [
+            "name": "lingshu_self_check",
+            "description": "灵枢自检:返回它当前的**整体架构(分层设计)+ 实时能力**(当前大脑、可用工具、已接入 agent 插件、已学技能、记忆规模、感知通道、自主/在岗运行态)的 markdown 报告。看灵枢『掌握自己到什么程度』、核对它能干什么。",
+            "inputSchema": ["type": "object", "properties": [:] as [String: Any]]
+        ],
+        [
             "name": "lingshu_send_prompt",
             "description": "向灵枢提交一条文本指令(等价用户输入),返回即时路由/直答结果;模型完整回复会异步进入对话,可用 lingshu_get_chat 轮询。",
             "inputSchema": [
@@ -370,6 +375,8 @@ final class LingShuControlRouter {
         switch name {
         case "lingshu_status":
             return (jsonText(statusPayload()), false)
+        case "lingshu_self_check":
+            return (state.selfInspectionReport, false)
         case "lingshu_send_prompt":
             guard let text = (arguments["text"] as? String), !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
                 return ("缺少参数 text", true)
@@ -713,7 +720,7 @@ final class LingShuControlRouter {
             protocolName: state.selectedModelPreset?.protocolName ?? "OpenAI 兼容",
             apiKey: state.apiKey,
             temperature: state.temperature,
-            timeout: state.codexTimeoutSeconds
+            timeout: state.modelTimeoutSeconds
         )
         let timeTool = LingShuAgentTool(
             name: "get_current_time",

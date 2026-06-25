@@ -116,29 +116,25 @@ final class CoreBoundaryTests: XCTestCase {
         XCTAssertTrue(LingShuModelServiceFailure.userFacingReason(original.encodedReason).contains("限流"))
     }
 
-    func testLocalIntentResolverAnswersSelfIdentityWithoutRemoteBrain() {
-        XCTAssertEqual(
-            LingShuLocalIntentResolver.answer(for: "你是谁"),
-            "我是灵枢，有什么可以帮你的？"
-        )
-
-        let intro = LingShuLocalIntentResolver.answer(for: "我是第一次见你。用一句话介绍你自己，不要列能力清单。")
-        XCTAssertNotNil(intro)
-        XCTAssertTrue(intro?.contains("我是灵枢") == true)
-        XCTAssertFalse(intro?.contains("工具") == true)
+    func testLocalIntentResolverNoLongerCannedAnswersIdentity() {
+        // 用户定调 2026-06-25:身份/能力问题不再走本机关键词罐头(要 AGI 真答,不要模板垃圾)→ 返回 nil,交大脑动态回答。
+        XCTAssertNil(LingShuLocalIntentResolver.answer(for: "你是谁"))
+        XCTAssertNil(LingShuLocalIntentResolver.answer(for: "介绍一下你自己"))
+        XCTAssertNil(LingShuLocalIntentResolver.answer(for: "详细说明一下你能做什么"))
+        XCTAssertNil(LingShuLocalIntentResolver.answer(for: "你的能力"))
+        // 事实型即时快答(时间/日期)仍保留——那是正确事实,不是人格罐头。
+        XCTAssertNotNil(LingShuLocalIntentResolver.answer(for: "现在几点了"))
+        XCTAssertNotNil(LingShuLocalIntentResolver.answer(for: "今天几号"))
     }
 
     @MainActor
-    func testSubmitTextInputUsesLocalWeakBrainForDeterministicSelfAnswer() {
+    func testSubmitTextInputRoutesIdentityToBrainNotCanned() {
         let state = LingShuState()
         let returned = state.submitTextInput("你是谁")
 
-        XCTAssertEqual(returned, "我是灵枢，有什么可以帮你的？")
-        XCTAssertEqual(state.pendingChatTurnIDs.count, 0)
-        XCTAssertFalse(state.hasActiveModelCall)
-        XCTAssertEqual(state.chatMessages.suffix(2).map(\.isUser), [true, false])
-        XCTAssertEqual(state.chatMessages.last?.text, "我是灵枢，有什么可以帮你的？")
-        XCTAssertEqual(state.taskExecutionRecords.first?.status, .answered)
+        // 不再本机罐头直答——身份问题交大脑(异步真答),同步不返回任何固定罐头串。
+        XCTAssertNotEqual(returned, "我是灵枢，有什么可以帮你的？")
+        XCTAssertNotEqual(state.chatMessages.last?.text, "我是灵枢，有什么可以帮你的？")
     }
 
     @MainActor
@@ -174,48 +170,48 @@ final class CoreBoundaryTests: XCTestCase {
         XCTAssertNil(LingShuState.explicitLocalMemoryFact(from: "我把记录一下写在材料里, 不是让你记忆。"))
     }
 
-    func testRemoteSessionPoolReusesWarmCodexRoutingSession() {
+    func testRemoteSessionPoolReusesWarmNativeRoutingSession() {
         let defaults = UserDefaults(suiteName: "lingshu.remote-session.tests.\(UUID().uuidString)")!
         let pool = LingShuRemoteSessionPool(defaults: defaults, maxHotSessions: 4, warmTTL: 600)
         let now = Date()
 
         let coldLease = pool.lease(
-            provider: "Codex Auth",
+            provider: "OpenAI",
             model: "gpt-5.5",
             purpose: .mainRouting,
             contextKey: "main-session",
             workingDirectory: "/tmp/project",
             permissionBoundary: "sandbox",
-            endpoint: "codex://local-cli",
-            protocolName: "Codex CLI",
+            endpoint: "https://api.openai.com/v1/responses",
+            protocolName: "Responses / OpenAI",
             localContextSummary: "主线程摘要",
             now: now
         )
         XCTAssertFalse(coldLease.isWarm)
-        XCTAssertEqual(coldLease.contextMode, .commandResume)
+        XCTAssertEqual(coldLease.contextMode, .nativeConversation)
 
         pool.resolveNativeSession(
             lease: coldLease,
-            nativeSessionID: "codex-session-1",
+            nativeSessionID: "resp-session-1",
             localContextSummary: "更新后的主线程摘要",
             now: now.addingTimeInterval(1)
         )
 
         let warmLease = pool.lease(
-            provider: "Codex Auth",
+            provider: "OpenAI",
             model: "gpt-5.5",
             purpose: .mainRouting,
             contextKey: "main-session",
             workingDirectory: "/tmp/project",
             permissionBoundary: "sandbox",
-            endpoint: "codex://local-cli",
-            protocolName: "Codex CLI",
+            endpoint: "https://api.openai.com/v1/responses",
+            protocolName: "Responses / OpenAI",
             now: now.addingTimeInterval(2)
         )
 
         XCTAssertTrue(warmLease.isWarm)
         XCTAssertTrue(warmLease.canResumeNativeSession)
-        XCTAssertEqual(warmLease.nativeSessionID, "codex-session-1")
+        XCTAssertEqual(warmLease.nativeSessionID, "resp-session-1")
     }
 
     func testRemoteSessionPoolSeparatesExecutionSessionsByTaskContext() {
@@ -224,27 +220,27 @@ final class CoreBoundaryTests: XCTestCase {
         let now = Date()
 
         let first = pool.lease(
-            provider: "Codex Auth",
+            provider: "OpenAI",
             model: "gpt-5.5",
             purpose: .taskExecution,
             contextKey: "task-a",
             workingDirectory: "/tmp/project",
             permissionBoundary: "sandbox",
-            endpoint: "codex://local-cli",
-            protocolName: "Codex CLI",
+            endpoint: "https://api.openai.com/v1/responses",
+            protocolName: "Responses / OpenAI",
             now: now
         )
         pool.resolveNativeSession(lease: first, nativeSessionID: "task-session-a", now: now.addingTimeInterval(1))
 
         let second = pool.lease(
-            provider: "Codex Auth",
+            provider: "OpenAI",
             model: "gpt-5.5",
             purpose: .taskExecution,
             contextKey: "task-b",
             workingDirectory: "/tmp/project",
             permissionBoundary: "sandbox",
-            endpoint: "codex://local-cli",
-            protocolName: "Codex CLI",
+            endpoint: "https://api.openai.com/v1/responses",
+            protocolName: "Responses / OpenAI",
             now: now.addingTimeInterval(2)
         )
 
@@ -541,46 +537,12 @@ final class CoreBoundaryTests: XCTestCase {
         XCTAssertEqual(decoded.artifacts.first?.title, "需求说明书")
     }
 
-    func testCodexRetryDiagnosticsAreFilteredFromUserVisibleOutput() {
-        let diagnostic = "2026-06-10T01:55:01.699073Z  WARN codex_core::responses_retry: stream disconnected - retrying sampling request (1/5 in 189ms)..."
-        let rawOutput = """
-        灵枢回复第一行
-        \(diagnostic)
-        灵枢回复第二行
-        """
-
-        XCTAssertTrue(CodexDiagnosticLogFilter.isInternalDiagnosticLine(diagnostic))
-        XCTAssertEqual(CodexDiagnosticLogFilter.diagnosticSummary(from: diagnostic), diagnostic)
-        XCTAssertEqual(
-            CodexDiagnosticLogFilter.userVisibleText(from: rawOutput),
-            "灵枢回复第一行\n灵枢回复第二行"
-        )
-    }
-
-    @MainActor
-    func testGuardStreamsUpdateHealthWithoutPollutingExecutionTrace() {
-        let state = LingShuState()
-        let initialTraceCount = state.executionTrace.count
-        let diagnostic = "2026-06-10T01:55:01.699073Z  WARN codex_core::responses_retry: stream disconnected - retrying sampling request (1/5 in 189ms)..."
-
-        state.appendCodexStream("__LINGSHU_HEARTBEAT__ LINGSHU_HEALTH_OK", actor: "主线程守护")
-        state.appendCodexStream("LINGSHU_HEALTH_OK", actor: "主线程守护")
-        state.appendCodexStream(diagnostic, actor: "远端会话守护")
-
-        XCTAssertEqual(state.executionTrace.count, initialTraceCount)
-        XCTAssertEqual(state.modelHeartbeatSource, "远端会话守护")
-
-        state.appendCodexStream("真实执行输出", actor: "执行模型")
-        XCTAssertEqual(state.executionTrace.count, initialTraceCount + 1)
-        XCTAssertEqual(state.executionTrace.last?.detail, "真实执行输出")
-    }
-
     func testPermissionPolicyKeepsLightweightDevelopmentInSandbox() {
         let policy = LingShuPermissionPolicy()
 
         let decision = policy.decide(
             intent: .lightweightDevelopment,
-            codexMode: .fullAccess,
+            permissionMode: .fullAccess,
             requireHumanApproval: true
         )
 
@@ -595,7 +557,7 @@ final class CoreBoundaryTests: XCTestCase {
 
         let decision = policy.decide(
             intent: .projectExecution,
-            codexMode: .fullAccess,
+            permissionMode: .fullAccess,
             requireHumanApproval: true
         )
 
@@ -603,23 +565,6 @@ final class CoreBoundaryTests: XCTestCase {
         XCTAssertTrue(decision.allowsFileMutation)
         XCTAssertTrue(decision.requiresHumanApproval)
         XCTAssertTrue(decision.boundary.contains("高风险动作需人工确认"))
-    }
-
-    func testModelGatewaySnapshotsCodexAuthConnection() {
-        let gateway = LingShuModelGateway()
-
-        let snapshot = gateway.snapshot(
-            provider: "Codex Auth",
-            model: "gpt-5.5",
-            endpoint: "codex://local-cli",
-            apiKey: "",
-            codexAuthStatus: "已登录",
-            codexAuthDetail: "ChatGPT"
-        )
-
-        XCTAssertEqual(snapshot.connectionKind, .codexAuth)
-        XCTAssertTrue(snapshot.isConnected)
-        XCTAssertEqual(snapshot.engineLabel, "Codex Auth / gpt-5.5")
     }
 
     func testModelGatewayBuildsOpenAICompatibleChatContract() throws {
@@ -718,9 +663,7 @@ final class CoreBoundaryTests: XCTestCase {
             provider: "Ollama",
             model: "qwen3",
             endpoint: "http://localhost:11434/v1",
-            apiKey: "",
-            codexAuthStatus: "未检查",
-            codexAuthDetail: ""
+            apiKey: ""
         )
 
         let contract = try gateway.makeInvocationContract(
@@ -785,24 +728,6 @@ final class CoreBoundaryTests: XCTestCase {
         let delta = gateway.decodeStreamingTextDelta(line: line, format: .responses)
 
         XCTAssertEqual(delta, "灵枢在。")
-    }
-
-    func testModelGatewayKeepsCodexAuthOnCodexBridge() {
-        let gateway = LingShuModelGateway()
-
-        XCTAssertThrowsError(try gateway.makeInvocationContract(
-            provider: "Codex Auth",
-            model: "gpt-5.5",
-            endpoint: "codex://local-cli",
-            protocolName: "Codex CLI",
-            apiKey: "",
-            systemPrompt: "你是灵枢。",
-            userPrompt: "你好",
-            temperature: 0.2,
-            stream: false
-        )) { error in
-            XCTAssertEqual(error as? LingShuModelGatewayError, .codexAuthRequiresBridge)
-        }
     }
 
     func testModelGatewayLeavesCloudSDKsToHostAdapters() {
@@ -999,7 +924,7 @@ final class CoreBoundaryTests: XCTestCase {
 
     func testDialogueAcknowledgementReportsExecutionDispatchForAgentRoute() {
         let acknowledgement = LingShuDialogueAcknowledgement()
-        let route = CodexRoutePayload(
+        let route = LingShuRoutePayload(
             needsAgents: true,
             agents: [
                 .init(agent: "规划", task: "形成结构"),
@@ -1177,7 +1102,7 @@ final class CoreBoundaryTests: XCTestCase {
 
     func testExecutionCoordinatorUsesCurrentReplyBeforeExecutionResult() {
         let acknowledgement = LingShuDialogueAcknowledgement()
-        let route = CodexRoutePayload(
+        let route = LingShuRoutePayload(
             needsAgents: true,
             agents: [.init(agent: "设计", task: "产出 PPT", mode: "设计")],
             currentReply: "我先按汇报场景处理，设计节点已经进入队列。",
@@ -1273,7 +1198,7 @@ final class CoreBoundaryTests: XCTestCase {
 
     func testTaskRuntimeCoordinatorRoutesAgentTaskIntoPermissionStage() {
         let coordinator = LingShuTaskRuntimeCoordinator()
-        let route = CodexRoutePayload(
+        let route = LingShuRoutePayload(
             needsAgents: true,
             agents: [.init(agent: "执行", task: "产出代码")],
             summary: "需要执行"
@@ -1281,14 +1206,14 @@ final class CoreBoundaryTests: XCTestCase {
         let initial = coordinator.begin(
             taskID: "task-2",
             memoryStatus: "未命中执行记忆",
-            engineLabel: "Codex / gpt",
+            engineLabel: "DeepSeek / chat",
             restored: false
         )
 
         let runtime = coordinator.afterRoute(
             initial,
             route: route,
-            engineLabel: "Codex / gpt",
+            engineLabel: "DeepSeek / chat",
             permissionBoundary: "sandbox"
         )
 
@@ -1302,7 +1227,7 @@ final class CoreBoundaryTests: XCTestCase {
         let initial = coordinator.begin(
             taskID: "task-3",
             memoryStatus: "未命中执行记忆",
-            engineLabel: "Codex / gpt",
+            engineLabel: "DeepSeek / chat",
             restored: false
         )
 

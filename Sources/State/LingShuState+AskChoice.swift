@@ -30,9 +30,9 @@ extension LingShuState {
             return "(当前无人值守,无法弹可点选项让主人确认;请给出你的默认建议、或稍后主人在场时再确认)"
         }
         return await withCheckedContinuation { (cont: CheckedContinuation<String, Never>) in
-            let prompt = CodexRouteChoicePrompt(
+            let prompt = LingShuRouteChoicePrompt(
                 question: question,
-                options: options.map { CodexRouteChoiceOption(label: $0.label, detail: $0.detail) })
+                options: options.map { LingShuRouteChoiceOption(label: $0.label, detail: $0.detail) })
             let msg = ChatMessage(speaker: "灵枢", text: question, isUser: false, choices: prompt)
             chatMessages.append(msg)
             pendingChoiceResolvers[msg.id] = { picked in cont.resume(returning: picked) }

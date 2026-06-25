@@ -128,8 +128,6 @@ struct LingShuModelServiceFailure: Equatable, Sendable {
         switch error {
         case .missingAPIKey:
             return .init(kind: .auth, statusCode: nil, detail: "未配置 API Key")
-        case .codexAuthRequiresBridge:
-            return .init(kind: .auth, statusCode: nil, detail: "Codex 授权通道不可用")
         case .hostAdapterRequired(let name):
             return .init(kind: .requestInvalid, statusCode: nil, detail: "缺少宿主适配器 \(name)")
         case .invalidEndpoint(let endpoint):

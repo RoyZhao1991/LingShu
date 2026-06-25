@@ -39,7 +39,7 @@ enum LingShuPrefixCache {
         switch format {
         case .anthropicMessages: return .anthropicExplicit
         case .responses, .chatCompletions: return .automatic
-        case .codexBridge, .hostAdapter: return .unsupported
+        case .hostAdapter: return .unsupported
         }
     }
 

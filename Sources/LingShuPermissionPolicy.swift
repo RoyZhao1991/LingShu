@@ -11,22 +11,22 @@ struct LingShuPermissionDecision: Equatable {
     var boundary: String
     var allowsFileMutation: Bool
     var requiresHumanApproval: Bool
-    var sandboxMode: CodexPermissionMode
+    var sandboxMode: LingShuExecutionPermissionMode
 }
 
 struct LingShuPermissionPolicy {
     func decide(
         intent: LingShuTaskIntent,
-        codexMode: CodexPermissionMode,
+        permissionMode: LingShuExecutionPermissionMode,
         requireHumanApproval: Bool
     ) -> LingShuPermissionDecision {
         switch intent {
         case .projectExecution:
             return .init(
-                boundary: "\(codexMode.rawValue)；\(requireHumanApproval ? "高风险动作需人工确认" : "按当前策略自动执行")",
+                boundary: "\(permissionMode.rawValue)；\(requireHumanApproval ? "高风险动作需人工确认" : "按当前策略自动执行")",
                 allowsFileMutation: true,
                 requiresHumanApproval: requireHumanApproval,
-                sandboxMode: codexMode
+                sandboxMode: permissionMode
             )
         case .lightweightDevelopment:
             return .init(

@@ -9,7 +9,7 @@ extension LingShuState {
 
     /// find_images 工具:联网找配图并下载到本地,返回路径。让 PPT 有真实视觉,而不是纯文字。
     func findImagesTool() -> LingShuAgentTool {
-        let workingDir = codexWorkingDirectory
+        let workingDir = agentWorkingDirectory
         return LingShuAgentTool(
             name: "find_images",
             description: "联网找高质量配图(CC/公有领域许可,Openverse),下载到工作目录 assets/ 并返回本地路径。做 PPT/海报需要真实配图时调用,把返回路径填进 slides.json 的 image 字段。",

@@ -85,7 +85,6 @@ struct LingShuRootView: View {
             }
         }
         .onAppear {
-            state.refreshCodexAuthStatusIfNeeded()
             state.livePerceptionContextProvider = { [weak perceptionGateway] in
                 guard let perceptionGateway, perceptionGateway.hasLiveSignals else { return "" }
                 return perceptionGateway.promptContext

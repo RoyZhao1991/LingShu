@@ -6,7 +6,7 @@ struct LingShuAutonomousEnvironmentInput: Equatable {
     var modelName: String
     var isModelConnected: Bool
     var modelConnectionState: String
-    var codexPermissionMode: CodexPermissionMode
+    var executionPermissionMode: LingShuExecutionPermissionMode
     var requireHumanApproval: Bool
     var permissionLevel: LingShuAutonomousPermissionLevel
     var voiceOutputEnabled: Bool
@@ -97,7 +97,7 @@ struct LingShuAutonomousEnvironmentProbe {
         case .delegated:
             return .pass
         case .full:
-            return input.codexPermissionMode == .fullAccess ? .pass : .warning
+            return input.executionPermissionMode == .fullAccess ? .pass : .warning
         }
     }
 
@@ -108,9 +108,9 @@ struct LingShuAutonomousEnvironmentProbe {
         case .delegated:
             return input.requireHumanApproval ? "代理模式：可推进低风险动作，高风险动作需确认。" : "代理模式：按当前策略自动推进授权动作。"
         case .full:
-            return input.codexPermissionMode == .fullAccess
-                ? "完整授权：Codex/工具层已处于完整权限，仍保留一键接管。"
-                : "已选择完整授权，但底层 Codex 仍是沙箱权限；系统级动作会降级。"
+            return input.executionPermissionMode == .fullAccess
+                ? "完整授权：工具层已处于完整权限，仍保留一键接管。"
+                : "已选择完整授权，但底层执行器仍是沙箱权限；系统级动作会降级。"
         }
     }
 }

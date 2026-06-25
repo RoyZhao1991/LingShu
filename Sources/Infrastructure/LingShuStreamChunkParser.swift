@@ -41,7 +41,7 @@ enum LingShuStreamChunkParsers {
         switch format {
         case .anthropicMessages: return LingShuAnthropicStreamChunkParser()
         case .responses: return LingShuResponsesStreamChunkParser()
-        case .chatCompletions, .codexBridge, .hostAdapter: return LingShuOpenAIChatStreamChunkParser()
+        case .chatCompletions, .hostAdapter: return LingShuOpenAIChatStreamChunkParser()
         }
     }
 

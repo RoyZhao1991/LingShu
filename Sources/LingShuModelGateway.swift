@@ -1,12 +1,10 @@
 import Foundation
 
 enum LingShuModelConnectionKind: String, Equatable {
-    case codexAuth = "Codex Auth"
     case apiKey = "API Key"
 }
 
 enum LingShuModelGatewayRequestFormat: String, Equatable {
-    case codexBridge
     case responses
     case chatCompletions
     case anthropicMessages
@@ -14,7 +12,6 @@ enum LingShuModelGatewayRequestFormat: String, Equatable {
 }
 
 enum LingShuModelGatewayError: Error, Equatable {
-    case codexAuthRequiresBridge
     case missingAPIKey
     case invalidEndpoint(String)
     case hostAdapterRequired(String)
@@ -121,37 +118,8 @@ struct LingShuModelGateway {
         provider: String,
         model: String,
         endpoint: String,
-        apiKey: String,
-        codexAuthStatus: String,
-        codexAuthDetail: String
+        apiKey: String
     ) -> LingShuModelGatewaySnapshot {
-        let usesCodexAuth = provider == "Codex Auth"
-        if usesCodexAuth {
-            let isConnected = codexAuthStatus == "已登录"
-            let status: String
-            switch codexAuthStatus {
-            case "已登录":
-                status = "已连接：\(codexAuthDetail)"
-            case "未检查":
-                status = "主通道未检查"
-            case "检查中":
-                status = "主通道检查中"
-            case "未登录":
-                status = "主通道未接入"
-            default:
-                status = "主通道异常"
-            }
-
-            return .init(
-                provider: provider,
-                model: model,
-                endpoint: endpoint,
-                connectionKind: .codexAuth,
-                isConnected: isConnected,
-                statusText: status
-            )
-        }
-
         let hasAPIKey = !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         let canUseWithoutAPIKey = !requiresAPIKey(provider: provider, endpoint: endpoint)
         return .init(
@@ -173,9 +141,6 @@ struct LingShuModelGateway {
         let normalizedEndpoint = endpoint.lowercased()
         let normalizedProtocol = protocolName.lowercased()
 
-        if normalizedProvider.contains("codex") || normalizedEndpoint.hasPrefix("codex://") {
-            return .codexBridge
-        }
         if normalizedEndpoint.hasPrefix("bedrock://")
             || normalizedEndpoint.hasPrefix("vertex://")
             || normalizedProtocol.contains("bedrock")
@@ -211,8 +176,6 @@ struct LingShuModelGateway {
     ) throws -> LingShuModelInvocationContract {
         let format = requestFormat(provider: provider, endpoint: endpoint, protocolName: protocolName)
         switch format {
-        case .codexBridge:
-            throw LingShuModelGatewayError.codexAuthRequiresBridge
         case .hostAdapter:
             throw LingShuModelGatewayError.hostAdapterRequired(protocolName)
         case .responses, .chatCompletions, .anthropicMessages:
@@ -277,7 +240,7 @@ struct LingShuModelGateway {
                 stream: stream,
                 cache: LingShuPrefixCache.strategy(for: format)
             )
-        case .codexBridge, .hostAdapter:
+        case .hostAdapter:
             preconditionFailure("Non-HTTP model formats are handled before body construction.")
         }
 
@@ -396,7 +359,7 @@ struct LingShuModelGateway {
                 return text.nilIfBlank
             }
             return extractText(from: object)?.nilIfBlank
-        case .codexBridge, .hostAdapter:
+        case .hostAdapter:
             return nil
         }
     }
@@ -474,7 +437,7 @@ struct LingShuModelGateway {
             return path.hasSuffix("/chat/completions") ? baseURL : baseURL.appendingPathComponent("chat/completions")
         case .anthropicMessages:
             return path.hasSuffix("/messages") ? baseURL : baseURL.appendingPathComponent("messages")
-        case .codexBridge, .hostAdapter:
+        case .hostAdapter:
             return baseURL
         }
     }

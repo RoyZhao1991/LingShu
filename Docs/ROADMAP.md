@@ -10,7 +10,7 @@
 | 能力 | 现状 | 位置 |
 | --- | --- | --- |
 | 中枢编排骨架 | 主线程内核 + 路由规划 + 能力调度的分层已成型 | `Sources/LingShuMainThreadRuntime.swift`、`LingShuRoutePlanner.swift`、`LingShuAgentScheduler.swift` |
-| 模型通道 | Codex CLI 桥接（进程级）+ 远端会话池 + 心跳/探活守护 | `Infrastructure/Codex/CodexBridge.swift`、`LingShuRemoteSessionPool.swift` |
+| 模型通道 | HTTP 模型网关（Responses/Chat/Anthropic 多格式 + 前缀缓存 + 流式）；大脑当前 DeepSeek。codex/claude 不再是模型通道，改为 agent 插件接入 | `LingShuModelGateway.swift`、`LingShuModelChannel.swift`、`Plugins/LingShuAgentPlugin*.swift` |
 | 任务可追溯 | 任务执行记录（消息/产出物/血缘关联）+ 归档 | `LingShuTaskExecutionJournal.swift` |
 | 记忆分层 | 热/冷聊天历史 + 主线程快照 + 记忆服务雏形 | `Services/Memory/`、`LingShuMemoryService.swift` |
 | 语音/视觉入口 | 本地 ASR、TTS、摄像头观测、感知线程协调 | `Services/VoiceIOManager.swift`、`VisionIOManager.swift`、`Services/Perception/` |
@@ -85,8 +85,7 @@
 
 ### Phase 3 — 模型网关重构：常驻双工通道（3~4 周）
 
-- `CodexBridge` 从"每次 spawn 进程"改为**常驻子进程 + JSON-RPC/stdio 协议**（或 MCP），支持多路复用、真流式、即时取消。
-- `LingShuModelGateway` 抽象成协议：`CodexChannel`、`AnthropicAPIChannel`、`LocalModelChannel`（Ollama/MLX）三个实现，按任务特征路由——判断类走快通道小模型，执行类走强模型。
+- `LingShuModelGateway` 抽象成协议：`OpenAICompatChannel`、`AnthropicAPIChannel`、`LocalModelChannel`（Ollama/MLX）等实现，按任务特征路由——判断类走快通道小模型，执行类走强模型。（注：codex/claude 已从模型通道剥离，改为 agent 插件，见 `Plugins/LingShuAgentPlugin*.swift`。）
 - 心跳/探活迁入通道内部，对中枢只暴露 `ChannelHealth` 状态流。
 
 **验收**：首 token 延迟（本地路由判断）< 800ms；通道断开自动重连且任务不丢。

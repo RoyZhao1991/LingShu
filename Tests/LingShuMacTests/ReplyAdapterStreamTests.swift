@@ -93,7 +93,7 @@ final class ReplyAdapterStreamTests: XCTestCase {
           }
         }
         """
-        let payload = try JSONDecoder().decode(CodexRoutePayload.self, from: Data(json.utf8))
+        let payload = try JSONDecoder().decode(LingShuRoutePayload.self, from: Data(json.utf8))
         let choices = try XCTUnwrap(payload.choices)
         XCTAssertEqual(choices.question, "选择演示文稿风格")
         XCTAssertEqual(choices.options.map(\.label), ["商务简洁", "活泼图形"], "空标签选项应被过滤")
@@ -108,7 +108,7 @@ final class ReplyAdapterStreamTests: XCTestCase {
           "choices": { "question": "只有一个选项", "options": [ { "label": "唯一" } ] }
         }
         """
-        let payload = try JSONDecoder().decode(CodexRoutePayload.self, from: Data(json.utf8))
+        let payload = try JSONDecoder().decode(LingShuRoutePayload.self, from: Data(json.utf8))
         XCTAssertNil(payload.choices, "少于 2 个有效选项不构成选择卡片")
     }
 }

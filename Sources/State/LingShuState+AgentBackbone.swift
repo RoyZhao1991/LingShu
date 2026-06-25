@@ -44,7 +44,7 @@ extension LingShuState {
             protocolName: selectedModelPreset?.protocolName ?? "OpenAI 兼容",
             apiKey: apiKey,
             temperature: temperature,
-            timeout: timeout ?? codexTimeoutSeconds,
+            timeout: timeout ?? modelTimeoutSeconds,
             maxAttempts: maxAttempts
         )
     }
@@ -121,7 +121,7 @@ extension LingShuState {
         - **设计取舍如实讲(不是短板)**:我是**本地中枢**,有意不做"云端并行沙箱"那种远程跑法、也不做 IDE 实时补全/编辑器插件——因为我直接在本机定位项目改代码,这是定位选择;被问到就这么讲,别说成"我能力不足"。
         - 需要最新/实时/超出你知识库的事实时,**调用 web_search 联网查证**,不要凭记忆瞎答或说"我的知识截止到…"。
         - **本机知识是你的基础能力(像读文件一样自然)**:用户问"我那份关于X的文档/笔记在哪""按我本机资料怎么说""我那天看的那篇文章"这类涉及他本机文件/资料/浏览历史的问题时,**先 recall_local 在本机知识索引里检索**,据命中的本机内容回答(需要全文再 read_file)。还没索引过的目录可 index_local_knowledge 纳入。这是本地、零上传的能力,该用就用,别答"我不知道你电脑里有什么"。
-        - 工作目录:\(codexWorkingDirectory)。
+        - 工作目录:\(agentWorkingDirectory)。
         - **先计划后执行(LOOP 标准,决不能省)**:落地任何**多步任务**(凡要写文件/跑命令/做交付物的都算),**你的第一个动作必须是真的调用 `update_plan` 工具**——**这是一次工具调用,不是在分析/正文里口头说一句"我的计划是…"就算**(口头说不算数,必须 update_plan)。调用时给出:**① `goal`=一句话总目标**(高度抽象概括,如「构建一个清分结算系统」「给课程通知做一份汇报 PPT」,**不是复述需求原文**);**② `steps`=3–7 步抽象计划**(每步是**阶段性里程碑/分步目标,不绑定具体实现路径**——具体用什么方式做、走哪条路是你在推进中自己摸索的,可随时换法)。之后严格按计划逐步执行:每开始一步标 in_progress、做完标 completed(再调 update_plan)。让全程"先有计划、再逐步推进、状态可见"。只有简单一问一答 / 纯对话才跳过 plan。
         - **想好的连贯序列就批量执行(通用,不止演示)**:当你已把接下来一串动作都想清楚了(逐页讲、逐条念、连续点几下界面…),用 `run_steps` 把它们一次性按序排上跑完,**别一步一个回合地来回往返**——逐步往返既慢又会在节点间卡顿,批量则一气呵成。批量随时可被主人插话/取消打断(停在当前步交还给你)。这就是"先理解、再规划、然后顺滑执行"。
         - **有产出物优先产出物**:凡是"做/写/生成 PPT、文档、设计方案、研究报告、规划、脚本、代码…"这类有交付物的请求,必须**真的用 write_file/run_command 把文件落到工作目录**,并在回复里给出文件绝对路径;**绝不允许只口头说"已完成"而没有真文件**。做 PPT 可写 HTML 或用脚本生成 pptx;做爬虫写 .py 并按需运行。**但反过来:动作/控制型任务(接入设备、开关灯、操作电脑、调音量、控外设…)的交付是【真实效果】不是文件**——把设备真控到位/动作真生效才算完成;写一篇"怎么接入/怎么用"的说明文档 ≠ 完成,绝不用产出物冒充本该亲手做到的动作。
@@ -323,6 +323,8 @@ extension LingShuState {
             completeMainTurnQueueSlot(pendingID)
             if currentAgentTurnRecordID == turn.taskRecordID { currentAgentTurnRecordID = nil }
             scheduleNextMainTurnIfIdle()
+            // 单串行:本条问答完全返回 → 若已空闲,出队串行队列里的下一条输入。
+            drainSerialInputsIfIdle()
         }
 
         let session: any LingShuAgentSessioning
@@ -350,7 +352,8 @@ extension LingShuState {
         } else {
             guidance = [
                 matchedSkillHint(for: turn.prompt),
-                LingShuSelfReferenceIntent.directIntroductionGuidance(for: turn.prompt)
+                LingShuSelfReferenceIntent.directIntroductionGuidance(for: turn.prompt),
+                selfInspectionGuidance(for: turn.prompt)   // 架构/能力/自检类问题→注入真实自我认知,大脑 grounded 在真架构+实时能力上答
             ]
             .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }

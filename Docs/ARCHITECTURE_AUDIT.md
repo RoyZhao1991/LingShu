@@ -6,7 +6,7 @@
 
 | 检查项 | 结果 |
 | --- | --- |
-| Views 直接调用 Infrastructure（CodexBridge / URLSession / Process） | 无（守卫测试 `testViewsDoNotDirectlyCallInfrastructureAdapters` 通过） |
+| Views 直接调用 Infrastructure（LingShuModelGateway / URLSession / Process） | 无（守卫测试 `testViewsDoNotDirectlyCallInfrastructureAdapters` 通过） |
 | Domain 依赖网络 / 文件系统 | 无 |
 | Domain 依赖 UI | 仅 `Color` 值类型（标准允许的轻量 UI 值对象） |
 | App 入口 `LingShuMac.swift` 只做启动 | 是（<200 行，不引用模型/网关，守卫测试通过） |
@@ -15,12 +15,11 @@
 
 ## 二、本轮已修复
 
-1. **CodexBridge.swift 929 行 > 800 硬上限** → 拆成 4 个文件：
-   - `CodexBridgeModels.swift`（命令结果/探活报告/路由载荷/权限模式等数据类型）
-   - `CodexDiagnosticLogFilter.swift`（诊断日志过滤）
-   - `CodexProcessSupport.swift`（子进程取消句柄 + 流式捕获）
-   - `CodexBridge.swift` 收敛到 637 行，只剩桥接执行逻辑。
-   - 新增守卫测试 `testInfrastructureFilesStayBelowHardSplitThreshold` 锁定。
+1. **Codex 模型通道整体下线（手术刀式切割）** → codex/claude 不再作为大脑模型,改为 agent 插件接入（被告知→注册→`@编排`）。
+   - 删除 `Infrastructure/Codex/`（`CodexBridge` / `CodexBridgeModels` / `CodexProcessSupport` / `CodexDiagnosticLogFilter`）与 `LingShuState+CodexAuth.swift`。
+   - 模型网关移除 `.codexAuth` 连接类型、`.codexBridge` 格式、`codexAuthRequiresBridge` 错误与登录/探活脚手架。
+   - 全局路由/选择/载荷类型正名为中性 `LingShu*`：`LingShuRoutePayload` / `LingShuRouteChoicePrompt` / `LingShuRouteChoiceOption` / `LingShuRouteAgentTask` / `LingShuExecutionPermissionMode`（见 `Domain/LingShuRouteModels.swift`）。
+   - 守卫测试 `testInfrastructureFilesStayBelowHardSplitThreshold` 仍锁 800 行硬上限。
 2. **两个视图文件散落在 `Sources/` 根目录** → 移入 `Sources/Views/`（`LingShuExecutionConsoleView`、`LingShuTaskExecutionRecordViews`）；新增守卫测试 `testViewFilesLiveUnderViewsFolder`。
 3. （前序）会话上下文丢失、每秒重渲染、持久化风暴、死代码已在此前提交修复。
 

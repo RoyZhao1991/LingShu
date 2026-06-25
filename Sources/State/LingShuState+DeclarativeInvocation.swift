@@ -1,5 +1,17 @@
 import Foundation
 
+/// 输入框里被声明式 `@` 到的 agent/插件芯片(驱动输入框上方"将编排"提示条)。
+struct LingShuInvocationChip: Identifiable, Equatable {
+    let id = UUID()
+    let name: String
+    let role: String
+    let isAgent: Bool
+
+    static func == (a: LingShuInvocationChip, b: LingShuInvocationChip) -> Bool {
+        a.name == b.name && a.role == b.role && a.isAgent == b.isAgent
+    }
+}
+
 /// **声明式调插件**接进 LingShuState:可调插件注册表 + 路由(`@演示`/`用录制技能`/「+」菜单 pinned → 确定性直达)。
 /// 这是对反复出现的「大脑误调用/绕开新插件」的系统性修复——用户一旦显式声明,就不再交给大脑判断。
 @MainActor
@@ -31,6 +43,20 @@ extension LingShuState {
                               icon: "wand.and.stars"))
         }
         return list
+    }
+
+    /// 当前所有**可 @ 触发**的别名(displayName + aliases 去重)——供输入框内嵌 token 高亮判定。
+    /// 读盘一次,调用方缓存(别每次按键调)。
+    func invocableAliases() -> [String] {
+        var seen = Set<String>()
+        var out: [String] = []
+        for p in invocablePlugins() {
+            for a in ([p.displayName] + p.aliases) {
+                let t = a.trimmingCharacters(in: .whitespaces)
+                if !t.isEmpty, seen.insert(t).inserted { out.append(t) }
+            }
+        }
+        return out
     }
 
     /// 文本声明(`@Codex 开发X @Claude 验收`/`@演示 …`)或「+」菜单 pinned(可多选)→ 确定性路由。返回 true=已接管。
@@ -66,44 +92,92 @@ extension LingShuState {
         }
         guard !agentSteps.isEmpty else { return }
 
-        // 一个气泡,边跑边换行追加。
-        let bubble = ChatMessage(speaker: "灵枢", text: "🔗 编排执行(\(agentSteps.count) 步):", isUser: false, isLoading: true)
-        chatMessages.append(bubble)
-        let bid = bubble.id
-        func appendToBubble(_ s: String) {
-            guard let i = chatMessages.firstIndex(where: { $0.id == bid }) else { return }
-            chatMessages[i].text += "\n\n" + s
+        // **用户定调 2026-06-25:声明式 @agent 是任务,必须走 LOOP——把 agent 作为 maker 引入循环(灵枢编排+验收),绝不绕过验收。**
+        // maker = 第一个 @agent(其 segment=开发目标);checker = 第二个 @agent(如 @Claude 验收)或灵枢自己(maker≠checker 跨厂商)。
+        func resolve(_ step: (id: String, segment: String)) -> (agentID: String, name: String)? {
+            guard let inv = plugins.first(where: { $0.id == step.id }) else { return nil }
+            let agentID = inv.id.hasPrefix("agent:") ? String(inv.id.dropFirst("agent:".count)) : inv.id
+            guard LingShuAgentPluginStore.plugin(id: agentID) != nil else { return nil }
+            return (agentID, inv.displayName)
         }
-        func finishBubble() {
-            guard let i = chatMessages.firstIndex(where: { $0.id == bid }) else { return }
-            chatMessages[i].isLoading = false
+        guard let maker = resolve(agentSteps[0]) else {
+            let nm = plugins.first(where: { $0.id == agentSteps[0].id })?.displayName ?? "agent"
+            chatMessages.append(.init(speaker: "灵枢", text: "⚠️ @\(nm) 没注册或不可用——先告诉我本机有它、怎么调,我注册后再用。", isUser: false))
+            return
         }
+        let checker = agentSteps.count >= 2 ? resolve(agentSteps[1]) : nil
+        let objective = agentSteps[0].segment.trimmingCharacters(in: .whitespacesAndNewlines)
 
-        Task { @MainActor [weak self] in
-            guard let self else { return }
-            var priorOutput = ""
-            for step in agentSteps {
-                guard let inv = plugins.first(where: { $0.id == step.id }) else { continue }
-                let agentID = inv.id.hasPrefix("agent:") ? String(inv.id.dropFirst("agent:".count)) : inv.id
-                guard let plugin = LingShuAgentPluginStore.plugin(id: agentID) else {
-                    appendToBubble("⚠️ agent「\(inv.displayName)」没注册或不可用,跳过。"); continue
-                }
-                // **运行时可见**:落 trace,状态/运维里能看清确实是这个 agent 插件在跑(不是大脑 freeform)。
-                self.appendTrace(kind: .tool, actor: "agent插件·\(plugin.displayName)", title: "\(plugin.role.rawValue) 执行中",
-                                 detail: "用插件库注册的 \(plugin.executable) 跑:\(step.segment.prefix(50))")
-                appendToBubble("▶ 交给 \(plugin.displayName)(\(plugin.role.rawValue)):\(step.segment.prefix(40))")
-                let obj = step.segment + (priorOutput.isEmpty ? "" : "\n\n【上一步产出,供你参考/复核】\n" + String(priorOutput.prefix(4000)))
-                let result = await LingShuAgentPluginStore.run(plugin, objective: obj, workingDirectory: self.codexWorkingDirectory)
-                let out: String
-                switch result {
-                case .completed(let t): out = t; self.appendTrace(kind: .result, actor: "agent插件·\(plugin.displayName)", title: "完成", detail: String(t.prefix(60)))
-                case .failure(let r):   out = "（\(plugin.displayName) 未完成:\(r)）"; self.appendTrace(kind: .warning, actor: "agent插件·\(plugin.displayName)", title: "未完成", detail: r)
-                }
-                appendToBubble("【\(plugin.displayName)】\n\(out)")
-                priorOutput = out
+        // 建任务记录 + GoalSpec(目标解析稳定)→ 走标准 LOOP(dispatchIsolatedTask),maker 换成 agent session。
+        let displayObjective = objective.isEmpty ? "\(maker.name) 任务" : objective
+        let rid = createTaskExecutionRecord(for: displayObjective)
+        if goalSpecEnabled { bindGoalSpec(LingShuGoalSpec(objective: displayObjective, kind: .task), to: rid) }
+        appendTrace(kind: .route, actor: "声明式调用", title: "@agent 进 LOOP",
+                    detail: "maker=\(maker.name) · checker=\(checker?.name ?? "灵枢")(任何任务都走 LOOP,maker 换成 agent session,不绕过验收)")
+        _ = dispatchIsolatedTask(prompt: objective, taskRecordID: rid, goal: objective.isEmpty ? nil : objective,
+                                 makerAgentID: maker.agentID, makerName: maker.name,
+                                 checkerAgentID: checker?.agentID, checkerName: checker?.name)
+    }
+
+    /// 编排气泡整段重写(单气泡承载:已定稿部分 + 运行中实时进度)。气泡没了(被清)就忽略。
+    func renderChainBubble(_ bid: UUID, _ text: String) {
+        guard let i = chatMessages.firstIndex(where: { $0.id == bid }) else { return }
+        chatMessages[i].text = text
+    }
+
+    /// agent 输出是否表明「没写入权限 / 只读环境」(没真落地文件,只在对话里贴了内容=无效交付)。验收据此触发授权兜底。
+    nonisolated static func agentOutputLacksPermission(_ text: String) -> Bool {
+        let lower = text.lowercased()
+        let en = ["read-only", "readonly", "permission denied", "cannot write", "operation not permitted",
+                  "not permitted to write", "eacces", "erofs", "sandbox is read"]
+        if en.contains(where: { lower.contains($0) }) { return true }
+        let zh = ["只读", "无法创建文件", "无法写入", "没有写入权限", "无写入权限", "写不了文件", "权限不足", "无法直接在"]
+        return zh.contains(where: { text.contains($0) })
+    }
+
+    /// 工作目录当前未提交/未跟踪的文件集合(git porcelain,**含全部文件**不止源码)。
+    /// 返回 nil = 非 git 仓(没法自动核验落地)。链路验收用它 diff 出"本次真落了哪些文件"。
+    nonisolated static func dirtyFileSet(workingDir: String) async -> Set<String>? {
+        let dir = workingDir.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !dir.isEmpty else { return nil }
+        for git in gitCandidatePaths() {
+            let inside = await runCapturing(git, ["-C", dir, "rev-parse", "--is-inside-work-tree"])
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if inside == "false" { return nil }   // 非 git 仓
+            guard inside == "true" else { continue }   // 空=该 git 没跑成,试下一个
+            let porcelain = await runCapturing(git, ["-C", dir, "status", "--porcelain", "--untracked-files=all"])
+            let paths = porcelain.split(separator: "\n", omittingEmptySubsequences: true).compactMap { line -> String? in
+                let s = String(line)
+                guard s.count > 3 else { return nil }
+                var p = String(s.dropFirst(3)).trimmingCharacters(in: .whitespaces)
+                    .trimmingCharacters(in: CharacterSet(charactersIn: "\""))
+                if let arrow = p.range(of: " -> ") { p = String(p[arrow.upperBound...]) }
+                return p.isEmpty ? nil : p
             }
-            finishBubble()
+            return Set(paths)
         }
+        return nil
+    }
+
+    /// 刷新输入框里被声明式 `@` 到的 agent/插件芯片(驱动输入框上方"将编排"提示条,让 agent 调用在聊天框里醒目可见)。
+    /// 在 `onChange(of: prompt)` 调;仅当含 `@` 才读盘解析(避免每次按键 I/O)。
+    func refreshInvocationChips() {
+        guard prompt.contains("@") else {
+            if !detectedInvocationChips.isEmpty { detectedInvocationChips = [] }
+            return
+        }
+        let plugins = invocablePlugins()
+        let chain = LingShuDeclarativeInvocation.detectChain(prompt, plugins: plugins)
+        let chips: [LingShuInvocationChip] = chain.compactMap { step in
+            guard let inv = plugins.first(where: { $0.id == step.id }) else { return nil }
+            if inv.kind == .agent {
+                let aid = inv.id.hasPrefix("agent:") ? String(inv.id.dropFirst("agent:".count)) : inv.id
+                let role = LingShuAgentPluginStore.plugin(id: aid)?.role.rawValue ?? "agent"
+                return .init(name: inv.displayName, role: role, isAgent: true)
+            }
+            return .init(name: inv.displayName, role: "插件", isAgent: false)
+        }
+        if chips != detectedInvocationChips { detectedInvocationChips = chips }
     }
 
     /// 把(已确认的)输入路由给指定**插件**(present/record/proc)。

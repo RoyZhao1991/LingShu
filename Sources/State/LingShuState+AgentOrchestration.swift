@@ -19,7 +19,11 @@ extension LingShuState {
         // 子任务与主线程同一套执行恢复力——复杂工程撞顶/崩溃会自己续跑修到跑通,而非直接判异常。
         Task { await orchestrator.setAcceptanceHook { @MainActor [weak self] subID, objective, session, initial in
             guard let self else { return initial }
-            return await self.verifyAndContinue(session: session, result: initial, userRequest: objective, taskRecordID: self.agentSubTaskRecords[subID])
+            let rid = self.agentSubTaskRecords[subID]
+            let verified = await self.verifyAndContinue(session: session, result: initial, userRequest: objective, taskRecordID: rid)
+            // **maker session ≠ checker session(用户硬性要求)**:maker 是外部 agent(@Codex)的任务,
+            // 收尾后跑**独立 checker**(另一个 agent 或异源审查员)做命名角色卡可见的复核——不让编排脑自验。
+            return await self.runIndependentAgentCheckerIfNeeded(recordID: rid, makerResult: verified, objective: objective)
         } }
     }
 

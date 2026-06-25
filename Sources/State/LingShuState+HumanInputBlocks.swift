@@ -103,9 +103,9 @@ extension LingShuState {
 
     private func renderChoiceBlock(_ argsJSON: String, bubbleID: UUID, recordID: String?, context: LingShuPendingHumanInputContext, prompt: String, elapsed: TimeInterval) -> Bool {
         let parsed = Self.parseChoiceArgs(argsJSON)
-        let promptCard = CodexRouteChoicePrompt(
+        let promptCard = LingShuRouteChoicePrompt(
             question: parsed.0.isEmpty ? "请选择下一步" : parsed.0,
-            options: parsed.1.map { CodexRouteChoiceOption(label: $0.label, detail: $0.detail) }
+            options: parsed.1.map { LingShuRouteChoiceOption(label: $0.label, detail: $0.detail) }
         )
         guard let sanitized = promptCard.sanitized else { return false }
         if let index = chatMessages.firstIndex(where: { $0.id == bubbleID }) {

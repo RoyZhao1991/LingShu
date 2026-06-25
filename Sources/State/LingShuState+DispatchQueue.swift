@@ -122,6 +122,9 @@ extension LingShuState {
     /// 有空位 → 把队列区最早的一条晋级为真派发(创建记录 + 绑定前置认知 + dispatchIsolatedTask)。
     /// 在任务收尾/卡住释放槽位后调用;可能连续晋级多条直到填满或队列空。
     func promoteQueuedDispatchIfPossible() {
+        // 单串行(2026-06-25):任务子线程释放槽位 → 若已空闲,出队串行输入队列的下一条。
+        // 放在最前:即便没有 queuedDispatchTasks 待晋级,也要 drain 串行队列(它承载所有新输入)。
+        drainSerialInputsIfIdle()
         guard !queuedDispatchTasks.isEmpty else { return }
         Task { @MainActor [weak self] in
             guard let self else { return }

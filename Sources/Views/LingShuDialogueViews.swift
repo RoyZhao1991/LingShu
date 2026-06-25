@@ -329,6 +329,59 @@ struct LingShuDispatchQueueTray: View {
     }
 }
 
+/// **串行输入队列区**(用户定调 2026-06-25「砍掉双线并行」):任一回合(问答/任务)在真跑时,新输入进这里**排队等待**,
+/// 当前回合完全返回后逐条自动开始;开始前可在此**删除**。横排芯片 + 删除 X,样式对齐派发队列区。
+struct LingShuSerialInputTray: View {
+    @ObservedObject var state: LingShuState
+
+    var body: some View {
+        let items = state.pendingSerialInputs
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Image(systemName: "tray.full")
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundStyle(Color.lingHolo)
+                Text("队列区 · \(items.count) 条等待中(单串行,前一件事完成后自动开始;开始前可删)")
+                    .font(.system(size: 10, weight: .bold, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.5))
+                Spacer(minLength: 0)
+            }
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(items) { chip($0) }
+                }
+            }
+        }
+    }
+
+    private func chip(_ item: LingShuPendingSerialInput) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "clock")
+                .font(.system(size: 13, weight: .bold))
+                .foregroundStyle(Color.lingHolo.opacity(0.85))
+            VStack(alignment: .leading, spacing: 1) {
+                Text(item.prompt)
+                    .font(.system(size: 11.5, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.9))
+                    .lineLimit(1)
+                Text("排队中")
+                    .font(.system(size: 9, weight: .bold, design: .monospaced))
+                    .foregroundStyle(Color.lingHolo.opacity(0.7))
+            }
+            Button { state.removeSerialInput(id: item.id) } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(.white.opacity(0.6))
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
+        .frame(maxWidth: 240)
+        .lingShuHUDPanel(cornerLength: 6, fillOpacity: 0.05)
+    }
+}
+
 /// **进行中长条**(用户定调 2026-06-23):任务线串行,同时只一条在跑;长条**自动定位**当前正在执行的派发任务,
 /// 让你随时看到"是谁占着槽、堵着队列"。点「定位」打开它的执行窗口看进度;点「停止」终止它(释放槽位让队列晋级,
 /// 不影响问答线)。无在跑任务时不显示。
@@ -378,74 +431,189 @@ private struct LingShuPulseDot: View {
     }
 }
 
+/// **声明式 @ 编排提示条**(用户定调 2026-06-25):输入框里打 `@Codex 开发 @Claude 验收` 这类 agent 调用时,
+/// 在输入框上方把被 @ 到的 agent/插件**醒目标记成芯片**——让"这是 agent 编排、要派给谁、谁 maker 谁 checker"在聊天框里一眼可见,
+/// 不再混在纯文本里看不出。(macOS 14 的 TextField 不支持原生 inline 富文本 token,故用上方芯片条做醒目标记。)
+struct LingShuInvocationHintBar: View {
+    @ObservedObject var state: LingShuState
+
+    var body: some View {
+        let chips = state.detectedInvocationChips
+        HStack(spacing: 8) {
+            Image(systemName: "bolt.horizontal.circle.fill")
+                .font(.system(size: 12, weight: .bold))
+                .foregroundStyle(Color.lingHolo)
+            Text(chips.count > 1 ? "将编排(\(chips.count) 步):" : "将调用:")
+                .font(.system(size: 10.5, weight: .bold, design: .monospaced))
+                .foregroundStyle(.white.opacity(0.55))
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 7) {
+                    ForEach(Array(chips.enumerated()), id: \.offset) { idx, chip in
+                        if idx > 0 {
+                            Image(systemName: "arrow.right")
+                                .font(.system(size: 8, weight: .bold))
+                                .foregroundStyle(.white.opacity(0.35))
+                        }
+                        chipView(chip)
+                    }
+                }
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 4)
+    }
+
+    private func roleColor(_ chip: LingShuInvocationChip) -> Color {
+        guard chip.isAgent else { return .white.opacity(0.5) }
+        switch chip.role {
+        case "maker": return .orange
+        case "checker": return .green
+        default: return Color.lingHolo
+        }
+    }
+
+    private func chipView(_ chip: LingShuInvocationChip) -> some View {
+        HStack(spacing: 5) {
+            Image(systemName: chip.isAgent ? "cpu" : "puzzlepiece.extension.fill")
+                .font(.system(size: 9, weight: .bold))
+            Text("@\(chip.name)")
+                .font(.system(size: 11.5, weight: .bold))
+            Text(chip.role)
+                .font(.system(size: 8.5, weight: .heavy, design: .monospaced))
+                .foregroundStyle(.black.opacity(0.8))
+                .padding(.horizontal, 4).padding(.vertical, 1)
+                .background(roleColor(chip).opacity(0.9), in: Capsule())
+        }
+        .foregroundStyle(roleColor(chip))
+        .padding(.horizontal, 9).padding(.vertical, 5)
+        .background(roleColor(chip).opacity(0.12), in: Capsule())
+        .overlay(Capsule().stroke(roleColor(chip).opacity(0.45), lineWidth: 1))
+    }
+}
+
+/// **@ 自动补全弹层**(对齐 codex):打 `@` 即弹插件/agent 列表,边打边过滤(`@c`→Codex),↑↓移、回车/Tab 选、Esc 关、点击选。
+struct LingShuMentionPopup: View {
+    let matches: [LingShuInvocablePlugin]
+    let selected: Int
+    let onPick: (Int) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            ForEach(Array(matches.prefix(6).enumerated()), id: \.offset) { idx, p in
+                HStack(spacing: 8) {
+                    Image(systemName: p.kind == .agent ? "cpu" : (p.icon.isEmpty ? "puzzlepiece.extension.fill" : p.icon))
+                        .font(.system(size: 12, weight: .bold))
+                        .foregroundStyle(idx == selected ? Color.lingVoid : Color.lingHolo)
+                        .frame(width: 16)
+                    Text("@\(p.displayName)")
+                        .font(.system(size: 12.5, weight: .semibold))
+                        .foregroundStyle(idx == selected ? Color.lingVoid : .white)
+                    if !p.subtitle.isEmpty {
+                        Text(p.subtitle)
+                            .font(.system(size: 10.5))
+                            .foregroundStyle(idx == selected ? Color.lingVoid.opacity(0.7) : .white.opacity(0.45))
+                            .lineLimit(1)
+                    }
+                    Spacer(minLength: 4)
+                    if p.kind == .agent {
+                        Text("agent").font(.system(size: 8.5, weight: .heavy, design: .monospaced))
+                            .foregroundStyle(idx == selected ? Color.lingVoid.opacity(0.8) : Color.lingHolo.opacity(0.7))
+                    }
+                }
+                .padding(.horizontal, 10).padding(.vertical, 7)
+                .background(idx == selected ? Color.lingHolo.opacity(0.9) : Color.clear,
+                            in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+                .contentShape(Rectangle())
+                .onTapGesture { onPick(idx) }
+            }
+        }
+        .padding(5)
+        .background(Color(white: 0.10), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).stroke(Color.lingHolo.opacity(0.3), lineWidth: 1))
+        .shadow(color: .black.opacity(0.5), radius: 12, y: 4)
+    }
+}
+
 struct LingShuInputDock: View {
     @ObservedObject var state: LingShuState
     @ObservedObject var voice: VoiceIOManager
     @ObservedObject var vision: VisionIOManager
     @ObservedObject var perceptionGateway: LingShuRealtimePerceptionGateway
     @State private var showClearConfirm = false
+    @State private var inputAliases: [String] = []   // 已知可 @ 的别名快照(内嵌 token 高亮判定;onAppear 读一次)
+    @State private var invocablePluginsCache: [LingShuInvocablePlugin] = []   // 可调插件/agent 快照(@ 补全弹层用)
+    @State private var mentionQuery: LingShuMentionQuery? = nil               // 光标处正在打的 @查询(nil=不在 mention)
+    @State private var mentionSelected: Int = 0                               // 补全弹层当前高亮项
 
     var body: some View {
         VStack(spacing: 10) {
             LingShuRunningTaskBar(state: state)
+            if !state.pendingSerialInputs.isEmpty {
+                LingShuSerialInputTray(state: state)
+            }
             if !state.queuedDispatchTasks.isEmpty {
                 LingShuDispatchQueueTray(state: state)
             }
             if !state.pendingAttachments.isEmpty {
                 LingShuAttachmentTray(state: state)
             }
+            if !state.detectedInvocationChips.isEmpty {
+                LingShuInvocationHintBar(state: state)
+            }
 
-            TextField("", text: $state.prompt, axis: .vertical)
-                .textFieldStyle(.plain)
-                .font(.system(size: 15.5, weight: .medium))
-                .foregroundStyle(.white)
-                .lineLimit(5...8)
-                .padding(14)
-                .frame(minHeight: 126, alignment: .topLeading)
-                .lingShuHUDPanel(
-                    accent: voice.isRecording ? .red : .lingHolo,
-                    cornerLength: 10,
-                    fillOpacity: 0.06
-                )
-                // 输入框为空时，中心位置显示提示语；一旦开始输入即隐藏。
-                .overlay(alignment: .center) {
-                    if state.prompt.isEmpty {
-                        Text(state.loc("有什么需要我做的？", "What can I do for you?"))
-                            .font(.system(size: 15.5, weight: .medium))
-                            .foregroundStyle(.white.opacity(0.32))
-                            .allowsHitTesting(false)
+            // **富文本输入框(对齐 codex 内嵌标签)**:`@别名` 实时高亮成 token。文本仍绑定 state.prompt。
+            LingShuRichInputField(
+                text: $state.prompt,
+                placeholder: state.loc("有什么需要我做的？", "What can I do for you?"),
+                aliases: inputAliases,
+                accent: .lingHolo,
+                onSubmit: { submit() },
+                onPasteImage: { png in state.ingestPastedImage(png) },
+                onMentionChange: { mq in handleMentionChange(mq) },
+                onMentionMove: { up in moveMentionSelection(up: up) },
+                onMentionCommit: { commitMention() },
+                onMentionCancel: { mentionQuery = nil }
+            )
+            .frame(height: 96, alignment: .topLeading)   // 固定高度(NSScrollView 内部滚,别再 minHeight 撑满整列)
+            .lingShuHUDPanel(
+                accent: voice.isRecording ? .red : .lingHolo,
+                cornerLength: 10,
+                fillOpacity: 0.06
+            )
+            .overlay(alignment: .bottomTrailing) {
+                if voice.isRecording {
+                    HStack(spacing: 6) {
+                        LingShuVoiceWaveView(color: .red, isActive: true, barCount: 7)
+                        Text("正在聆听")
+                            .font(.system(size: 10, weight: .bold, design: .monospaced))
+                            .foregroundStyle(.red.opacity(0.85))
                     }
+                    .padding(10)
                 }
-                .overlay(alignment: .bottomTrailing) {
-                    if voice.isRecording {
-                        HStack(spacing: 6) {
-                            LingShuVoiceWaveView(color: .red, isActive: true, barCount: 7)
-                            Text("正在聆听")
-                                .font(.system(size: 10, weight: .bold, design: .monospaced))
-                                .foregroundStyle(.red.opacity(0.85))
-                        }
-                        .padding(10)
+            }
+            // **@ 自动补全弹层**:打 @ 即弹插件/agent 列表,边打边过滤(@c→Codex),浮在输入框上方。
+            .overlay(alignment: .topLeading) {
+                if mentionQuery != nil, !mentionMatches.isEmpty {
+                    LingShuMentionPopup(matches: mentionMatches, selected: mentionSelected) { idx in
+                        commitMention(at: idx)
                     }
+                    .frame(width: 360)
+                    .offset(y: -CGFloat(min(mentionMatches.count, 6) * 38 + 10))
                 }
-                .submitLabel(.send)
-                .onSubmit {
-                    submit()
-                }
-                // 剪贴板粘贴图片（Cmd+V）：抓剪贴板里的图 → 走云视觉解析管线，作为输入的一部分。
-                // 仅拦截图片类型，纯文本粘贴仍由输入框默认处理。
-                .onPasteCommand(of: [.image, .png, .jpeg, .tiff]) { _ in
-                    guard let image = NSImage(pasteboard: .general),
-                          let tiff = image.tiffRepresentation,
-                          let rep = NSBitmapImageRep(data: tiff),
-                          let png = rep.representation(using: .png, properties: [:]) else { return }
-                    state.ingestPastedImage(png)
-                }
-                // 拖拽/粘贴文件到输入框:多行文本框会把拖入的文件落成**路径文本**(原生 NSTextView 抢先处理,
-                // SwiftUI 的 dropDestination 盖不住),这里识别"整框就是真实存在的文件路径"并自动转成附件芯片
-                // (与 📎 选择、Cmd+V 粘贴同一条解析管线);正文里顺带提到的路径不动。
-                .onChange(of: state.prompt) { _, _ in
-                    state.convertDroppedFilePathsIfNeeded()
-                }
+            }
+            // 拖拽/粘贴文件落成路径文本→转附件芯片;@agent→上方"将编排"提示条 + 触发别名快照刷新(供内嵌高亮)。
+            .onChange(of: state.prompt) { _, _ in
+                state.convertDroppedFilePathsIfNeeded()
+                state.refreshInvocationChips()
+            }
+            .onAppear {
+                inputAliases = state.invocableAliases()
+                invocablePluginsCache = state.invocablePlugins()
+            }
+            // 选中 agent 编排时(chips 变)顺带刷新别名快照——新注册的 agent 也能即时高亮。
+            .onChange(of: state.detectedInvocationChips) { _, _ in
+                if inputAliases.isEmpty { inputAliases = state.invocableAliases() }
+            }
 
             HStack(spacing: 10) {
                 // **声明式调插件/agent(对标 Codex「+」,最左)**:选(可多选)插件/agent,下一条消息**确定性直达**;
@@ -635,6 +803,43 @@ struct LingShuInputDock: View {
         }
 
         _ = state.sendPrompt()
+    }
+
+    // MARK: - @ 自动补全
+
+    /// 当前 @查询命中的插件/agent(前缀优先、含次之)。空查询=全列表。
+    private var mentionMatches: [LingShuInvocablePlugin] {
+        guard let q = mentionQuery?.query.lowercased() else { return [] }
+        if q.isEmpty { return invocablePluginsCache }
+        let scored = invocablePluginsCache.compactMap { p -> (LingShuInvocablePlugin, Int)? in
+            let names = ([p.displayName] + p.aliases).map { $0.lowercased() }
+            if names.contains(where: { $0.hasPrefix(q) }) { return (p, 0) }
+            if names.contains(where: { $0.contains(q) }) { return (p, 1) }
+            return nil
+        }
+        return scored.sorted { $0.1 < $1.1 }.map { $0.0 }
+    }
+
+    private func handleMentionChange(_ mq: LingShuMentionQuery?) {
+        mentionQuery = mq
+        mentionSelected = 0
+    }
+
+    private func moveMentionSelection(up: Bool) {
+        let n = mentionMatches.count
+        guard n > 0 else { return }
+        mentionSelected = ((mentionSelected + (up ? -1 : 1)) % n + n) % n
+    }
+
+    /// 选中补全:把光标处的 `@查询` 替换成 `@全名 `,关弹层。
+    private func commitMention(at index: Int? = nil) {
+        let matches = mentionMatches
+        guard let mq = mentionQuery, !matches.isEmpty else { mentionQuery = nil; return }
+        let pick = matches[min(index ?? mentionSelected, matches.count - 1)]
+        let ns = state.prompt as NSString
+        guard mq.range.location + mq.range.length <= ns.length else { mentionQuery = nil; return }
+        state.prompt = ns.replacingCharacters(in: mq.range, with: "@\(pick.displayName) ")
+        mentionQuery = nil
     }
 
     private func toggleVoiceInput() {

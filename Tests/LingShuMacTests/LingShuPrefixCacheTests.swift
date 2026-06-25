@@ -10,7 +10,6 @@ final class LingShuPrefixCacheTests: XCTestCase {
         XCTAssertEqual(LingShuPrefixCache.strategy(for: .chatCompletions), .automatic)
         XCTAssertEqual(LingShuPrefixCache.strategy(for: .responses), .automatic)
         XCTAssertEqual(LingShuPrefixCache.strategy(for: .anthropicMessages), .anthropicExplicit)
-        XCTAssertEqual(LingShuPrefixCache.strategy(for: .codexBridge), .unsupported)
         XCTAssertEqual(LingShuPrefixCache.strategy(for: .hostAdapter), .unsupported)
     }
 

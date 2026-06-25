@@ -1,39 +1,45 @@
 import Foundation
 
-// Codex 通道的数据类型（命令结果、探活报告、路由载荷、权限模式）。
-// 从 CodexBridge.swift 拆出，保持桥接逻辑文件在 800 行硬上限以内。
+// 灵枢**模型网关**的路由/选择/载荷类型——与具体大脑(DeepSeek/Claude/GLM/…)和传输方式无关。
+// 历史上这些类型曾叫 Codex*(灵枢早期基于 Codex 搭建),现已正名为中性的 LingShu* 路由类型;
+// 它们是大脑分诊判断、选择卡片、任务分派载荷的通用结构,被任务运行时 / 对话 / 记忆 / 验收门统一使用。
 
-struct CodexCommandResult {
-    let exitCode: Int32
-    let stdout: String
-    let stderr: String
-}
+/// 结构化选项：模型需要用户在有限选择中做决定时返回，界面渲染成选择卡片。
+/// action 为宿主侧结构化动作（如 "resume:task-123" / "new-task"）：有 action 的选项
+/// 点选后执行动作而不是把 label 当新输入提交；模型生成的选项不填 action。
+struct LingShuRouteChoiceOption: Codable, Equatable, Sendable {
+    var label: String
+    var detail: String?
+    var action: String?
 
-struct CodexHealthProbeReport: Equatable {
-    var reply: String
-    var rawLog: String
-}
+    init(label: String, detail: String? = nil, action: String? = nil) {
+        self.label = label
+        self.detail = detail
+        self.action = action
+    }
 
-struct CodexHealthProbeFailure: Error, Equatable {
-    var message: String
-    var rawLog: String
-
-    var diagnosticSummary: String {
-        CodexDiagnosticLogFilter.diagnosticSummary(from: rawLog)
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        label = (try? container.decode(String.self, forKey: .label)) ?? ""
+        detail = try? container.decode(String.self, forKey: .detail)
+        action = try? container.decode(String.self, forKey: .action)
     }
 }
 
-enum CodexHealthProbeResult: Equatable {
-    case success(CodexHealthProbeReport)
-    case failure(CodexHealthProbeFailure)
+struct LingShuRouteChoicePrompt: Codable, Equatable, Sendable {
+    var question: String
+    var options: [LingShuRouteChoiceOption]
+
+    /// 过滤掉空标签，至少要有 2 个有效选项才算合法选择卡片。
+    var sanitized: LingShuRouteChoicePrompt? {
+        let valid = options.filter { !$0.label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        guard valid.count >= 2 else { return nil }
+        return LingShuRouteChoicePrompt(question: question, options: valid)
+    }
 }
 
-enum CodexReplyResult {
-    case success(String)
-    case failure(String)
-}
-
-struct CodexAgentTask: Codable {
+/// 大脑分诊判断要分派给某个能力节点时的任务描述(目标/模式/节奏/理由)。
+struct LingShuRouteAgentTask: Codable {
     var agent: String
     var task: String
     var mode: String?
@@ -66,49 +72,16 @@ struct CodexAgentTask: Codable {
     }
 }
 
-/// 结构化选项：模型需要用户在有限选择中做决定时返回，界面渲染成选择卡片。
-/// action 为宿主侧结构化动作（如 "resume:task-123" / "new-task"）：有 action 的选项
-/// 点选后执行动作而不是把 label 当新输入提交；模型生成的选项不填 action。
-struct CodexRouteChoiceOption: Codable, Equatable, Sendable {
-    var label: String
-    var detail: String?
-    var action: String?
-
-    init(label: String, detail: String? = nil, action: String? = nil) {
-        self.label = label
-        self.detail = detail
-        self.action = action
-    }
-
-    init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        label = (try? container.decode(String.self, forKey: .label)) ?? ""
-        detail = try? container.decode(String.self, forKey: .detail)
-        action = try? container.decode(String.self, forKey: .action)
-    }
-}
-
-struct CodexRouteChoicePrompt: Codable, Equatable, Sendable {
-    var question: String
-    var options: [CodexRouteChoiceOption]
-
-    /// 过滤掉空标签，至少要有 2 个有效选项才算合法选择卡片。
-    var sanitized: CodexRouteChoicePrompt? {
-        let valid = options.filter { !$0.label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
-        guard valid.count >= 2 else { return nil }
-        return CodexRouteChoicePrompt(question: question, options: valid)
-    }
-}
-
-struct CodexRoutePayload: Codable {
+/// 大脑一轮分诊的结构化输出:是否需要分派、当前口播、执行诉求、直接回答、最终回复、选择卡片。
+struct LingShuRoutePayload: Codable {
     var needsAgents: Bool
-    var agents: [CodexAgentTask]
+    var agents: [LingShuRouteAgentTask]
     var currentReply: String?
     var executionRequest: String?
     var directAnswer: String?
     var finalAnswer: String?
     var summary: String?
-    var choices: CodexRouteChoicePrompt?
+    var choices: LingShuRouteChoicePrompt?
 
     enum CodingKeys: String, CodingKey {
         case needsAgents
@@ -123,13 +96,13 @@ struct CodexRoutePayload: Codable {
 
     init(
         needsAgents: Bool,
-        agents: [CodexAgentTask],
+        agents: [LingShuRouteAgentTask],
         currentReply: String? = nil,
         executionRequest: String? = nil,
         directAnswer: String? = nil,
         finalAnswer: String? = nil,
         summary: String? = nil,
-        choices: CodexRouteChoicePrompt? = nil
+        choices: LingShuRouteChoicePrompt? = nil
     ) {
         self.needsAgents = needsAgents
         self.agents = agents
@@ -144,13 +117,13 @@ struct CodexRoutePayload: Codable {
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         needsAgents = (try? container.decode(Bool.self, forKey: .needsAgents)) ?? false
-        agents = (try? container.decode([CodexAgentTask].self, forKey: .agents)) ?? []
+        agents = (try? container.decode([LingShuRouteAgentTask].self, forKey: .agents)) ?? []
         currentReply = try? container.decode(String.self, forKey: .currentReply)
         executionRequest = try? container.decode(String.self, forKey: .executionRequest)
         directAnswer = try? container.decode(String.self, forKey: .directAnswer)
         finalAnswer = try? container.decode(String.self, forKey: .finalAnswer)
         summary = try? container.decode(String.self, forKey: .summary)
-        choices = (try? container.decode(CodexRouteChoicePrompt.self, forKey: .choices))?.sanitized
+        choices = (try? container.decode(LingShuRouteChoicePrompt.self, forKey: .choices))?.sanitized
     }
 
     var currentUserReply: String {
@@ -178,12 +151,8 @@ struct CodexRoutePayload: Codable {
     }
 }
 
-enum CodexRouteResult {
-    case success(CodexRoutePayload)
-    case failure(String)
-}
-
-enum CodexPermissionMode: String, CaseIterable, Identifiable {
+/// 任务执行的权限模式(沙箱/完整)——自主运行权限门、权限策略、设置面板共用,与具体执行器无关。
+enum LingShuExecutionPermissionMode: String, CaseIterable, Identifiable {
     case sandbox = "沙箱权限"
     case fullAccess = "完整权限"
 
@@ -196,19 +165,12 @@ enum CodexPermissionMode: String, CaseIterable, Identifiable {
         }
     }
 
-    var sandboxArgument: String {
-        switch self {
-        case .sandbox: "workspace-write"
-        case .fullAccess: "danger-full-access"
-        }
-    }
-
     var detail: String {
         switch self {
         case .sandbox:
-            "仅允许 Codex 在目标项目内读写，适合日常开发。"
+            "仅允许在目标项目目录内读写，适合日常开发。"
         case .fullAccess:
-            "允许 Codex 访问更完整的本机文件系统，适合你明确授权的系统级操作。"
+            "允许访问更完整的本机文件系统，适合你明确授权的系统级操作。"
         }
     }
 }

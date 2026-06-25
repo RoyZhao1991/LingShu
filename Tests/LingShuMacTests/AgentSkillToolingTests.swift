@@ -41,7 +41,7 @@ final class AgentSkillToolingTests: XCTestCase {
         let tempDir = NSTemporaryDirectory() + "lingshu-skill-test-\(UUID().uuidString)"
         try? FileManager.default.createDirectory(atPath: tempDir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(atPath: tempDir) }
-        state.codexWorkingDirectory = tempDir
+        state.agentWorkingDirectory = tempDir
 
         let tool = state.applySkillTool()
         let output = await tool.handler("{\"task\":\"帮我做一个自我介绍 PPT\"}")

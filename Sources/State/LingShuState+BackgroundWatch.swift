@@ -61,7 +61,7 @@ extension LingShuState {
             let preok = await MainActor.run { self.shellPreauthorized || LingShuShellCommandPolicy.isReadOnly(cmd) }
             var allow = preok
             if !allow {
-                let wd = await MainActor.run { self.codexWorkingDirectory }
+                let wd = await MainActor.run { self.agentWorkingDirectory }
                 let decision = await self.requestShellApproval(command: cmd, workingDirectory: wd, taskRecordID: nil)
                 allow = decision != .deny
             }
@@ -109,7 +109,7 @@ extension LingShuState {
         let deadline = Date().addingTimeInterval(Double(timeoutMinutes) * 60)
         backgroundWatches.append(.init(id: id, label: label, checkCommand: checkCommand, successWhen: successWhen, thenInstruction: then, intervalSeconds: intervalSeconds, deadline: deadline, createdAt: Date()))
         appendTrace(kind: .runtime, actor: "后台守候", title: "已挂起:\(label)", detail: "每 \(intervalSeconds)s 查;满足即续:\(String(then.prefix(40)))")
-        let wd = codexWorkingDirectory
+        let wd = agentWorkingDirectory
         let executor = toolExecutor
         let nanos = UInt64(intervalSeconds) * 1_000_000_000
         backgroundWatchTasks[id] = Task { @MainActor [weak self] in

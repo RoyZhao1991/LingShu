@@ -28,7 +28,7 @@ struct LingShuTaskRuntimeCoordinator {
 
     func afterRoute(
         _ current: TaskRuntimeSnapshot,
-        route: CodexRoutePayload,
+        route: LingShuRoutePayload,
         engineLabel: String,
         permissionBoundary: String
     ) -> TaskRuntimeSnapshot {

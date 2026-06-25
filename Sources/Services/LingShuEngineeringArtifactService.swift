@@ -13,7 +13,7 @@ struct LingShuEngineeringArtifactService {
         case document
     }
 
-    func inferCapabilities(prompt: String, route: CodexRoutePayload? = nil) -> [Capability] {
+    func inferCapabilities(prompt: String, route: LingShuRoutePayload? = nil) -> [Capability] {
         let routeText = route.map { route in
             (
                 [route.summary, route.currentReply, route.executionRequest, route.directAnswer, route.finalAnswer].compactMap { $0 }
@@ -82,7 +82,7 @@ struct LingShuEngineeringArtifactService {
 
     func materializeArtifacts(
         prompt: String,
-        route: CodexRoutePayload? = nil,
+        route: LingShuRoutePayload? = nil,
         reply: String,
         workingDirectory: String,
         now: Date = Date()

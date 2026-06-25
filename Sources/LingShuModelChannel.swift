@@ -2,8 +2,8 @@ import Foundation
 
 /// 完全版 #1·**模型通道续接策略**(纯逻辑、可测)。
 ///
-/// 灵枢是本地中枢,管的是"外部大脑通道"(OpenAI/Claude/Codex/DeepSeek/Kimi/私有)的上下文续接——不是把灵枢远端化。
-/// 不同通道续接机制不同:OpenAI Responses(previous_response_id)/ Codex(resume)= **服务端原生续接**;
+/// 灵枢是本地中枢,管的是"外部大脑通道"(OpenAI/Claude/DeepSeek/Kimi/私有)的上下文续接——不是把灵枢远端化。
+/// 不同通道续接机制不同:OpenAI Responses(previous_response_id)= **服务端原生续接**;
 /// DeepSeek/Kimi/Claude messages = **无状态 + 前缀缓存**(续接=保持前缀稳定);其余 = **本地压缩上下文**。
 ///
 /// **关键(避开 #1 的设计陷阱):本回合若改写了上下文(压缩/纠正/注入工具结果),必须降级到 prefixStable**——
@@ -18,7 +18,7 @@ enum LingShuModelChannelStrategy {
     /// 该 provider 是否支持服务端原生续接。
     static func supportsNativeContinuation(provider: String) -> Bool {
         let p = provider.lowercased()
-        return p.contains("responses") || p.contains("codex")
+        return p.contains("responses")
     }
 
     /// 本通道是否走前缀缓存(无状态 chat-completions 系)。

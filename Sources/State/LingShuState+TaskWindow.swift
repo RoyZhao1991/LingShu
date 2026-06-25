@@ -5,9 +5,10 @@ import Foundation
 @MainActor
 extension LingShuState {
 
-    /// 窗口内追问:把追问当本任务记录的续跑——agent 循环以**同一条记录**继续(执行流追加进窗口,实时可见),
-    /// 走持久主会话(带上下文)。同时进主对话气泡(与正常输入一致)。**支持附件**(与主输入框同一套 ingest 管线)。
-    func submitTaskFollowup(_ text: String, recordID: String) {
+    /// 窗口内追问:把追问当本任务记录的续跑——以**同一条记录**继续(执行流追加进窗口,实时可见)。
+    /// **线程隔离(2026-06-25):始终走这条记录自己的隔离会话,绝不落主会话**——有现存隔离子会话就续它(`resumeWithInput`),
+    /// 没有(主线程直答记录/会话已结束)就为这条记录**重新派发一条隔离会话**续推进;主会话上下文不被污染。**支持附件**(同主输入框 ingest 管线)。
+    func submitTaskFollowup(_ text: String, recordID: String, appendUserMessage: Bool = true) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         let attachmentContext = attachmentContextBlock()
         guard (!trimmed.isEmpty || !attachmentContext.isEmpty), !hasActiveModelCall else { return }
@@ -27,7 +28,9 @@ extension LingShuState {
             closeDispatchedTaskForDeniedPrerequisite(recordID: recordID, answer: display)
             return
         }
-        appendTaskRecordMessage(recordID, actor: "你", role: "追问", kind: .user, text: display)
+        if appendUserMessage {   // 干预 fallback 进来时,纠正已作为「纠正」贴过,不重复贴
+            appendTaskRecordMessage(recordID, actor: "你", role: "追问", kind: .user, text: display)
+        }
         captureDesignFeedbackForDreaming(trimmed, recordID: recordID)   // 设计任务的追问/改进→dreaming 固化
         clearAttachments()
         // 这条记录若属于**隔离子任务**(派发/spawn 出来的并行任务)→ 续跑**那条隔离会话本身**(它才有真上下文),
@@ -46,12 +49,63 @@ extension LingShuState {
             Task { await agentOrchestrator.resumeWithInput(id: subID, input: resumeInput) }
             return
         }
-        let mainProvidesPrerequisite = Self.userInputProvidesPrerequisite(combined)
-        if isWaitingForPrerequisite && mainProvidesPrerequisite { resolveUserProvidedGaps(recordID: recordID) }
-        let mainResumeInput = isWaitingForPrerequisite && mainProvidesPrerequisite
+        // **线程隔离(用户定调 2026-06-25):任务窗口的追问绝不落主会话**——这条记录是一条**独立隔离线程**。
+        // 没有现存隔离子会话(主线程直答记录 / 子会话已结束被丢)→ **为这条记录重新派发一条隔离会话**续推进
+        // (带它此前的目标/进展作上下文),主会话上下文**不被污染**;子→主只经 `briefMainThread` 同步蒸馏简报(完成/落文件时)。
+        // 重新派发后会建出本记录的新隔离子会话,之后的追问就走上面 subID 分支续同一条会话(连续推进)。
+        let providesPrerequisite = Self.userInputProvidesPrerequisite(combined)
+        if isWaitingForPrerequisite && providesPrerequisite { resolveUserProvidedGaps(recordID: recordID) }
+        let resumeInput = isWaitingForPrerequisite && providesPrerequisite
             ? combined + "\n\n" + capabilityResumePreamble(recordID: recordID)
             : combined
-        runMainAgentTurn(prompt: mainResumeInput, taskRecordID: recordID, resumeBlocked: true)
+        let record = taskExecutionRecords.first { $0.id == recordID }
+        let priorBrief = [record?.goal, record?.summary]
+            .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .first { !$0.isEmpty } ?? ""
+        let isolatedInput = priorBrief.isEmpty
+            ? resumeInput
+            : "【接续这条隔离任务(它此前:\(String(priorBrief.prefix(200))))】\n\n\(resumeInput)"
+        _ = dispatchIsolatedTask(prompt: isolatedInput, taskRecordID: recordID, goal: record?.goal)
+    }
+
+    /// **子线程统一交互入口(对齐 codex 的子线程:一条独立隔离线程,发消息就续跑、始终有执行+回复)。**
+    /// 窗口 footer 只调这一个——不再按不可靠的「执行中」标志分「纠正/追问」两套(那是「子线程收到没回复」的根因):
+    /// ① 这条记录的隔离子会话/主会话循环**正在飞** → 注入 steer(循环在回合边界采纳、续跑产出执行+回复);
+    /// ② **没在飞**(循环已结束,如演示交给播放循环、回合已收尾)→ 重新起/续隔离会话 re-engage(产出执行+回复)。
+    /// 两条路都落进这条记录的窗口、都不污染主会话、都不破坏线程隔离。
+    func continueTaskThread(_ text: String, recordID: String) {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let attachmentContext = attachmentContextBlock()
+        guard !trimmed.isEmpty || !attachmentContext.isEmpty else { return }
+        let combined: String
+        if attachmentContext.isEmpty {
+            combined = trimmed
+        } else {
+            combined = trimmed.isEmpty
+                ? "\(attachmentContext)\n\n请按上述文件落地交付。"
+                : "\(attachmentContext)\n\n用户指令：\n\(trimmed)"
+        }
+        let display = trimmed.isEmpty ? "[上传了 \(pendingAttachments.count) 个文件]" : trimmed
+        appendTaskRecordMessage(recordID, actor: "你", role: "续", kind: .user, text: display)
+        captureDesignFeedbackForDreaming(trimmed, recordID: recordID)
+        clearAttachments()
+        let subID = agentSubTaskRecords.first(where: { $0.value == recordID })?.key
+        let main = mainAgentSessionHolder
+        let isMainTaskRunning = (currentAgentTurnRecordID == recordID)
+        let orchestrator = agentOrchestrator
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            var landed = false
+            // ① 在飞的隔离子会话 → steer(注入,loop 续跑采纳)。
+            if let subID, await orchestrator.injectCorrection(id: subID, combined) { landed = true }
+            // ① 这条记录正是主会话当前在跑的回合 → 注入主会话 steer。
+            if !landed, isMainTaskRunning, let main, await main.injectCorrection(combined) { landed = true }
+            // ② 没在飞 → 重新起/续隔离会话 re-engage(产出执行+回复);复位 batchInterrupt 防泄漏。
+            if !landed {
+                self.batchInterruptRequested = false
+                self.submitTaskFollowup(combined, recordID: recordID, appendUserMessage: false)
+            }
+        }
     }
 
     /// **流程纠正(干预)**:看到 agent 跑偏时,中途把纠正注入**正在跑的会话**(主/自主)。
@@ -76,10 +130,25 @@ extension LingShuState {
         // 主/自主会话的 interject 够不到编排器里的子会话(否则空转的派发任务没法从外部叫停/纠偏)。
         let subID = recordID.flatMap { rid in agentSubTaskRecords.first(where: { $0.value == rid })?.key }
         let orchestrator = agentOrchestrator
-        Task {
-            await main?.injectCorrection(correction)
-            await autonomous?.injectCorrection(correction)
-            if let subID { await orchestrator.injectCorrection(id: subID, correction) }
+        Task { @MainActor [weak self] in
+            // injectCorrection 返回**是否被一个正在跑的循环接住**(false=当前没在跑,只存了 pendingCorrection 没人消费)。
+            var landed = false
+            if let main, await main.injectCorrection(correction) { landed = true }
+            if let autonomous, await autonomous.injectCorrection(correction) { landed = true }
+            if let subID, await orchestrator.injectCorrection(id: subID, correction) { landed = true }
+            guard let self else { return }
+            // **修(2026-06-25,用户「子线程收到没回复」):**任务显示「执行中」但 agent 循环其实已结束
+            // (如演示交给播放循环、回合已收尾)→ 注入没人接住、纠正石沉大海、零回复。这里兜底:
+            // 没接住就当作对这条任务的**新指令**,重新起隔离会话续跑(产出执行过程+回复,对齐 codex/claude「收到消息就有执行+回复」),
+            // 并复位 batchInterrupt(本就没有在跑的批量要打断,防它泄漏卡住后续验收)。
+            if !landed {
+                self.batchInterruptRequested = false
+                if let recordID {
+                    self.submitTaskFollowup(correction, recordID: recordID, appendUserMessage: false)
+                } else {
+                    self.missionStatus = "收到纠正,但当前没有在跑的任务可纠;请把它作为新指令发我。"
+                }
+            }
         }
     }
 

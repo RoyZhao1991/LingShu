@@ -344,7 +344,7 @@ struct LingShuExecutionPolicySurface: View {
                     }.pickerStyle(.segmented).labelsHidden().frame(width: 190)
                 }
                 row(state.loc("工作目录", "Working dir")) {
-                    TextField(state.loc("项目目录绝对路径", "Absolute project path"), text: $state.codexWorkingDirectory)
+                    TextField(state.loc("项目目录绝对路径", "Absolute project path"), text: $state.agentWorkingDirectory)
                         .textFieldStyle(.roundedBorder).font(.system(size: 12.5, design: .monospaced)).frame(maxWidth: 460)
                 }
                 row(state.loc("语音朗读", "Speak aloud")) {
@@ -358,8 +358,8 @@ struct LingShuExecutionPolicySurface: View {
                 Divider().overlay(Color.white.opacity(0.08))
 
                 row(state.loc("权限模式", "Permission mode")) {
-                    Picker("", selection: $state.codexPermissionMode) {
-                        ForEach(CodexPermissionMode.allCases) { Text(state.loc($0.rawValue, $0.englishName)).tag($0) }
+                    Picker("", selection: $state.executionPermissionMode) {
+                        ForEach(LingShuExecutionPermissionMode.allCases) { Text(state.loc($0.rawValue, $0.englishName)).tag($0) }
                     }.pickerStyle(.segmented).labelsHidden().frame(width: 190)
                 }
                 row(state.loc("高风险需人工确认", "Confirm high-risk")) {

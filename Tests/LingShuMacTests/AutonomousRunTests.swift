@@ -9,17 +9,17 @@ final class AutonomousRunTests: XCTestCase {
         return url
     }
 
-    func testEnvironmentProbeWarnsWhenFullAutonomyLacksFullCodexPermission() throws {
+    func testEnvironmentProbeWarnsWhenFullAutonomyLacksFullExecutionPermission() throws {
         let directory = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
 
         let report = LingShuAutonomousEnvironmentProbe().run(input: .init(
             workingDirectory: directory.path,
-            modelProvider: "Codex Auth",
-            modelName: "gpt-5.5",
+            modelProvider: "DeepSeek",
+            modelName: "deepseek-chat",
             isModelConnected: true,
             modelConnectionState: "已连接",
-            codexPermissionMode: .sandbox,
+            executionPermissionMode: .sandbox,
             requireHumanApproval: false,
             permissionLevel: .full,
             voiceOutputEnabled: true,

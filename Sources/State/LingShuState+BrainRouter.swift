@@ -51,7 +51,7 @@ extension LingShuState {
         return LingShuGatewayAgentModel(
             client: remoteModelClient, provider: cfg.provider, model: cfg.model, endpoint: cfg.endpoint,
             protocolName: "OpenAI 兼容", apiKey: cfg.apiKey, temperature: temperature,
-            timeout: timeout ?? codexTimeoutSeconds, maxAttempts: maxAttempts
+            timeout: timeout ?? modelTimeoutSeconds, maxAttempts: maxAttempts
         )
     }
 
