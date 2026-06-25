@@ -460,6 +460,33 @@ struct LingShuInputDock: View {
                 .buttonStyle(.plain)
                 .help("上传图片 / PPT / 文档给灵枢理解或修改")
 
+                // **声明式调插件(对标 Codex「+」)**:选一个插件,下一条消息**确定性直达它、不经大脑分诊**(根治误调用)。
+                Menu {
+                    Section("声明式调插件(下一条消息直达,不经大脑判断)") {
+                        ForEach(state.invocablePlugins()) { p in
+                            Button {
+                                state.pinnedPluginInvocation = (state.pinnedPluginInvocation == p.id) ? nil : p.id
+                            } label: {
+                                Label("\(p.displayName)\(state.pinnedPluginInvocation == p.id ? " ✓" : "") — \(p.subtitle)", systemImage: p.icon)
+                            }
+                        }
+                    }
+                    if state.pinnedPluginInvocation != nil {
+                        Divider()
+                        Button("取消指定(交回大脑判断)", role: .destructive) { state.pinnedPluginInvocation = nil }
+                    }
+                } label: {
+                    Image(systemName: state.pinnedPluginInvocation == nil ? "plus" : "plus.circle.fill")
+                        .font(.system(size: 17, weight: .bold))
+                        .foregroundStyle(state.pinnedPluginInvocation == nil ? .white.opacity(0.86) : Color.lingVoid)
+                        .frame(width: 46, height: 42)
+                        .background(state.pinnedPluginInvocation == nil ? Color.white.opacity(0.08) : Color.lingHolo, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .fixedSize()
+                .help("声明式调插件:选一个,下一条消息直达它,不经大脑判断(像 Codex 的「+」)")
+
                 Button {
                     toggleVoiceInput()
                 } label: {

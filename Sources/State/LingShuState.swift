@@ -508,6 +508,8 @@ final class LingShuState: ObservableObject {
     @Published var procedureRecording: LingShuProcedureRecordingSession?
     /// 在飞的 replay 执行任务(按 SKILL.md 步骤用计算机控制逐步操作)。
     var procedureReplayTask: Task<Void, Never>?
+    /// **声明式调插件**(输入框「+」菜单选中):置位后**下一条输入确定性直达该插件**,跳过大脑分诊;用一次即清。见 LingShuState+DeclarativeInvocation。
+    @Published var pinnedPluginInvocation: String?
     /// 内置多 tab 浏览器:大脑用 browser_* 四肢上网/做网页自动化测试(打开URL/多tab/JS执行/滚动/全屏)。
     let browserController = LingShuBrowserController()
     /// 由根视图注入：返回当前实时态势感知上下文（无有效信号时返回空串）。
@@ -1193,6 +1195,8 @@ final class LingShuState: ObservableObject {
         if appendUserMessage, handlePresentationInputIfNeeded(trimmedPrompt) { return "" }
         // 「Record & Replay」录制进行时:用户开口=记一步(或完成/取消),拦下来,不走常规分诊。
         if appendUserMessage, handleProcedureRecordingInputIfNeeded(trimmedPrompt) { return "" }
+        // **声明式调插件**:`@演示`/`用录制技能`/输入框「+」菜单 pinned → 确定性直达,跳过大脑分诊(根治误调用)。
+        if appendUserMessage, handleDeclarativeInvocationIfNeeded(trimmedPrompt) { return "" }
         // 「演示文档」请求:确定性路由到 present_documents 插件(实测模型会习惯性绕开新插件,故硬路由保证用上)。
         if appendUserMessage, handlePresentationStartIfNeeded(trimmedPrompt) { return "" }
         // 「记录技能」请求 → 进录制;「用X技能…」请求 → 确定性匹配并 replay(声明式直达,不靠大脑瞎选)。
