@@ -45,7 +45,9 @@ struct LingShuRootView: View {
         // **手动接管安全闸**:只要演示窗在全屏(撑满)——无论自主运行还是普通派发任务——一旦检测到你的键鼠/移动/滚动
         // → 立刻退全屏恢复屏幕 + 弹框问是否停止。演示期间灵枢不产生键鼠事件(翻页走内部),故此时任何输入=你在夺回控制,判定可靠。
         .background(LingShuManualTakeoverMonitor(
-            active: previewSlideshow && !manualTakeover
+            // 「演示与答疑」插件在跑时**禁用键鼠接管闸**:它是语音驱动的(答疑走语音问答),
+            // 旧的键鼠接管会弹框 + 注入"继续演示"框架给大脑,把我的演示打断/停掉(实测真凶 2026-06-25)。
+            active: previewSlideshow && !manualTakeover && !state.presentationController.isActive
         ) { manualTakeover = true })
         .onChange(of: manualTakeover) { _, on in
             if on {
