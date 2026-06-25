@@ -66,6 +66,13 @@ extension LingShuState {
         guard !paths.isEmpty else { return "没有给文档路径。" }
         let missing = paths.filter { !FileManager.default.fileExists(atPath: $0) }
         guard missing.isEmpty else { return "这些文件不存在:\(missing.joined(separator: "、"))" }
+        // **演示=自主模式交互**(本体在位、麦克风在听、语音答疑才生效)。不进自主模式→麦克风没在听→
+        // 用户真实语音打断收不到(实测 bug 2026-06-25)。上岗用**空目标**:只本体在位+开麦,不给大脑任务
+        // (演示由我的 presentationController 驱动,不是大脑),已在岗则幂等跳过。
+        if !isStandingPersonOnDuty {
+            enteringViaManagedHandoff = true   // 本体立即出现,免入场仪式盖住演示开场
+            goLiveAsStandingPerson()
+        }
         installPresentationHooks()
         await presentationController.buildQueue(documentPaths: paths)
         let n = presentationController.queue.count
