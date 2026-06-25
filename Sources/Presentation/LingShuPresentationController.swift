@@ -82,6 +82,7 @@ final class LingShuPresentationController: ObservableObject {
         pauseRequested = false
         stopRequested = false
         phase = .playing
+        await hooks.setFullscreen(true)   // 续演(同一文档、无 showDocument)据此重进全屏;新文档由下面 open 后再进一次
 
         while var script = queue.currentScript {
             // 演这篇前先把它显示出来(多文档连播必需;同一篇续演不重复开窗),**open 之后再进全屏单页模式**——

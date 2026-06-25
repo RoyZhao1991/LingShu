@@ -50,9 +50,10 @@ struct LingShuRootView: View {
         .onChange(of: manualTakeover) { _, on in
             if on {
                 if state.presentationController.isActive {
-                    // 「演示与答疑」在跑:打字/动鼠标=答疑交互,不是夺回控制。只**暂停念稿**(别盖过用户、别一路翻页),
-                    // 留在全屏;问题由 handlePresentationInputIfNeeded 答完续演。复位监听器以便后续再问。
+                    // 「演示与答疑」在跑:打字/动鼠标=答疑交互,不是夺回控制。**暂停念稿 + 退全屏**(露出聊天框好打字提问,
+                    // 别盖过用户、别一路翻页);问题由 handlePresentationInputIfNeeded 答完 resume 自动重进全屏。复位监听器以便后续再问。
                     state.presentationController.requestPauseForQA()
+                    _ = state.previewController.setSlideshow(false)
                     manualTakeover = false
                 } else {
                     _ = state.previewController.setSlideshow(false)        // 先立刻退全屏,把屏幕还给用户
