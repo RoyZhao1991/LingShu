@@ -75,6 +75,40 @@ extension LingShuState {
         return "已开始演示(共 \(n) 篇,讲稿已逐页生成,正照稿进全屏讲)。演示中用户随时可打断提问,我答完接着讲;多篇会一篇篇连播,一篇演完会问要不要继续下一篇。你这条到此停,别再重复 open/present。"
     }
 
+    /// **确定性路由(实测必需)**:识别「演示/讲解 + 文档路径」的请求,**直接走 present_documents 插件**,
+    /// 不靠模型选工具——实测 GLM/DeepSeek 等会习惯性用旧的 open_preview+speak 手搓路径、不碰新插件(工具建了也白搭)。
+    /// 返回 true=已直接路由,submitTextInput 不再走常规分诊。
+    func handlePresentationStartIfNeeded(_ prompt: String) -> Bool {
+        guard !presentationController.isActive else { return false }   // 已在演示 → 交给答疑路由
+        guard let paths = Self.detectPresentationRequest(prompt) else { return false }
+        let existing = paths.filter { FileManager.default.fileExists(atPath: $0) }
+        guard !existing.isEmpty else { return false }                  // 路径不存在 → 交大脑常规处理(可能要先生成)
+        chatMessages.append(.init(speaker: "你", text: prompt, isUser: true))
+        appendTrace(kind: .route, actor: "演示与答疑", title: "确定性路由",
+                    detail: "识别为文档演示请求,直接走 present_documents 插件(\(existing.count) 篇),不靠模型选工具。")
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            let msg = await self.startPresentation(paths: existing)
+            self.chatMessages.append(.init(speaker: "灵枢", text: msg, isUser: false))
+        }
+        return true
+    }
+
+    /// 识别「文档演示」请求并抽出文档路径:必须有演示意图词 + 至少一个存在的文档路径。纯逻辑,可单测。
+    nonisolated static func detectPresentationRequest(_ prompt: String) -> [String]? {
+        let intents = ["演示", "讲解", "放映", "讲一下这", "讲讲这", "带我看", "带人看", "过一遍这", "present", "演讲"]
+        guard intents.contains(where: { prompt.contains($0) }) else { return nil }
+        let exts = ["pdf", "pptx", "ppt", "docx", "doc", "key", "html", "htm", "md", "txt", "xlsx"]
+        let pattern = "(/[^\\s,，；;、]+\\.(?:" + exts.joined(separator: "|") + "))"
+        guard let re = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else { return nil }
+        let ns = prompt as NSString
+        var paths: [String] = []
+        re.enumerateMatches(in: prompt, range: NSRange(location: 0, length: ns.length)) { m, _, _ in
+            if let m { paths.append(ns.substring(with: m.range)) }
+        }
+        return paths.isEmpty ? nil : paths
+    }
+
     /// 演示进行时的用户输入拦截(**实时答疑,主线程线性**):返回 true=已作为演示交互处理,submitTextInput 不再走常规分诊。
     func handlePresentationInputIfNeeded(_ prompt: String) -> Bool {
         let c = presentationController

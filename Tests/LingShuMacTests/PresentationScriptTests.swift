@@ -90,4 +90,26 @@ final class PresentationScriptTests: XCTestCase {
         XCTAssertFalse(q.hasNext)
         XCTAssertNil(q.advanceToNext())
     }
+
+    // MARK: - 「演示文档」确定性路由检测器
+
+    func testDetectPresentationRequestExtractsPaths() {
+        let r = LingShuState.detectPresentationRequest("把 /tmp/a.pdf 这个文档正式演示讲解一下")
+        XCTAssertEqual(r, ["/tmp/a.pdf"])
+    }
+
+    func testDetectPresentationRequestMultipleDocs() {
+        let r = LingShuState.detectPresentationRequest("依次演示 /a/x.pptx 和 /b/y.pdf")
+        XCTAssertEqual(r, ["/a/x.pptx", "/b/y.pdf"])
+    }
+
+    func testDetectPresentationRequestNeedsIntentWord() {
+        // 有路径但无演示意图 → 不拦(交大脑常规处理)。
+        XCTAssertNil(LingShuState.detectPresentationRequest("帮我改一下 /tmp/a.pdf 的内容"))
+    }
+
+    func testDetectPresentationRequestNeedsPath() {
+        // 有演示意图但无文档路径 → 不拦。
+        XCTAssertNil(LingShuState.detectPresentationRequest("给我演示一下你的能力"))
+    }
 }

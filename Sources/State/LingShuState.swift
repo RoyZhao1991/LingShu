@@ -1179,6 +1179,8 @@ final class LingShuState: ObservableObject {
         guard !trimmedPrompt.isEmpty else { return "" }
         // 「演示与答疑」进行时:用户开口=实时答疑(**主线程线性**,保真人交互感),拦下来处理,不走常规分诊/派发。
         if appendUserMessage, handlePresentationInputIfNeeded(trimmedPrompt) { return "" }
+        // 「演示文档」请求:确定性路由到 present_documents 插件(实测模型会习惯性绕开新插件,故硬路由保证用上)。
+        if appendUserMessage, handlePresentationStartIfNeeded(trimmedPrompt) { return "" }
         cancelMainRemoteHealthProbe(reason: "探活让路", detail: "收到用户指令，已停止后台探活，把主通道让给本轮任务。")
 
         // 记录**按需建**(不再在最顶 eager 建):被续答/在岗/答复等早返回接管的轮次用各自的记录,
