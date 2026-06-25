@@ -11,6 +11,7 @@ struct LingShuSettingsHub: View {
         case policy = "系统配置"
         case residency = "常驻与触发"
         case skills = "技能"
+        case plugins = "插件"
         case connectors = "连接器"
         case memory = "记忆"
         var id: String { rawValue }
@@ -20,6 +21,7 @@ struct LingShuSettingsHub: View {
             case .policy: "gearshape"
             case .residency: "clock.badge"
             case .skills: "puzzlepiece.extension"
+            case .plugins: "square.grid.2x2"
             case .connectors: "app.connected.to.app.below.fill"
             case .memory: "brain"
             }
@@ -30,6 +32,7 @@ struct LingShuSettingsHub: View {
             case .policy: "System"
             case .residency: "Standby & Triggers"
             case .skills: "Skills"
+            case .plugins: "Plugins"
             case .connectors: "Connectors"
             case .memory: "Memory"
             }
@@ -98,6 +101,8 @@ struct LingShuSettingsHub: View {
                         }
                         .padding(22)
                     }
+                case .plugins:
+                    ScrollView { LingShuPluginListPanel(state: state).padding(22) }
                 case .connectors:
                     LingShuConnectorsHub(state: state)
                 case .memory:

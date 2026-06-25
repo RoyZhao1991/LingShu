@@ -36,14 +36,7 @@ extension LingShuState {
     /// 文本声明(`@Codex 开发X @Claude 验收`/`@演示 …`)或「+」菜单 pinned(可多选)→ 确定性路由。返回 true=已接管。
     func handleDeclarativeInvocationIfNeeded(_ prompt: String) -> Bool {
         let plugins = invocablePlugins()
-        // ① 「+」菜单 pinned(可多选):整条输入按选中链路由(多 agent=maker→checker);用一次即清。
-        if !pinnedInvocations.isEmpty {
-            let ids = pinnedInvocations; pinnedInvocations = []
-            chatMessages.append(.init(speaker: "你", text: prompt, isUser: true))
-            runInvocationChain(buildPinnedSteps(ids: ids, input: prompt.trimmingCharacters(in: .whitespaces)), plugins: plugins)
-            return true
-        }
-        // ② 文本 `@链式`(@Codex 开发X @Claude 验收Y)。
+        // 文本 `@链式`(@Codex 开发X @Claude 验收Y)——「+」菜单选中即往输入框插 @名字,inline 编排,提交时按序解析成链。
         let chain = LingShuDeclarativeInvocation.detectChain(prompt, plugins: plugins)
         if !chain.isEmpty {
             chatMessages.append(.init(speaker: "你", text: prompt, isUser: true))
@@ -61,12 +54,6 @@ extension LingShuState {
         return false
     }
 
-    /// 「+」菜单多选 → 执行链:agent 们 = **maker→checker**(首个做 input,其余复核上一步产出);插件各自处理 input。
-    private func buildPinnedSteps(ids: [String], input: String) -> [(id: String, segment: String)] {
-        ids.enumerated().map { i, id in
-            (id, i == 0 ? input : "复核/验收上一步的产出物,对照原始要求:\(input)")
-        }
-    }
 
     /// 顺序执行声明链:agent 步走真委托(后一个 agent 拿到前一步产出→天然 maker≠checker);插件步路由各自插件。
     private func runInvocationChain(_ steps: [(id: String, segment: String)], plugins: [LingShuInvocablePlugin]) {

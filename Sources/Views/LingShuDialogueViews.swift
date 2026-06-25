@@ -447,8 +447,6 @@ struct LingShuInputDock: View {
                     state.convertDroppedFilePathsIfNeeded()
                 }
 
-            pinnedChipsRow   // 已选中的插件/agent chip(可删),像 Codex 选中技能出现在输入栏
-
             HStack(spacing: 10) {
                 // **声明式调插件/agent(对标 Codex「+」,最左)**:选(可多选)插件/agent,下一条消息**确定性直达**;
                 // 多个 agent 组合 = maker→checker(@Codex 开发 → @Claude 验收)。
@@ -604,58 +602,30 @@ struct LingShuInputDock: View {
         return alerts
     }
 
-    /// 「+」菜单:列可调插件/agent,**多选**(✓ 标记),选中=置 pinned;下一条消息直达。
+    /// 「+」菜单:列可调插件/agent,**选中即往输入框插入 `@名字 ` token**——这样能在输入里 inline 编排
+    /// (「@Codex 开发 @Claude 验收」),@名字 即声明式插件格式,提交时按出现顺序解析成执行链(多 agent=maker→checker)。
     @ViewBuilder private var invocationMenu: some View {
         Menu {
-            Text("声明式调插件/agent — 选中(可多选)下一条消息直达,不经大脑判断")
+            Text("选一个插进输入框(@名字);可多选拼成编排:@Codex 开发 @Claude 验收")
             ForEach(state.invocablePlugins()) { p in
                 Button {
-                    if let i = state.pinnedInvocations.firstIndex(of: p.id) { state.pinnedInvocations.remove(at: i) }
-                    else { state.pinnedInvocations.append(p.id) }
+                    let sep = (state.prompt.isEmpty || state.prompt.hasSuffix(" ")) ? "" : " "
+                    state.prompt += "\(sep)@\(p.displayName) "
                 } label: {
-                    Label(state.pinnedInvocations.contains(p.id) ? "✓ \(p.displayName)" : p.displayName, systemImage: p.icon)
+                    Label(p.displayName, systemImage: p.icon)
                 }
             }
-            if !state.pinnedInvocations.isEmpty {
-                Divider()
-                Button("清空选择", role: .destructive) { state.pinnedInvocations.removeAll() }
-            }
         } label: {
-            Image(systemName: state.pinnedInvocations.isEmpty ? "plus" : "plus.circle.fill")
+            Image(systemName: "plus")
                 .font(.system(size: 17, weight: .bold))
-                .foregroundStyle(state.pinnedInvocations.isEmpty ? .white.opacity(0.86) : Color.lingVoid)
+                .foregroundStyle(.white.opacity(0.86))
                 .frame(width: 46, height: 42)
-                .background(state.pinnedInvocations.isEmpty ? Color.white.opacity(0.08) : Color.lingHolo, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
         }
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
         .fixedSize()
-        .help("声明式调插件/agent:选中(可多选)下一条直达;多 agent=maker→checker(像 Codex「+」)")
-    }
-
-    /// 已选中的插件/agent 显示成可删 chip(像 Codex 选中技能出现在输入栏)。
-    @ViewBuilder private var pinnedChipsRow: some View {
-        if !state.pinnedInvocations.isEmpty {
-            let chosen = state.invocablePlugins().filter { state.pinnedInvocations.contains($0.id) }
-            HStack(spacing: 6) {
-                ForEach(chosen) { p in
-                    HStack(spacing: 4) {
-                        Image(systemName: p.icon).font(.system(size: 11, weight: .bold))
-                        Text(p.displayName).font(.system(size: 12, weight: .semibold))
-                        Button { state.pinnedInvocations.removeAll { $0 == p.id } } label: {
-                            Image(systemName: "xmark").font(.system(size: 9, weight: .bold))
-                        }.buttonStyle(.plain)
-                    }
-                    .foregroundStyle(Color.lingVoid)
-                    .padding(.horizontal, 9).padding(.vertical, 5)
-                    .background(Color.lingHolo, in: Capsule())
-                }
-                if chosen.count > 1 {
-                    Text("→ 顺序执行(多 agent=做完再验收)").font(.system(size: 11)).foregroundStyle(.white.opacity(0.5))
-                }
-                Spacer(minLength: 0)
-            }
-        }
+        .help("声明式调插件/agent:选中即在输入框插入 @名字,可 inline 编排「@Codex 开发 @Claude 验收」")
     }
 
     private func submit() {
