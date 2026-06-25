@@ -21,7 +21,7 @@ enum LingShuPresentationPace: String, Codable, Sendable, Equatable, CaseIterable
     /// "快速/概要"是少展开、跳细节,长度**随内容自然定**,该讲明白的还是要讲明白)。
     var narrationGuidance: String {
         switch self {
-        case .detailed: return "把这页讲透:展开要点、必要时补背景或举例,像详细讲解一样讲清楚。"
+        case .detailed: return "把这页讲清楚:展开要点、必要时补一句背景或举例。**口语自然、讲到位就收,别长篇大论凑时长**(一页几句到十来句即可,不是越长越好)。"
         case .brief:    return "**直奔重点、不啰嗦**:把这页最关键的信息说清楚就收,不展开、不举例、不铺垫客套。该讲明白的仍要讲明白——**长度随内容定,绝不为求短把话说得没头没尾、让人听不懂**。"
         case .overview: return "**只点这页的核心主旨**:一两句说清这页大致在讲什么、想表达什么,跳过具体细节;但**要让人听懂大意,别压到说不清楚**。"
         }

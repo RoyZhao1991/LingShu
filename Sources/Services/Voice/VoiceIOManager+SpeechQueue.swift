@@ -11,13 +11,14 @@ extension VoiceIOManager {
     }
 
     /// 阻塞等当前这句念完(供 speak 工具同步返回:演示逐页讲自然停顿)。先等起播(TTS 有起播延迟),
-    /// 再等念完;双封顶防卡:起播最多 3s、整句最多 90s,到顶即放行不阻塞 agent 循环。
-    func awaitPlaybackDone() async {
+    /// 再等念完;双封顶防卡:起播最多 3s、整句最多 `maxSeconds`(默认 90s),到顶即放行不阻塞 agent 循环。
+    /// **演示长页(详细档几百字念 100s+)须传更大的 maxSeconds**,否则 90s 硬闸会把没念完的页切走(实测翻页过早)。
+    func awaitPlaybackDone(maxSeconds: Double = 90) async {
         let start = Date()
         while Date().timeIntervalSince(start) < 3, !isSpeakingOrQueued {
             try? await Task.sleep(nanoseconds: 50_000_000)
         }
-        while Date().timeIntervalSince(start) < 90, isSpeakingOrQueued {
+        while Date().timeIntervalSince(start) < maxSeconds, isSpeakingOrQueued {
             try? await Task.sleep(nanoseconds: 60_000_000)
         }
     }

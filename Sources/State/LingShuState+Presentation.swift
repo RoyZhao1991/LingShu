@@ -39,7 +39,10 @@ extension LingShuState {
                 guard let self, let voice = self.voiceManager else { return }
                 voice.speakPresentationNarration(text)   // 命中下一页预合成则即时起播,消翻页停顿
                 self.recordSpokenLine(text)
-                await voice.awaitPlaybackDone()
+                // **按讲稿长度给足封顶**:详细档一页可念 100s+,默认 90s 硬闸会把没念完的页切走(实测过早翻页)。
+                // 保守按 ~2.5 字/秒估时长(实际更快)+富余,保证封顶恒大于真实播放时长、只在 TTS 真卡住时兜底放行。
+                let cap = max(150, Double(text.count) / 2.5 + 60)
+                await voice.awaitPlaybackDone(maxSeconds: cap)
             },
             prefetchNarration: { [weak self] text in self?.voiceManager?.prefetchSpeech(text) },
             setFullscreen: { [weak self] on in _ = self?.previewController.setSlideshow(on) },
@@ -165,6 +168,8 @@ extension LingShuState {
                     self.appendPresentationLine("好,先停在这一页,你说「继续」我接着讲。")   // 停住保持,等「继续」
                 case .pace(let p):
                     c.setPace(p); self.appendPresentationLine("好,后面我\(p.label)讲。"); await c.resume()   // 切档→续演,后续页按新深度
+                case .seek(let page):
+                    self.appendPresentationLine("好,翻到第\(page)页。"); await c.resume(seekTo: page - 1)   // 定向跳页 + 从该页续演
                 case .question:
                     await self.speakPresentationAnswer(answer)
                     if c.phase == .pausedForQA {
@@ -186,8 +191,8 @@ extension LingShuState {
         }
     }
 
-    /// 听众这句话的语义意图(暂停/继续/停止/换讲解档/提问)——由模型按语义判,不靠关键词枚举。
-    enum PresentationUtteranceIntent { case pause, resume, stop, question, pace(LingShuPresentationPace) }
+    /// 听众这句话的语义意图(暂停/继续/停止/换讲解档/跳页/提问)——由模型按语义判,不靠关键词枚举。
+    enum PresentationUtteranceIntent { case pause, resume, stop, question, pace(LingShuPresentationPace), seek(Int) }
 
     /// **模型按语义分类**听众这句话 + 若提问给出回答(一次 LLM 搞定)。失败才回退关键词兜底。
     /// 这样「先暂时停一下」「稍微停会儿」「咱们接着」任何说法都能判对,而不是写死一串词。
@@ -201,6 +206,7 @@ extension LingShuState {
         - 暂停后想接着往下讲(如「继续」「咱们接着」「往下说吧」)→ {"intent":"resume"}
         - 想结束/退出/不看了(如「不演了」「停了吧」「够了」「先到这」)→ {"intent":"stop"}
         - 想**换讲解节奏/深度**(如「后面快速讲」「简要过一下就行」「概要说说剩下的」「详细讲」「恢复正常速度」)→ {"intent":"pace","pace":"detailed"或"brief"或"overview"}(快速=brief、概要=overview、详细/正常=detailed)
+        - 想**跳到/翻到某一页**(如「跳到第5页」「翻到第3页」「我想看第8页」「回到第一页」)→ {"intent":"seek","page":页号数字}
         - 对内容提问、或说别的话 → {"intent":"question","answer":"结合当前这页内容、像真人当面口语简洁回答(40-140字),不复述整页、不编造页面没有的事"}
         \(context)
         """
@@ -216,6 +222,11 @@ extension LingShuState {
         case "pace":
             let p = LingShuPresentationPace(rawValue: (Self.jsonField(clean, "pace") ?? "").lowercased()) ?? .brief
             return (.pace(p), "")
+        case "seek":
+            let page = (Self.jsonField(clean, "page").flatMap { Int($0.trimmingCharacters(in: .whitespacesAndNewlines)) })
+                ?? Self.parsePresentationResumePage(input)
+            if let page, page > 0 { return (.seek(page), "") }
+            return (.question, "你想跳到第几页?说个页号我就翻过去。")
         case "question":
             let a = (Self.jsonField(clean, "answer") ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
             return (.question, a.isEmpty ? "这个问题我先记下,演示后细聊。" : a)
@@ -229,6 +240,9 @@ extension LingShuState {
         if isPresentationStopIntent(s)   { return (.stop, "") }
         if isPresentationResumeIntent(s) { return (.resume, "") }
         if isPresentationPauseIntent(s)  { return (.pause, "") }
+        let t = s.replacingOccurrences(of: " ", with: "")
+        if (t.contains("跳") || t.contains("翻到") || t.contains("回到") || t.contains("看第")),
+           let p = parsePresentationResumePage(s) { return (.seek(p), "") }   // 跳页兜底
         return (.question, "这个问题我先记下,演示后细聊。")
     }
 

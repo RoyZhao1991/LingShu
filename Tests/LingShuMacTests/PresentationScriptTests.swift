@@ -132,4 +132,11 @@ final class PresentationIntentTests: XCTestCase {
         XCTAssertTrue(LingShuState.isPresentationResumeIntent("接着讲"))
         XCTAssertFalse(LingShuState.isPresentationResumeIntent("这页讲的是什么"), "普通问题不算继续")
     }
+    @MainActor func testSeekIntentFallback() {
+        if case .seek(let p) = LingShuState.fallbackPresentationIntent("跳到第5页").intent { XCTAssertEqual(p, 5) }
+        else { XCTFail("「跳到第5页」应判为 seek(5)") }
+        if case .seek(let p) = LingShuState.fallbackPresentationIntent("翻到第3页").intent { XCTAssertEqual(p, 3) }
+        else { XCTFail("「翻到第3页」应判为 seek(3)") }
+        if case .question = LingShuState.fallbackPresentationIntent("这页讲的是啥").intent {} else { XCTFail("普通问题不该判成跳页") }
+    }
 }
