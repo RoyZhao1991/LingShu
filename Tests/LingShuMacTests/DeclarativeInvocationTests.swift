@@ -36,4 +36,24 @@ final class DeclarativeInvocationTests: XCTestCase {
         XCTAssertNil(LingShuDeclarativeInvocation.detect("演示这个文档", plugins: plugins))
         XCTAssertNil(LingShuDeclarativeInvocation.detect("帮我改一下报销单", plugins: plugins))
     }
+
+    func testDetectChainMultiAgent() {
+        let agents: [LingShuInvocablePlugin] = [
+            .init(id: "codex", displayName: "Codex", aliases: ["codex"], subtitle: "", icon: "", kind: .agent),
+            .init(id: "claude", displayName: "Claude", aliases: ["claude"], subtitle: "", icon: "", kind: .agent),
+        ]
+        let chain = LingShuDeclarativeInvocation.detectChain("@Codex 开发一个清分结算系统 @Claude 进行验收", plugins: agents)
+        XCTAssertEqual(chain.count, 2)
+        XCTAssertEqual(chain[0].id, "codex")
+        XCTAssertEqual(chain[0].segment, "开发一个清分结算系统")
+        XCTAssertEqual(chain[1].id, "claude")
+        XCTAssertEqual(chain[1].segment, "进行验收")
+    }
+
+    func testDetectChainSingle() {
+        let chain = LingShuDeclarativeInvocation.detectChain("@演示 /tmp/a.pdf", plugins: plugins)
+        XCTAssertEqual(chain.count, 1)
+        XCTAssertEqual(chain[0].id, "present")
+        XCTAssertEqual(chain[0].segment, "/tmp/a.pdf")
+    }
 }

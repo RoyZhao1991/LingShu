@@ -4,11 +4,13 @@ import Foundation
 /// **跳过大脑分诊**。根治反复踩的坑——模型常绕开新插件/不去委托([[presentation-qa-plugin]] 记的「GLM绕开新工具」)。
 /// 两种声明方式:① 文本里 `@演示`/`用演示插件`/`/present` 前缀;② 输入框「+」菜单选中(置 pinned)。
 struct LingShuInvocablePlugin: Identifiable, Sendable, Equatable {
+    enum Kind: String, Sendable { case plugin, agent }   // 插件(演示/录制) vs 外部 agent(Codex/Claude)
     let id: String
     let displayName: String
     let aliases: [String]    // 触发别名(自动并入 displayName + id)
     let subtitle: String     // 「+」菜单里的一句说明
     let icon: String         // SF Symbol 名
+    var kind: Kind = .plugin
 
     /// 全部可匹配的别名(去重、含 displayName/id)。
     var allAliases: [String] {
@@ -46,5 +48,33 @@ enum LingShuDeclarativeInvocation {
         ["@\(alias)", "/\(alias)",
          "用\(alias)插件", "用\(alias)", "调用\(alias)", "调\(alias)",
          "切换到\(alias)", "切到\(alias)", "使用\(alias)"]
+    }
+
+    /// 解析输入里的**多个 `@调用`**(`@Codex 开发X @Claude 验收Y`)→ 有序 [(id, 该段任务文本)]。
+    /// 只认 `@别名` 前缀(多 agent/插件组合最自然);无 `@` 命中返回空。每段=从该别名后到下一个 `@别名` 之前。
+    static func detectChain(_ input: String, plugins: [LingShuInvocablePlugin]) -> [(id: String, segment: String)] {
+        let t = input
+        let aliasPairs = plugins.flatMap { p in p.allAliases.map { (id: p.id, alias: $0) } }
+            .sorted { $0.alias.count > $1.alias.count }   // 最长别名优先
+        struct Marker { let id: String; let at: String.Index; let contentStart: String.Index }
+        var markers: [Marker] = []
+        var idx = t.startIndex
+        while idx < t.endIndex {
+            guard let at = t[idx...].firstIndex(of: "@") else { break }
+            let afterAt = t.index(after: at)
+            if afterAt < t.endIndex, let pair = aliasPairs.first(where: { t[afterAt...].hasPrefix($0.alias) }) {
+                let contentStart = t.index(afterAt, offsetBy: pair.alias.count)
+                markers.append(Marker(id: pair.id, at: at, contentStart: contentStart))
+                idx = contentStart
+            } else {
+                idx = afterAt
+            }
+        }
+        guard !markers.isEmpty else { return [] }
+        return markers.enumerated().map { i, m in
+            let segEnd = (i + 1 < markers.count) ? markers[i + 1].at : t.endIndex
+            let seg = String(t[m.contentStart..<segEnd]).trimmingCharacters(in: CharacterSet(charactersIn: " :：,，、\n"))
+            return (m.id, seg)
+        }
     }
 }
