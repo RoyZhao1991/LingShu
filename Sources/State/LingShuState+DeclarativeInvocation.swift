@@ -9,16 +9,11 @@ extension LingShuState {
     /// 按可用性实时过滤(如录制要计算机控制授权;演示总在)。
     func invocablePlugins() -> [LingShuInvocablePlugin] {
         var list: [LingShuInvocablePlugin] = []
-        // **外部 agent**(可用才出现):声明式直达,跳过大脑判断要不要委托。多个 agent 组合=maker→checker 管线。
-        if codexAuthStatus == "已登录" {
-            list.append(.init(id: "codex", displayName: "Codex",
-                              aliases: ["codex", "Codex"],
-                              subtitle: "外包给 Codex 开发(仓库内自主读改跑测,擅长重型编码)", icon: "hammer.fill", kind: .agent))
-        }
-        if ClaudeBridge.isAvailable() {
-            list.append(.init(id: "claude", displayName: "Claude",
-                              aliases: ["claude", "Claude"],
-                              subtitle: "外包给 Claude Code 做/独立验收(跨厂商第二视角,maker≠checker)", icon: "checkmark.seal.fill", kind: .agent))
+        // **已注册的 agent 插件**(被告知可用→注册进插件库,零硬编码;不再写死 codex/claude)。可执行文件在才出现。
+        for a in LingShuAgentPluginStore.load() where a.isAvailableNow {
+            list.append(.init(id: "agent:\(a.id)", displayName: a.displayName, aliases: a.aliases,
+                              subtitle: a.subtitle.isEmpty ? "已注册 agent(\(a.role.rawValue))" : a.subtitle,
+                              icon: a.icon, kind: .agent))
         }
         // **插件**
         list.append(contentsOf: [
@@ -82,11 +77,20 @@ extension LingShuState {
                 guard let inv = plugins.first(where: { $0.id == step.id }) else { continue }
                 switch inv.kind {
                 case .agent:
+                    // 从插件库取这个**已注册 agent**,统一用 Store.run 跑(零硬编码,任何 CLI agent 同一套)。
+                    let agentID = inv.id.hasPrefix("agent:") ? String(inv.id.dropFirst("agent:".count)) : inv.id
+                    guard let plugin = LingShuAgentPluginStore.plugin(id: agentID) else {
+                        self.speakAndChat("agent「\(inv.displayName)」没注册或不可用,跳过。"); continue
+                    }
                     let obj = step.segment + (priorOutput.isEmpty ? "" : "\n\n【上一步产出,供你参考/复核】\n" + String(priorOutput.prefix(4000)))
-                    self.speakAndChat("交给 \(inv.displayName):\(step.segment.prefix(50))")
-                    let out = (inv.id == "codex") ? await self.runDelegatedCodex(objective: obj)
-                                                  : await self.runDelegatedClaude(objective: obj)
-                    self.chatMessages.append(.init(speaker: "灵枢", text: "【\(inv.displayName)】\n\(out)", isUser: false))
+                    self.speakAndChat("交给 \(plugin.displayName):\(step.segment.prefix(50))")
+                    let result = await LingShuAgentPluginStore.run(plugin, objective: obj, workingDirectory: self.codexWorkingDirectory)
+                    let out: String
+                    switch result {
+                    case .completed(let t): out = t
+                    case .failure(let r):   out = "（\(plugin.displayName) 未完成:\(r)）"
+                    }
+                    self.chatMessages.append(.init(speaker: "灵枢", text: "【\(plugin.displayName)】\n\(out)", isUser: false))
                     priorOutput = out
                 case .plugin:
                     self.routePlugin(pluginID: inv.id, rest: step.segment)

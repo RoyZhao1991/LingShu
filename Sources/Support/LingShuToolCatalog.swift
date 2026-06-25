@@ -66,7 +66,7 @@ enum LingShuToolCatalog {
     static let coreToolNames: Set<String> = [
         "read_file", "write_file", "edit_file", "apply_patch", "run_command", "web_search",
         "ask_user", "ask_form", "speak", "recall_memory", "recall_local", "update_plan", "spawn_task",
-        "delegate_to_codex", "delegate_to_claude",   // 外部 agent 委托:恒可见,让大脑随时能把活外包给 Codex/Claude
+        "register_agent", "run_agent",   // agent 即插件(通用):被告知本机有某 CLI agent→注册;把活外包给已注册 agent
         "present_documents"   // 「演示与答疑」插件:恒可见,做正式文档演示时大脑直接用
     ]
     static let searchToolName = "search_tools"

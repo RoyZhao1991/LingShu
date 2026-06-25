@@ -47,15 +47,13 @@ extension LingShuState {
                 available: !cfg.endpoint.trimmingCharacters(in: .whitespaces).isEmpty))
         }
 
-        // 外部 agent CLI:Codex —— 执行接线在步骤2,这里仅据登录态报可用性。
-        descriptors.append(.init(
-            id: "external:codex", kind: .externalCLI, providerLabel: "Codex",
-            available: codexAuthStatus == "已登录"))
-
-        // Claude Code —— 尚未接入(步骤3),恒不可用,占位以便 UI/日志看到「该源待接入」。
-        descriptors.append(.init(
-            id: "external:claude-code", kind: .externalCLI, providerLabel: "Claude Code",
-            available: false))
+        // 外部 agent CLI:**从插件库取已注册的 agent**(零硬编码;codex/claude 只是被注册的两个 agent 插件)。
+        // 跨源审查(maker≠checker)据此判:库里有 ≥2 个不同 agent 就能配。
+        for a in LingShuAgentPluginStore.load() where a.isAvailableNow {
+            descriptors.append(.init(
+                id: "external:\(a.id)", kind: .externalCLI, providerLabel: a.displayName,
+                available: true))
+        }
 
         return LingShuAgentEngineRegistry.availablePool(descriptors)
     }
