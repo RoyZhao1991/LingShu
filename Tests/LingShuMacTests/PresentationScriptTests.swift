@@ -113,3 +113,23 @@ final class PresentationScriptTests: XCTestCase {
         XCTAssertNil(LingShuState.detectPresentationRequest("给我演示一下你的能力"))
     }
 }
+
+// 暂停/继续/停止 意图判定(删除鼠标打断后,暂停走语音命令)
+final class PresentationIntentTests: XCTestCase {
+    func testPauseIntentNotStop() {
+        XCTAssertTrue(LingShuState.isPresentationPauseIntent("暂停一下"))
+        XCTAssertTrue(LingShuState.isPresentationPauseIntent("先停一下"))
+        XCTAssertFalse(LingShuState.isPresentationStopIntent("暂停一下"), "「暂停」不能被当成停止")
+        XCTAssertFalse(LingShuState.isPresentationStopIntent("停一下"))
+    }
+    func testStopIntentStillWorks() {
+        XCTAssertTrue(LingShuState.isPresentationStopIntent("停止演示"))
+        XCTAssertTrue(LingShuState.isPresentationStopIntent("不看了"))
+        XCTAssertTrue(LingShuState.isPresentationStopIntent("退出演示"))
+    }
+    func testResumeIntent() {
+        XCTAssertTrue(LingShuState.isPresentationResumeIntent("继续"))
+        XCTAssertTrue(LingShuState.isPresentationResumeIntent("接着讲"))
+        XCTAssertFalse(LingShuState.isPresentationResumeIntent("这页讲的是什么"), "普通问题不算继续")
+    }
+}

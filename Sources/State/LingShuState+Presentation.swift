@@ -141,8 +141,17 @@ extension LingShuState {
                 if Self.isPresentationStopIntent(trimmed) { await c.stop(); self.appendPresentationLine("好,演示就到这里。") }
                 else { self.appendPresentationLine("好,继续下一篇。"); await c.confirmAndPlayNext() }
             case .playing, .pausedForQA:
+                // **命令优先,不进答疑**:暂停态下「继续」→ 续演。
+                if c.phase == .pausedForQA, Self.isPresentationResumeIntent(trimmed) {
+                    self.appendPresentationLine("好,接着讲。"); await c.resume(); return
+                }
                 if c.phase == .playing { c.requestPauseForQA(); await self.waitUntilPresentationPaused() }
                 if Self.isPresentationStopIntent(trimmed) { await c.stop(); self.appendPresentationLine("好,停下了,需要再演随时叫我。"); return }
+                // 「暂停/停一下」→ 停在当前页保持,等「继续」再讲(不答疑、不续)。
+                if Self.isPresentationPauseIntent(trimmed) {
+                    self.appendPresentationLine("好,先停在这一页,你说「继续」我接着讲。"); return
+                }
+                // 其余=听众提问 → 答完从打断处(或「从第N页」)续。
                 await self.answerDuringPresentation(trimmed)
                 if c.phase == .pausedForQA {
                     let seekPage = Self.parsePresentationResumePage(trimmed)   // "从第N页"→seek;否则当前位置续
@@ -187,7 +196,20 @@ extension LingShuState {
 
     nonisolated static func isPresentationStopIntent(_ s: String) -> Bool {
         let t = s.replacingOccurrences(of: " ", with: "")
-        return ["停止演示", "结束演示", "退出演示", "不看了", "不演了", "停下", "够了", "停"].contains { t.contains($0) }
+        // 注:去掉了裸「停」「停下」——它们会误命中「暂停/停一下」(那是暂停保持,不是停止)。
+        return ["停止演示", "结束演示", "退出演示", "不看了", "不演了", "别演了", "够了"].contains { t.contains($0) }
+    }
+
+    /// 暂停保持(可续):说「暂停/停一下/等一下」→ 停在当前页,等「继续」再讲(不是停止、不是答疑)。
+    nonisolated static func isPresentationPauseIntent(_ s: String) -> Bool {
+        let t = s.replacingOccurrences(of: " ", with: "")
+        return ["暂停", "停一下", "停一会", "先停", "等一下", "等等", "稍等"].contains { t.contains($0) }
+    }
+
+    /// 继续演示:暂停态下说「继续/接着讲/往下讲」→ 从当前页续。
+    nonisolated static func isPresentationResumeIntent(_ s: String) -> Bool {
+        let t = s.replacingOccurrences(of: " ", with: "")
+        return ["继续", "接着讲", "接着演", "往下讲", "往下演", "接着说"].contains { t.contains($0) }
     }
 
     /// 解析"从第N页/回到第N页/第N页"里的页号(1-based);没有则 nil(从当前位置续)。

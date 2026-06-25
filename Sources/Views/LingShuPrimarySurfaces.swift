@@ -12,12 +12,6 @@ struct LingShuRootView: View {
     @StateObject private var standingVoiceCall = LingShuVoiceCallController()
     /// 自主模式「只剩本体」终态:进入仪式(融化→离子化)播完后置真,界面整个让位给右上角的悬浮本体。
     @State private var autonomousOrbMode = false
-    /// 演示窗是否处于"全屏(撑满)"态——供手动接管安全闸判定(演示在独立窗口里,本体浮窗始终在位,不再让位)。
-    @State private var previewSlideshow = false
-    /// 全屏演示中检测到手动操作 → 弹"是否退出自主"确认框(并已先退全屏恢复屏幕)。
-    @State private var manualTakeover = false
-    /// AppKit alert 正在展示。全屏/预览窗口重排期间避免 SwiftUI sheet/confirmationDialog 参与布局。
-    @State private var manualTakeoverAlertShowing = false
     private var orbActive: Bool { state.isStandingPersonOnDuty && autonomousOrbMode }
 
     var body: some View {
@@ -41,23 +35,9 @@ struct LingShuRootView: View {
         // 进入仪式只在「上岗→终态之前」的过渡期覆盖(界面融化→离子化凝成本体);终态(只剩本体)不再覆盖。
         .overlay { if state.isStandingPersonOnDuty && !autonomousOrbMode { LingShuAutonomousIntroOverlay(state: state) } }
         .background(LingShuAutonomousWindowController(active: orbActive))
-        .onReceive(state.previewController.$slideshow) { previewSlideshow = $0 }
-        // **手动接管安全闸**:只要演示窗在全屏(撑满)——无论自主运行还是普通派发任务——一旦检测到你的键鼠/移动/滚动
-        // → 立刻退全屏恢复屏幕 + 弹框问是否停止。演示期间灵枢不产生键鼠事件(翻页走内部),故此时任何输入=你在夺回控制,判定可靠。
-        .background(LingShuManualTakeoverMonitor(
-            // 「演示与答疑」插件在跑时**禁用键鼠接管闸**:它是语音驱动的(答疑走语音问答),
-            // 旧的键鼠接管会弹框 + 注入"继续演示"框架给大脑,把我的演示打断/停掉(实测真凶 2026-06-25)。
-            active: previewSlideshow && !manualTakeover && !state.presentationController.isActive
-        ) { manualTakeover = true })
-        .onChange(of: manualTakeover) { _, on in
-            if on {
-                // 键鼠物理接管(自主演示时用户正常用语音、不碰键鼠;真碰了=夺回控制)→ 退全屏 + 暂停 + 弹框。
-                // pauseActiveFlow 内已让「演示与答疑」控制器一并暂停(不再被掐音频后狂翻页)。
-                _ = state.previewController.setSlideshow(false)        // 先立刻退全屏,把屏幕还给用户
-                state.pauseActiveFlow(reason: "全屏演示中检测到手动操作(动鼠标/键盘)")
-                presentManualTakeoverDecision()
-            }
-        }
+        // **已删除「移动鼠标/键鼠接管」打断演示的整套流程(用户定调 2026-06-25)**:演示是语音驱动的,
+        // 移动鼠标不该打断演示。**暂停**走语音(说「暂停/停一下」);**停止演示**=关演示窗
+        // (下面 onUserClosedWindow → abortActiveFlow → stopPresentationIfActive 自动停)。
         .onAppear {
             // 关任一演示窗 = 硬中断流程(防大脑下一步又把窗弹回来)。幂等设置,多次 onAppear 无碍。
             state.previewController.onUserClosedWindow = { [weak state] in
@@ -203,34 +183,6 @@ struct LingShuRootView: View {
     /// 全屏演示期间的手动接管确认。
     ///
     /// 这里刻意不用 SwiftUI `confirmationDialog`/`sheet`:演示窗正在撑满/还原尺寸时,
-    /// SwiftUI sheet 会跟随父窗口安全区与尺寸变化重算,macOS 26 下曾触发
-    /// `SheetPresentationWindow.parentWindowSizeChanged` / `_postWindowNeedsUpdateConstraints`
-    /// 崩溃。AppKit `NSAlert.runModal()` 是独立 app-modal,不会挂在主窗口布局树上。
-    private func presentManualTakeoverDecision() {
-        guard !manualTakeoverAlertShowing else { return }
-        manualTakeoverAlertShowing = true
-        DispatchQueue.main.async {
-            NSApp.activate(ignoringOtherApps: true)
-            let alert = NSAlert()
-            alert.messageText = "检测到你在手动操作"
-            alert.informativeText = "我已经暂停当前演示并退出全屏。要停止本任务,还是从当前页继续?"
-            alert.addButton(withTitle: "停止,回到正常界面")
-            alert.addButton(withTitle: "继续演示")
-            let response = alert.runModal()
-            Task { @MainActor in
-                manualTakeoverAlertShowing = false
-                manualTakeover = false
-                if response == .alertFirstButtonReturn {
-                    state.abortActiveFlow(reason: "演示中手动接管→选择停止")
-                    if state.isStandingPersonOnDuty { state.stopAutonomousRun() }
-                } else {
-                    _ = state.previewController.setSlideshow(true)         // 重进全屏
-                    _ = state.submitVoiceTranscript("从当前这一页继续演示,接着往下讲")   // 让大脑从当前页续讲
-                }
-            }
-        }
-    }
-
     /// 灵枢新回复就播报。集中在根视图，确保普通界面和极简语音模式都会发声。
     private func speakLatestReplyIfNeeded(_ messages: [ChatMessage]) {
         let shouldSpeak = state.voiceOutputEnabled || state.isMinimalVoiceMode
@@ -300,55 +252,6 @@ struct LingShuRootView: View {
     }
 }
 
-/// 手动接管监听:active 时挂键鼠监听(本 app 内 local + 其他 app global),任一键鼠按下即回调。
-/// 仅在「自主运行 + 全屏演示」时启用,此时灵枢自身不产生键鼠事件,故任何输入=用户夺回控制。
-private struct LingShuManualTakeoverMonitor: NSViewRepresentable {
-    let active: Bool
-    let onManualInput: () -> Void
-
-    func makeNSView(context: Context) -> NSView { NSView() }
-
-    func updateNSView(_ nsView: NSView, context: Context) {
-        let c = context.coordinator
-        c.onInput = onManualInput
-        if active, c.local == nil {
-            // 键盘、点击、**移动鼠标**、拖拽、滚动都算"你在夺回控制"——演示期间灵枢不产生这些事件(翻页走内部)。
-            let mask: NSEvent.EventTypeMask = [.keyDown, .leftMouseDown, .rightMouseDown, .otherMouseDown,
-                                               .mouseMoved, .leftMouseDragged, .scrollWheel]
-            // 为了 .mouseMoved 在自家窗口上也能被本地监听捕获,打开所有窗口的"接收鼠标移动"。
-            NSApp.windows.forEach { $0.acceptsMouseMovedEvents = true }
-            c.armedAt = Date()
-            c.local = NSEvent.addLocalMonitorForEvents(matching: mask) { event in
-                c.fireIfArmed(); return event
-            }
-            c.global = NSEvent.addGlobalMonitorForEvents(matching: mask) { _ in
-                c.fireIfArmed()
-            }
-        } else if !active {
-            c.teardown()
-        }
-    }
-
-    func makeCoordinator() -> Coordinator { Coordinator() }
-
-    final class Coordinator {
-        var local: Any?
-        var global: Any?
-        var onInput: (() -> Void)?
-        var armedAt: Date?
-        /// 武装后 0.8s 内的事件忽略(避免演示刚开屏瞬间光标残留移动误触发);之后任何输入即判定夺回控制。
-        func fireIfArmed() {
-            guard let armedAt, Date().timeIntervalSince(armedAt) > 0.8 else { return }
-            onInput?()
-        }
-        func teardown() {
-            if let local { NSEvent.removeMonitor(local) }
-            if let global { NSEvent.removeMonitor(global) }
-            local = nil; global = nil; armedAt = nil
-        }
-        deinit { teardown() }
-    }
-}
 
 struct LingShuStableBackground: View {
     var accent: Color = .lingHolo
