@@ -105,7 +105,8 @@ enum LingShuAgentPluginStore {
     /// 不再阻塞到进程结束才一次性出结果(根治派发 agent「交给 X 后干等没进度」)。在后台队列回调,调用方自行 hop 到 UI 线程。
     nonisolated static func run(_ plugin: LingShuAgentPlugin, objective: String,
                                workingDirectory: String, environment: [String: String]? = nil,
-                               progress: (@Sendable (String) -> Void)? = nil) async -> AgentRunResult {
+                               progress: (@Sendable (String) -> Void)? = nil,
+                               producedFilesSink: (@Sendable ([String]) -> Void)? = nil) async -> AgentRunResult {
         let exe = FileManager.default.isExecutableFile(atPath: plugin.executable)
             ? plugin.executable
             : (LingShuAgentPlugin.resolveInPath(plugin.executable) ?? plugin.executable)
@@ -175,6 +176,11 @@ enum LingShuAgentPluginStore {
                 let restErr = errH.readDataToEndOfFile(); if !restErr.isEmpty { buf.appendErr(restErr) }
                 let timedOut = timeoutBox.isSet
                 let text = buf.outString(); let errText = buf.errString()
+                // stream-json:把 agent 真写过的文件(tool_use)精确回调出去,供上层登记产出物(根治共享目录串台)。
+                // 即便超时也回调——超时前真写出的文件也是产出。
+                if isStream, let producedFilesSink {
+                    producedFilesSink(LingShuAgentStreamParser.producedFiles(fromStreamJSON: text))
+                }
                 // **可用性回写(2026-06-26)**:输出/报错含明确的登录/认证失败信号 → 这个 agent「文件在但用不了」。
                 // 把插件标记为不可用(下次 @/派活前 isAvailableNow 据此过滤),并把这次当失败返回——别把"未登录"当成功产出。
                 if !timedOut, let unavail = (outputIndicatesUnavailable(text) ?? outputIndicatesUnavailable(errText)) {

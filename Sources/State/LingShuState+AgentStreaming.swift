@@ -22,6 +22,7 @@ extension LingShuState {
         appendTaskRecordMessage(rid, actor: actor, role: role, kind: .agent, text: startText)
         let msgID = taskExecutionRecords.first(where: { $0.id == rid })?.messages.last?.id
         let startedAt = Date()
+        let isStream = LingShuAgentStreamParser.isStreamJSON(plugin.argsTemplate)
         let result = await LingShuAgentPluginStore.run(
             plugin, objective: objective, workingDirectory: agentWorkingDirectory,
             progress: { tail in
@@ -31,6 +32,9 @@ extension LingShuState {
                     self.updateTaskRecordMessageText(rid, messageID: msgID,
                         text: startText + "\n\n⏳ 运行中(\(secs)s):\n" + String(tail.suffix(700)))
                 }
+            },
+            producedFilesSink: { files in
+                Task { @MainActor [weak self] in self?.registerAgentTouchedFiles(recordID: rid, paths: files) }
             })
         // 收尾:把这条流式气泡定格成最终结论尾部,并持久化一次。
         let finalText: String
@@ -40,10 +44,28 @@ extension LingShuState {
         }
         updateTaskRecordMessageText(rid, messageID: msgID, text: finalText)
         // **产出物补登(2026-06-26)**:agent CLI 用自己的工具写文件、绕过灵枢 write_file → 不会自动进产出物列表。
-        // 扫工作目录,把本次运行期间真新建/改动的交付型文件补登进 rec.artifacts(对齐 run_command 的 mtime 补登)。
-        registerAgentProducedArtifacts(recordID: rid, workingDirectory: agentWorkingDirectory, since: startedAt)
+        // stream-json(claude)已由 producedFilesSink **精确**登记(只认它 tool_use 真写过的文件,根治共享目录串台);
+        // 非 stream(codex/text)拿不到 tool_use,回退**扫工作目录 mtime**(本次运行期间真新建/改动的文件)。
+        if !isStream {
+            registerAgentProducedArtifacts(recordID: rid, workingDirectory: agentWorkingDirectory, since: startedAt)
+        }
         persistTaskExecutionRecords()
         return result
+    }
+
+    /// 登记 agent **真碰过的文件**(来自 stream-json tool_use)为产出物,并**刷新其 mtime**——
+    /// 用户定调(2026-06-26):改已有项目必须在原项目里做、不隔离目录;就算是已有产出物,处理时也迭代一下修改时间,
+    /// 这样无论文件是本次新建、还是改了已有项目里的旧文件,都被一致认作本任务产出 + 兼容下游 mtime 逻辑。
+    func registerAgentTouchedFiles(recordID: String, paths: [String]) {
+        let fm = FileManager.default
+        var any = false
+        for p in paths where fm.fileExists(atPath: p) {
+            try? fm.setAttributes([.modificationDate: Date()], ofItemAtPath: p)   // 迭代修改时间,保持兼容
+            appendTaskRecordArtifact(recordID, title: (p as NSString).lastPathComponent, location: p,
+                                     producer: "agent产出", operation: .created)
+            any = true
+        }
+        if any { persistTaskExecutionRecords() }
     }
 
     /// 扫 `workingDirectory`,把【`since` 之后真新建/改动】的交付型文件补登进产出物(去重由 appendArtifact 负责)。

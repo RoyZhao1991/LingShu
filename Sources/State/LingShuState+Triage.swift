@@ -144,6 +144,13 @@ extension LingShuState {
     func kernelGate(_ d: DispatchDecision, goalSpec: LingShuGoalSpec?) -> GateOutcome {
         if d.kind == .reply { return .execute }
         if let directive = kernelGateClarifyDirective(d) { return .clarify(directive) }
+        // **步骤4·结构化结果回流改路由**:triage 判 task,但派生的 GoalSpec 反而拆成「可直接回答的问答」(非交付型),
+        // 且 triage 置信不到 high → 这是 triage 与结构化的冲突。别盲目开跑后台任务,转追问让用户定夺。
+        // 只在「冲突 + 非高置信」时触发(不误伤 actionHint 双印证的高置信真任务);这是把结构化喂回决策的**安全切口**——
+        // 只会多一次追问,绝不静默改判。根治了原来「kind 在 triage 锁死、结构化只当执行资料」的拓扑反转。
+        if d.kind == .task, d.confidence != .high, goalSpec?.kind == .question {
+            return .clarify("(系统提示:这条像是要执行的任务,但拆解下来更像一个可以直接回答的问题。先跟用户确认一句:是要你**动手做出交付物**,还是**直接回答**就行?确认后再决定。)")
+        }
         return .execute
     }
 

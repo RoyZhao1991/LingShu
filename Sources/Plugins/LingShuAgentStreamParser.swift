@@ -39,6 +39,28 @@ enum LingShuAgentStreamParser {
         return lines.suffix(maxLines).joined(separator: "\n")
     }
 
+    /// 从 stream-json 抽出 agent **真写过/改过**的文件路径(Write/Edit/MultiEdit/NotebookEdit 的 file_path)。
+    /// 比"扫整个工作目录按 mtime 猜"精确——**只认这个 agent 自己工具碰过的文件**,根治多任务共享同一工作目录时的
+    /// 产出物串台(改已有项目必须在原项目里做、不能隔离目录,所以靠精确归属而非目录隔离)。
+    static func producedFiles(fromStreamJSON raw: String) -> [String] {
+        let writeTools: Set<String> = ["Write", "Edit", "MultiEdit", "NotebookEdit", "create_file", "write_file", "edit_file"]
+        var paths: [String] = []
+        for rawLine in raw.split(separator: "\n") {
+            guard let obj = parseLine(rawLine), obj["type"] as? String == "assistant" else { continue }
+            for item in contentItems(obj) where item["type"] as? String == "tool_use" {
+                guard let name = item["name"] as? String, writeTools.contains(name),
+                      let input = item["input"] as? [String: Any] else { continue }
+                for key in ["file_path", "path", "notebook_path"] {
+                    if let p = (input[key] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !p.isEmpty {
+                        paths.append(p)
+                    }
+                }
+            }
+        }
+        var seen = Set<String>()
+        return paths.filter { seen.insert($0).inserted }   // 去重保序
+    }
+
     /// 提取最终交付文本(result 字段)。找不到 → 拼 assistant 文本块;再不行 → 回退原文(别丢东西)。
     static func finalText(fromStreamJSON raw: String) -> String {
         var resultText: String?
