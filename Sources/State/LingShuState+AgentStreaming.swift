@@ -39,7 +39,35 @@ extension LingShuState {
         case .failure(let f):   finalText = startText + "\n\n✗ 未完成:" + String(f.prefix(300))
         }
         updateTaskRecordMessageText(rid, messageID: msgID, text: finalText)
+        // **产出物补登(2026-06-26)**:agent CLI 用自己的工具写文件、绕过灵枢 write_file → 不会自动进产出物列表。
+        // 扫工作目录,把本次运行期间真新建/改动的交付型文件补登进 rec.artifacts(对齐 run_command 的 mtime 补登)。
+        registerAgentProducedArtifacts(recordID: rid, workingDirectory: agentWorkingDirectory, since: startedAt)
         persistTaskExecutionRecords()
         return result
+    }
+
+    /// 扫 `workingDirectory`,把【`since` 之后真新建/改动】的交付型文件补登进产出物(去重由 appendArtifact 负责)。
+    /// agent(claude/codex…)用自己的工具/Bash 写文件不经灵枢 write_file,只能靠运行后扫盘 + mtime 认本次产出。
+    /// 跳过依赖/构建/缓存目录,有安全上限,避免把 node_modules 之类塞进产出物。
+    func registerAgentProducedArtifacts(recordID: String, workingDirectory: String, since: Date) {
+        let fm = FileManager.default
+        let dir = workingDirectory.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !dir.isEmpty, fm.fileExists(atPath: dir) else { return }
+        let skip: Set<String> = [".git", ".build", "node_modules", "__pycache__", ".venv", "venv",
+                                 "dist", "build", "target", ".pytest_cache", ".idea", ".next", ".cache", "DerivedData"]
+        guard let en = fm.enumerator(at: URL(fileURLWithPath: dir),
+                                     includingPropertiesForKeys: [.isRegularFileKey, .contentModificationDateKey],
+                                     options: [.skipsHiddenFiles]) else { return }
+        let cutoff = since.addingTimeInterval(-1)   // 1s 容差,对齐 run_command 补登
+        var count = 0
+        for case let url as URL in en {
+            if skip.contains(url.lastPathComponent) { en.skipDescendants(); continue }
+            guard let vals = try? url.resourceValues(forKeys: [.isRegularFileKey, .contentModificationDateKey]),
+                  vals.isRegularFile == true, let mtime = vals.contentModificationDate, mtime >= cutoff else { continue }
+            appendTaskRecordArtifact(recordID, title: url.lastPathComponent, location: url.path,
+                                     producer: "agent产出", operation: .created)
+            count += 1
+            if count >= 50 { break }   // 安全上限
+        }
     }
 }
