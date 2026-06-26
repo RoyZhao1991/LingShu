@@ -150,6 +150,9 @@ actor LingShuAgentOrchestrator {
     /// 当前后台正在跑的子任务数(供"是否有可停的派发任务"判断)。
     func activeDriveCount() -> Int { driveTasks.count }
 
+    /// 当前仍有活跃 drive 的子任务 id 集合(供"孤儿收割":记录还卡活跃态但编排器已无对应 drive=孤儿)。
+    func activeDriveIDs() -> Set<String> { Set(driveTasks.keys) }
+
     private func drive(id: String, objective: String) async {
         guard let session = sessions[id] else { return }
         var result = await session.send(objective)

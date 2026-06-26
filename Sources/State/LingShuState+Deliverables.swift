@@ -25,6 +25,7 @@ extension LingShuState {
             }
         }
         startMemoryCompactionTimerIfNeeded()
+        startDispatchWatchdogIfNeeded()   // 启派发看门狗:定时收割孤儿任务,防僵死执行中堵死串行队列
     }
 
     /// 定时 checkpoint(把碎片化 WAL 压实成快照,参考 MySQL 定时 checkpoint)——每 5 分钟一次,低频不打扰。

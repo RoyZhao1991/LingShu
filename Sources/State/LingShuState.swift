@@ -326,6 +326,8 @@ final class LingShuState: ObservableObject {
     lazy var localKnowledgeIndex = LingShuFileKnowledgeIndex()
     /// 定时压缩(checkpoint)定时器。
     var memoryCompactionTimer: Timer?
+    /// 派发任务看门狗:定时收割「驱动已结束但状态卡活跃态」的孤儿,根治僵死执行中堵死串行队列(2026-06-27)。
+    var dispatchWatchdogTimer: Timer?
 
     /// 能力通道校验状态(channelKey → 校验结果):中枢/视觉/视频/听/语音各通道"是否实测校验通过"。
     /// channelKey 形如 `brain:DeepSeek` / `vision:datanet` / `tts:dataNetSpeakerTTS` / `asr:local`。

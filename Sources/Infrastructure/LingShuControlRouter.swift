@@ -452,8 +452,11 @@ final class LingShuControlRouter {
             return (jsonText(["trace": tracePayload(limit: limit)]), false)
         case "lingshu_stop":
             let wasActive = state.hasActiveModelCall
-            let dispatched = await state.agentOrchestrator.activeDriveCount()
             state.cancelCurrentCall()
+            // **真停派发任务(2026-06-27)**:原来只 cancelCurrentCall(主线程),停不掉后台派发任务、还误报 dispatchedStopped。
+            // 现调 stopAllDispatchedTasks——它对每条活跃派发气泡走 stopDispatchedTask(含"编排器无活跃 drive 时本地兜底收口"),
+            // 能清掉僵死执行中的孤儿任务。
+            let dispatched = state.stopAllDispatchedTasks()
             return (jsonText(["stopped": wasActive || dispatched > 0, "mainTurn": wasActive, "dispatchedStopped": dispatched]), false)
         case "lingshu_autonomous":   // 驱动自主模式/常驻灵枢(等价独立运行面板)。args: action
             guard let action = (arguments["action"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) else {

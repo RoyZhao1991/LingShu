@@ -108,6 +108,45 @@ extension LingShuState {
         }
     }
 
+    /// **派发任务孤儿收割(2026-06-27 根治僵死执行中堵死队列)**:记录还卡在活跃态(.running/.dispatched/…),
+    /// 但编排器已无对应 drive(驱动早结束/异常退出却没置终态)→ 自动收口成 .partial、移除气泡、释放串行队列。
+    /// 根因:currentlyExecutingTurn 把卡 .running 的派发气泡当"执行中"、prune 又只清终态 → 队列永久死锁。
+    func reapOrphanedDispatchedTasks() async {
+        guard !dispatchedTaskBubbles.isEmpty else { return }
+        let liveIDs = await agentOrchestrator.activeDriveIDs()
+        let active: Set<LingShuTaskExecutionStatus> = [.running, .dispatched, .analyzing, .acquiringCapability, .ready]
+        var reaped = false
+        for recordID in Array(dispatchedTaskBubbles.keys) {
+            guard let status = taskExecutionRecords.first(where: { $0.id == recordID })?.status,
+                  active.contains(status) else { continue }
+            let subID = agentSubTaskRecords.first(where: { $0.value == recordID })?.key
+            if let subID, liveIDs.contains(subID) { continue }   // 真有活跃 drive → 不是孤儿,跳过
+            dispatchedTaskBubbles.removeValue(forKey: recordID)
+            if blockedDispatchedRecordID == recordID { blockedDispatchedRecordID = nil }
+            appendTaskRecordMessage(recordID, actor: "系统", role: "自动收口", kind: .warning,
+                                    text: "检测到任务驱动已结束但状态未收口(孤儿),自动置为部分完成、释放队列。")
+            finishTaskRecord(recordID, status: .partial, summary: "驱动意外结束、状态未收口,看门狗自动收口。")
+            reaped = true
+        }
+        if reaped { promoteQueuedDispatchIfPossible(); drainSerialInputsIfIdle() }
+    }
+
+    /// 停止所有活跃派发任务(供 lingshu_stop / 全局停止——原 lingshu_stop 只取消主线程调用、停不掉派发任务)。返回停了几条。
+    @discardableResult
+    func stopAllDispatchedTasks() -> Int {
+        let ids = Array(dispatchedTaskBubbles.keys)
+        for id in ids { stopDispatchedTask(recordID: id) }
+        return ids.count
+    }
+
+    /// 启动派发看门狗:每 20s 收割一次孤儿任务(防僵死执行中永久堵塞串行队列)。幂等。
+    func startDispatchWatchdogIfNeeded() {
+        guard dispatchWatchdogTimer == nil else { return }
+        dispatchWatchdogTimer = Timer.scheduledTimer(withTimeInterval: 20, repeats: true) { [weak self] _ in
+            Task { @MainActor in await self?.reapOrphanedDispatchedTasks() }
+        }
+    }
+
     /// 用户在队列区删除一条**尚未派发**的排队任务。
     func removeQueuedDispatchTask(id: String) {
         guard let idx = queuedDispatchTasks.firstIndex(where: { $0.id == id }) else { return }
