@@ -21,22 +21,31 @@ struct TriageContext {
 extension LingShuState {
 
     enum DispatchKind { case chat, task, reply }
+    enum DispatchConfidence: Equatable { case high, medium, low }
+
+    /// 分诊决策(图里 B→C 的结构化产出):kind + 目标 + reply 目标 + **置信度** + 关键词信号 + 脑是否失败。
+    /// 置信度是**融合**产物(大脑自报 × 关键词印证 × 一致性),供内核闸门据此扇出执行/追问——不全信模型自评。
+    struct DispatchDecision {
+        let kind: DispatchKind
+        let goal: String?
+        let replyRecordID: String?
+        var confidence: DispatchConfidence = .high
+        var actionHint: Bool = false     // 关键词门信号:降级后只当置信度外部锚,不再绕过大脑
+        var brainFailed: Bool = false     // 分诊脑调用失败/超时 → 闸门显式追问,不静默吞成闲聊
+    }
 
     /// **上下文感知**的轻量分诊(用户定调 2026-06-17):每次分诊都带上**完整语义的近上下文(最近逐字)+ 压缩的远上下文
-    /// (对话摘要)+ 当前可续的派发任务线程**,让分诊器能(a)分得更准、(b)**回溯到前面隔了几条才问的问题**——
-    /// 用户回答某条任务线程的提问(哪怕中间穿插了几句闲聊)也能认出来、续到**那条隔离会话本身**。
-    /// 返回 reply 时附 `replyRecordID`(要续的那条派发线程记录)。**保守**:判不出 → chat(留主线程),不误派。
-    func classifyDispatch(_ prompt: String) async -> (kind: DispatchKind, goal: String?, replyRecordID: String?) {
-        if isMinimalVoiceMode { return (.chat, nil, nil) }   // 极简语音:一律对话
+    /// (对话摘要)+ 当前可续的派发任务线程**,让分诊器能(a)分得更准、(b)**回溯到前面隔了几条才问的问题**。
+    /// 返回 reply 时附 `replyRecordID`。**架构升级(2026-06-26)**:关键词门从「return .task 抄近路」降级为 `actionHint`
+    /// 信号(喂大脑当先验 + 融合进置信度);产出带 Confidence 的结构化决策;脑失败不静默吞 chat,交内核闸门追问。
+    func classifyDispatch(_ prompt: String) async -> DispatchDecision {
+        if isMinimalVoiceMode { return DispatchDecision(kind: .chat, goal: nil, replyRecordID: nil) }   // 极简语音:一律对话
         if LingShuSelfReferenceIntent.isDirectAssistantSelfIntroduction(prompt) {
-            return (.chat, nil, nil)
+            return DispatchDecision(kind: .chat, goal: nil, replyRecordID: nil)
         }
-        // 通用硬门:明确的现实动作/产出物/外部系统操作,先进入任务流。
-        // 模型分诊只处理灰区;否则"同步到未授权外部系统"这类任务会被模型误标 question,
-        // 进而绕过 GoalSpec/缺口/权限/队列整条控制面。
-        if Self.isObviousExecutionRequest(prompt) {
-            return (.task, Self.executionGoalSummary(prompt), nil)
-        }
+        // **关键词门降级**:不再 `return .task` 抄近路——只产出 actionHint 信号,既喂大脑当先验、又作为置信度的"外部锚"。
+        // 大脑判 chat 但 actionHint 说像执行 → 冲突 → 压低置信 → 闸门追问(而非原来强判 task 硬覆盖大脑)。
+        let actionHint = Self.isObviousExecutionRequest(prompt)
 
         let ctx = buildTriageContext()
         var threadBlock = ""
@@ -45,36 +54,80 @@ extension LingShuState {
             threadBlock = "\n【当前可续的任务线程】(用户可能在回答/延续其中某条,哪怕中间隔了几句别的话):\n\(lines)\n"
         }
         let far = ctx.far.isEmpty ? "" : "【更早对话摘要(压缩)】\n\(ctx.far)\n\n"
-        let replyOut = ctx.threads.isEmpty ? "" : "、{\"kind\":\"reply\",\"thread\":\"T1\"}"
+        let hintLine = actionHint ? "【先验线索】这条消息文面含明确动作动词,**像**要执行的动作——但请结合上下文判:它也可能只是闲聊/解释里提到了这些词(如「教我怎么写爬虫」是解释、不是要你爬)。别被字面骗,该 chat 就 chat。\n" : ""
+        let replyOut = ctx.threads.isEmpty ? "" : "、{\"kind\":\"reply\",\"thread\":\"T1\",\"confidence\":\"high\"}"
         let system = """
         你是分诊器。下面给你与用户的对话上下文(近期逐字 + 更早摘要)和当前可续的任务线程。
-        判断用户【最新一条】消息属于哪一类,**只输出一行 JSON,不要任何解释**:
+        判断用户【最新一条】消息属于哪一类,**并自报置信度 confidence(high/medium/low)**,只输出一行 JSON,不要任何解释:
         - reply:用户在【回答/延续/补充/确认】上面某条可续任务线程(尤其它标了"⏳正等你回答"、或在问主题/要信息/给选项)——**哪怕中间隔了几句闲聊也算**,指出是哪条 thread(如 "T1")。
         - chat:与任何任务线程无关、灵枢能直接对话作答(闲聊/解释概念/问事实/给建议/介绍自己)。
         - task:与现有线程无关的**全新**执行任务(做PPT/文档/代码/爬虫、要落盘产出物、跑命令、明显多步)。
-
+        \(hintLine)
         \(far)【近期对话(逐字)】
         \(ctx.near)
         \(threadBlock)
-        输出:{"kind":"chat"}、{"kind":"task","goal":"一句话总目标(高度概括)"}\(replyOut)
+        输出:{"kind":"chat","confidence":"high"}、{"kind":"task","goal":"一句话总目标(高度概括)","confidence":"high"}\(replyOut)
         """
         let classifier = LingShuAgentSession(
             id: "triage-\(UUID().uuidString.prefix(6))",
             system: system, tools: [], model: controlPlaneModelAdapter(.triage), maxTurns: 1
         )
         let result = await classifier.send("用户最新消息:\(prompt)")
-        guard case .completed(let raw) = result else { return (.chat, nil, nil) }
+        guard case .completed(let raw) = result else {
+            // **脑调用失败:不静默吞成 chat**——标记 brainFailed + 低置信,交内核闸门显式追问(而非假装闲聊敷衍)。
+            return DispatchDecision(kind: .chat, goal: nil, replyRecordID: nil,
+                                    confidence: .low, actionHint: actionHint, brainFailed: true)
+        }
         let text = LingShuReasoningText.stripThinkTags(raw)
         let norm = text.lowercased().replacingOccurrences(of: " ", with: "")
+        let brainConf = Self.parseConfidence(norm)
         if !ctx.threads.isEmpty, norm.contains("\"kind\":\"reply\"") || norm.contains("kind:reply") {
             let label = (Self.jsonField(text, "thread") ?? "").trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
             let rid = ctx.threads.first(where: { $0.label.uppercased() == label })?.recordID ?? ctx.threads.first?.recordID
-            if let rid { return (.reply, nil, rid) }
+            if let rid {
+                return DispatchDecision(kind: .reply, goal: nil, replyRecordID: rid,
+                                        confidence: brainConf, actionHint: actionHint)
+            }
         }
         let isTask = norm.contains("\"kind\":\"task\"") || norm.contains("kind:task")
-        guard isTask else { return (.chat, nil, nil) }
-        let goal = Self.jsonField(text, "goal")?.trimmingCharacters(in: .whitespacesAndNewlines)
-        return (.task, (goal?.isEmpty == false) ? goal : nil, nil)
+        let brainKind: DispatchKind = isTask ? .task : .chat
+        let fused = Self.fuseConfidence(brainKind: brainKind, brainConf: brainConf, actionHint: actionHint)
+        if isTask {
+            let goal = Self.jsonField(text, "goal")?.trimmingCharacters(in: .whitespacesAndNewlines)
+            return DispatchDecision(kind: .task, goal: (goal?.isEmpty == false) ? goal : nil,
+                                    replyRecordID: nil, confidence: fused, actionHint: actionHint)
+        }
+        return DispatchDecision(kind: .chat, goal: nil, replyRecordID: nil,
+                                confidence: fused, actionHint: actionHint)
+    }
+
+    /// 解析大脑自报的置信度(没报 → medium 中性)。
+    nonisolated static func parseConfidence(_ norm: String) -> DispatchConfidence {
+        if norm.contains("\"confidence\":\"high\"") || norm.contains("confidence:high") { return .high }
+        if norm.contains("\"confidence\":\"low\"") || norm.contains("confidence:low") { return .low }
+        return .medium
+    }
+
+    /// **融合置信度**(图没说、但 GLM 自评不可靠必须补):大脑自报 × 关键词信号印证 × kind 一致性。
+    /// - 关键词命中 且 大脑判 task → high(双印证)
+    /// - 关键词命中 但 大脑判 chat → low(冲突:像执行却判闲聊 → 闸门追问,不静默放过)
+    /// - 其余 → 信大脑自报(无外部信号可锚,不强行干预、避免误伤真任务)
+    nonisolated static func fuseConfidence(brainKind: DispatchKind, brainConf: DispatchConfidence, actionHint: Bool) -> DispatchConfidence {
+        if actionHint && brainKind == .task { return .high }
+        if actionHint && brainKind == .chat { return .low }
+        return brainConf
+    }
+
+    /// **内核校验闸门(图里 D)·第一步**:吃分诊决策,低置信/脑失败 → 返回「追问指令」(注入主回合,逼它先与用户确认意图,
+    /// 不再静默吞成闲聊);高置信 → nil(照常按 kind 扇出)。把决策重心从 triage.kind 往统一闸门挪的起点。
+    func kernelGateClarifyDirective(_ d: DispatchDecision) -> String? {
+        if d.brainFailed {
+            return "(系统提示:刚才对这条消息意图的判定没成功。请先用一句话跟用户确认他是想让你**执行某个任务**还是**只是聊聊**,确认后再行动,别擅自当闲聊敷衍。)"
+        }
+        if d.confidence == .low {
+            return "(系统提示:这条消息意图不明确——可能是要执行的任务,也可能只是闲聊。先简短跟用户确认意图再决定怎么做,别直接当闲聊回应、也别擅自开跑任务。)"
+        }
+        return nil
     }
 
     /// 是否是明确的执行请求。这里保持**通用范式**:不识别具体平台,只识别动作结构。

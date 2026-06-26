@@ -1361,7 +1361,16 @@ final class LingShuState: ObservableObject {
                     self.dispatchIsolatedTask(prompt: trimmedPrompt, taskRecordID: newRecordBoundToGoal(.task, triage.goal), goal: triage.goal, existingBubbleID: placeholderID)
                 }
             case .chat:
-                _ = self.runMainAgentTurn(prompt: trimmedPrompt, taskRecordID: newRecordBoundToGoal(.question, nil), existingBubbleID: placeholderID)
+                // **内核校验闸门**:低置信/脑失败 → 注入追问指令(主回合先与用户确认意图,不静默当闲聊吞掉);
+                // 高置信闲聊 → directive 为 nil,原样直答,不受影响。
+                let clarify = self.kernelGateClarifyDirective(triage)
+                if clarify != nil {
+                    self.appendTrace(kind: .route, actor: "内核校验闸门",
+                                     title: triage.brainFailed ? "分诊未果·转追问" : "低置信·转追问",
+                                     detail: "意图不明确,主回合先与用户确认,不静默当闲聊。")
+                }
+                let chatPrompt = clarify.map { trimmedPrompt + "\n\n" + $0 } ?? trimmedPrompt
+                _ = self.runMainAgentTurn(prompt: chatPrompt, taskRecordID: newRecordBoundToGoal(.question, nil), existingBubbleID: placeholderID)
             }
         }
         return ""
