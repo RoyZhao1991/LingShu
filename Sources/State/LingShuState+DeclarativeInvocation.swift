@@ -98,37 +98,64 @@ extension LingShuState {
             guard LingShuAgentPluginStore.plugin(id: agentID) != nil else { return nil }
             return (agentID, inv.displayName)
         }
-        // **角色按「验收意图」关键词分(用户定调 2026-06-26:支持 codex 当 checker、甚至多个 agent 同时当 checker)**:
-        // 段里含 验收/审核/复核… = checker;否则 = maker。0 个 maker(全 checker)→ 灵枢自己当 maker。
-        let makerStep = agentSteps.first { !Self.segmentIsCheckerIntent($0.segment) }
-        let checkerSteps = agentSteps.filter { Self.segmentIsCheckerIntent($0.segment) }
-        let makerAgent = makerStep.flatMap(resolve)                 // nil = 灵枢自己当 maker
-        let checkerAgents = checkerSteps.compactMap(resolve)        // 可多个 = 多 checker
-        // objective:agent 当 maker→其 segment;灵枢当 maker→全 prompt 去掉所有 @提及。
-        let objective: String = {
-            if let makerStep { return makerStep.segment.trimmingCharacters(in: .whitespacesAndNewlines) }
-            var t = fullPrompt
-            for inv in plugins { for a in inv.allAliases { t = t.replacingOccurrences(of: "@\(a)", with: "") } }
-            return t.trimmingCharacters(in: .whitespacesAndNewlines)
-        }()
-
-        let displayObjective = objective.isEmpty ? "\(makerAgent?.name ?? "灵枢") 任务" : objective
-        let rid = createTaskExecutionRecord(for: displayObjective)
-        if goalSpecEnabled { bindGoalSpec(LingShuGoalSpec(objective: displayObjective, kind: .task), to: rid) }
-        let checkerLabel = checkerAgents.isEmpty ? "灵枢(独立会话)" : checkerAgents.map(\.name).joined(separator: "+")
-        appendTrace(kind: .route, actor: "声明式调用", title: "@agent 进 LOOP",
-                    detail: "maker=\(makerAgent?.name ?? "灵枢") · checker=\(checkerLabel)(任何任务都走 LOOP,maker≠checker)")
-        _ = dispatchIsolatedTask(prompt: objective, taskRecordID: rid, goal: objective.isEmpty ? nil : objective,
-                                 makerAgentID: makerAgent?.agentID, makerName: makerAgent?.name,
-                                 checkerAgentID: checkerAgents.first?.agentID, checkerName: checkerAgents.first?.name,
-                                 extraCheckerAgentIDs: checkerAgents.dropFirst().map(\.agentID))
+        // **角色装配:让大脑语义判断(用户定调 2026-06-26:不用关键词,大脑读懂"谁开发/谁验收/几个验收")**。
+        let agents = agentSteps.compactMap(resolve).map { (id: $0.agentID, name: $0.name) }
+        guard !agents.isEmpty else {
+            let nm = plugins.first(where: { $0.id == agentSteps[0].id })?.displayName ?? "agent"
+            chatMessages.append(.init(speaker: "灵枢", text: "⚠️ @\(nm) 没注册或不可用——先告诉我本机有它、怎么调,我注册后再用。", isUser: false))
+            return
+        }
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            // 大脑解析失败兜底:位置(第一个 = maker,其余 = checker)——非关键词。
+            let asm = await self.resolveAgentRoleAssembly(prompt: fullPrompt, agents: agents)
+                ?? (makerAgentID: agents.first!.id, makerName: agents.first!.name,
+                    checkers: Array(agents.dropFirst()), makerTask: fullPrompt)
+            let objective = asm.makerTask.trimmingCharacters(in: .whitespacesAndNewlines)
+            let displayObjective = objective.isEmpty ? "\(asm.makerName ?? "灵枢") 任务" : objective
+            let rid = self.createTaskExecutionRecord(for: displayObjective)
+            if self.goalSpecEnabled { self.bindGoalSpec(LingShuGoalSpec(objective: displayObjective, kind: .task), to: rid) }
+            let checkerLabel = asm.checkers.isEmpty ? "灵枢(独立会话)" : asm.checkers.map(\.name).joined(separator: "+")
+            self.appendTrace(kind: .route, actor: "声明式调用", title: "@agent 进 LOOP(大脑装配角色)",
+                             detail: "maker=\(asm.makerName ?? "灵枢") · checker=\(checkerLabel)")
+            _ = self.dispatchIsolatedTask(prompt: objective, taskRecordID: rid, goal: objective.isEmpty ? nil : objective,
+                                          makerAgentID: asm.makerAgentID, makerName: asm.makerName,
+                                          checkerAgentID: asm.checkers.first?.id, checkerName: asm.checkers.first?.name,
+                                          extraCheckerAgentIDs: asm.checkers.dropFirst().map(\.id))
+        }
     }
 
-    /// 段落是否表达「验收/审核」意图(用于把 @agent 判成 checker 而非 maker)。纯函数可测。
-    nonisolated static func segmentIsCheckerIntent(_ segment: String) -> Bool {
-        let kws = ["验收", "审核", "审查", "复核", "校验", "把关", "核验", "检查", "评审", "review", "verify", "check"]
-        let lower = segment.lowercased()
-        return kws.contains { segment.contains($0) || lower.contains($0.lowercased()) }
+    private struct LingShuRoleAssemblyJSON: Codable { let maker: String?; let checkers: [String]?; let makerTask: String? }
+
+    /// **大脑语义判断角色装配(用户定调:不用关键词)**:给请求 + 提到的 agent,大脑判断谁 maker、谁 checker(可多个)、maker 开发目标。
+    /// 一次性 maxTurns=1 调用;失败返回 nil(调用方位置兜底)。
+    func resolveAgentRoleAssembly(prompt: String, agents: [(id: String, name: String)]) async
+        -> (makerAgentID: String?, makerName: String?, checkers: [(id: String, name: String)], makerTask: String)? {
+        let agentList = agents.map { "- \($0.name)(id=\($0.id))" }.joined(separator: "\n")
+        let system = """
+        你是「角色装配」解析器。用户请求里提到了一个或多个 agent。请**语义判断**(别只抠关键词,读懂用户真实意图):每个被提到的 agent 在这个任务里该当 **maker(负责开发/产出)** 还是 **checker(负责验收/复核/把关)**,以及谁来当 maker。
+        - 用户意思是让某 agent 做/开发/写 → 它是 maker;让某 agent 验收/审/把关/复核 → 它是 checker(可多个)。
+        - 若没有 agent 被指派开发(都是验收角色),maker 就是 "灵枢"(灵枢自己开发)。
+        - makerTask:给 maker 的真正开发目标(把"让 X 验收"这类装配指令剥掉,只留要做的事)。
+        **只输出一个 JSON,别的都不要**:{"maker":"<agent id 或 灵枢>","checkers":["<agent id>"],"makerTask":"<开发目标>"}
+        可用 agent:
+        \(agentList)
+        """
+        let session = LingShuAgentSession(id: "roles-\(UUID().uuidString.prefix(6))", system: system,
+                                          tools: [], model: makeAgentModelAdapter(), maxTurns: 1)
+        guard case .completed(let raw) = await session.send(prompt) else { return nil }
+        let text = LingShuReasoningText.stripThinkTags(raw)
+        guard let s = text.firstIndex(of: "{"), let e = text.lastIndex(of: "}"),
+              let data = String(text[s...e]).data(using: .utf8),
+              let obj = try? JSONDecoder().decode(LingShuRoleAssemblyJSON.self, from: data) else { return nil }
+        func match(_ str: String) -> (id: String, name: String)? {
+            let t = str.trimmingCharacters(in: .whitespaces)
+            return agents.first { $0.id.caseInsensitiveCompare(t) == .orderedSame || $0.name.caseInsensitiveCompare(t) == .orderedSame }
+        }
+        let makerAgent = obj.maker.flatMap(match)   // nil → 灵枢
+        let checkers = (obj.checkers ?? []).compactMap(match)
+        let makerTask = (obj.makerTask?.isEmpty == false) ? obj.makerTask! : prompt
+        return (makerAgent?.id, makerAgent?.name, checkers, makerTask)
     }
 
     /// 编排气泡整段重写(单气泡承载:已定稿部分 + 运行中实时进度)。气泡没了(被清)就忽略。
