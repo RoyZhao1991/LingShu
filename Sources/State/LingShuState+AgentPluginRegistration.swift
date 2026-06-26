@@ -76,9 +76,12 @@ extension LingShuState {
             // **架构合规(ARCHITECTURE.md §Task Journal「被调用 agent 的发言式进度」+ §Review「只展示真实参与者」)**:
             // 被委托的 agent 必须作为**任务时间线里的独立命名参与方**(maker 一条线、checker 另一条线),不再藏在灵枢名下当工具返回串。
             // 这正是用户要的「maker session ≠ checker session」可见化——codex=工作线程、审查员=验收线程,各自一条命名角色卡。
-            let roleLabel = plugin.role == .maker ? "开发(maker)" : plugin.role == .checker ? "验收(checker)" : "执行"
-            let verb = plugin.role == .checker ? "复核" : "开发"
+            // **角色按本任务绑定标,不靠 agent 固定 role**(agent 就是 agent,角色是任务级装配):
+            // 这个 agent 在本任务是 maker → 「开发(maker)」;否则中性「受委托执行」。checker 由框架 runAgentChecker 另标。
             let (wd, rid) = await MainActor.run { (self.agentWorkingDirectory, recordIDProvider()) }
+            let isTaskMaker = await MainActor.run { rid.flatMap { self.taskReviewBindings[$0] }?.maker.id == "external:\(plugin.id)" }
+            let roleLabel = isTaskMaker ? "开发(maker)" : "受委托执行"
+            let verb = isTaskMaker ? "开发" : "执行"
             await MainActor.run {
                 self.appendTaskRecordMessage(rid, actor: plugin.displayName, role: "\(roleLabel)·受灵枢委托", kind: .agent,
                                              text: "▶ \(plugin.displayName) 接活(\(verb)):\(objective.prefix(160))")

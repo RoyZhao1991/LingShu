@@ -11,13 +11,14 @@ struct LingShuPluginListPanel: View {
             SectionHeader(icon: "square.grid.2x2", title: "插件列表",
                           subtitle: "已接入的插件 / agent —— 输入框点「+」或打 @名字 即可调用、编排(@Codex 开发 @Claude 验收)")
 
-            // ── Agent 插件(被告知→注册)
-            groupTitle("Agent 插件", "被告知本机有某 CLI agent → 注册进插件库;@名字 委托,多个=maker→checker 编排")
+            // ── Agent 插件(被告知→注册)。**agent 就是 agent,不带固定 maker/checker 角色**——
+            // 角色(谁开发、谁验收、几个验收)由灵枢**按每个任务的语义临时装配**(codex 能当 checker、claude 能当 maker)。
+            groupTitle("Agent 插件", "被告知本机有某 CLI agent → 注册进插件库;@名字 委托,角色(maker/checker)由灵枢按任务语义临时装配")
             if agents.isEmpty {
                 hint("还没注册 agent。跟灵枢说「本机有 X,可执行 …,调用 …,用 register_agent 注册」即可。")
             } else {
                 ForEach(agents) { a in
-                    row(name: a.displayName, badge: a.role.rawValue, badgeColor: badgeColor(a.role),
+                    row(name: a.displayName, badge: "agent", badgeColor: .lingHolo,
                         detail: a.executable, available: a.isAvailableNow) {
                         LingShuAgentPluginStore.unregister(id: a.id)
                         reload()
@@ -37,10 +38,6 @@ struct LingShuPluginListPanel: View {
     }
 
     private func reload() { agents = LingShuAgentPluginStore.load() }
-
-    private func badgeColor(_ role: LingShuAgentPlugin.Role) -> Color {
-        switch role { case .maker: .orange; case .checker: .green; case .general: .gray }
-    }
 
     @ViewBuilder private func groupTitle(_ t: String, _ sub: String) -> some View {
         VStack(alignment: .leading, spacing: 2) {
