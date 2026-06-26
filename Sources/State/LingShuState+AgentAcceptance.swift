@@ -162,6 +162,15 @@ extension LingShuState {
             let (passed, critique) = useCheckerSession
                 ? await runCheckerSession(recordID: taskRecordID ?? "", objective: userRequest, makerText: Self.runResultText(result))
                 : await verifyAgentDeliverable(userRequest: userRequest, reply: Self.runResultText(result), taskRecordID: taskRecordID)
+            // **验收时模型通道故障 ≠ 验收驳回(根因修:坦克大战验收超时被误判需修正→异常)**:checker 的判词若是模型故障标记
+            // (超时/网络/限流/5xx),那是基础设施故障、不是真的"产出需修正"——当 `.interrupted` 暂停、等通道恢复自动续验,
+            // 绝不当需修正去返工、更不该把任务判异常(产物其实已落地)。不可恢复(鉴权/额度)才上抛交还。
+            if !passed, let failure = LingShuModelServiceFailure.decodeReason(critique), failure.shouldAutoResume {
+                appendTaskRecordMessage(taskRecordID, actor: "审查员", role: "验收暂停(模型通道故障)", kind: .warning,
+                                        text: "🧑‍⚖️ 验收时\(failure.userFacingMessage)（不是产出需修正,产物已落地;通道恢复后自动重验)。")
+                appendTrace(kind: .warning, actor: "验收", title: "验收遇模型通道故障·暂停待续", detail: failure.userFacingMessage)
+                return .interrupted(reason: critique)
+            }
             // **差距6·可见 checker**:把独立审查官(maker≠checker)从"藏在验收门里"提成**任务时间线里的命名角色卡**——
             // 主人能看到「审查员」这个独立角色每轮的裁决(通过/需修正+理由),而不是只有一句隐形"验收通过"。对标 Codex 的命名 CHECKER。
             appendTaskRecordMessage(taskRecordID, actor: "审查员", role: passed ? "审查·通过" : "审查·需修正(第\(round + 1)轮)",
