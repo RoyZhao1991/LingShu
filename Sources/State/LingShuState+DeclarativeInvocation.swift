@@ -107,7 +107,26 @@ extension LingShuState {
         }
         Task { @MainActor [weak self] in
             guard let self else { return }
-            // 大脑解析失败兜底:位置(第一个 = maker,其余 = checker)——非关键词。
+            self.isModelExecuting = true
+            defer { self.isModelExecuting = false; self.drainSerialInputsIfIdle() }
+            // **大脑先规划角色管线**(读现有角色 + agent,决定启用哪些角色、谁来干)。≥2 角色→走通用多角色管线;否则回退 maker/checker。
+            let steps = await self.planRolePipeline(task: fullPrompt, agents: agents)
+            if steps.count >= 2 {
+                let rid = self.createTaskExecutionRecord(for: fullPrompt)
+                if self.goalSpecEnabled { self.bindGoalSpec(LingShuGoalSpec(objective: fullPrompt, kind: .task), to: rid) }
+                let intake = "🔧 已规划角色管线:" + steps.map { "\($0.roleTitle)(\($0.agentName ?? "灵枢"))" }.joined(separator: " → ")
+                let bubble = ChatMessage(speaker: "灵枢", text: intake, isUser: false, isLoading: true, taskRecordID: rid)
+                self.chatMessages.append(bubble); let bid = bubble.id
+                self.dispatchedTaskBubbles[rid] = bid
+                let result = await self.runRolePipeline(recordID: rid, task: fullPrompt, steps: steps)
+                if let idx = self.chatMessages.firstIndex(where: { $0.id == bid }) {
+                    self.chatMessages[idx].text = intake + "\n\n✅ 管线完成。\n" + String(result.suffix(500))
+                    self.chatMessages[idx].isLoading = false
+                }
+                self.finishTaskRecord(rid, status: .completed, summary: "角色管线完成:" + steps.map(\.roleTitle).joined(separator: "→"))
+                return
+            }
+            // 回退:无/单角色 → maker/checker 派发(大脑装配,失败用位置兜底)。
             let asm = await self.resolveAgentRoleAssembly(prompt: fullPrompt, agents: agents)
                 ?? (makerAgentID: agents.first!.id, makerName: agents.first!.name,
                     checkers: Array(agents.dropFirst()), makerTask: fullPrompt)
@@ -115,9 +134,8 @@ extension LingShuState {
             let displayObjective = objective.isEmpty ? "\(asm.makerName ?? "灵枢") 任务" : objective
             let rid = self.createTaskExecutionRecord(for: displayObjective)
             if self.goalSpecEnabled { self.bindGoalSpec(LingShuGoalSpec(objective: displayObjective, kind: .task), to: rid) }
-            let checkerLabel = asm.checkers.isEmpty ? "灵枢(独立会话)" : asm.checkers.map(\.name).joined(separator: "+")
             self.appendTrace(kind: .route, actor: "声明式调用", title: "@agent 进 LOOP(大脑装配角色)",
-                             detail: "maker=\(asm.makerName ?? "灵枢") · checker=\(checkerLabel)")
+                             detail: "maker=\(asm.makerName ?? "灵枢") · checker=\(asm.checkers.first?.name ?? "灵枢")")
             _ = self.dispatchIsolatedTask(prompt: objective, taskRecordID: rid, goal: objective.isEmpty ? nil : objective,
                                           makerAgentID: asm.makerAgentID, makerName: asm.makerName,
                                           checkerAgentID: asm.checkers.first?.id, checkerName: asm.checkers.first?.name,
