@@ -1304,13 +1304,24 @@ final class LingShuState: ObservableObject {
             }
             // **内核校验闸门(图里 D)**:吃结构化决策,低置信/脑失败 → 追问(chat/task 一视同仁),不进 kind 扇出;
             // 其余落到下面的 kind-switch 当「执行」分支。决策重心从 triage.kind 收拢到闸门(reply 走自身兜底,闸门放行)。
-            if case .clarify(let directive) = self.kernelGate(triage, goalSpec: goalSpec) {
+            switch self.kernelGate(triage, goalSpec: goalSpec) {
+            case .clarify(let directive):
                 self.appendTrace(kind: .route, actor: "内核校验闸门",
                                  title: triage.brainFailed ? "分诊未果·转追问" : "低置信·转追问",
                                  detail: "意图不明确,先与用户确认再决定,不静默当闲聊、也不擅自开跑。")
                 _ = self.runMainAgentTurn(prompt: trimmedPrompt + "\n\n" + directive,
                                           taskRecordID: newRecordBoundToGoal(.question, nil), existingBubbleID: placeholderID)
                 return
+            case .dispatchAsTask:
+                // 动作信号命中但脑判 chat → 确定性派发去尝试(找能力/授权),不当闲聊(场景8)。
+                self.appendTrace(kind: .route, actor: "内核校验闸门", title: "动作请求·确定性派发",
+                                 detail: "动作信号命中、脑却判闲聊 → 派发去尝试(找能力/要授权),不当闲聊解释/拒绝。")
+                self.dispatchIsolatedTask(prompt: trimmedPrompt,
+                                          taskRecordID: newRecordBoundToGoal(.task, triage.goal),
+                                          goal: triage.goal, existingBubbleID: placeholderID)
+                return
+            case .execute:
+                break   // 落到下面的 kind-switch 扇出
             }
             switch triage.kind {
             case .reply:

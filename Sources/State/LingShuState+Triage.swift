@@ -137,6 +137,7 @@ extension LingShuState {
     enum GateOutcome: Equatable {
         case execute              // 高置信 + 合规 → 照常按 kind 扇出执行
         case clarify(String)      // 低置信 / 脑失败 → 追问指令(先与用户确认意图,别猜)
+        case dispatchAsTask       // 动作信号命中但脑判 chat → 确定性派发去尝试(找能力/授权),不当闲聊
     }
 
     /// **内核校验闸门(图里 D)**:吃〈分诊决策 + 结构化结果〉,统一决定走执行还是追问——
@@ -146,6 +147,12 @@ extension LingShuState {
     /// 后续把危险评估上提到此闸门(goalSpec 预留给那一步用)。
     func kernelGate(_ d: DispatchDecision, goalSpec: LingShuGoalSpec?) -> GateOutcome {
         if d.kind == .reply { return .execute }
+        if d.brainFailed, let directive = kernelGateClarifyDirective(d) { return .clarify(directive) }
+        // **确定性兜底(2026-06-27 压测发现:能力请求靠大脑判 task 不可靠,DeepSeek 时而判 chat)**:
+        // actionHint 命中(imperative 动作词,已排除解释/问答类)但大脑判 chat = 现实动作/外部操作请求大脑却犹豫
+        // (多半因"我可能没这能力")→ **确定性派发去尝试**(找能力/要授权再做),不当闲聊解释/拒绝。通用范式,非特判;
+        // 场景8:缺能力先找能力授权、别直接说不能。误伤(action 词闲聊如「谢谢你帮我发邮件」)罕见,且不做比误问代价更小。
+        if d.kind == .chat, d.actionHint { return .dispatchAsTask }
         if let directive = kernelGateClarifyDirective(d) { return .clarify(directive) }
         // **步骤4·结构化结果回流改路由**:triage 判 task,但派生的 GoalSpec 反而拆成「可直接回答的问答」(非交付型),
         // 且 triage 置信不到 high → 这是 triage 与结构化的冲突。别盲目开跑后台任务,转追问让用户定夺。
