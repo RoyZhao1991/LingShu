@@ -120,6 +120,36 @@ extension LingShuState {
         return true
     }
 
+    /// **独立 checker 会话(用户定调 2026-06-26:maker/checker 必须是两个独立 session,哪怕都是 GLM)**。
+    /// 起一个与 maker **完全独立**的 agent 会话,**从启动就被赋予「验收官」角色**——它主动 read_file 看代码、
+    /// run_command 跑测试 / 把程序运行起来,独立核验产出是否真达成目标,给「通过/不通过」结论。
+    /// 它看不到 maker 的内部过程,只面对落盘产出——这才是真 LOOP(maker 干活、checker 独立验,两条会话各司其职)。
+    /// 异源与否取决于配了几档脑(配了第二档=真异源;单脑=同 GLM 两个独立会话/上下文)。
+    func runCheckerSession(recordID rid: String, objective: String, makerText: String) async -> (passed: Bool, critique: String) {
+        let adapter = checkerAdapter(taskRecordID: rid)   // 异源脑(配了的话)否则当前脑——但都是**独立会话**
+        let verifyToolNames: Set<String> = ["read_file", "list_directory", "run_command"]
+        let tools = agentBuiltinTools(recordIDProvider: { rid }, executionPolicy: dispatchedTaskExecutionPolicy)
+            .filter { verifyToolNames.contains($0.name) }
+        let system = """
+        你是**独立验收官(checker)**,与开发方(maker)是**两条完全独立的会话**。你看不到 maker 的内部过程,只面对它落盘的产出。
+        职责:独立核验产出**是否真达成目标**——主动 `read_file` 看代码、`run_command` 跑测试 / 把程序运行起来,逐条对成功标准核对。
+        **铁律:只验收,绝不替它改 / 写任何代码或文件。** 结论:**第一行只写「通过」或「不通过」**,其后列依据(你跑了什么、看到什么)。
+        """
+        appendTaskRecordMessage(rid, actor: "审查员", role: "验收(checker)·独立会话上岗", kind: .agent,
+            text: "🧑‍⚖️ 独立 checker 会话上岗(与 maker 不同会话/上下文),开始独立核验产出——读代码、跑测试、运行起来。")
+        appendTrace(kind: .tool, actor: "checker会话", title: "独立验收会话上岗", detail: String(objective.prefix(50)))
+        let session = makeAgentSession(id: "checker-\(UUID().uuidString.prefix(6))", system: system,
+                                       tools: tools, model: adapter, maxTurns: 30)
+        let task = """
+        目标:\(objective)
+        maker 自述它的产出(仅供参考,务必独立核实、别轻信):
+        \(makerText.prefix(1500))
+        产物在当前工作目录。请独立核验后给结论(第一行 通过/不通过)。
+        """
+        let verdict = Self.runResultText(await session.send(task))
+        return (Self.checkerVerdictPassed(verdict), verdict)
+    }
+
     /// checker 文本结论是否判过(纯函数可测):第一行「通过」/pass 算过;「不通过」/not pass/fail 一律不过。
     nonisolated static func checkerVerdictPassed(_ text: String) -> Bool {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)

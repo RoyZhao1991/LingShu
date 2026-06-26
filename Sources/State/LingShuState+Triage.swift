@@ -302,6 +302,13 @@ extension LingShuState {
             所以你**绝不**自己写代码、**绝不**调 `run_agent` 去做"复核/验收"、**绝不**自己跑测试来下"验收通过/不通过"的结论、**绝不**替 checker 拍板。
             (你顺手 cat/读一眼确认 maker 真落了盘可以,但**判过没过是 checker 的事,不是你的事**。)若你确知 maker 明显没落地/报错,可让它先返工再交回;但绝不假装完成。
             """))
+        } else {
+            // **默认(灵枢自己当 maker):明确 maker 角色 + 会有独立 checker 会话(LOOP 两角色,从启动赋予不同任务)。**
+            initialMessages.append(.init(role: .system, content: """
+            【本任务你是开发方(maker)· LOOP 两个独立角色】
+            你负责**开发 / 产出**。你完成后,会有一个**独立的验收官(checker)会话**(另一条会话、独立上下文,看不到你的内部过程)**独立核验**你的产出——它会真去 read_file 看代码、run_command 跑测试 / 把程序运行起来。
+            所以:① 真正做完做对,产物**真实落盘**;② 写了代码就**自己先跑一遍测试 / 运行起来**确认能用;③ 别只口头声称完成——checker 会独立核,过不了会打回让你修。
+            """))
         }
         let sub = makeAgentSession(
             id: subID,

@@ -18,7 +18,9 @@ extension LingShuState {
     /// 一次性/派发/自主执行路径=true(捕获 run_command 产出却没自动登记的真文件);**常驻在岗路径=false**——
     /// 在岗轻量/对话/演示回合(导航/答疑/讲解)重活都派发给隔离 session 各自验收、自己几乎不直接产交付物,
     /// 其回复一提到既有文件就被 `replyClaimsArtifact` 误触发验收 → maker 无新文件可改 → 空转停滞("讲解完处理中卡很久")。
-    func verifyAndContinue(session: any LingShuAgentSessioning, result initial: LingShuAgentRunResult, userRequest: String, taskRecordID: String?, artifactBaseline: Int = 0, trustReplyClaim: Bool = true) async -> LingShuAgentRunResult {
+    /// `useCheckerSession`:true 时 checker 用**独立 agent 会话**(`runCheckerSession`,maker≠checker 两条独立 session)
+    /// 而非一次性复核调用。派发任务(默认本地脑 maker)由此满足「LOOP 必须有两个独立角色 session」。
+    func verifyAndContinue(session: any LingShuAgentSessioning, result initial: LingShuAgentRunResult, userRequest: String, taskRecordID: String?, artifactBaseline: Int = 0, trustReplyClaim: Bool = true, useCheckerSession: Bool = false) async -> LingShuAgentRunResult {
         // **嵌套循环已自带逐阶段验收(maker≠checker)+ 大 LOOP 终验,外层别再重复验收(2026-06-19 修"任务完成后自发起'修正'流水线")**:
         // `.nested` 的会话内部每个任务阶段都过了 `driveNestedStageAcceptance`(=本函数,传内层 classic 会话);其聚合结果再被这里
         // 重复验收 → verifier 对聚合挑刺 → `session.resume(返工)` → 嵌套会话又规划一条全新"修正"流水线(实测主前台空发指令自发做事)。
@@ -27,7 +29,7 @@ extension LingShuState {
         // 撞顶恢复(执行恢复力核心):一段推进用满 per-run 安全天花板却还没收尾,**不是失败**——
         // 若任务确有在制品(已落产出物 / 动过工具),把它当检查点,补一段全新预算让它接着做完 / 把崩溃修到跑通。
         let result = await recoverFromExhaustionIfNeeded(session: session, result: initial, taskRecordID: taskRecordID)
-        let verified = await runVerificationLoop(session: session, result: result, userRequest: userRequest, taskRecordID: taskRecordID, artifactBaseline: artifactBaseline, trustReplyClaim: trustReplyClaim)
+        let verified = await runVerificationLoop(session: session, result: result, userRequest: userRequest, taskRecordID: taskRecordID, artifactBaseline: artifactBaseline, trustReplyClaim: trustReplyClaim, useCheckerSession: useCheckerSession)
         // **收尾兜底(2026-06-21,清分系统实测根因)**:模型最后一步若是个静默 `run_command`(输出写进文件、stdout 为空),
         // 收尾回复会退化成「✓ run_command:（无输出，退出码 0）」——任务真做完了、产出物也在,却把"无输出"丢给用户。
         // 检测到这种占位收尾 + 任务确有产出物 → 用 `composeDeliveryMessage` 据产出物补一段像样的交付说明。
@@ -105,7 +107,7 @@ extension LingShuState {
 
     /// 验收门主循环(maker≠checker):**目标(验收通过)是唯一成功停止位**,一直续跑直到通过;
     /// 只有「maker 一轮无新进展(产出物没增、意见与上轮实质相同)」=停滞才诚实交还。`verifyCeiling` 只是高位安全天花板。
-    private func runVerificationLoop(session: any LingShuAgentSessioning, result initial: LingShuAgentRunResult, userRequest: String, taskRecordID: String?, artifactBaseline: Int = 0, trustReplyClaim: Bool = true) async -> LingShuAgentRunResult {
+    private func runVerificationLoop(session: any LingShuAgentSessioning, result initial: LingShuAgentRunResult, userRequest: String, taskRecordID: String?, artifactBaseline: Int = 0, trustReplyClaim: Bool = true, useCheckerSession: Bool = false) async -> LingShuAgentRunResult {
         var result = initial
         // 触发验收门的可靠信号:**本回合真有【新】产出物落盘**(write_file 自动登记)——比抠回复动词稳得多
         // (旧的只认"已生成/已写入"会漏掉"已交付"这类措辞,导致验收形同虚设);
@@ -152,7 +154,11 @@ extension LingShuState {
                 setLoopPhase(.idle)
                 return result
             }
-            let (passed, critique) = await verifyAgentDeliverable(userRequest: userRequest, reply: Self.runResultText(result), taskRecordID: taskRecordID)
+            // **checker = 独立会话(useCheckerSession)还是一次性复核调用**:派发任务(默认本地脑 maker)走独立 checker 会话,
+            // 让 maker / checker 是两条独立 session、两个独立角色——主会话/自主等其它路径仍用原复核调用(行为不变)。
+            let (passed, critique) = useCheckerSession
+                ? await runCheckerSession(recordID: taskRecordID ?? "", objective: userRequest, makerText: Self.runResultText(result))
+                : await verifyAgentDeliverable(userRequest: userRequest, reply: Self.runResultText(result), taskRecordID: taskRecordID)
             // **差距6·可见 checker**:把独立审查官(maker≠checker)从"藏在验收门里"提成**任务时间线里的命名角色卡**——
             // 主人能看到「审查员」这个独立角色每轮的裁决(通过/需修正+理由),而不是只有一句隐形"验收通过"。对标 Codex 的命名 CHECKER。
             appendTaskRecordMessage(taskRecordID, actor: "审查员", role: passed ? "审查·通过" : "审查·需修正(第\(round + 1)轮)",

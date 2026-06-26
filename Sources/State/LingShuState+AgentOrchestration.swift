@@ -20,9 +20,12 @@ extension LingShuState {
         Task { await orchestrator.setAcceptanceHook { @MainActor [weak self] subID, objective, session, initial in
             guard let self else { return initial }
             let rid = self.agentSubTaskRecords[subID]
-            let verified = await self.verifyAndContinue(session: session, result: initial, userRequest: objective, taskRecordID: rid)
-            // **maker session ≠ checker session(用户硬性要求)**:maker 是外部 agent(@Codex)的任务,
-            // 收尾后跑**独立 checker**(另一个 agent 或异源审查员)做命名角色卡可见的复核——不让编排脑自验。
+            // **maker session ≠ checker session(用户硬性要求:LOOP 必须两个独立角色 session,哪怕都是 GLM)**:
+            // - 默认(本地脑 maker)→ checker 用**独立 agent 会话** `runCheckerSession`(useCheckerSession),它自己读代码/跑测试独立验收;
+            // - maker 是外部 agent(@Codex)→ checker 走 `runIndependentAgentCheckerIfNeeded`(另一个 agent 进程 / 异源审查员)。
+            let makerIsExternal = rid.flatMap { self.taskReviewBindings[$0]?.maker.kind } == .externalCLI
+            let verified = await self.verifyAndContinue(session: session, result: initial, userRequest: objective,
+                                                        taskRecordID: rid, useCheckerSession: !makerIsExternal)
             return await self.runIndependentAgentCheckerIfNeeded(recordID: rid, makerResult: verified, objective: objective)
         } }
     }
