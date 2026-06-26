@@ -18,71 +18,84 @@ extension LingShuState {
                                             objective: String) async -> LingShuAgentRunResult {
         guard let rid = recordID,
               let binding = taskReviewBindings[rid],
-              binding.maker.kind == .externalCLI,           // 只对「外部 agent 当 maker」的任务补独立 checker
+              // 外部 agent 当 **maker**(@Codex 开发)或当 **checker**(灵枢开发 + @Codex 验收)都要走独立 checker。
+              binding.maker.kind == .externalCLI || binding.checker.kind == .externalCLI,
               case .completed = makerResult else { return makerResult }
 
-        let makerAgentID = String(binding.maker.id.dropFirst("external:".count))
+        let makerIsExternal = binding.maker.kind == .externalCLI
+        let makerAgentID = makerIsExternal ? String(binding.maker.id.dropFirst("external:".count)) : ""   // 本地脑 maker 无插件,不重委托
         let checkerIsAgent = binding.checker.kind == .externalCLI
         let checkerAgentID = checkerIsAgent ? String(binding.checker.id.dropFirst("external:".count)) : ""
         let maxRounds = 2          // maker↔checker 返工的安全天花板(有界,不无限返工)
         var round = 0
         var current = makerResult
+        let extraCheckerIDs = taskExtraCheckerAgentIDs[rid] ?? []   // **多 checker**:主 checker 之外的额外 agent
+
+        // 跑单个 agent checker(独立会话:它自己读文件/跑测试),记参与方 + 结论。
+        func runAgentChecker(_ plugin: LingShuAgentPlugin, makerText: String, round: Int) async -> (passed: Bool, critique: String) {
+            appendTaskRecordMessage(rid, actor: plugin.displayName, role: "验收(checker)·受灵枢委托", kind: .agent,
+                text: "▶ \(plugin.displayName) 独立复核产出(maker≠checker)。")
+            appendTrace(kind: .tool, actor: "独立验收·\(plugin.displayName)", title: "复核中", detail: String(objective.prefix(50)))
+            let reviewObj = "你是独立验收方(checker)。maker 针对目标完成了开发,产物在当前工作目录。\n目标:\(objective)\n请独立核验:真实读文件 / 跑测试 / 运行起来,判断是否达成目标。**只验收,别替它重写。**\n结论格式:第一行只写「通过」或「不通过」,其后逐条列问题。\nmaker 自述产出:\n\(makerText.prefix(1500))"
+            let c: String
+            switch await LingShuAgentPluginStore.run(plugin, objective: reviewObj, workingDirectory: agentWorkingDirectory) {
+            case .completed(let t): c = t
+            case .failure(let f):   c = "(checker 未能完成复核:\(f))"
+            }
+            let p = Self.checkerVerdictPassed(c)
+            appendTaskRecordMessage(rid, actor: plugin.displayName,
+                role: p ? "验收(checker)·通过" : "验收(checker)·需修正(第\(round + 1)轮)",
+                kind: p ? .result : .agent, text: String(c.prefix(1500)))
+            return (p, c)
+        }
 
         while round < maxRounds {
             if Task.isCancelled || batchInterruptRequested { break }   // 全程可打断
             let makerText = Self.runResultText(current)
+            var verdicts: [(name: String, passed: Bool, critique: String)] = []   // 每个 checker 一条(多 checker 聚合)
 
-            let passed: Bool
-            let critique: String
-            if checkerIsAgent, let checkerPlugin = LingShuAgentPluginStore.plugin(id: checkerAgentID) {
-                // ── 独立 agent(如 Claude)跨厂商复核:它是一条**独立会话**,真去读文件/跑测试再下结论。
-                appendTaskRecordMessage(rid, actor: checkerPlugin.displayName, role: "验收(checker)·受灵枢委托", kind: .agent,
-                    text: "▶ \(checkerPlugin.displayName) 独立复核 \(binding.maker.providerLabel)(maker)的产出——maker≠checker,跨厂商。")
-                appendTrace(kind: .tool, actor: "独立验收·\(checkerPlugin.displayName)", title: "复核中", detail: String(objective.prefix(50)))
-                let reviewObj = """
-                你是独立验收方(checker)。另一个 agent(\(binding.maker.providerLabel),maker)针对目标完成了开发,产物在当前工作目录。
-                目标:\(objective)
-                请独立核验:真实读文件 / 跑测试 / 运行起来,判断是否达成目标。**只验收,别替它重写。**
-                结论格式:第一行只写「通过」或「不通过」,其后逐条列问题。
-                maker 自述产出:
-                \(makerText.prefix(1500))
-                """
-                switch await LingShuAgentPluginStore.run(checkerPlugin, objective: reviewObj, workingDirectory: agentWorkingDirectory) {
-                case .completed(let t): critique = t
-                case .failure(let f):   critique = "(checker 未能完成复核:\(f))"
-                }
-                passed = Self.checkerVerdictPassed(critique)
-                appendTaskRecordMessage(rid, actor: checkerPlugin.displayName,
-                    role: passed ? "验收(checker)·通过" : "验收(checker)·需修正(第\(round + 1)轮)",
-                    kind: passed ? .result : .agent, text: String(critique.prefix(1500)))
+            // 主 checker:外部 agent → 它;否则异源审查员(GLM,先自己跑测试再判)。
+            if checkerIsAgent, let primary = LingShuAgentPluginStore.plugin(id: checkerAgentID) {
+                let (p, c) = await runAgentChecker(primary, makerText: makerText, round: round)
+                verdicts.append((primary.displayName, p, c))
             } else {
-                // ── 异源审查员:**先自己真跑一遍测试**(不信 maker 自报的"全绿"——maker 在自己 session 跑的测试输出没进任务记录,
-                // 确定性验收门看不到 → 否则会一直判"构建完成不算交付"死循环)。把 checker 独立执行的测试结果记成 run_command 证据,
-                // 再走同一确定性验收器(`checkerAdapter` 取**异源于 maker** 的本地脑,maker=codex → checker=GLM,真跨厂商)。
                 await checkerIndependentlyRunsTests(recordID: rid, makerText: makerText)
                 let (p, c) = await verifyAgentDeliverable(userRequest: objective, reply: makerText, taskRecordID: rid)
-                passed = p; critique = c
                 appendTaskRecordMessage(rid, actor: "审查员",
-                    role: passed ? "验收(checker)·通过" : "验收(checker)·需修正(第\(round + 1)轮)",
-                    kind: passed ? .result : .agent,
-                    text: passed ? "🧑‍⚖️ 独立审查(\(binding.checker.providerLabel),异源于 maker \(binding.maker.providerLabel)):✅ 通过——产出真实落地、达成目标。"
-                                 : "🧑‍⚖️ 独立审查(\(binding.checker.providerLabel)):⚠️ 需修正 — \(String(critique.prefix(400)))")
+                    role: p ? "验收(checker)·通过" : "验收(checker)·需修正(第\(round + 1)轮)",
+                    kind: p ? .result : .agent,
+                    text: p ? "🧑‍⚖️ 独立审查(\(binding.checker.providerLabel),异源于 maker \(binding.maker.providerLabel)):✅ 通过——产出真实落地、达成目标。"
+                            : "🧑‍⚖️ 独立审查(\(binding.checker.providerLabel)):⚠️ 需修正 — \(String(c.prefix(400)))")
+                verdicts.append(("审查员", p, c))
             }
-            appendTrace(kind: passed ? .result : .warning, actor: "独立验收",
-                        title: passed ? "通过" : "需修正(第\(round + 1)轮)",
-                        detail: "maker:\(binding.maker.providerLabel) · checker:\(binding.checker.providerLabel)（异源）")
+            // **额外 checker(多 checker:多个 agent 同时验,各自独立会话、各自一条命名角色卡)**
+            for id in extraCheckerIDs {
+                if let plugin = LingShuAgentPluginStore.plugin(id: id) {
+                    let (p, c) = await runAgentChecker(plugin, makerText: makerText, round: round)
+                    verdicts.append((plugin.displayName, p, c))
+                }
+            }
 
-            if passed { return current }
+            let allPassed = verdicts.allSatisfy { $0.passed }
+            let combined = verdicts.filter { !$0.passed }.map { "【\($0.name)】\($0.critique.prefix(300))" }.joined(separator: "\n")
+            appendTrace(kind: allPassed ? .result : .warning, actor: "独立验收",
+                        title: allPassed ? "全部 checker 通过" : "需修正(第\(round + 1)轮)",
+                        detail: verdicts.map { "\($0.name):\($0.passed ? "✅" : "✗")" }.joined(separator: " "))
+
+            if allPassed { return current }
 
             round += 1
             if round >= maxRounds {
-                return .maxTurnsReached(lastText: makerText + "\n\n(独立验收 \(round) 轮仍未通过:\(critique.prefix(160))。先交还——需要你的判断。)")
+                return .maxTurnsReached(lastText: makerText + "\n\n(独立验收 \(round) 轮仍未全过:\(combined.prefix(200))。先交还——需要你的判断。)")
             }
-            // ── 不过 → 退回 maker 自己改(再委托一次,带上验收意见),checker 再验。maker 改、checker 验,各司其职。
-            guard let makerPlugin = LingShuAgentPluginStore.plugin(id: makerAgentID) else { return current }
+            // ── 不过 → 退回 maker 自己改(带上**所有未过 checker** 的合并意见),checker 再验。
+            // 本地脑 maker(灵枢自己开发 + 外部 agent 当 checker)无插件可重委托 → 如实交还,等主人/灵枢据意见再修。
+            guard makerIsExternal, let makerPlugin = LingShuAgentPluginStore.plugin(id: makerAgentID) else {
+                return .maxTurnsReached(lastText: makerText + "\n\n(独立 checker 判未通过:\(combined.prefix(200))。本地 maker 已交还——需据意见修正后重验。)")
+            }
             appendTaskRecordMessage(rid, actor: makerPlugin.displayName, role: "开发(maker)·返工(第\(round)轮)", kind: .agent,
-                                    text: "▶ 据独立验收意见返工:\(critique.prefix(160))")
-            let fixObj = "你之前针对目标「\(objective)」的开发未通过独立验收。验收意见:\n\(critique.prefix(800))\n请据此修正,产物落到当前工作目录,确保真能跑通。"
+                                    text: "▶ 据独立验收意见返工:\(combined.prefix(200))")
+            let fixObj = "你之前针对目标「\(objective)」的开发未通过独立验收。验收意见:\n\(combined.prefix(800))\n请据此修正,产物落到当前工作目录,确保真能跑通。"
             switch await LingShuAgentPluginStore.run(makerPlugin, objective: fixObj, workingDirectory: agentWorkingDirectory) {
             case .completed(let t):
                 current = .completed(text: t)

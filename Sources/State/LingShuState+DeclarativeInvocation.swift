@@ -69,13 +69,13 @@ extension LingShuState {
             chatMessages.append(.init(speaker: "你", text: prompt, isUser: true))
             appendTrace(kind: .route, actor: "声明式调用", title: "用户显式指定",
                         detail: "链:\(chain.map { $0.id }.joined(separator: " → "))(跳过大脑分诊)")
-            runInvocationChain(chain.map { (id: $0.id, segment: $0.segment) }, plugins: plugins)
+            runInvocationChain(chain.map { (id: $0.id, segment: $0.segment) }, plugins: plugins, fullPrompt: prompt)
             return true
         }
         // ③ 单个 `用X插件`/`切到X` 声明。
         if let hit = LingShuDeclarativeInvocation.detect(prompt, plugins: plugins) {
             chatMessages.append(.init(speaker: "你", text: prompt, isUser: true))
-            runInvocationChain([(id: hit.id, segment: hit.rest)], plugins: plugins)
+            runInvocationChain([(id: hit.id, segment: hit.rest)], plugins: plugins, fullPrompt: prompt)
             return true
         }
         return false
@@ -84,7 +84,7 @@ extension LingShuState {
 
     /// 顺序执行声明链:agent 步走真委托(后一个 agent 拿到前一步产出→天然 maker≠checker);插件步路由各自插件。
     /// **同一编排任务=一个气泡换行追加**(不拆成多气泡);每步落 trace,运行时(状态/运维)能看清启动的是哪个 agent。
-    private func runInvocationChain(_ steps: [(id: String, segment: String)], plugins: [LingShuInvocablePlugin]) {
+    private func runInvocationChain(_ steps: [(id: String, segment: String)], plugins: [LingShuInvocablePlugin], fullPrompt: String) {
         // 纯插件步(present/record/proc)不进 agent 气泡——它们各自有交互/窗口。
         let agentSteps = steps.filter { id in plugins.first(where: { $0.id == id.id })?.kind == .agent }
         for step in steps where plugins.first(where: { $0.id == step.id })?.kind == .plugin {
@@ -92,31 +92,43 @@ extension LingShuState {
         }
         guard !agentSteps.isEmpty else { return }
 
-        // **用户定调 2026-06-25:声明式 @agent 是任务,必须走 LOOP——把 agent 作为 maker 引入循环(灵枢编排+验收),绝不绕过验收。**
-        // maker = 第一个 @agent(其 segment=开发目标);checker = 第二个 @agent(如 @Claude 验收)或灵枢自己(maker≠checker 跨厂商)。
         func resolve(_ step: (id: String, segment: String)) -> (agentID: String, name: String)? {
             guard let inv = plugins.first(where: { $0.id == step.id }) else { return nil }
             let agentID = inv.id.hasPrefix("agent:") ? String(inv.id.dropFirst("agent:".count)) : inv.id
             guard LingShuAgentPluginStore.plugin(id: agentID) != nil else { return nil }
             return (agentID, inv.displayName)
         }
-        guard let maker = resolve(agentSteps[0]) else {
-            let nm = plugins.first(where: { $0.id == agentSteps[0].id })?.displayName ?? "agent"
-            chatMessages.append(.init(speaker: "灵枢", text: "⚠️ @\(nm) 没注册或不可用——先告诉我本机有它、怎么调,我注册后再用。", isUser: false))
-            return
-        }
-        let checker = agentSteps.count >= 2 ? resolve(agentSteps[1]) : nil
-        let objective = agentSteps[0].segment.trimmingCharacters(in: .whitespacesAndNewlines)
+        // **角色按「验收意图」关键词分(用户定调 2026-06-26:支持 codex 当 checker、甚至多个 agent 同时当 checker)**:
+        // 段里含 验收/审核/复核… = checker;否则 = maker。0 个 maker(全 checker)→ 灵枢自己当 maker。
+        let makerStep = agentSteps.first { !Self.segmentIsCheckerIntent($0.segment) }
+        let checkerSteps = agentSteps.filter { Self.segmentIsCheckerIntent($0.segment) }
+        let makerAgent = makerStep.flatMap(resolve)                 // nil = 灵枢自己当 maker
+        let checkerAgents = checkerSteps.compactMap(resolve)        // 可多个 = 多 checker
+        // objective:agent 当 maker→其 segment;灵枢当 maker→全 prompt 去掉所有 @提及。
+        let objective: String = {
+            if let makerStep { return makerStep.segment.trimmingCharacters(in: .whitespacesAndNewlines) }
+            var t = fullPrompt
+            for inv in plugins { for a in inv.allAliases { t = t.replacingOccurrences(of: "@\(a)", with: "") } }
+            return t.trimmingCharacters(in: .whitespacesAndNewlines)
+        }()
 
-        // 建任务记录 + GoalSpec(目标解析稳定)→ 走标准 LOOP(dispatchIsolatedTask),maker 换成 agent session。
-        let displayObjective = objective.isEmpty ? "\(maker.name) 任务" : objective
+        let displayObjective = objective.isEmpty ? "\(makerAgent?.name ?? "灵枢") 任务" : objective
         let rid = createTaskExecutionRecord(for: displayObjective)
         if goalSpecEnabled { bindGoalSpec(LingShuGoalSpec(objective: displayObjective, kind: .task), to: rid) }
+        let checkerLabel = checkerAgents.isEmpty ? "灵枢(独立会话)" : checkerAgents.map(\.name).joined(separator: "+")
         appendTrace(kind: .route, actor: "声明式调用", title: "@agent 进 LOOP",
-                    detail: "maker=\(maker.name) · checker=\(checker?.name ?? "灵枢")(任何任务都走 LOOP,maker 换成 agent session,不绕过验收)")
+                    detail: "maker=\(makerAgent?.name ?? "灵枢") · checker=\(checkerLabel)(任何任务都走 LOOP,maker≠checker)")
         _ = dispatchIsolatedTask(prompt: objective, taskRecordID: rid, goal: objective.isEmpty ? nil : objective,
-                                 makerAgentID: maker.agentID, makerName: maker.name,
-                                 checkerAgentID: checker?.agentID, checkerName: checker?.name)
+                                 makerAgentID: makerAgent?.agentID, makerName: makerAgent?.name,
+                                 checkerAgentID: checkerAgents.first?.agentID, checkerName: checkerAgents.first?.name,
+                                 extraCheckerAgentIDs: checkerAgents.dropFirst().map(\.agentID))
+    }
+
+    /// 段落是否表达「验收/审核」意图(用于把 @agent 判成 checker 而非 maker)。纯函数可测。
+    nonisolated static func segmentIsCheckerIntent(_ segment: String) -> Bool {
+        let kws = ["验收", "审核", "审查", "复核", "校验", "把关", "核验", "检查", "评审", "review", "verify", "check"]
+        let lower = segment.lowercased()
+        return kws.contains { segment.contains($0) || lower.contains($0.lowercased()) }
     }
 
     /// 编排气泡整段重写(单气泡承载:已定稿部分 + 运行中实时进度)。气泡没了(被清)就忽略。

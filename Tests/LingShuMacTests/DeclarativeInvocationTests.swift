@@ -68,4 +68,13 @@ final class DeclarativeInvocationTests: XCTestCase {
         XCTAssertFalse(LingShuState.agentOutputLacksPermission("已创建 tank.html,浏览器打开即可玩。"))
         XCTAssertFalse(LingShuState.agentOutputLacksPermission("做好了,文件写到 /Users/example/app/tank.html,跑测试全绿。"))
     }
+
+    func testSegmentCheckerIntent() {
+        XCTAssertTrue(LingShuState.segmentIsCheckerIntent("验收一下"))
+        XCTAssertTrue(LingShuState.segmentIsCheckerIntent("帮我审核代码"))
+        XCTAssertTrue(LingShuState.segmentIsCheckerIntent("review this"))
+        XCTAssertFalse(LingShuState.segmentIsCheckerIntent("开发一个待办清单"))
+        XCTAssertFalse(LingShuState.segmentIsCheckerIntent("写个排序函数"))
+    }
+
 }

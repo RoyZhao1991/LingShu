@@ -213,7 +213,8 @@ extension LingShuState {
     @discardableResult
     func dispatchIsolatedTask(prompt: String, taskRecordID: String, goal: String?, existingBubbleID: UUID? = nil,
                               makerAgentID: String? = nil, makerName: String? = nil,
-                              checkerAgentID: String? = nil, checkerName: String? = nil) -> String {
+                              checkerAgentID: String? = nil, checkerName: String? = nil,
+                              extraCheckerAgentIDs: [String] = []) -> String {
         installAgentEventSinkIfNeeded()
         interruptSpeechOutput?()
         let subID = "task-\(UUID().uuidString.prefix(6))"
@@ -252,11 +253,17 @@ extension LingShuState {
                 checkerEngine = .init(id: "localBrain:\(modelProvider.lowercased())", kind: .localBrain, providerLabel: modelProvider, available: true)
             }
             binding = .init(maker: makerEngine, checker: checkerEngine, crossSource: true)
+        } else if let checkerAgentID, let checkerName {
+            // **灵枢自己当 maker + 指定外部 agent 当 checker**(如「灵枢开发 + @Codex 验收」):maker=本地脑、checker=外部 agent。
+            let makerEngine = LingShuAgentEngineDescriptor(id: "localBrain:\(modelProvider.lowercased())", kind: .localBrain, providerLabel: modelProvider, available: true)
+            let checkerEngine = LingShuAgentEngineDescriptor(id: "external:\(checkerAgentID)", kind: .externalCLI, providerLabel: checkerName, available: true)
+            binding = .init(maker: makerEngine, checker: checkerEngine, crossSource: true)
         } else {
             binding = reviewBinding(forMaker: resolveMakerEngine(taskRecordID: taskRecordID).engine)
         }
         taskReviewBindings[taskRecordID] = binding
-        appendTrace(kind: .system, actor: "派发引擎", title: "maker / checker 绑定", detail: binding.label)
+        if !extraCheckerAgentIDs.isEmpty { taskExtraCheckerAgentIDs[taskRecordID] = extraCheckerAgentIDs }   // 多 checker
+        appendTrace(kind: .system, actor: "派发引擎", title: "maker / checker 绑定", detail: binding.label + (extraCheckerAgentIDs.isEmpty ? "" : " +\(extraCheckerAgentIDs.count) checker"))
         // 边做边想:派发的隔离子任务也要把模型每步动作前的旁白落进**这条任务自己的记录**——否则任务窗口
         // 只见工具调用、缺"运行时思考",看不出每步为什么这么做。记录 id 用本子任务的(主会话用 currentAgentTurnRecordID,
         // 这里不同);后台并行跑,不抢全局 missionStatus。
@@ -306,8 +313,9 @@ extension LingShuState {
             // **默认(灵枢自己当 maker):明确 maker 角色 + 会有独立 checker 会话(LOOP 两角色,从启动赋予不同任务)。**
             initialMessages.append(.init(role: .system, content: """
             【本任务你是开发方(maker)· LOOP 两个独立角色】
-            你负责**开发 / 产出**。你完成后,会有一个**独立的验收官(checker)会话**(另一条会话、独立上下文,看不到你的内部过程)**独立核验**你的产出——它会真去 read_file 看代码、run_command 跑测试 / 把程序运行起来。
+            你负责**开发 / 产出**。你完成后,会有一个**独立的验收官(checker)**(另一条会话/agent、独立上下文,看不到你的内部过程)**独立核验**你的产出——它会真去 read_file 看代码、run_command 跑测试 / 把程序运行起来。
             所以:① 真正做完做对,产物**真实落盘**;② 写了代码就**自己先跑一遍测试 / 运行起来**确认能用;③ 别只口头声称完成——checker 会独立核,过不了会打回让你修。
+            ④ **铁律:你只管开发,绝不自己调 `run_agent` 去找别的 agent 验收 / 复核**——独立 checker 由系统在你交付后**自动**跑,不归你管;你交付后就结束回合。
             """))
         }
         let sub = makeAgentSession(

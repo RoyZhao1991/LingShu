@@ -249,6 +249,9 @@ final class LingShuState: ObservableObject {
     var dispatchedTaskBubbles: [String: UUID] = [:]
     /// 派发任务的「评审绑定」:记录 id →(maker 引擎 / checker 引擎 / 是否异源)。创建子线程时解析并标注,验收时据 checker 复核。
     var taskReviewBindings: [String: LingShuReviewBinding] = [:]
+    /// **多 checker**(用户定调:可让两个 agent 同时当 checker):记录 id → 主 checker 之外的**额外 checker agent id 列表**。
+    /// binding.checker 是第一个(供标注/异源判);这里存其余的,验收时全部独立跑、聚合裁决(全过才过)。
+    var taskExtraCheckerAgentIDs: [String: [String]] = [:]
     /// **派发队列区**(用户定调):主界面支持 3 并发,多出来的进**可见队列区等待**(不直接进主窗口/不派发);
     /// 有空位时自动晋级派发;晋级前可在队列区删除。见 LingShuState+DispatchQueue。
     @Published var queuedDispatchTasks: [LingShuQueuedDispatchTask] = []
