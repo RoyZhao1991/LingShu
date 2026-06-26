@@ -33,12 +33,13 @@ extension LingShuState {
 
         // 跑单个 agent checker(独立会话:它自己读文件/跑测试),记参与方 + 结论。
         func runAgentChecker(_ plugin: LingShuAgentPlugin, makerText: String, round: Int) async -> (passed: Bool, critique: String) {
-            appendTaskRecordMessage(rid, actor: plugin.displayName, role: "验收(checker)·受灵枢委托", kind: .agent,
-                text: "▶ \(plugin.displayName) 独立复核产出(maker≠checker)。")
             appendTrace(kind: .tool, actor: "独立验收·\(plugin.displayName)", title: "复核中", detail: String(objective.prefix(50)))
             let reviewObj = "你是独立验收方(checker)。maker 针对目标完成了开发,产物在当前工作目录。\n目标:\(objective)\n请独立核验:真实读文件 / 跑测试 / 运行起来,判断是否达成目标。**只验收,别替它重写。**\n结论格式:第一行只写「通过」或「不通过」,其后逐条列问题。\nmaker 自述产出:\n\(makerText.prefix(1500))"
             let c: String
-            switch await LingShuAgentPluginStore.run(plugin, objective: reviewObj, workingDirectory: agentWorkingDirectory) {
+            // **流式**:边跑边把 checker 的复核进展更新进同一条参与方气泡(不再干等)。
+            switch await runAgentStreamingToRecord(plugin, objective: reviewObj, recordID: rid,
+                                                   actor: plugin.displayName, role: "验收(checker)·受灵枢委托",
+                                                   startText: "▶ \(plugin.displayName) 独立复核产出(maker≠checker)。") {
             case .completed(let t): c = t
             case .failure(let f):   c = "(checker 未能完成复核:\(f))"
             }
@@ -93,10 +94,11 @@ extension LingShuState {
             guard makerIsExternal, let makerPlugin = LingShuAgentPluginStore.plugin(id: makerAgentID) else {
                 return .maxTurnsReached(lastText: makerText + "\n\n(独立 checker 判未通过:\(combined.prefix(200))。本地 maker 已交还——需据意见修正后重验。)")
             }
-            appendTaskRecordMessage(rid, actor: makerPlugin.displayName, role: "开发(maker)·返工(第\(round)轮)", kind: .agent,
-                                    text: "▶ 据独立验收意见返工:\(combined.prefix(200))")
             let fixObj = "你之前针对目标「\(objective)」的开发未通过独立验收。验收意见:\n\(combined.prefix(800))\n请据此修正,产物落到当前工作目录,确保真能跑通。"
-            switch await LingShuAgentPluginStore.run(makerPlugin, objective: fixObj, workingDirectory: agentWorkingDirectory) {
+            // **流式**:maker 返工也边跑边更新气泡(不再干等)。
+            switch await runAgentStreamingToRecord(makerPlugin, objective: fixObj, recordID: rid,
+                                                   actor: makerPlugin.displayName, role: "开发(maker)·返工(第\(round)轮)",
+                                                   startText: "▶ 据独立验收意见返工:\(combined.prefix(200))") {
             case .completed(let t):
                 current = .completed(text: t)
                 appendTaskRecordMessage(rid, actor: makerPlugin.displayName, role: "开发(maker)·返工交付", kind: .result, text: String(t.prefix(1500)))

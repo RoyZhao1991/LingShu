@@ -154,15 +154,17 @@ extension LingShuState {
             产物落到当前工作目录;最后用一句话交代你这一环的结论 / 产出。
             """
             let actor = step.agentName ?? "灵枢"
-            appendTaskRecordMessage(rid, actor: actor, role: "\(step.roleTitle)·\(tag)", kind: .agent,
-                                    text: "▶ \(actor) 担任「\(step.roleTitle)」:\(step.subtask.prefix(80))")
+            let startText = "▶ \(actor) 担任「\(step.roleTitle)」:\(step.subtask.prefix(80))"
             let output: String
             if let agentID = step.agentID, let plugin = LingShuAgentPluginStore.plugin(id: agentID) {
-                switch await LingShuAgentPluginStore.run(plugin, objective: objective, workingDirectory: agentWorkingDirectory) {
+                // **流式**:边跑边把 agent 输出更新进同一条参与方气泡(不再干等)。
+                switch await runAgentStreamingToRecord(plugin, objective: objective, recordID: rid,
+                                                       actor: actor, role: "\(step.roleTitle)·\(tag)", startText: startText) {
                 case .completed(let t): output = t
                 case .failure(let f):   output = "(\(plugin.displayName) 未完成:\(f))"
                 }
             } else {
+                appendTaskRecordMessage(rid, actor: actor, role: "\(step.roleTitle)·\(tag)", kind: .agent, text: startText)
                 let tools = agentBuiltinTools(recordIDProvider: { rid }, executionPolicy: dispatchedTaskExecutionPolicy)
                 let session = makeAgentSession(id: "role-\(UUID().uuidString.prefix(6))", system: rolePrompt,
                                                tools: tools, model: makeAgentModelAdapter(), maxTurns: 40)
