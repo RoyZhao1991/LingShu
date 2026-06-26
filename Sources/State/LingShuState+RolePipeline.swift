@@ -24,25 +24,38 @@ extension LingShuState {
     /// 返回 true=确实跑了多角色管线(≥2 角色);false=没规划出多角色(调用方回退 maker/checker)。
     @discardableResult
     func runRolePipelineDispatch(task: String, agents: [(id: String, name: String)], existingBubbleID: UUID? = nil) async -> Bool {
-        let steps = await planRolePipeline(task: task, agents: agents)
-        guard steps.count >= 2 else { return false }
-        lastPipelineAgents = agents.map { LingShuRoleAgentRef(id: $0.id, name: $0.name) }   // 记下供续接继承
-        lastPipelineTask = task
+        // **立即建记录 + 绑气泡 + 注册线程(发出即开好、可打开、可见"执行中";别等规划那几秒)**——
+        // 修「发完消息长延迟才出气泡」+「执行完才看到执行记录」:规划/执行都在记录已可见之后进行。
         let rid = createTaskExecutionRecord(for: task)
         let subID = "pipe-\(rid.suffix(8))"
-        agentSubTaskRecords[subID] = rid   // 注册成可打开的派发子线程
+        agentSubTaskRecords[subID] = rid
         if goalSpecEnabled { bindGoalSpec(LingShuGoalSpec(objective: task, kind: .task), to: rid) }
-        appendTaskRecordMessage(rid, actor: "灵枢", role: "派生子任务", kind: .router,
-                                text: "派生角色管线子线程:" + steps.map { "\($0.roleTitle)(\($0.agentName ?? "灵枢"))" }.joined(separator: " → "))
-        let intake = "🔧 已规划角色管线:" + steps.map { "\($0.roleTitle)(\($0.agentName ?? "灵枢"))" }.joined(separator: " → ")
         let bid: UUID
         if let existingBubbleID, let idx = chatMessages.firstIndex(where: { $0.id == existingBubbleID }) {
-            chatMessages[idx].text = intake; chatMessages[idx].isLoading = true; chatMessages[idx].taskRecordID = rid; bid = existingBubbleID
+            chatMessages[idx].text = "🔧 正在理解任务、规划角色…"; chatMessages[idx].isLoading = true; chatMessages[idx].taskRecordID = rid; bid = existingBubbleID
         } else {
-            let bubble = ChatMessage(speaker: "灵枢", text: intake, isUser: false, isLoading: true, taskRecordID: rid)
+            let bubble = ChatMessage(speaker: "灵枢", text: "🔧 正在理解任务、规划角色…", isUser: false, isLoading: true, taskRecordID: rid)
             chatMessages.append(bubble); bid = bubble.id
         }
         dispatchedTaskBubbles[rid] = bid
+        appendTaskRecordMessage(rid, actor: "灵枢", role: "中枢", kind: .core, text: "收到。理解任务、规划角色管线中…")
+
+        let steps = await planRolePipeline(task: task, agents: agents)
+        guard steps.count >= 2 else {
+            // 没规划出多角色 → 清理这条预建记录/气泡,返回 false 让调用方回退 maker/checker(干净重来)。
+            agentSubTaskRecords[subID] = nil
+            dispatchedTaskBubbles[rid] = nil
+            taskExecutionRecords.removeAll { $0.id == rid }; persistTaskExecutionRecords()
+            if existingBubbleID == nil, let idx = chatMessages.firstIndex(where: { $0.id == bid }) { chatMessages.remove(at: idx) }
+            else if let idx = chatMessages.firstIndex(where: { $0.id == bid }) { chatMessages[idx].taskRecordID = nil }
+            return false
+        }
+        lastPipelineAgents = agents.map { LingShuRoleAgentRef(id: $0.id, name: $0.name) }   // 记下供续接继承
+        lastPipelineTask = task
+        appendTaskRecordMessage(rid, actor: "灵枢", role: "派生子任务", kind: .router,
+                                text: "派生角色管线子线程:" + steps.map { "\($0.roleTitle)(\($0.agentName ?? "灵枢"))" }.joined(separator: " → "))
+        let intake = "🔧 已规划角色管线:" + steps.map { "\($0.roleTitle)(\($0.agentName ?? "灵枢"))" }.joined(separator: " → ")
+        if let idx = chatMessages.firstIndex(where: { $0.id == bid }) { chatMessages[idx].text = intake }
         let (result, passed) = await runRolePipeline(recordID: rid, task: task, steps: steps)
         agentSubTaskRecords[subID] = nil
         if let idx = chatMessages.firstIndex(where: { $0.id == bid }) {
