@@ -29,7 +29,10 @@ extension LingShuState {
               let index = taskExecutionRecords.firstIndex(where: { $0.id == recordID }) else { return }
 
         // 净化(剥模型名泄露 + 裸 tool_calls JSON)走独立模块 LingShuTaskMessageFormatting。
-        taskExecutionRecords[index].append(actor: actor, role: role, kind: kind, text: LingShuTaskMessageFormatting.sanitize(text), detail: detail)
+        // **只净化输出,不净化输入(用户定调)**:净化是防大脑/模型输出暴露底层模型真身——用户自己打的字(.user)
+        // 一个字都不改(否则像「@Claude 被改成 @灵枢」那样篡改用户原话)。
+        let cleanText = kind == .user ? text : LingShuTaskMessageFormatting.sanitize(text)
+        taskExecutionRecords[index].append(actor: actor, role: role, kind: kind, text: cleanText, detail: detail)
         persistTaskExecutionRecords()
         recordWorldEvent(kind: .task, source: actor, summary: "\(role):\(text)", payload: [
             "recordID": recordID,
