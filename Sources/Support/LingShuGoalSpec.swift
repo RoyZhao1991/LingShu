@@ -30,11 +30,12 @@ struct LingShuGoalSpec: Codable, Sendable, Equatable {
     }
 
     /// P1b·**执行引导**(注入正在执行的会话,让模型据结构化目标推进、别跑偏)。合并到既有 guidance 之上。
-    /// P2 补齐:有【待澄清】点时,明确指示**执行前先用 ask_user 问清关键的**(主动澄清,别凭空假设)。
+    /// **默认自洽范式(2026-06-27 修过度追问)**:有【待澄清】点时,**默认带合理假设直接做、把假设写进交付**,
+    /// 绝不为可默认的细节停下来 ask_user;只有【硬前提】(凭据/授权/付费/物理设备/不可逆危险)缺了才问。
     func executionGuidance(base: String?) -> String {
         var block = "【本次目标(已结构化理解,据此推进,别跑偏)】\n\(summary)"
         if !openQuestions.isEmpty {
-            block += "\n⚠️ 上面有【待澄清】点 → **执行前先用 ask_user 问清其中关键的**,别凭空假设后做错方向。"
+            block += "\n上面的【待澄清】点 → **绝大多数都能带合理默认直接做**(让用户在产物里自调、或挑个常见默认),做完把假设写进交付说明,**别停下来问**;**只有缺了就真做不动的硬前提(登录凭据/API授权/付费确认/物理设备/不可逆危险)才用 ask_user**。"
         }
         guard let b = base?.trimmingCharacters(in: .whitespacesAndNewlines), !b.isEmpty else { return block }
         return b + "\n\n" + block
