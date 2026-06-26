@@ -252,6 +252,9 @@ final class LingShuState: ObservableObject {
     /// **多 checker**(用户定调:可让两个 agent 同时当 checker):记录 id → 主 checker 之外的**额外 checker agent id 列表**。
     /// binding.checker 是第一个(供标注/异源判);这里存其余的,验收时全部独立跑、聚合裁决(全过才过)。
     var taskExtraCheckerAgentIDs: [String: [String]] = [:]
+    /// **续接继承**:上一次角色管线用的 agent + 任务,供「把刚才那个做完」这类延续沿用同样的 agent(不重置回灵枢)。
+    var lastPipelineAgents: [LingShuRoleAgentRef] = []
+    var lastPipelineTask: String = ""
     /// **派发队列区**(用户定调):主界面支持 3 并发,多出来的进**可见队列区等待**(不直接进主窗口/不派发);
     /// 有空位时自动晋级派发;晋级前可在队列区删除。见 LingShuState+DispatchQueue。
     @Published var queuedDispatchTasks: [LingShuQueuedDispatchTask] = []
@@ -1330,6 +1333,14 @@ final class LingShuState: ObservableObject {
                     appendTrace(kind: .route, actor: "主线程分诊", title: "前台交互任务", detail: "演示/讲解/答疑类任务留在主线程生成材料并转入托管,不进后台队列。")
                     _ = self.runMainAgentTurn(prompt: trimmedPrompt, taskRecordID: rid, existingBubbleID: placeholderID)
                     return
+                }
+                // **续接继承(用户定调:延续之前角色管线的任务,沿用同样的 agent,不重置回灵枢)**:
+                // 上次跑过角色管线(记下了用的 agent),且大脑判断这条是它的延续 → 沿用同 agent 再跑管线。
+                if !self.lastPipelineAgents.isEmpty, await self.isContinuationOfLastPipeline(prompt: trimmedPrompt) {
+                    let inherited = self.lastPipelineAgents.map { (id: $0.id, name: $0.name) }
+                    self.appendTrace(kind: .route, actor: "主线程分诊", title: "续接·沿用上次 agent",
+                                     detail: "延续上一个角色管线,沿用 " + inherited.map(\.name).joined(separator: "、"))
+                    if await self.runRolePipelineDispatch(task: trimmedPrompt, agents: inherited, existingBubbleID: placeholderID) { return }
                 }
                 // 主界面 task **串行**(同时只一条在执行);**满了进可见队列区等待**(不直接派发、可删除),前一条完成后自动晋级(用户定调)。
                 // **竞态修(2026-06-23,监工"信息池丢了"):**容量门改用**同步 MainActor 状态**(活跃派发气泡数 + 队列区数),

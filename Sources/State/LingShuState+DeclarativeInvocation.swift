@@ -110,33 +110,7 @@ extension LingShuState {
             self.isModelExecuting = true
             defer { self.isModelExecuting = false; self.drainSerialInputsIfIdle() }
             // **大脑先规划角色管线**(读现有角色 + agent,决定启用哪些角色、谁来干)。≥2 角色→走通用多角色管线;否则回退 maker/checker。
-            let steps = await self.planRolePipeline(task: fullPrompt, agents: agents)
-            if steps.count >= 2 {
-                let rid = self.createTaskExecutionRecord(for: fullPrompt)
-                // **注册成派发子线程(线程视图可见、可打开看执行记录)**:管线内联跑,但仍是一条隔离子线程——
-                // 进 agentSubTaskRecords(dispatchedRecordIDs 据此认),和正常派发任务一样发出指令即开好线程、处于执行中。
-                let subID = "pipe-\(rid.suffix(8))"
-                self.agentSubTaskRecords[subID] = rid
-                if self.goalSpecEnabled { self.bindGoalSpec(LingShuGoalSpec(objective: fullPrompt, kind: .task), to: rid) }
-                self.appendTaskRecordMessage(rid, actor: "灵枢", role: "派生子任务", kind: .router,
-                                             text: "派生角色管线子线程:" + steps.map { "\($0.roleTitle)(\($0.agentName ?? "灵枢"))" }.joined(separator: " → "))
-                let intake = "🔧 已规划角色管线:" + steps.map { "\($0.roleTitle)(\($0.agentName ?? "灵枢"))" }.joined(separator: " → ")
-                let bubble = ChatMessage(speaker: "灵枢", text: intake, isUser: false, isLoading: true, taskRecordID: rid)
-                self.chatMessages.append(bubble); let bid = bubble.id
-                self.dispatchedTaskBubbles[rid] = bid
-                let (result, passed) = await self.runRolePipeline(recordID: rid, task: fullPrompt, steps: steps)
-                self.agentSubTaskRecords[subID] = nil   // 收尾:解除映射
-                if let idx = self.chatMessages.firstIndex(where: { $0.id == bid }) {
-                    self.chatMessages[idx].text = intake
-                        + (passed ? "\n\n✅ 管线完成,评审通过、已交付。\n" : "\n\n⚠️ 评审未通过,已交还(未交付,需修正后重验)。\n")
-                        + String(result.suffix(500))
-                    self.chatMessages[idx].isLoading = false
-                }
-                // **LOOP 闭环:评审通过才记「已核验」交付;不过记「部分完成」,不假交付。**
-                self.finishTaskRecord(rid, status: passed ? .verified : .partial,
-                                      summary: (passed ? "角色管线评审通过:" : "角色管线评审未通过(部分完成):") + steps.map(\.roleTitle).joined(separator: "→"))
-                return
-            }
+            if await self.runRolePipelineDispatch(task: fullPrompt, agents: agents) { return }
             // 回退:无/单角色 → maker/checker 派发(大脑装配,失败用位置兜底)。
             let asm = await self.resolveAgentRoleAssembly(prompt: fullPrompt, agents: agents)
                 ?? (makerAgentID: agents.first!.id, makerName: agents.first!.name,
