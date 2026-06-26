@@ -39,6 +39,7 @@ extension LingShuState {
         }
         dispatchedTaskBubbles[rid] = bid
         appendTaskRecordMessage(rid, actor: "灵枢", role: "中枢", kind: .core, text: "收到。理解任务、规划角色管线中…")
+        openTaskRecord(rid)   // **发出即自动打开执行记录窗口**(用户要的「子线程直接开好、能看执行中」),不必再点「定位」
 
         let steps = await planRolePipeline(task: task, agents: agents)
         guard steps.count >= 2 else {
