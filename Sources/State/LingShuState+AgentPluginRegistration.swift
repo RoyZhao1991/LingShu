@@ -30,12 +30,31 @@ extension LingShuState {
                                             argsTemplate: args, role: role,
                                             subtitle: (obj["subtitle"] as? String) ?? "",
                                             icon: role == .maker ? "hammer.fill" : role == .checker ? "checkmark.seal.fill" : "cpu")
-            guard plugin.isAvailableNow else {
+            guard plugin.executableExists else {
                 return "没注册:找不到可执行文件「\(exe)」。确认路径对、文件可执行。"
             }
-            _ = LingShuAgentPluginStore.register(plugin)
-            await MainActor.run { self?.appendTrace(kind: .system, actor: "agent插件", title: "注册 agent", detail: "「\(name)」(\(role.rawValue))已入插件库,可 @\(name) 调用。") }
-            return "已把「\(name)」注册成 agent 插件(role=\(role.rawValue))。以后可 `@\(name) 目标` 声明式调用,或 run_agent 委托。"
+            // **注册时探活(2026-06-26 用户定调:加入前先验证真能用)**:不只看文件在,真跑一次验证——
+            // 如 claude 装了但没登录,文件在但用不了。探活不过则**登记但标记为不可用**(不静默当可用),并当场告知主人。
+            let wd = await MainActor.run { self?.agentWorkingDirectory ?? FileManager.default.homeDirectoryForCurrentUser.path }
+            let probe = await LingShuAgentPluginStore.probeAvailability(plugin, workingDirectory: wd)
+            var toRegister = plugin
+            if !probe.ok {
+                toRegister.available = false
+                toRegister.unavailableReason = probe.reason
+                toRegister.lastCheckedAt = Date()
+            } else {
+                toRegister.available = true
+                toRegister.lastCheckedAt = Date()
+            }
+            _ = LingShuAgentPluginStore.register(toRegister)
+            let okText = probe.ok ? "探活通过·可用" : "探活发现不可用:\(probe.reason)"
+            await MainActor.run { self?.appendTrace(kind: probe.ok ? .system : .warning, actor: "agent插件",
+                title: "注册 agent(\(probe.ok ? "可用" : "不可用"))", detail: "「\(name)」(\(role.rawValue))已入库,\(okText)。") }
+            if probe.ok {
+                return "已把「\(name)」注册成 agent 插件(role=\(role.rawValue),**探活通过·当前可用**)。可 `@\(name) 目标` 声明式调用,或 run_agent 委托。"
+            } else {
+                return "「\(name)」已登记,但**探活发现当前不可用:\(probe.reason)**——已标记为不可用,不会被 @/派活(避免用时才暴露)。请先恢复(如该 CLI 登录 / 补凭据)后,重新 `register_agent` 探活即可启用。"
+            }
         }
     }
 

@@ -16,12 +16,18 @@ struct LingShuAgentPlugin: Codable, Identifiable, Sendable, Equatable {
     var subtitle: String        // 插件库/「+」菜单里的一句说明
     var icon: String            // SF Symbol
     var timeoutSeconds: Int     // 单次执行软超时
+    // **持久可用状态**(2026-06-26):注册时探活、用时发现不可用都回写到这里。
+    // optional 是为了向后兼容旧 JSON(缺这些键时解码为 nil = 视为可用)。
+    var available: Bool?        // false=探活失败/用时发现不可用(登录失效/认证);nil 或 true=可用
+    var unavailableReason: String?  // 不可用原因(登录失效/缺凭据…),给主人看 + UI 标注
+    var lastCheckedAt: Date?   // 上次探活/状态更新时间
 
     enum Role: String, Codable, Sendable { case maker, checker, general }
 
     init(id: String, displayName: String, aliases: [String] = [], executable: String,
          argsTemplate: [String], role: Role = .general, subtitle: String = "", icon: String = "cpu",
-         timeoutSeconds: Int = 600) {
+         timeoutSeconds: Int = 600, available: Bool? = nil, unavailableReason: String? = nil,
+         lastCheckedAt: Date? = nil) {
         self.id = id
         self.displayName = displayName
         self.aliases = aliases
@@ -31,6 +37,9 @@ struct LingShuAgentPlugin: Codable, Identifiable, Sendable, Equatable {
         self.subtitle = subtitle
         self.icon = icon
         self.timeoutSeconds = timeoutSeconds
+        self.available = available
+        self.unavailableReason = unavailableReason
+        self.lastCheckedAt = lastCheckedAt
     }
 
     /// 全部可匹配别名(去重,含 displayName/id)。
@@ -46,8 +55,16 @@ struct LingShuAgentPlugin: Codable, Identifiable, Sendable, Equatable {
         argsTemplate.map { $0.replacingOccurrences(of: "{{objective}}", with: objective) }
     }
 
-    /// 该 agent 当前是否真可用(可执行文件在)。注册时校验、用前再核。
+    /// 该 agent 当前是否真可用:① 没被标记为不可用(`available != false`,即没在探活/使用时发现登录失效等)
+    /// ② 且可执行文件在。注册时探活、用前再核;登录失效这类「文件在但用不了」由持久状态 `available` 兜住。
     var isAvailableNow: Bool {
+        guard available != false else { return false }   // 已被标记不可用(登录失效/缺凭据)→ 不可用,别再 @ 它/派活
+        return FileManager.default.isExecutableFile(atPath: executable)
+            || LingShuAgentPlugin.resolveInPath(executable) != nil
+    }
+
+    /// 可执行文件是否在(不看登录状态)——探活/恢复可用时用(文件在才值得重新探活)。
+    var executableExists: Bool {
         FileManager.default.isExecutableFile(atPath: executable)
             || LingShuAgentPlugin.resolveInPath(executable) != nil
     }

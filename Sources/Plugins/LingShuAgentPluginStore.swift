@@ -42,6 +42,61 @@ enum LingShuAgentPluginStore {
         load(from: dir).first { $0.id == id }
     }
 
+    // MARK: 可用性(注册时探活 + 用时回写)
+
+    /// agent 输出/报错是否表明「文件在但用不了」=不可用(登录失效 / 缺凭据 / 未认证)。返回不可用原因,否则 nil。
+    /// 只认**明确的认证类信号**(不碰 "not found"/"unauthorized" 这种宽泛词,避免代码 agent 正常输出里误命中)。
+    nonisolated static func outputIndicatesUnavailable(_ text: String) -> String? {
+        let lower = text.lowercased()
+        let en: [(String, String)] = [
+            ("not logged in", "未登录"), ("please run /login", "需登录(/login)"), ("run /login", "需登录(/login)"),
+            ("please login", "需登录"), ("login required", "需登录"), ("not authenticated", "未认证"),
+            ("no api key", "缺 API Key"), ("missing api key", "缺 API Key"), ("invalid api key", "API Key 无效"),
+            ("api key required", "缺 API Key"), ("credit balance is too low", "额度不足"), ("quota exceeded", "额度用尽"),
+        ]
+        for (needle, reason) in en where lower.contains(needle) { return reason }
+        let zh: [(String, String)] = [
+            ("未登录", "未登录"), ("请先登录", "需登录"), ("登录已过期", "登录过期"), ("登录失效", "登录失效"),
+            ("认证失败", "认证失败"), ("授权已过期", "授权过期"), ("额度不足", "额度不足"), ("余额不足", "余额不足"),
+        ]
+        for (needle, reason) in zh where text.contains(needle) { return reason }
+        return nil
+    }
+
+    /// **注册时探活**:用极短超时跑一个无害 objective——登录/认证失败会很快返回(判不可用);
+    /// 真在干活会软超时(没被 auth 挡住 → 视为可用)。返回 (是否可用, 不可用原因)。
+    nonisolated static func probeAvailability(_ plugin: LingShuAgentPlugin, workingDirectory: String) async -> (ok: Bool, reason: String) {
+        guard plugin.executableExists else { return (false, "找不到可执行文件 \(plugin.executable)") }
+        var probe = plugin
+        probe.timeoutSeconds = 25   // 短超时:auth 失败秒回,在干活则超时=视为可用
+        switch await run(probe, objective: "只回复 READY,不要做其它任何事。", workingDirectory: workingDirectory) {
+        case .completed(let t):
+            if let reason = outputIndicatesUnavailable(t) { return (false, reason) }
+            return (true, "")
+        case .failure(let r):
+            if let reason = outputIndicatesUnavailable(r) { return (false, reason) }
+            if r.contains("软超时") { return (true, "") }            // 超时=在干活,没被 auth 挡 → 可用
+            if r.contains("找不到可执行文件") { return (false, "找不到可执行文件") }
+            return (false, r)
+        }
+    }
+
+    /// 把某 agent 标记为**不可用**(用时发现登录失效等回写;@/派活前 `isAvailableNow` 据此过滤)。
+    @discardableResult
+    nonisolated static func markUnavailable(id: String, reason: String, in dir: URL = directory) -> Bool {
+        guard var p = plugin(id: id, from: dir) else { return false }
+        p.available = false; p.unavailableReason = reason; p.lastCheckedAt = Date()
+        return register(p, into: dir)
+    }
+
+    /// 恢复某 agent 为**可用**(重新登录/探活通过后)。
+    @discardableResult
+    nonisolated static func markAvailable(id: String, in dir: URL = directory) -> Bool {
+        guard var p = plugin(id: id, from: dir) else { return false }
+        p.available = true; p.unavailableReason = nil; p.lastCheckedAt = Date()
+        return register(p, into: dir)
+    }
+
     // MARK: 统一执行(跑 CLI agent)
 
     /// 跑一个 agent 插件:把 objective 填进参数、执行 CLI、软超时内取 stdout。任何 agent 同一套。
@@ -105,6 +160,13 @@ enum LingShuAgentPluginStore {
                 let restErr = errH.readDataToEndOfFile(); if !restErr.isEmpty { buf.appendErr(restErr) }
                 let timedOut = timeoutBox.isSet
                 let text = buf.outString(); let errText = buf.errString()
+                // **可用性回写(2026-06-26)**:输出/报错含明确的登录/认证失败信号 → 这个 agent「文件在但用不了」。
+                // 把插件标记为不可用(下次 @/派活前 isAvailableNow 据此过滤),并把这次当失败返回——别把"未登录"当成功产出。
+                if !timedOut, let unavail = (outputIndicatesUnavailable(text) ?? outputIndicatesUnavailable(errText)) {
+                    markUnavailable(id: plugin.id, reason: unavail)
+                    cont.resume(returning: .failure("\(plugin.displayName) 当前不可用:\(unavail)。已标记该插件不可用,请先恢复(如登录/补凭据)再用。"))
+                    return
+                }
                 if timedOut { cont.resume(returning: .failure("\(plugin.displayName) 软超时(\(plugin.timeoutSeconds)s)")) }
                 else if proc.terminationStatus != 0 && text.isEmpty {
                     cont.resume(returning: .failure("\(plugin.displayName) 退出码 \(proc.terminationStatus):\(errText.isEmpty ? "无输出" : String(errText.prefix(300)))"))
