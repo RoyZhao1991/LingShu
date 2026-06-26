@@ -24,12 +24,11 @@ extension LingShuState {
             // - 默认(本地脑 maker)→ checker 用**独立 agent 会话** `runCheckerSession`(useCheckerSession),它自己读代码/跑测试独立验收;
             // - maker 是外部 agent(@Codex)→ checker 走 `runIndependentAgentCheckerIfNeeded`(另一个 agent 进程 / 异源审查员)。
             let binding = rid.flatMap { self.taskReviewBindings[$0] }
-            let makerIsExternal = binding?.maker.kind == .externalCLI
-            let checkerIsExternal = binding?.checker.kind == .externalCLI
-            // 独立 checker **GLM 会话**只在 maker/checker 都非外部(默认灵枢自建双角色)时用;
-            // 任一方是外部 agent(@Codex 当 maker 或当 checker)→ runIndependentAgentCheckerIfNeeded 接管。
+            let hasExternalRole = binding?.maker.kind == .externalCLI || binding?.checker.kind == .externalCLI
+            // **唯一 checker(消除双重验收)**:任一方是外部 agent → 由 runIndependentAgentCheckerIfNeeded 跑(agent checker),
+            // verifyAndContinue 跳过内部审查员;都本地(灵枢自建双角色)→ verifyAndContinue 用**独立 GLM checker 会话**。
             let verified = await self.verifyAndContinue(session: session, result: initial, userRequest: objective,
-                                                        taskRecordID: rid, useCheckerSession: !makerIsExternal && !checkerIsExternal)
+                                                        taskRecordID: rid, useCheckerSession: !hasExternalRole, skipReview: hasExternalRole)
             return await self.runIndependentAgentCheckerIfNeeded(recordID: rid, makerResult: verified, objective: objective)
         } }
     }

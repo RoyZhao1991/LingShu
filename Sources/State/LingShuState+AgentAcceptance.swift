@@ -20,7 +20,9 @@ extension LingShuState {
     /// 其回复一提到既有文件就被 `replyClaimsArtifact` 误触发验收 → maker 无新文件可改 → 空转停滞("讲解完处理中卡很久")。
     /// `useCheckerSession`:true 时 checker 用**独立 agent 会话**(`runCheckerSession`,maker≠checker 两条独立 session)
     /// 而非一次性复核调用。派发任务(默认本地脑 maker)由此满足「LOOP 必须有两个独立角色 session」。
-    func verifyAndContinue(session: any LingShuAgentSessioning, result initial: LingShuAgentRunResult, userRequest: String, taskRecordID: String?, artifactBaseline: Int = 0, trustReplyClaim: Bool = true, useCheckerSession: Bool = false) async -> LingShuAgentRunResult {
+    /// `skipReview`:true 时**跳过内部审查员复核**(只做撞顶恢复 + 完成闸)——派发任务的 checker 由外部统一接管
+    /// (agent checker 或独立 checker 会话),避免「内部审查员 + 外部 checker」双重验收。
+    func verifyAndContinue(session: any LingShuAgentSessioning, result initial: LingShuAgentRunResult, userRequest: String, taskRecordID: String?, artifactBaseline: Int = 0, trustReplyClaim: Bool = true, useCheckerSession: Bool = false, skipReview: Bool = false) async -> LingShuAgentRunResult {
         // **嵌套循环已自带逐阶段验收(maker≠checker)+ 大 LOOP 终验,外层别再重复验收(2026-06-19 修"任务完成后自发起'修正'流水线")**:
         // `.nested` 的会话内部每个任务阶段都过了 `driveNestedStageAcceptance`(=本函数,传内层 classic 会话);其聚合结果再被这里
         // 重复验收 → verifier 对聚合挑刺 → `session.resume(返工)` → 嵌套会话又规划一条全新"修正"流水线(实测主前台空发指令自发做事)。
@@ -29,7 +31,8 @@ extension LingShuState {
         // 撞顶恢复(执行恢复力核心):一段推进用满 per-run 安全天花板却还没收尾,**不是失败**——
         // 若任务确有在制品(已落产出物 / 动过工具),把它当检查点,补一段全新预算让它接着做完 / 把崩溃修到跑通。
         let result = await recoverFromExhaustionIfNeeded(session: session, result: initial, taskRecordID: taskRecordID)
-        let verified = await runVerificationLoop(session: session, result: result, userRequest: userRequest, taskRecordID: taskRecordID, artifactBaseline: artifactBaseline, trustReplyClaim: trustReplyClaim, useCheckerSession: useCheckerSession)
+        // skipReview:checker 由外部统一接管(agent / 独立 checker 会话)→ 这里不再跑内部审查员,避免双重验收。
+        let verified = skipReview ? result : await runVerificationLoop(session: session, result: result, userRequest: userRequest, taskRecordID: taskRecordID, artifactBaseline: artifactBaseline, trustReplyClaim: trustReplyClaim, useCheckerSession: useCheckerSession)
         // **收尾兜底(2026-06-21,清分系统实测根因)**:模型最后一步若是个静默 `run_command`(输出写进文件、stdout 为空),
         // 收尾回复会退化成「✓ run_command:（无输出，退出码 0）」——任务真做完了、产出物也在,却把"无输出"丢给用户。
         // 检测到这种占位收尾 + 任务确有产出物 → 用 `composeDeliveryMessage` 据产出物补一段像样的交付说明。

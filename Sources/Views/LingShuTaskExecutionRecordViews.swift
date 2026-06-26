@@ -57,7 +57,7 @@ struct TaskExecutionRecordSheet: View {
                         Text(record.status.rawValue)
                             .font(.system(size: 11, weight: .bold))
                             .foregroundStyle(record.status.color)
-                        Text("\(record.participants.count) 个参与方")
+                        Text("\(agentList(record).count) 个参与方")   // 与下方过滤 chip 同源(排除「你」+内部机制标签),不再头部5/下面4 对不上
                             .font(.system(size: 11, weight: .semibold))
                             .foregroundStyle(.white.opacity(0.52))
                         Text(record.updatedAt.taskRecordDisplayTime)

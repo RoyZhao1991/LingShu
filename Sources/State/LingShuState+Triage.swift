@@ -264,6 +264,12 @@ extension LingShuState {
         taskReviewBindings[taskRecordID] = binding
         if !extraCheckerAgentIDs.isEmpty { taskExtraCheckerAgentIDs[taskRecordID] = extraCheckerAgentIDs }   // 多 checker
         appendTrace(kind: .system, actor: "派发引擎", title: "maker / checker 绑定", detail: binding.label + (extraCheckerAgentIDs.isEmpty ? "" : " +\(extraCheckerAgentIDs.count) checker"))
+        // **统一给 maker 打标(灵枢当 maker 时也明确标 maker 角色,不再只显示「派生子任务/分析」让人看不出谁是 maker)**:
+        // agent 当 maker 由 run_agent 落「开发(maker)」标;灵枢当 maker 在这里补一条,让 LOOP 两角色从启动都可见。
+        if makerAgentID == nil {
+            appendTaskRecordMessage(taskRecordID, actor: "灵枢", role: "开发(maker)·上岗", kind: .agent,
+                                    text: "▶ 灵枢(maker)接手开发本任务;完成后由独立 checker 验收。")
+        }
         // 边做边想:派发的隔离子任务也要把模型每步动作前的旁白落进**这条任务自己的记录**——否则任务窗口
         // 只见工具调用、缺"运行时思考",看不出每步为什么这么做。记录 id 用本子任务的(主会话用 currentAgentTurnRecordID,
         // 这里不同);后台并行跑,不抢全局 missionStatus。
