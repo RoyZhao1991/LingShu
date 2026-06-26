@@ -255,6 +255,9 @@ final class LingShuState: ObservableObject {
     /// **续接继承**:上一次角色管线用的 agent + 任务,供「把刚才那个做完」这类延续沿用同样的 agent(不重置回灵枢)。
     var lastPipelineAgents: [LingShuRoleAgentRef] = []
     var lastPipelineTask: String = ""
+    /// **管线停止**:用户在任务窗口点停止时,把该管线 recordID 放进来;角色管线在每个角色边界检查 → 立即收口(管线内联跑,
+    /// 不是编排器任务,orchestrator.cancel 管不到它)。
+    var cancelledPipelineRecords: Set<String> = []
     /// **派发队列区**(用户定调):主界面支持 3 并发,多出来的进**可见队列区等待**(不直接进主窗口/不派发);
     /// 有空位时自动晋级派发;晋级前可在队列区删除。见 LingShuState+DispatchQueue。
     @Published var queuedDispatchTasks: [LingShuQueuedDispatchTask] = []

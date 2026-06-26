@@ -61,14 +61,17 @@ extension LingShuState {
         if let idx = chatMessages.firstIndex(where: { $0.id == bid }) { chatMessages[idx].text = intake }
         let (result, passed) = await runRolePipeline(recordID: rid, task: task, steps: steps)
         agentSubTaskRecords[subID] = nil
+        let wasCancelled = cancelledPipelineRecords.contains(rid)   // 用户中途点了停止
+        cancelledPipelineRecords.remove(rid)
         if let idx = chatMessages.firstIndex(where: { $0.id == bid }) {
-            chatMessages[idx].text = intake
-                + (passed ? "\n\n✅ 管线完成,评审通过、已交付。\n" : "\n\n⚠️ 评审未通过,已交还(未交付,需修正后重验)。\n")
-                + String(result.suffix(500))
+            chatMessages[idx].text = intake + (wasCancelled ? "\n\n⏹ 已停止。"
+                : (passed ? "\n\n✅ 管线完成,评审通过、已交付。\n" : "\n\n⚠️ 评审未通过,已交还(未交付,需修正后重验)。\n") + String(result.suffix(500)))
             chatMessages[idx].isLoading = false
         }
-        finishTaskRecord(rid, status: passed ? .verified : .partial,
-                         summary: (passed ? "角色管线评审通过:" : "角色管线评审未通过(部分完成):") + steps.map(\.roleTitle).joined(separator: "→"))
+        if !wasCancelled {   // 被停止的已由 stopDispatchedTask 标 .failed,别再覆盖成 verified/partial
+            finishTaskRecord(rid, status: passed ? .verified : .partial,
+                             summary: (passed ? "角色管线评审通过:" : "角色管线评审未通过(部分完成):") + steps.map(\.roleTitle).joined(separator: "→"))
+        }
         return true
     }
 
@@ -169,7 +172,7 @@ extension LingShuState {
 
         // 1) 建设角色按序跑一遍。
         for (i, step) in builders.enumerated() {
-            if Task.isCancelled || batchInterruptRequested { break }
+            if Task.isCancelled || batchInterruptRequested || cancelledPipelineRecords.contains(rid) { break }
             let o = await runRole(step, tag: "上岗(第\(i + 1)环)", extra: "")
             appendTaskRecordMessage(rid, actor: step.agentName ?? "灵枢", role: "\(step.roleTitle)·产出", kind: .result, text: String(o.prefix(1500)))
             prior += "\n【\(step.roleTitle)·\(step.agentName ?? "灵枢")】\n\(o.prefix(1500))"
@@ -180,7 +183,7 @@ extension LingShuState {
         // 2) 评审官把关 → 不过退回最后一个建设角色返工 → 再验(有界 2 轮)。**通过才交付,这是 LOOP 闭环。**
         let maxRounds = 2
         for round in 0..<maxRounds {
-            if Task.isCancelled || batchInterruptRequested { break }
+            if Task.isCancelled || batchInterruptRequested || cancelledPipelineRecords.contains(rid) { break }
             var fails: [String] = []
             for rev in reviewers {
                 let v = await runRole(rev, tag: "验收(第\(round + 1)轮)", extra: "你是把关方,独立核验前序产出是否达成目标(读代码/跑测试/运行)。**结论第一行只写「通过」或「不通过」**,其后列问题。")

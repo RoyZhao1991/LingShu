@@ -13,7 +13,9 @@ enum LingShuTaskMessageFormatting {
             out = "（已发起工具调用）"
         }
         // ① 模型名泄露 → 统一抹成"灵枢"(身份只有灵枢)。
-        let leaks = ["MiniMax AI", "MiniMax", "minimax", "通义千问", "Qwen", "qwen", "GPT-4", "GPT", "ChatGPT", "Claude", "DeepSeek", "deepseek"]
+        // 注:**不剥 Claude/Codex**——它们是**注册的 agent(认知外设)**,在任务里是合法的命名参与方/用户 @ 的对象,
+        // 不是要隐藏的「底层大脑模型」;之前误剥导致「用户的 @Claude 被改成 @灵枢」。
+        let leaks = ["MiniMax AI", "MiniMax", "minimax", "通义千问", "Qwen", "qwen", "GPT-4", "GPT", "ChatGPT", "DeepSeek", "deepseek"]
         for leak in leaks { out = out.replacingOccurrences(of: leak, with: "灵枢") }
         return out
     }
