@@ -29,7 +29,6 @@ extension LingShuState {
         let rid = createTaskExecutionRecord(for: task)
         let subID = "pipe-\(rid.suffix(8))"
         agentSubTaskRecords[subID] = rid
-        if goalSpecEnabled { bindGoalSpec(LingShuGoalSpec(objective: task, kind: .task), to: rid) }
         let bid: UUID
         if let existingBubbleID, let idx = chatMessages.firstIndex(where: { $0.id == existingBubbleID }) {
             chatMessages[idx].text = "🔧 正在理解任务、规划角色…"; chatMessages[idx].isLoading = true; chatMessages[idx].taskRecordID = rid; bid = existingBubbleID
@@ -40,6 +39,9 @@ extension LingShuState {
         dispatchedTaskBubbles[rid] = bid
         appendTaskRecordMessage(rid, actor: "灵枢", role: "中枢", kind: .core, text: "收到。理解任务、规划角色管线中…")
         openTaskRecord(rid)   // **发出即自动打开执行记录窗口**(用户要的「子线程直接开好、能看执行中」),不必再点「定位」
+        // **真目标认知**:用 deriveGoalSpec 让大脑把请求**提炼成精炼目标 + 逐条可验收成功标准**(不是把原话照抄进去),
+        // 供执行引导 + 评审官据此逐条核验。放窗口打开之后:先弹窗、再填目标认知。
+        if goalSpecEnabled, let spec = await deriveGoalSpec(for: task, taskRecordID: rid) { bindGoalSpec(spec, to: rid) }
 
         let steps = await planRolePipeline(task: task, agents: agents)
         guard steps.count >= 2 else {
@@ -131,6 +133,7 @@ extension LingShuState {
         let builders = steps.filter { $0.roleID != reviewerID }       // 建设角色(架构/开发…)
         let reviewers = steps.filter { $0.roleID == reviewerID }      // 评审官(可多个)
         var prior = ""
+        let goalCriteria = goalSpec(for: rid)?.acceptanceCriteriaBlock ?? ""   // 提炼出的逐条成功标准,注入每个角色(尤其评审官据此核验)
         appendTrace(kind: .route, actor: "角色规划", title: "多角色管线(\(steps.count) 环)",
                     detail: steps.map { "\($0.roleTitle)=\($0.agentName ?? "灵枢")" }.joined(separator: " → "))
 
@@ -141,6 +144,7 @@ extension LingShuState {
             你在本任务里担任角色:**\(step.roleTitle)**。
             \(rolePrompt)
             你这一环的子任务:\(step.subtask)
+            \(goalCriteria.isEmpty ? "" : "本任务的成功标准(逐条对齐、别漏):\n\(goalCriteria)")
             \(extra)
             \(prior.isEmpty ? "" : "前序角色的产出(承接它往下做,别推翻重来):\n\(prior.prefix(2500))")
             产物落到当前工作目录;最后用一句话交代你这一环的结论 / 产出。
