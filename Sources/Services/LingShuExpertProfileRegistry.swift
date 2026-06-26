@@ -63,22 +63,11 @@ protocol LingShuExpertProfileProviding: Sendable {
 
 /// 默认专家注册表：内置项目经理/产品经理/架构师/设计总监/工程执行五类专家 + 评审官。
 struct LingShuExpertProfileRegistry: LingShuExpertProfileProviding {
-    /// 按任务文本选择最合适的专家档案；无明显信号时回退工程执行专家。
+    /// 专家档案选择。**关键词表已退役(审计 #5,2026-06-26)**:角色/专家选择由 `planRolePipeline`(大脑读 `allProfiles`
+    /// + CapabilityGraph + GoalSpec 语义判断)接管,不再靠 `[架构/PRD/排期/PPT…]→某专家` 这种关键词级联做语义判断。
+    /// 这里只保留默认档(工程执行)供 apply_skill 等遗留调用方兜底;要按任务挑专家请走 planRolePipeline。
+    /// 用户/策展 skill 的匹配在 `LingShuCompositeExpertRegistry` 单独处理,不受此影响。
     func profile(for taskText: String) -> LingShuExpertProfile {
-        let normalized = taskText.lowercased()
-
-        if ["架构", "技术选型", "系统设计", "微服务", "高可用", "技术方案"].contains(where: normalized.contains) {
-            return Self.architect
-        }
-        if ["产品", "需求文档", "prd", "用户故事", "功能列表", "竞品"].contains(where: normalized.contains) {
-            return Self.productManager
-        }
-        if ["项目", "排期", "里程碑", "风险", "资源计划", "项目分析", "复盘"].contains(where: normalized.contains) {
-            return Self.projectManager
-        }
-        if ["ppt", "演示", "幻灯", "设计稿", "视觉", "版式", "海报", "汇报材料"].contains(where: normalized.contains) {
-            return Self.designDirector
-        }
         return Self.engineer
     }
 
