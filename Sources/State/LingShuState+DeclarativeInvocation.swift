@@ -118,12 +118,16 @@ extension LingShuState {
                 let bubble = ChatMessage(speaker: "灵枢", text: intake, isUser: false, isLoading: true, taskRecordID: rid)
                 self.chatMessages.append(bubble); let bid = bubble.id
                 self.dispatchedTaskBubbles[rid] = bid
-                let result = await self.runRolePipeline(recordID: rid, task: fullPrompt, steps: steps)
+                let (result, passed) = await self.runRolePipeline(recordID: rid, task: fullPrompt, steps: steps)
                 if let idx = self.chatMessages.firstIndex(where: { $0.id == bid }) {
-                    self.chatMessages[idx].text = intake + "\n\n✅ 管线完成。\n" + String(result.suffix(500))
+                    self.chatMessages[idx].text = intake
+                        + (passed ? "\n\n✅ 管线完成,评审通过、已交付。\n" : "\n\n⚠️ 评审未通过,已交还(未交付,需修正后重验)。\n")
+                        + String(result.suffix(500))
                     self.chatMessages[idx].isLoading = false
                 }
-                self.finishTaskRecord(rid, status: .completed, summary: "角色管线完成:" + steps.map(\.roleTitle).joined(separator: "→"))
+                // **LOOP 闭环:评审通过才记「已核验」交付;不过记「部分完成」,不假交付。**
+                self.finishTaskRecord(rid, status: passed ? .verified : .partial,
+                                      summary: (passed ? "角色管线评审通过:" : "角色管线评审未通过(部分完成):") + steps.map(\.roleTitle).joined(separator: "→"))
                 return
             }
             // 回退:无/单角色 → maker/checker 派发(大脑装配,失败用位置兜底)。
