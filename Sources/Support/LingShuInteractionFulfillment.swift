@@ -28,11 +28,12 @@ enum LingShuInteractionFulfillment {
     nonisolated static func requiresLiveInteraction(_ text: String) -> Bool {
         let value = text.lowercased()
         guard !value.isEmpty, !forbidsManagedInteraction(value) else { return false }
+        // **审计 #1(2026-06-26):只保留「显式控制命令」做确定性保险丝**(用户明确要进占屏/托管放映)——
+        // 这类是用户的显式指令,确定性直达合理。**领域/含糊词(汇报/讲解/答疑/带我看/路演/demo…)已移除**:
+        // 它们只是「上下文信号」,不该硬决定流程,交给大脑(看 prompt + GoalSpec,需要时自己调 enter_managed_mode)判。
         let liveSignals = [
-            "开始演示", "全屏演示", "进入演示", "放映", "占屏", "自主模式", "托管模式",
-            "替我汇报", "自己汇报", "完整汇报", "现场汇报", "现场答疑", "答辩",
-            "路演", "讲解", "讲给", "带我看", "带着我看", "主持", "全自动播放",
-            "present", "presentation", "slideshow", "walk me through", "demo"
+            "开始演示", "全屏演示", "进入演示", "放映", "占屏", "自主模式", "托管模式", "全自动播放",
+            "present", "presentation", "slideshow"
         ]
         return liveSignals.contains { value.contains($0.lowercased()) }
     }
