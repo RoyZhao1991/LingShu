@@ -116,7 +116,9 @@ extension LingShuState {
         var contentBlock = ""
         var visualBlock = "版式视觉评审:未启用(无渲染器或视觉通道)"
         if let primary = realFiles.first(where: { ["pptx", "docx", "html", "md", "pdf", "csv", "txt"].contains(($0 as NSString).pathExtension.lowercased()) }) {
-            let text = await extractArtifactContent(path: primary)
+            // **正文截断(根因修:整份 40KB+ 塞进 prompt → 调用又大又慢 → 18s 超时)**:事实核查取节选即可
+            // (确定性正确性由代码门/VL 看图把关,验收脑不必读完整份);截到 8000 字,既够核查又不拖超时。
+            let text = String(await extractArtifactContent(path: primary).prefix(8000))
             if !text.isEmpty { contentBlock = "\n【产出物正文(节选,供事实核查)】\n\(text)\n" }
             if let visual = await visuallyReviewArtifact(path: primary) {
                 visualBlock = "版式视觉评审(VL 看图,逐页):\n\(visual)"

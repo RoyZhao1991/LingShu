@@ -16,7 +16,9 @@ enum LingShuControlPlaneRole: String, Sendable {
         case .triage: return 6
         case .goalSpec, .capabilityRequirement, .acceptancePlanner: return 8
         case .gapAnalysis: return 10
-        case .deliveryReview: return 18
+        // 验收要处理大产物正文 + VL 看图审版式,18s 对 40KB+ 的 HTML/代码太短(健康模型也被拖超时 → 误判通道故障)。
+        // 抬到 90s(配合正文截断),既不超时也不空等。
+        case .deliveryReview: return 90
         case .deliveryComposer: return 8
         }
     }
