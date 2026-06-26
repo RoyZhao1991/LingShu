@@ -1300,6 +1300,16 @@ final class LingShuState: ObservableObject {
                 self.bindCapabilityRequirements(reqs, to: rid)
                 return rid
             }
+            // **内核校验闸门(图里 D)**:吃结构化决策,低置信/脑失败 → 追问(chat/task 一视同仁),不进 kind 扇出;
+            // 其余落到下面的 kind-switch 当「执行」分支。决策重心从 triage.kind 收拢到闸门(reply 走自身兜底,闸门放行)。
+            if case .clarify(let directive) = self.kernelGate(triage, goalSpec: goalSpec) {
+                self.appendTrace(kind: .route, actor: "内核校验闸门",
+                                 title: triage.brainFailed ? "分诊未果·转追问" : "低置信·转追问",
+                                 detail: "意图不明确,先与用户确认再决定,不静默当闲聊、也不擅自开跑。")
+                _ = self.runMainAgentTurn(prompt: trimmedPrompt + "\n\n" + directive,
+                                          taskRecordID: newRecordBoundToGoal(.question, nil), existingBubbleID: placeholderID)
+                return
+            }
             switch triage.kind {
             case .reply:
                 // 只续接**仍在进行/等待**的派发任务。已完成(completed)/已直答(answered)的任务不该被"回复"再续跑——
@@ -1361,16 +1371,8 @@ final class LingShuState: ObservableObject {
                     self.dispatchIsolatedTask(prompt: trimmedPrompt, taskRecordID: newRecordBoundToGoal(.task, triage.goal), goal: triage.goal, existingBubbleID: placeholderID)
                 }
             case .chat:
-                // **内核校验闸门**:低置信/脑失败 → 注入追问指令(主回合先与用户确认意图,不静默当闲聊吞掉);
-                // 高置信闲聊 → directive 为 nil,原样直答,不受影响。
-                let clarify = self.kernelGateClarifyDirective(triage)
-                if clarify != nil {
-                    self.appendTrace(kind: .route, actor: "内核校验闸门",
-                                     title: triage.brainFailed ? "分诊未果·转追问" : "低置信·转追问",
-                                     detail: "意图不明确,主回合先与用户确认,不静默当闲聊。")
-                }
-                let chatPrompt = clarify.map { trimmedPrompt + "\n\n" + $0 } ?? trimmedPrompt
-                _ = self.runMainAgentTurn(prompt: chatPrompt, taskRecordID: newRecordBoundToGoal(.question, nil), existingBubbleID: placeholderID)
+                // 高置信闲聊:直答(低置信/脑失败已在上面的内核闸门转追问,不会走到这里)。
+                _ = self.runMainAgentTurn(prompt: trimmedPrompt, taskRecordID: newRecordBoundToGoal(.question, nil), existingBubbleID: placeholderID)
             }
         }
         return ""

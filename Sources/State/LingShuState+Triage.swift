@@ -130,6 +130,23 @@ extension LingShuState {
         return nil
     }
 
+    /// 内核闸门的处置结果(图里 D 扇出的方向)。
+    enum GateOutcome: Equatable {
+        case execute              // 高置信 + 合规 → 照常按 kind 扇出执行
+        case clarify(String)      // 低置信 / 脑失败 → 追问指令(先与用户确认意图,别猜)
+    }
+
+    /// **内核校验闸门(图里 D)**:吃〈分诊决策 + 结构化结果〉,统一决定走执行还是追问——
+    /// 决策重心从 triage.kind 收拢到这里(kind 退化为 execute 分支内部的扇出依据)。
+    /// 低置信/脑失败 → clarify(对 **chat 和 task 一视同仁**,不再只拦 chat);其余 → execute。
+    /// reply 走自身的活跃线程兜底,不在此追问。注:危险/不可逆的权限确认(图里 G)当前仍在工具执行时拦,
+    /// 后续把危险评估上提到此闸门(goalSpec 预留给那一步用)。
+    func kernelGate(_ d: DispatchDecision, goalSpec: LingShuGoalSpec?) -> GateOutcome {
+        if d.kind == .reply { return .execute }
+        if let directive = kernelGateClarifyDirective(d) { return .clarify(directive) }
+        return .execute
+    }
+
     /// 是否是明确的执行请求。这里保持**通用范式**:不识别具体平台,只识别动作结构。
     /// 目标是拦住"把/请/帮我 + 动作 + 对象"、路径/产出物/外设/外部系统操作等清晰任务,
     /// 同时放过"什么是/解释/为什么"这类纯问答。
