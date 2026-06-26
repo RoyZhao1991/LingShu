@@ -5,6 +5,7 @@ import SwiftUI
 struct LingShuPluginListPanel: View {
     @ObservedObject var state: LingShuState
     @State private var agents: [LingShuAgentPlugin] = []
+    @State private var rechecking: Set<String> = []   // 正在重新探活的 agent id
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -19,10 +20,13 @@ struct LingShuPluginListPanel: View {
             } else {
                 ForEach(agents) { a in
                     row(name: a.displayName, badge: "agent", badgeColor: .lingHolo,
-                        detail: a.executable, available: a.isAvailableNow) {
-                        LingShuAgentPluginStore.unregister(id: a.id)
-                        reload()
-                    }
+                        detail: a.executable, available: a.isAvailableNow,
+                        rechecking: rechecking.contains(a.id),
+                        onRecheck: a.isAvailableNow ? nil : { recheck(a) },
+                        onRemove: {
+                            LingShuAgentPluginStore.unregister(id: a.id)
+                            reload()
+                        })
                 }
             }
 
@@ -31,7 +35,8 @@ struct LingShuPluginListPanel: View {
             // ── 内置插件 / 技能
             groupTitle("内置插件 / 技能", "随灵枢出厂或学会的能力,@名字 直接调")
             ForEach(state.invocablePlugins().filter { $0.kind == .plugin }) { p in
-                row(name: p.displayName, badge: nil, badgeColor: .clear, detail: p.subtitle, available: true, onRemove: nil)
+                row(name: p.displayName, badge: nil, badgeColor: .clear, detail: p.subtitle, available: true,
+                    rechecking: false, onRecheck: nil, onRemove: nil)
             }
         }
         .onAppear { reload() }
@@ -53,7 +58,8 @@ struct LingShuPluginListPanel: View {
     }
 
     @ViewBuilder private func row(name: String, badge: String?, badgeColor: Color, detail: String,
-                                  available: Bool, onRemove: (() -> Void)?) -> some View {
+                                  available: Bool, rechecking: Bool = false,
+                                  onRecheck: (() -> Void)? = nil, onRemove: (() -> Void)?) -> some View {
         HStack(spacing: 10) {
             Circle().fill(available ? Color.green : Color.red.opacity(0.7)).frame(width: 8, height: 8)
             Text("@\(name)").font(.system(size: 13, weight: .semibold)).foregroundStyle(.white)
@@ -65,6 +71,20 @@ struct LingShuPluginListPanel: View {
             Text(detail).font(.system(size: 11)).foregroundStyle(.white.opacity(0.5)).lineLimit(1).truncationMode(.middle)
             Spacer(minLength: 8)
             if !available { Text("不可用").font(.system(size: 10)).foregroundStyle(.red.opacity(0.8)) }
+            // 不可用 → 给「重新检测」按钮:重跑探活(登录/补凭据后点一下即恢复可用)。
+            if let onRecheck {
+                Button(action: onRecheck) {
+                    HStack(spacing: 3) {
+                        if rechecking { ProgressView().controlSize(.mini) }
+                        else { Image(systemName: "arrow.clockwise").font(.system(size: 10, weight: .bold)) }
+                        Text(rechecking ? "检测中…" : "重新检测").font(.system(size: 10, weight: .semibold))
+                    }
+                    .padding(.horizontal, 8).padding(.vertical, 3)
+                    .background(Color.lingHolo.opacity(0.16), in: Capsule())
+                    .foregroundStyle(Color.lingHolo)
+                }
+                .buttonStyle(.plain).disabled(rechecking).help("重新探活这个 agent 是否可用")
+            }
             if let onRemove {
                 Button(action: onRemove) { Image(systemName: "trash").font(.system(size: 12)) }
                     .buttonStyle(.plain).foregroundStyle(.white.opacity(0.5))
@@ -73,5 +93,23 @@ struct LingShuPluginListPanel: View {
         }
         .padding(.horizontal, 12).padding(.vertical, 9)
         .background(Color.white.opacity(0.04), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+
+    /// 重新探活一个 agent:跑 probeAvailability(短超时实跑一次,检测登录/认证),通过→标可用,否则→保持不可用 + 原因。
+    private func recheck(_ plugin: LingShuAgentPlugin) {
+        rechecking.insert(plugin.id)
+        let wd = state.agentWorkingDirectory
+        Task {
+            let result = await LingShuAgentPluginStore.probeAvailability(plugin, workingDirectory: wd)
+            await MainActor.run {
+                if result.ok { _ = LingShuAgentPluginStore.markAvailable(id: plugin.id) }
+                else { _ = LingShuAgentPluginStore.markUnavailable(id: plugin.id, reason: result.reason) }
+                rechecking.remove(plugin.id)
+                reload()
+                state.appendTrace(kind: result.ok ? .result : .warning, actor: "插件",
+                                  title: "重新探活·\(plugin.displayName)",
+                                  detail: result.ok ? "恢复可用" : "仍不可用:\(result.reason)")
+            }
+        }
     }
 }
