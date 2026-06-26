@@ -130,6 +130,7 @@ enum LingShuAgentPluginStore {
                 // 增量读 + 累计尾部喂进度:stdout/stderr 任一来块就把"累计输出的尾部"推给 progress(看得到在干活)。
                 // 用 @unchecked Sendable 缓冲类:`readabilityHandler` 是 @Sendable 闭包,不能直接改捕获的 var,经此类锁保护。
                 let buf = OutputBuffer()
+                let clock = ActivityClock()   // 滚动空闲计时:每次有输出就 touch;空闲(连续无输出)超 timeout 才判卡死
                 let emit: @Sendable () -> Void = {
                     guard let progress else { return }
                     let tail = String(buf.combined().suffix(800)).trimmingCharacters(in: .whitespacesAndNewlines)
@@ -138,22 +139,30 @@ enum LingShuAgentPluginStore {
                 outH.readabilityHandler = { h in
                     let d = h.availableData
                     guard !d.isEmpty else { return }
-                    buf.appendOut(d); emit()
+                    buf.appendOut(d); clock.touch(); emit()
                 }
                 errH.readabilityHandler = { h in
                     let d = h.availableData
                     guard !d.isEmpty else { return }
-                    buf.appendErr(d); emit()
+                    buf.appendErr(d); clock.touch(); emit()
                 }
                 do { try proc.run() } catch {
                     outH.readabilityHandler = nil; errH.readabilityHandler = nil
                     cont.resume(returning: .failure("启动 \(plugin.displayName) 失败:\(error.localizedDescription)")); return
                 }
                 let timeoutBox = TimeoutFlag()
-                let timeoutItem = DispatchWorkItem { if proc.isRunning { timeoutBox.set(); proc.terminate() } }
-                DispatchQueue.global().asyncAfter(deadline: .now() + timeout, execute: timeoutItem)
+                // **滚动空闲超时(2026-06-26,用户定调:只要还在动就不该超时)**:timeout 不是绝对墙钟上限,而是「空闲窗口」——
+                // 每 15s 巡检一次,只有连续 timeout 秒(默认600=10分钟)一个字都没吐(真卡死)才 terminate;
+                // agent 还在流式吐输出 → clock 持续刷新 → idle 归零 → 永不误杀正在干活的大工程。
+                let idleTimer = DispatchSource.makeTimerSource(queue: DispatchQueue.global())
+                idleTimer.schedule(deadline: .now() + 15, repeating: 15)
+                idleTimer.setEventHandler {
+                    guard proc.isRunning else { return }
+                    if clock.idleSeconds() >= timeout { timeoutBox.set(); proc.terminate(); idleTimer.cancel() }
+                }
+                idleTimer.resume()
                 proc.waitUntilExit()
-                timeoutItem.cancel()
+                idleTimer.cancel()
                 outH.readabilityHandler = nil; errH.readabilityHandler = nil
                 // 收尾把残余缓冲读干净(handler 置 nil 后可能还有最后一块)。
                 let restOut = outH.readDataToEndOfFile(); if !restOut.isEmpty { buf.appendOut(restOut) }
@@ -167,7 +176,7 @@ enum LingShuAgentPluginStore {
                     cont.resume(returning: .failure("\(plugin.displayName) 当前不可用:\(unavail)。已标记该插件不可用,请先恢复(如登录/补凭据)再用。"))
                     return
                 }
-                if timedOut { cont.resume(returning: .failure("\(plugin.displayName) 软超时(\(plugin.timeoutSeconds)s)")) }
+                if timedOut { cont.resume(returning: .failure("\(plugin.displayName) 软超时(连续\(plugin.timeoutSeconds)s无输出,疑似卡死)")) }
                 else if proc.terminationStatus != 0 && text.isEmpty {
                     cont.resume(returning: .failure("\(plugin.displayName) 退出码 \(proc.terminationStatus):\(errText.isEmpty ? "无输出" : String(errText.prefix(300)))"))
                 } else {
@@ -204,4 +213,13 @@ private final class TimeoutFlag: @unchecked Sendable {
     private var flag = false
     func set() { lock.lock(); flag = true; lock.unlock() }
     var isSet: Bool { lock.lock(); defer { lock.unlock() }; return flag }
+}
+
+/// 线程安全的「最后活动时刻」计时器:每次子进程有输出就 `touch()`,巡检线程读 `idleSeconds()` 判空闲。
+/// 滚动空闲超时用——只要 agent 还在吐输出,idle 归零,永不误杀;真卡死(连续无输出)才到顶。
+private final class ActivityClock: @unchecked Sendable {
+    private let lock = NSLock()
+    private var last = Date()
+    func touch() { lock.lock(); last = Date(); lock.unlock() }
+    func idleSeconds() -> TimeInterval { lock.lock(); defer { lock.unlock() }; return Date().timeIntervalSince(last) }
 }
