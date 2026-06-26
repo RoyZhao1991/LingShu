@@ -114,6 +114,8 @@ enum LingShuAgentPluginStore {
         }
         let args = plugin.resolvedArguments(objective: objective)
         let timeout = TimeInterval(plugin.timeoutSeconds)
+        // stream-json 调用(claude 等):中间事件要解析成人能读的过程摘要 + 最终从 result 字段提取(不写死 agent,看 argsTemplate)。
+        let isStream = LingShuAgentStreamParser.isStreamJSON(plugin.argsTemplate)
         return await withCheckedContinuation { (cont: CheckedContinuation<AgentRunResult, Never>) in
             DispatchQueue.global(qos: .userInitiated).async {
                 let proc = Process()
@@ -133,7 +135,11 @@ enum LingShuAgentPluginStore {
                 let clock = ActivityClock()   // 滚动空闲计时:每次有输出就 touch;空闲(连续无输出)超 timeout 才判卡死
                 let emit: @Sendable () -> Void = {
                     guard let progress else { return }
-                    let tail = String(buf.combined().suffix(800)).trimmingCharacters(in: .whitespacesAndNewlines)
+                    let combined = buf.combined()
+                    // stream-json:把 NDJSON 事件提炼成"🔧 工具 / 每轮摘要"(像 codex 看得到中间过程);text:直接喂尾部。
+                    let tail = isStream
+                        ? LingShuAgentStreamParser.progressSummary(fromStreamJSON: combined)
+                        : String(combined.suffix(800)).trimmingCharacters(in: .whitespacesAndNewlines)
                     if !tail.isEmpty { progress(tail) }
                 }
                 outH.readabilityHandler = { h in
@@ -180,7 +186,9 @@ enum LingShuAgentPluginStore {
                 else if proc.terminationStatus != 0 && text.isEmpty {
                     cont.resume(returning: .failure("\(plugin.displayName) 退出码 \(proc.terminationStatus):\(errText.isEmpty ? "无输出" : String(errText.prefix(300)))"))
                 } else {
-                    cont.resume(returning: .completed(text.isEmpty ? errText : text))
+                    // stream-json:最终交付从 result 字段提取(否则返回的是一坨 NDJSON);text:原样。
+                    let deliverable = isStream ? LingShuAgentStreamParser.finalText(fromStreamJSON: text) : text
+                    cont.resume(returning: .completed(deliverable.isEmpty ? errText : deliverable))
                 }
             }
         }
