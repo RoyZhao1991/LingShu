@@ -1127,20 +1127,28 @@ final class LingShuState: ObservableObject {
     /// UI sendPrompt 与 MCP `lingshu_send_prompt` 共用——修"MCP 发送时附件没一并带出"的 bug。
     @discardableResult
     func submitTextWithAttachments(_ text: String, source: LingShuDialogueInputSource) -> String {
-        let attachmentContext = attachmentContextBlock()
         let userText = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !attachmentContext.isEmpty else {
+        guard !pendingAttachments.isEmpty else {
             return submitTextInput(userText, source: source)
         }
-        // 有附件时：用户消息原文照常入库展示，但发给模型的提示前置附件正文上下文。
-        let combined = userText.isEmpty
-            ? "\(attachmentContext)\n\n请按上述文件落地交付。"
-            : "\(attachmentContext)\n\n用户指令：\n\(userText)"
-        // 把随发的附件名挂到这条用户消息上(气泡里展示),再清空托盘。
+        // **结构化输入 {message: userText, files: attachedPaths}(2026-06-27 用户定调)**:附件路径随消息带出
+        // (不只把正文折进 prompt、不丢路径)。把随发的附件名挂到这条用户消息上(气泡里展示)。
+        let attachedPaths = pendingAttachments.compactMap { $0.localURL?.path }
         let names = pendingAttachments.map(\.filename)
         let displayText = userText.isEmpty ? "已上传 \(names.count) 个文件" : userText
         chatMessages.append(.init(speaker: "你", text: displayText, isUser: true, attachmentNames: names))
+        // **演示路由直接用结构化输入**:演示意图(看 userText)+ 附件里有可演示文档 → 直接全屏演示(不折正文、不进大脑)。
+        // 附件是输入的一部分,不是侧信道、不是特例分支——根治"讲解一下附件中的PPT"不进演示。
+        if handlePresentationStartIfNeeded(userText, attachedFiles: attachedPaths, appendUserMessage: false) {
+            clearAttachments()
+            return ""
+        }
+        // 否则:附件正文折入提示发给大脑(原行为;attachmentContextBlock 必须在 clear 之前读)。
+        let attachmentContext = attachmentContextBlock()
         clearAttachments()
+        let combined = attachmentContext.isEmpty ? userText
+            : (userText.isEmpty ? "\(attachmentContext)\n\n请按上述文件落地交付。"
+                                : "\(attachmentContext)\n\n用户指令：\n\(userText)")
         return submitTextInput(combined, source: source, appendUserMessage: false)
     }
 

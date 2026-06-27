@@ -119,19 +119,19 @@ extension LingShuState {
     /// **确定性路由(实测必需)**:识别「演示/讲解 + 文档路径」的请求,**直接走 present_documents 插件**,
     /// 不靠模型选工具——实测 GLM/DeepSeek 等会习惯性用旧的 open_preview+speak 手搓路径、不碰新插件(工具建了也白搭)。
     /// 返回 true=已直接路由,submitTextInput 不再走常规分诊。
-    func handlePresentationStartIfNeeded(_ prompt: String) -> Bool {
+    func handlePresentationStartIfNeeded(_ prompt: String, attachedFiles: [String] = [], appendUserMessage: Bool = true) -> Bool {
         guard !presentationController.isActive else { return false }   // 已在演示 → 交给答疑路由
-        // 文字里带路径 → 用文字路径;**否则有演示意图 + 附件是可演示文档 → 用附件路径**。
-        // 根治(2026-06-27):用户"讲解一下附件中的PPT"——附件没在文字里写路径,原 detectPresentationRequest 看不到附件
-        // → 落到大脑只读一读写个文稿、不进全屏演示。现在附件形式也能直达 present_documents。
+        // **结构化输入 {message, files}**:message 里带路径就用它;否则有演示意图 + files(随消息传下来的附件路径)里有
+        // 可演示文档就用它。附件是**输入的一部分**(由发送入口随消息带下来),不是侧信道、不是特例分支。
+        // 根治(2026-06-27):用户"讲解一下附件中的PPT"——附件路径原来既没进文字、又被 clearAttachments 清掉、又被
+        // appendUserMessage 挡掉,所以落到大脑只读一读写文稿。现在 files 随消息直达,附件形式也能进 present_documents。
         var paths = Self.detectPresentationRequest(prompt) ?? []
         if paths.isEmpty, Self.hasPresentationIntent(prompt) {
-            paths = presentableAttachmentPaths()
+            paths = attachedFiles.filter { Self.isPresentableDoc($0) }
         }
         let existing = paths.filter { FileManager.default.fileExists(atPath: $0) }
-        guard !existing.isEmpty else { return false }                  // 路径不存在 → 交大脑常规处理(可能要先生成)
-        chatMessages.append(.init(speaker: "你", text: prompt, isUser: true))
-        if !pendingAttachments.isEmpty { clearAttachments() }          // 附件已被演示路由消费,清掉免重复处理
+        guard !existing.isEmpty else { return false }                  // 没有可演示文档 → 交大脑常规处理(可能要先生成)
+        if appendUserMessage { chatMessages.append(.init(speaker: "你", text: prompt, isUser: true)) }
         appendTrace(kind: .route, actor: "演示与答疑", title: "确定性路由",
                     detail: "识别为文档演示请求,直接走 present_documents 插件(\(existing.count) 篇),不靠模型选工具。")
         Task { @MainActor [weak self] in
@@ -163,15 +163,10 @@ extension LingShuState {
             .contains { prompt.contains($0) }
     }
 
-    /// `pendingAttachments` 里**可演示的文档**(演示文稿/文档类 或可演示扩展名 + 有本地路径)的绝对路径。
-    func presentableAttachmentPaths() -> [String] {
-        let exts: Set<String> = ["pdf", "pptx", "ppt", "docx", "doc", "key", "html", "htm", "md", "txt", "xlsx"]
-        return pendingAttachments.compactMap { att in
-            guard let url = att.localURL else { return nil }
-            guard att.kind == .presentation || att.kind == .document
-                || exts.contains(url.pathExtension.lowercased()) else { return nil }
-            return url.path
-        }
+    /// 路径是否是**可演示文档**(纯扩展名判断,可单测)。
+    nonisolated static func isPresentableDoc(_ path: String) -> Bool {
+        ["pdf", "pptx", "ppt", "docx", "doc", "key", "html", "htm", "md", "txt", "xlsx"]
+            .contains((path as NSString).pathExtension.lowercased())
     }
 
     /// 演示进行时的用户输入拦截(**实时答疑,主线程线性**):返回 true=已作为演示交互处理,submitTextInput 不再走常规分诊。
