@@ -72,11 +72,12 @@ extension LingShuState {
         req.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.timeoutInterval = 40
+        // 省钱:搜索包装用便宜模型(deepseek-chat,只需汇总搜索结果,不必上 Kimi)+ 结果数 5→3(OpenRouter 按结果收费)。
         let body: [String: Any] = [
-            "model": "moonshotai/kimi-k2",
-            "plugins": [["id": "web", "max_results": 5]],
+            "model": "deepseek/deepseek-chat",
+            "plugins": [["id": "web", "max_results": 3]],
             "messages": [["role": "user", "content": "联网搜索并用中文简要汇总关于「\(query)」的**最新**信息:给关键事实/数字/日期,别凭记忆。"]],
-            "max_tokens": 700
+            "max_tokens": 600
         ]
         guard let data = try? JSONSerialization.data(withJSONObject: body) else { return nil }
         req.httpBody = data
