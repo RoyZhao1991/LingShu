@@ -19,6 +19,7 @@ extension LingShuState {
         let bridge: @MainActor @Sendable (String, [String: String]) async -> String = { [weak self] tool, args in
             guard let self else { return "执行环境不可用" }
             let recordID = recordIDProvider()
+            self.announceLocalCapabilityIfNeeded(tool: tool, recordID: recordID)   // 实际调用的本地能力 → 记进能力探测(去重)
             self.missionTitle = "执行中：\(Self.toolDisplayName(tool))"
             defer { self.missionTitle = self.currentActivityLabel }
             let result = await self.runAgenticTool(
@@ -66,6 +67,7 @@ extension LingShuState {
             let recordID = await MainActor.run { recordIDProvider() }
             let summary = LingShuTaskMessageFormatting.toolCallSummary(tool: tool.name, arguments: args)
             await MainActor.run {
+                self.announceLocalCapabilityIfNeeded(tool: tool.name, recordID: recordID)
                 self.appendTaskRecordMessage(
                     recordID, actor: "工具", role: "Agent循环", kind: .agent, text: summary,
                     detail: .toolCall(tool: tool.name, summary: summary, arguments: LingShuTaskMessageFormatting.prettyArguments(args))
@@ -81,6 +83,30 @@ extension LingShuState {
                 )
             }
             return output
+        }
+    }
+
+    /// **实际调用的本地能力 → 记进"能力探测"**(2026-06-27,用户要"加个显示"):能力探测原来只显示缺口(需要什么),
+    /// 现在工具一旦真用到某类本地能力,首次就记一条"已调用本地能力:X"(按 recordID 去重,不刷屏)。让面板既有"需要什么"也有"真用了什么"。
+    func announceLocalCapabilityIfNeeded(tool: String, recordID: String?) {
+        guard let recordID, let cap = Self.localCapabilityLabel(forTool: tool) else { return }
+        var announced = announcedLocalCapabilities[recordID] ?? []
+        guard !announced.contains(cap) else { return }
+        announced.insert(cap)
+        announcedLocalCapabilities[recordID] = announced
+        appendTaskRecordMessage(recordID, actor: "能力探测", role: "本地能力·已调用", kind: .router,
+            text: "✓ 已调用本地能力:\(cap)（本机直连,无需外部授权）")
+    }
+
+    /// 工具名 → 本地能力标签(只认本机系统类工具;非本地的返回 nil,不打印)。
+    nonisolated static func localCapabilityLabel(forTool tool: String) -> String? {
+        switch tool {
+        case "write_file", "edit_file", "apply_patch": return "本地文件系统(读写)"
+        case "read_file", "list_directory":            return "本地文件系统(读取)"
+        case "run_command":                            return "本地命令执行 / shell"
+        case "recall_local", "index_local_knowledge":  return "本机知识检索"
+        case "fetch_url", "web_search":                return "联网访问"
+        default:                                       return nil
         }
     }
 

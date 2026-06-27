@@ -243,6 +243,8 @@ final class LingShuState: ObservableObject {
     var mainAgentSessionHolder: (any LingShuAgentSessioning)?
     /// 编排器子会话 id → 任务执行记录 id(让每条并行子任务成为列表里独立任务号)。
     var agentSubTaskRecords: [String: String] = [:]
+    /// 能力探测·**已调用的本地能力**:记录 id → 已记过的本地能力标签集合(去重,首次用某类本地能力才记一条进"能力探测",不刷屏)。
+    var announcedLocalCapabilities: [String: Set<String>] = [:]
     // 注:P1 GoalSpec 不再用内存字典 —— 作为 typed 字段持久化进 LingShuTaskExecutionRecord.goalSpec(跨重启),经 goalSpec(for:) 读。
     /// 主线程分诊「派发」的任务:记录 id → 它在对话里的加载气泡 id(完成时回填这条气泡而非另起一条)。
     /// Stage 2 多任务真隔离:每条派发任务有自己的气泡 + 独立 session,互不串。
