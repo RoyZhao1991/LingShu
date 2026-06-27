@@ -72,8 +72,14 @@ extension LingShuState {
         }
         let gap = record.gapAnalysis
         let admits = LingShuTaskCompletionGate.replyAdmitsIncapacity(reply)
+        // **根治"部分完成"反复出现(2026-06-27)**:gap 分析常误报"本地文件系统 requiresAuth"这类 .permission gap;
+        // 高权限(完整授权/开发全权)下,系统/账号"授权"类视为**已解决**——否则已核验交付+产物在的任务,会因这条
+        // 误报的阻断 gap 永远判 partial(实测红黑树/AVL/队列 PPT 全栽在这)。与弹框层 userPrerequisiteChoicePromptIfNeeded
+        // 的 .permission 过滤保持一致(决策层 + UI 层同口径)。
+        let fullyAuthorized = developmentPhaseFullAccess || autonomousPermissionLevel == .full
         let actionableBlockingGaps = (gap?.blockingGaps ?? []).filter { gap in
-            !gap.requiresUser || Self.isActionableUserGap(gap)
+            if fullyAuthorized, gap.kind == .permission { return false }
+            return !gap.requiresUser || Self.isActionableUserGap(gap)
         }
         let hasBlocking = !actionableBlockingGaps.isEmpty
         let blockingNeedsUser = actionableBlockingGaps.contains { $0.requiresUser }
