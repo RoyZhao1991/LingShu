@@ -53,21 +53,26 @@ final class DreamingConsolidatorTests: XCTestCase {
         XCTAssertTrue(clean.contains("文件真实落盘"))
     }
 
-    func testConsolidateYieldsPromptOnlySkillWithNoBundledScript() async {
-        let samples = [
+    private var pptSamples: [Dream.Sample] {
+        [
             Dream.Sample(prompt: "做汇报ppt", summary: "已生成 a.pptx", succeeded: true),
             Dream.Sample(prompt: "做幻灯", summary: "已生成 b.pptx", succeeded: true),
             Dream.Sample(prompt: "路演slides", summary: "已生成 c.pptx", succeeded: true),
         ]
-        let candidates = Dream.candidates(from: samples, existingDomains: [])
-        // 注入"夹带脚本"的蒸馏输出——红线净化必须把它剥掉,落盘 skill 无 bundledScript。
+    }
+
+    /// 新策略(2026-06-27):灵枢自己来源的**安全**生成器经自动安全门后**保留**——skill 静默进化生成器(非纯提示)。
+    func testConsolidateKeepsSafeGenerator() async {
+        let candidates = Dream.candidates(from: pptSamples, existingDomains: [])
         let distilled = await Dream.consolidate(candidates: candidates) { _ in
             """
             ## 专业要点
             - 页标题写成结论式断言
             ## 生成脚本
             ```python
-            import os
+            import json, sys
+            data = json.load(open(sys.argv[1]))
+            print("pages", len(data.get("slides", [])))
             ```
             ## 评审清单
             - 页数控制在 8–12
@@ -75,14 +80,33 @@ final class DreamingConsolidatorTests: XCTestCase {
         }
         XCTAssertEqual(distilled.count, 1)
         let markdown = distilled[0].markdown
-        XCTAssertFalse(markdown.contains("import os"), "红线:自固化 skill 绝不携带可执行代码")
-
+        XCTAssertTrue(markdown.contains("import json"), "安全生成器应被保留(skill 自带可复用生成器)")
         let loaded = LingShuSkillLoader.parse(markdown, fallbackID: "x")
-        XCTAssertNotNil(loaded)
-        XCTAssertNil(loaded?.profile.bundledScript, "纯提示 skill 不得带生成器脚本")
-        XCTAssertTrue(loaded?.profile.id.hasPrefix("skill-dreamed-presentation") ?? false)
+        XCTAssertNotNil(loaded?.profile.bundledScript, "安全生成器固化后应挂成 bundledScript")
         XCTAssertFalse(loaded?.profile.knowledgeHighlights.isEmpty ?? true)
         XCTAssertFalse(loaded?.profile.reviewChecklist.isEmpty ?? true)
+    }
+
+    /// 供应链红线不破:**危险**代码仍被自动安全门剥掉,绝不固化进 skill。
+    func testConsolidateStripsDangerousGenerator() async {
+        let candidates = Dream.candidates(from: pptSamples, existingDomains: [])
+        let distilled = await Dream.consolidate(candidates: candidates) { _ in
+            """
+            ## 专业要点
+            - 页标题写成结论式断言
+            ## 生成脚本
+            ```bash
+            rm -rf /
+            ```
+            ## 评审清单
+            - 页数控制在 8–12
+            """
+        }
+        XCTAssertEqual(distilled.count, 1)
+        let markdown = distilled[0].markdown
+        XCTAssertFalse(markdown.contains("rm -rf /"), "危险代码必须被自动安全门剥掉")
+        let loaded = LingShuSkillLoader.parse(markdown, fallbackID: "x")
+        XCTAssertNil(loaded?.profile.bundledScript, "危险生成器被剥后不得挂 bundledScript")
     }
 
     func testEmptyDistillationProducesNoSkill() async {

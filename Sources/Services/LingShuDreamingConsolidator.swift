@@ -6,10 +6,11 @@ import Foundation
 /// 把反复成功的做法蒸馏成**可复用的纯提示型 skill**,并用**实测通过率**当质量分——
 /// 不改模型权重也能越用越强。醒来(下次启动)时这些自固化 skill 已并入组合注册表生效。
 ///
-/// **安全红线(不可破,结构性保证非仅靠提示)**:dreaming **只自动产出纯提示 skill**
-/// (专业要点 + 评审清单),`sanitizePromptOnly` 在落盘前**剥掉一切围栏代码块与脚本/代码/生成器小节**,
-/// 绝不自动写入可执行脚本。带生成器的 skill 仍只能走人工授权 + `LingShuSkillSafetyGate`。
-/// 见 [skill-self-evolution] 记忆与 LingShuCuratedSkillRegistry(Phase 1 静态策展)。
+/// **安全模型(2026-06-27 用户校正)**:skill 是**可自由进化的外围**——dreaming **自动触发、自动迭代、静默升级**,
+/// 含**生成器**:落盘前每段代码逐块过**自动安全门** `LingShuSkillSafetyGate.scan`(`safetyFilterCode`),安全就保留、
+/// 危险才剥。**不需人工授权**——因为这是灵枢从**自己验证过的任务**长出来的(非"未审外部来源")。供应链红线(绝不自动执行
+/// **未审外部来源**代码)针对的是 `discover_skill` 拉的外部 skill;**内核 ABI** 固化、改动才需人工授权。两者与 dreaming 自进化各管一段。
+/// 见 [skill-self-evolution] / Docs/灵枢内核ABI.md §0「核心固化 → 自我编程外围 → 可插拔进化」。
 enum LingShuDreamingConsolidator {
 
     /// 一条已完成任务的精简回放样本(从 journal 记录映射而来,便于纯逻辑单测)。
@@ -103,15 +104,19 @@ enum LingShuDreamingConsolidator {
             }.joined(separator: "\n")
             let prompt = """
             下面是「\(candidate.title)」这类任务里**已成功交付**的若干真实案例。请把它们提炼成一份可复用的
-            "专家要点 + 评审清单",供以后做同类任务直接参考。**只输出下面两个小节,纯文字经验,严禁写任何可执行代码/脚本/命令**:
+            "专家要点 + 评审清单",供以后做同类任务直接参考:
             ## 专业要点
             （5–8 条做这类任务的关键经验/套路/易错点,每条一行,以「- 」开头）
             ## 评审清单
             （4–6 条交付前自检项,每条一行,以「- 」开头）
+            **若这类任务靠一段可复用的脚本/生成器完成的**(如把声明式数据渲染成产物),再附:
+            ## 生成脚本
+            （把那个可复用生成器的完整代码放进围栏代码块——会自动过安全门,安全才保留;让以后同类任务直接复用、不必每次现写）
             成功案例:
             \(examples)
             """
-            let body = sanitizePromptOnly(await distill(prompt))
+            // **2026-06-27:不再无差别剥光,改过自动安全门**——灵枢自己来源的生成器,安全就保留(静默进化外围 skill)。
+            let (body, keptGenerator) = safetyFilterCode(await distill(prompt))
             guard hasAnyBullet(body) else { continue }   // 净化后空壳不落盘
             // 实测通过率作质量分,封顶 0.85(低于人工策展 0.9,自动固化不抢策展优先级)。
             let qualityScore = min(0.85, max(0.5, candidate.passRate))
@@ -121,7 +126,8 @@ enum LingShuDreamingConsolidator {
                 triggers: candidate.triggers,
                 body: body,
                 qualityScore: qualityScore,
-                sampleCount: candidate.successes.count
+                sampleCount: candidate.successes.count,
+                hasGenerator: keptGenerator
             )
             out.append(.init(domain: candidate.domain, markdown: markdown, qualityScore: qualityScore, sampleCount: candidate.successes.count))
         }
@@ -187,6 +193,36 @@ enum LingShuDreamingConsolidator {
         return kept.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    /// **安全门过滤(2026-06-27,替代无差别剥光)**:正文里的围栏代码块**逐块过 `LingShuSkillSafetyGate`**——
+    /// 安全的**保留**(让灵枢从自己验证过的任务里长出来的 skill 能进化生成器,静默升级),扫出危险的才整块剥掉。
+    /// 用户定调:skill 是可自由进化的外围,自动门把关即可、不需人工授权;只有**未审外部来源**(discover_skill)和
+    /// **内核**才需人工门。灵枢自己来源的代码不是"未审来源"。返回净化后正文 + 是否保留了生成器代码。
+    static func safetyFilterCode(_ markdown: String) -> (body: String, keptGenerator: Bool) {
+        var kept: [String] = []
+        var fenceOpen = ""
+        var fenceBuffer: [String] = []
+        var inFence = false
+        var keptGenerator = false
+        for raw in markdown.components(separatedBy: "\n") {
+            if raw.trimmingCharacters(in: .whitespaces).hasPrefix("```") {
+                if inFence {
+                    let code = fenceBuffer.joined(separator: "\n")
+                    if LingShuSkillSafetyGate.scan(code).isSafe {   // 安全→连围栏一起保留
+                        kept.append(fenceOpen); kept.append(contentsOf: fenceBuffer); kept.append(raw)
+                        keptGenerator = true
+                    }   // 危险→整块丢(保守)
+                    fenceBuffer = []; fenceOpen = ""; inFence = false
+                } else {
+                    inFence = true; fenceOpen = raw
+                }
+                continue
+            }
+            if inFence { fenceBuffer.append(raw); continue }
+            kept.append(raw)
+        }
+        return (kept.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines), keptGenerator)
+    }
+
     /// 正文里是否还有至少一条要点行(净化后用于挡空壳)。
     static func hasAnyBullet(_ body: String) -> Bool {
         body.components(separatedBy: "\n").contains { line in
@@ -195,21 +231,24 @@ enum LingShuDreamingConsolidator {
         }
     }
 
-    /// 组装可被 LingShuSkillLoader 解析的 skill markdown。**不带 script_name** → 加载后 bundledScript 必为 nil。
+    /// 组装可被 LingShuSkillLoader 解析的 skill markdown。`hasGenerator=true`(正文保留了过安全门的生成器)时
+    /// **带上 `script_name`** → loader 把「## 生成脚本」挂成 bundledScript,让固化的 skill 自带可复用生成器(静默进化外围)。
     static func skillMarkdown(
         domain: String,
         title: String,
         triggers: [String],
         body: String,
         qualityScore: Double,
-        sampleCount: Int
+        sampleCount: Int,
+        hasGenerator: Bool = false
     ) -> String {
-        """
+        let scriptLine = hasGenerator ? "\nscript_name: generator.py" : ""
+        return """
         ---
         id: dreamed-\(domain)
         title: \(title)（自固化）
-        mission: 灵枢从 \(sampleCount) 个成功交付的同类任务离线固化的可复用经验(实测通过率约 \(Int((qualityScore * 100).rounded()))%）。
-        triggers: \(triggers.joined(separator: ","))
+        mission: 灵枢从 \(sampleCount) 个成功交付的同类任务离线固化的可复用经验(实测通过率约 \(Int((qualityScore * 100).rounded()))%）。\(hasGenerator ? "自带可复用生成器(已过安全门)。" : "")
+        triggers: \(triggers.joined(separator: ","))\(scriptLine)
         ---
 
         \(body)
