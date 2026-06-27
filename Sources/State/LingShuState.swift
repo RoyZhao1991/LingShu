@@ -940,7 +940,16 @@ final class LingShuState: ObservableObject {
             if !force, now.timeIntervalSince(msg.createdAt) <= staleSeconds { continue }   // 还没卡够久,再等等
             chatMessages[index].isLoading = false
             if chatMessages[index].text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                chatMessages[index].text = "（上一轮交互已中断，我已收起等待状态。）"
+                // **修 2(2026-06-27)**:这条空 loading 气泡若关联的是**已派发任务**且任务其实已完成/已核验,别误报"已中断"
+                // ——任务在自己记录里跑完了、主气泡只是没被收尾(实测:PPT 派发任务已完成,主气泡却被后续停止 force-reap 成"已中断",
+                // 与任务记录"已完成"自相矛盾)。如实反映任务终态。
+                if let rid = msg.taskRecordID,
+                   let rec = taskExecutionRecords.first(where: { $0.id == rid }),
+                   rec.status == .completed || rec.status == .verified || rec.status == .partial {
+                    chatMessages[index].text = "（已转入后台任务并完成，详见下方任务记录。）"
+                } else {
+                    chatMessages[index].text = "（上一轮交互已中断，我已收起等待状态。）"
+                }
             }
             changed = true
         }

@@ -34,7 +34,11 @@ extension LingShuState {
         // 跑单个 agent checker(独立会话:它自己读文件/跑测试),记参与方 + 结论。
         func runAgentChecker(_ plugin: LingShuAgentPlugin, makerText: String, round: Int) async -> (passed: Bool, critique: String) {
             appendTrace(kind: .tool, actor: "独立验收·\(plugin.displayName)", title: "复核中", detail: String(objective.prefix(50)))
-            let reviewObj = "你是独立验收方(checker)。maker 针对目标完成了开发,产物在当前工作目录。\n目标:\(objective)\n请独立核验:真实读文件 / 跑测试 / 运行起来,判断是否达成目标。**只验收,别替它重写。**\n结论格式:第一行只写「通过」或「不通过」,其后逐条列问题。\nmaker 自述产出:\n\(makerText.prefix(1500))"
+            // 修 1a:给外部 agent checker 也带上产出物真实绝对路径,别只说"在工作目录"(同 runCheckerSession 根因)。
+            let artPaths = (taskExecutionRecords.first { $0.id == rid }?.artifacts ?? []).map(\.location)
+            let artHint = artPaths.isEmpty ? "产物应在工作目录 \(agentWorkingDirectory)。"
+                : "产出物绝对路径(直接核验这些具体文件):\n" + artPaths.map { "- \($0)" }.joined(separator: "\n")
+            let reviewObj = "你是独立验收方(checker)。maker 针对目标完成了开发。\n目标:\(objective)\n工作目录:\(agentWorkingDirectory)\n\(artHint)\n请独立核验:真实读文件 / 跑测试 / 运行起来,判断是否达成目标。**只验收,别替它重写。**\n结论格式:第一行只写「通过」或「不通过」,其后逐条列问题。\nmaker 自述产出:\n\(makerText.prefix(1500))"
             let c: String
             // **流式**:边跑边把 checker 的复核进展更新进同一条参与方气泡(不再干等)。
             switch await runAgentStreamingToRecord(plugin, objective: reviewObj, recordID: rid,
@@ -155,11 +159,21 @@ extension LingShuState {
         appendTrace(kind: .tool, actor: "checker会话", title: "独立验收会话上岗", detail: String(objective.prefix(50)))
         let session = makeAgentSession(id: "checker-\(UUID().uuidString.prefix(6))", system: system,
                                        tools: tools, model: adapter, maxTurns: 30)
+        // **修 1a(2026-06-27)**:给 checker **产出物的真实绝对路径**——别只说"在工作目录"。
+        // 否则产物在工作目录之外(maker 用绝对路径写到别处)或 list_directory 列空时,checker 找不到文件 → 瞎判"不存在"=假否决
+        // (实测:checker 在 HOME list_directory 列空,而产物在 /app 子目录,直接判 PPT 不存在)。给了绝对路径它就能 read_file 核真文件。
+        let artifactPaths = (taskExecutionRecords.first { $0.id == rid }?.artifacts ?? []).map(\.location)
+        let artifactHint = artifactPaths.isEmpty
+            ? "产物应在工作目录 \(agentWorkingDirectory)(若 list_directory 列空,maker 可能没真落盘=本身就是问题)。"
+            : "maker 落盘的产出物**绝对路径**(直接 `read_file`/`run_command` 核验这些具体文件,别只 list_directory 工作目录):\n"
+              + artifactPaths.map { "- \($0)" }.joined(separator: "\n")
         let task = """
         目标:\(objective)
+        工作目录:\(agentWorkingDirectory)
+        \(artifactHint)
         maker 自述它的产出(仅供参考,务必独立核实、别轻信):
         \(makerText.prefix(1500))
-        产物在当前工作目录。请独立核验后给结论(第一行 通过/不通过)。
+        请独立核验后给结论(第一行 通过/不通过)。
         """
         let verdict = Self.runResultText(await session.send(task))
         return (Self.checkerVerdictPassed(verdict), verdict)

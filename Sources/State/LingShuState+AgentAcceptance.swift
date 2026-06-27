@@ -194,7 +194,11 @@ extension LingShuState {
             if nonCodeDeliverable, round > 0, artifactCount > artifactBaseline, Date() > revisionDeadline {
                 appendTrace(kind: .result, actor: "验收", title: "返工超预算·交付现有版本", detail: "非代码交付(如PPT)已多轮打磨且超时,先交付当前版本,避免无限返工。")
                 let delivery = await composeDeliveryMessage(userRequest: userRequest, makerText: Self.runResultText(result), taskRecordID: taskRecordID)
-                return .completed(text: delivery)
+                // **修 1b(2026-06-27)**:超预算交付,但本轮审查员**仍有异议**(passed=false 才会走到这里)→ 别静默"已完成",
+                // 如实把未决意见带给用户(否则用户看到"已完成"+时间线里"不通过"自相矛盾、否决被悄悄吞掉)。
+                let note = critique.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? ""
+                    : "\n\n(说明:已多轮打磨并交付当前版本;审查员仍保留意见——\(critique.prefix(160))。要我继续按这条改就说一声。)"
+                return .completed(text: delivery + note)
             }
             if round > 0, artifactCount <= lastArtifactCount, critique.prefix(120) == lastCritique.prefix(120) {
                 recordBrainFallback("验收停滞交还(脑没救回来)")   // 大脑评分:触发兜底 −1
