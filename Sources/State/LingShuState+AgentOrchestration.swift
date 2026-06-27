@@ -182,7 +182,10 @@ extension LingShuState {
         if let recordID, dispatchedTaskBubbles[recordID] != nil {
             fillDispatchedBubble(recordID, text: dispatched)
         } else {
-            chatMessages.append(.init(speaker: "灵枢", text: spawned, isUser: false, taskRecordID: recordID, choices: LingShuChoiceParsing.parse(spawned)))
+            // 同 fillDispatchedBubble:只有任务真在等用户输入才解析选项卡,免得**已完成**的交付编号清单被误抽成无效选项。
+            let awaits = recordID.map { dispatchedRecordNeedsUserInput($0) } ?? false
+            let choices = awaits ? LingShuChoiceParsing.parse(spawned) : nil
+            chatMessages.append(.init(speaker: "灵枢", text: spawned, isUser: false, taskRecordID: recordID, choices: choices))
         }
     }
 
