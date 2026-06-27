@@ -91,9 +91,13 @@ extension LingShuState {
         // **重演/新演前先彻底停掉在跑的老演示**(取消播放任务 + 停循环 + 清 shownDocumentPath)。
         // 否则老 play 循环会在下面 buildQueue 通读生成讲稿那十几秒里**继续推画面**,而新演示从第1页念
         // → 画面跑到前面、语音却在第1页 = 脱节(2026-06-25 用户实测 bug)。必须在 buildQueue 之前停。
-        presentationPlaybackTask?.cancel()
-        presentationPlaybackTask = nil
-        presentationController.requestStop()
+        // **只有真有老演示在跑才停它**(取消播放+停循环+掐其音频);全新开演时不要 requestStop——否则它会顺手
+        // 掐掉刚播的开场"好的我开始演示了"那段(用户实测:开场音频没说完就被切)。开场音频独立输出,让它自然念完。
+        if presentationController.isActive || presentationPlaybackTask != nil {
+            presentationPlaybackTask?.cancel()
+            presentationPlaybackTask = nil
+            presentationController.requestStop()
+        }
         installPresentationHooks()
         await presentationController.buildQueue(documentPaths: paths)
         let n = presentationController.queue.count
@@ -248,7 +252,7 @@ extension LingShuState {
         - 暂停后想接着往下讲(如「继续」「咱们接着」「往下说吧」)→ {"intent":"resume"}
         - 想结束/退出/不看了(如「不演了」「停了吧」「够了」「先到这」)→ {"intent":"stop"}
         - 想**换讲解节奏/深度**(如「后面快速讲」「简要过一下就行」「概要说说剩下的」「详细讲」「恢复正常速度」)→ {"intent":"pace","pace":"detailed"或"brief"或"overview"}(快速=brief、概要=overview、详细/正常=detailed)
-        - 想**跳到/翻到某一页**(如「跳到第5页」「翻到第3页」「我想看第8页」「回到第一页」)→ {"intent":"seek","page":页号数字}
+        - 想**跳到/翻到某个位置**(如「跳到第5页」「翻到第3页」「我想看第8页」「回到第一页」「从第一页重新开始讲」),**或只说一个数字(如「1」「3」「第二页」)**→ {"intent":"seek","page":目标数字}
         - 对内容提问、或说别的话 → {"intent":"question","answer":"结合当前这页内容、像真人当面口语简洁回答(40-140字),不复述整页、不编造页面没有的事"}
         **重要:若这份文档讲的就是你灵枢自己(介绍灵枢的定位/架构/能力/课题成果),回答用第一人称('我'/'我的')、结合你真实的自我认知,别把自己当外人。**
         \(context)
@@ -266,8 +270,7 @@ extension LingShuState {
             let p = LingShuPresentationPace(rawValue: (Self.jsonField(clean, "pace") ?? "").lowercased()) ?? .brief
             return (.pace(p), "")
         case "seek":
-            let page = (Self.jsonField(clean, "page").flatMap { Int($0.trimmingCharacters(in: .whitespacesAndNewlines)) })
-                ?? Self.parsePresentationResumePage(input)
+            let page = (Self.jsonField(clean, "page").flatMap { Self.parseSeekTarget($0) }) ?? Self.parseSeekTarget(input)   // 通用解析:阿拉伯/中文/裸数字都认
             if let page, page > 0 { return (.seek(page), "") }
             return (.question, "你想跳到第几页?说个页号我就翻过去。")
         case "question":
@@ -318,18 +321,38 @@ extension LingShuState {
     }
 
     /// 解析"从第N页/回到第N页/第N页"里的页号(1-based);没有则 nil(从当前位置续)。
-    nonisolated static func parsePresentationResumePage(_ s: String) -> Int? {
-        for marker in ["第", "从"] {
-            var search = s[s.startIndex...]
-            while let r = search.range(of: marker) {
-                let after = search[r.upperBound...]
-                let digits = after.prefix(while: { $0.isNumber })
-                if let n = Int(digits), n > 0 { return n }
-                search = search[r.upperBound...]
-            }
+    /// 从自然语言里解析一个**目标位置数字**(页号 / 秒数 / 第N / 跳到N / 从N…)。
+    /// **通用、不区分单位**(页 or 秒由调用方决定)——认 ① 阿拉伯数字 ② 中文数字(一二三…十百千)③ 裸数字。
+    /// PPT/Word 当页号、音视频当秒数,都用这一套"解析目标数字"逻辑(用户定调:操作不同、逻辑相同,不准场景定制)。
+    nonisolated static func parseSeekTarget(_ s: String) -> Int? {
+        if let r = s.range(of: "[0-9]+", options: .regularExpression), let n = Int(s[r]), n > 0 { return n }   // 阿拉伯数字优先
+        let numChars = Set("零〇一二两三四五六七八九十百千")                                                    // 最长的连续中文数字串
+        var best = "", run = ""
+        for ch in s {
+            if numChars.contains(ch) { run.append(ch); if run.count > best.count { best = run } }
+            else { run = "" }
         }
-        return nil
+        return parseChineseNumeral(best)
     }
+
+    /// 解析纯中文数字串(一/十/十一/二十三/一百…)。非纯数字串返回 nil。
+    nonisolated static func parseChineseNumeral(_ run: String) -> Int? {
+        guard !run.isEmpty else { return nil }
+        let d: [Character: Int] = ["零": 0, "〇": 0, "一": 1, "二": 2, "两": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9]
+        var result = 0, current = 0
+        for ch in run {
+            if let v = d[ch] { current = v }
+            else if ch == "十" { result += (current == 0 ? 1 : current) * 10; current = 0 }
+            else if ch == "百" { result += (current == 0 ? 1 : current) * 100; current = 0 }
+            else if ch == "千" { result += (current == 0 ? 1 : current) * 1000; current = 0 }
+            else { return nil }
+        }
+        result += current
+        return result > 0 ? result : nil
+    }
+
+    /// 解析"从第N页/回到第N页/第N页"里的页号(1-based);没有则 nil(从当前位置续)。委托通用 `parseSeekTarget`。
+    nonisolated static func parsePresentationResumePage(_ s: String) -> Int? { parseSeekTarget(s) }
 
     nonisolated static func parsePresentationPaths(_ json: String) -> [String] {
         guard let data = json.data(using: .utf8),
