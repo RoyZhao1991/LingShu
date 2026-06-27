@@ -55,7 +55,7 @@ extension LingShuState {
                 ] } ?? []
                 let bodyTools = self.map { [$0.speakTool(), $0.digitalHumanTool()] } ?? []
                 let asyncTools = self.map { $0.backgroundWatchTools() + $0.scheduledTaskTools() } ?? []
-                return builtin + [Self.timeTool(), Self.locationTool(), Self.webSearchTool(), Self.askUserTool()] + bodyTools + extras + asyncTools
+                return builtin + [Self.timeTool(), Self.locationTool(), Self.askUserTool()] + (self.map { [$0.webSearchTool()] } ?? []) + bodyTools + extras + asyncTools
             }
 
             let sub: (any LingShuAgentSessioning)? = await MainActor.run { [weak self] in

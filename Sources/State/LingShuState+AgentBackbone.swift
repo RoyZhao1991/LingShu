@@ -97,7 +97,7 @@ extension LingShuState {
         }
         let tools = withPhaseTracking(withBatchRunner(   // 相位跟踪:每个工具调用前把 LOOP 阶段切到理解/规划/执行,本体实时显示
             agentBuiltinTools(recordIDProvider: { [weak self] in self?.currentAgentTurnRecordID })
-            + [Self.timeTool(), Self.locationTool(), Self.webSearchTool(), searchTextTool(), findImagesTool(), acquireResourceTool(), discoverSkillTool(), authorComponentTool(), discoverDevicesTool(), peripheralsTool(), labelPeripheralTool(), askChoiceTool(), askFormTool(), updateTaskPlanTool(recordIDProvider: { [weak self] in self?.currentAgentTurnRecordID }), reviewDesignTool(recordIDProvider: { [weak self] in self?.currentAgentTurnRecordID }), recallMemoryTool(), perceiveTool(), pushNotificationTool(), rememberCredentialTool(), listCredentialsTool(), speakTool(), digitalHumanTool(), enterManagedModeTool(), Self.askUserTool(), spawnTaskTool(adapter: adapter), spawnTeamTool(recordIDProvider: { [weak self] in self?.currentAgentTurnRecordID }, model: adapter)]
+            + [Self.timeTool(), Self.locationTool(), webSearchTool(), searchTextTool(), findImagesTool(), acquireResourceTool(), discoverSkillTool(), authorComponentTool(), discoverDevicesTool(), peripheralsTool(), labelPeripheralTool(), askChoiceTool(), askFormTool(), updateTaskPlanTool(recordIDProvider: { [weak self] in self?.currentAgentTurnRecordID }), reviewDesignTool(recordIDProvider: { [weak self] in self?.currentAgentTurnRecordID }), recallMemoryTool(), perceiveTool(), pushNotificationTool(), rememberCredentialTool(), listCredentialsTool(), speakTool(), digitalHumanTool(), enterManagedModeTool(), Self.askUserTool(), spawnTaskTool(adapter: adapter), spawnTeamTool(recordIDProvider: { [weak self] in self?.currentAgentTurnRecordID }, model: adapter)]
             + previewTools()
             + browserTools()           // 内置多 tab 浏览器(上网/网页自动化测试)
             + computerControlTools()   // 计算机直接操作四肢(授权在 call-time 判,计划 §9)
@@ -132,7 +132,7 @@ extension LingShuState {
         - **"到某时间点 / 每天定时 / 过一会儿提醒我"这类定时需求,一律用 `schedule_task`(这是你的原生定时四肢)——绝不要去写 launchd plist / crontab / shell 脚本来"假装设了定时"(那只是写个文件、根本没真正接到能把活干起来的系统,是假象)**。`schedule_task` 把指令真正登记进我自己的调度系统(JSON 持久化、跨重启、关窗也在),到点会把那条指令当成**新输入交给完整的我**处理——是提醒就开口、是任务就动手做完(能查日历、能用全部四肢),远胜一个只弹静态通知的 plist。用 `list_scheduled_tasks` 查、`cancel_scheduled_task` 取消。**区分**:等"外部条件满足"才继续 → `watch_until`;到"时间点"触发 → `schedule_task`。
         - 需要实时信息(如当前时间)时调用对应工具。
         - **边做边想(像资深工程师)**:每次发起工具调用前,先用**一句话**说清你观察到了什么、这一步要做什么、为什么(例:"上一步生成失败是因为缺 python-pptx,我先装依赖再重跑")。这句话会显示在执行流里,别省。
-        - **高效核查,别空耗**:要查实时/不确定的事实就用 **web_search** 工具(一两次即可),**不要手写一长串 curl|grep 反复抓网页、跟 shell 正则较劲**;已经确定的常识不用反复查。
+        - **回答事实前默认先查证(诚实红线·别凭记忆冒充)**:判据是「这个答案会不会随时间变」——**只有【铁定不随时间变化的理论/定义/数学/算法/已定历史】**(光速、勾股定理、闭包定义、快排原理、水的沸点…)才可凭记忆直答;**其余一切可能演化的事实,回答前都先 `web_search` 查证再答**:产品/工具对比(如 codex vs claude 谁更强/支持什么——这种**没有时间词但天天在变**)、现状、最新进展、版本、价格/汇率/股价、排名、近期事件、谁出了什么……你的训练知识有截止日,**凭记忆答演化中的事就是幻觉**,尤其**绝不把旧记忆包装成「今天/最新数据」**(日期都可能编错)。**拿不准会不会变 → 当作会变,查**。查用 web_search(一两次即可),别手写 curl|grep 反复抓网页较劲。
         - 用户一句话里若包含多个**互不相关**的任务,对每个用 spawn_task 各派生一个并行子任务;相关的步骤留在本会话顺序做。
         - **默认自洽推进,别为可默认的细节停下来问(头号纪律)**:绝大多数任务都能用**合理默认**直接做出来——倒计时网页的目标时间就让用户在页面上自己输入/给个常见默认、要不要暂停重置等额外功能就先做个能用的基础版、配色版式就按惯例挑一套…… 这些**可默认/可让用户在产物里自调**的细节,**一律自己定个合理默认、把假设写进交付说明,直接做完**,绝不停下来问。**只有缺了就真做不动的【硬前提】才 ask_user**:登录凭据/API 授权/付费确认/物理设备接入/不可逆且无法假设的关键岔路。判断准则:"我能不能先合理假设着把它做出来给用户看?"——能,就别问,做。
         - 要主人一次定多个**硬前提**事项(凭据/付费参数等)时,调 `ask_form` 弹多字段表单(每项各带选择菜单+「其他自行输入」),别把多个问题写成一长串文字、也别塞进一个单选卡——一张表单逐项填,体验好得多。
@@ -351,7 +351,9 @@ extension LingShuState {
         if isMinimalVoiceMode {
             guidance = "【对话模式】当前是语音对话,请像聊天一样直接、口语化、简洁地回答。不要派生子任务、不要写文件或跑命令、不要套用 PPT/文档等交付模板——这只是对话。"
         } else {
+            let verifyFirstHint = "【回答前先判:要不要先查证(诚实红线,放最前)】用户这句若问的是**会随时间变化的事实**——汇率/股价/天气/价格、最新进展/版本/排名、产品或工具对比(谁更强/支持什么,如 codex vs claude 这种没时间词但天天变的)、现状、近期事件……**你的第一个动作就是调 `web_search` 查证再答**,绝不凭记忆直接答、更绝不把旧记忆说成「今天/最新数据」。只有【铁定不随时间变的理论/定义/数学/算法/已定历史】(光速、勾股定理、闭包定义、快排原理)才可凭记忆直答。**拿不准会不会变 = 当作会变,先 web_search**。"
             guidance = [
+                verifyFirstHint,
                 matchedSkillHint(for: turn.prompt),
                 LingShuSelfReferenceIntent.directIntroductionGuidance(for: turn.prompt),
                 selfInspectionGuidance(for: turn.prompt)   // 架构/能力/自检类问题→注入真实自我认知,大脑 grounded 在真架构+实时能力上答

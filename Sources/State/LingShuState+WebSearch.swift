@@ -6,22 +6,27 @@ import Foundation
 extension LingShuState {
 
     /// 联网搜索工具:让模型不受知识库时效限制,可查实时/最新信息。
-    nonisolated static func webSearchTool() -> LingShuAgentTool {
-        LingShuAgentTool(
+    /// **2026-06-27 修**:无密钥 DDG 抓取已被搜索引擎封死(返回空),改优先走 **OpenRouter web 插件**(真实时结果+来源),
+    /// 没配 OpenRouter key 才回退 DDG。读 self 凭据库里的 openrouter key(故改为实例方法)。
+    func webSearchTool() -> LingShuAgentTool {
+        let orKey = credentialStore.apiKey(forProvider: "openrouter") ?? ""
+        return LingShuAgentTool(
             name: "web_search",
-            description: "联网搜索实时/最新信息(突破模型知识库时效)。返回前几条结果的标题、摘要、链接。需要最新事实、新闻、行情、文档时调用。",
+            description: "联网搜索实时/最新信息(突破模型知识库时效)。返回最新事实摘要 + 来源链接。需要最新事实、新闻、行情、产品对比、现状时调用。",
             parametersJSON: "{\"type\":\"object\",\"properties\":{\"query\":{\"type\":\"string\",\"description\":\"搜索关键词\"}},\"required\":[\"query\"]}"
         ) { argsJSON in
-            let query = jsonField(argsJSON, "query") ?? argsJSON
-            return await performWebSearch(query)
+            let query = Self.jsonField(argsJSON, "query") ?? argsJSON
+            return await Self.performWebSearch(query, openRouterKey: orKey)
         }
     }
 
-    /// 用 DuckDuckGo HTML 做无密钥联网搜索,抽取前 5 条结果(标题/摘要/链接)。
-    /// 注:可平滑替换为高质量付费搜索 API(改这一处即可),接口与工具不变。
-    nonisolated static func performWebSearch(_ query: String) async -> String {
+    /// 联网搜索:优先 OpenRouter web 插件(真实时+来源,无密钥 DDG 已被封),没 key 回退 DDG。
+    nonisolated static func performWebSearch(_ query: String, openRouterKey: String = "") async -> String {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return "搜索词为空。" }
+        if !openRouterKey.isEmpty, let viaOR = await openRouterWebSearch(trimmed, key: openRouterKey) {
+            return viaOR
+        }
         guard let encoded = trimmed.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
               let url = URL(string: "https://html.duckduckgo.com/html/?q=\(encoded)") else {
             return "搜索 URL 构造失败。"
@@ -38,6 +43,37 @@ extension LingShuState {
         } catch {
             return "联网搜索失败:\(error.localizedDescription)"
         }
+    }
+
+    /// 用 **OpenRouter 的 web 插件**做联网搜索:它服务端先搜网页、把结果喂模型,返回带**真实时数据 + 来源链接**的摘要。
+    /// 无密钥 DDG 抓取已被搜索引擎封死(返回空),这是当前真正能用的搜索路径。返回 nil = 没拿到(调用方回退 DDG)。
+    nonisolated static func openRouterWebSearch(_ query: String, key: String) async -> String? {
+        guard let url = URL(string: "https://openrouter.ai/api/v1/chat/completions") else { return nil }
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.timeoutInterval = 40
+        let body: [String: Any] = [
+            "model": "moonshotai/kimi-k2",
+            "plugins": [["id": "web", "max_results": 5]],
+            "messages": [["role": "user", "content": "联网搜索并用中文简要汇总关于「\(query)」的**最新**信息:给关键事实/数字/日期,别凭记忆。"]],
+            "max_tokens": 700
+        ]
+        guard let data = try? JSONSerialization.data(withJSONObject: body) else { return nil }
+        req.httpBody = data
+        guard let (respData, _) = try? await URLSession.shared.data(for: req),
+              let obj = try? JSONSerialization.jsonObject(with: respData) as? [String: Any],
+              let choices = obj["choices"] as? [[String: Any]],
+              let msg = choices.first?["message"] as? [String: Any],
+              let content = (msg["content"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !content.isEmpty else { return nil }
+        var out = "联网搜索「\(query)」结果(实时):\n" + content
+        if let ann = msg["annotations"] as? [[String: Any]] {
+            let urls = ann.compactMap { ($0["url_citation"] as? [String: Any])?["url"] as? String }.prefix(5)
+            if !urls.isEmpty { out += "\n\n来源:\n" + urls.map { "- \($0)" }.joined(separator: "\n") }
+        }
+        return out
     }
 
     /// 联网搜索返回**结果真实 URL**(供 acquire_resource 抓资源用)。DDG 结果链接常是 `/l/?uddg=<编码真链>`,这里解出真链。

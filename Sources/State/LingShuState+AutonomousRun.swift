@@ -259,7 +259,7 @@ extension LingShuState {
             Task { @MainActor in self?.recordAgentReasoning(aside, recordID: self?.autonomousRunRecordID) }
         }
         var tools = agentBuiltinTools(recordIDProvider: { [weak self] in self?.autonomousRunRecordID }, executionPolicy: policy)
-        tools += [Self.timeTool(), Self.locationTool(), Self.webSearchTool(), recallMemoryTool(), perceiveTool(), pushNotificationTool(), rememberCredentialTool(), listCredentialsTool(), speakTool(), digitalHumanTool(), Self.askUserTool()] + previewTools() + browserTools()
+        tools += [Self.timeTool(), Self.locationTool(), webSearchTool(), recallMemoryTool(), perceiveTool(), pushNotificationTool(), rememberCredentialTool(), listCredentialsTool(), speakTool(), digitalHumanTool(), Self.askUserTool()] + previewTools() + browserTools()
         if policy != .readOnly {
             tools.append(spawnTaskTool(adapter: adapter))   // 观察模式不派生可写子任务
             tools += computerControlTools()                  // 计算机直接操作四肢(完整授权档自动放行,计划 §9)

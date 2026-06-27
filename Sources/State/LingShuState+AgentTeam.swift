@@ -72,7 +72,7 @@ extension LingShuState {
         let input = context.isEmpty ? spec.objective
             : "你的目标:\(spec.objective)\n\n前序角色已完成(作为你的输入/上下文):\n\(context)"
         let tools = agentBuiltinTools(recordIDProvider: { recordID })
-            + [Self.timeTool(), Self.locationTool(), Self.webSearchTool(), searchTextTool(), findImagesTool(), Self.askUserTool()]
+            + [Self.timeTool(), Self.locationTool(), webSearchTool(), searchTextTool(), findImagesTool(), Self.askUserTool()]
         let session = makeAgentSession(id: id, system: system, tools: tools, model: model, maxTurns: 80, recordIDProvider: { recordID })
 
         appendTaskRecordMessage(recordID, actor: spec.name, role: "角色·\(spec.role)", kind: .agent,
