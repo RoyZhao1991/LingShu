@@ -54,9 +54,10 @@ enum LingShuSkillLoader {
         guard !title.isEmpty else { return nil }
 
         let sections = splitSections(body)
-        let knowledge = bulletLines(sections["专业要点"] ?? sections["knowledge"] ?? "")
-        let checklist = bulletLines(sections["评审清单"] ?? sections["checklist"] ?? "")
-        let template = (sections["交付物模板"] ?? sections["template"] ?? "")
+        // 契约小节**别名容错**:大脑沉淀/手建/网络来源的 skill 常用近义小节名,都归一,免内容漏读。
+        let knowledge = bulletLines(Self.section(sections, ["专业要点", "knowledge", "要点", "核心要点", "核心范式", "方法", "操作步骤", "步骤"]))
+        let checklist = bulletLines(Self.section(sections, ["评审清单", "checklist", "自查清单", "检查清单", "质量清单", "评审"]))
+        var template = Self.section(sections, ["交付物模板", "template", "schema", "模板", "格式", "结构", "slides.json schema"])
             .trimmingCharacters(in: .whitespacesAndNewlines)
 
         let triggers = (frontmatter["triggers"] ?? "")
@@ -71,6 +72,18 @@ enum LingShuSkillLoader {
         if !rawScript.isEmpty, LingShuSkillSafetyGate.scan(rawScript).isSafe {
             bundledScript = rawScript
             bundledScriptName = frontmatter["script_name"]?.nonEmpty ?? "generator.py"
+        }
+
+        // **契约健壮化(2026-06-27):契约小节都没命中 → 别让内容静默丢失。**
+        // 把正文(去掉围栏代码块=脚本)兜底当方法模板,保证非契约格式的 skill 真实内容仍进 promptBlock。
+        // 根治"手搓/网络来源 skill 因小节名不合契约,就空有触发词、内容全丢、loop 断"(端到端实测实锤:
+        // 我手搓的 ppt-builder 原用非契约小节,schema+命令从没被加载,大脑现编)。
+        if knowledge.isEmpty && template.isEmpty {
+            let raw = Self.bodyMethodText(body)
+            if !raw.isEmpty {
+                template = String(raw.prefix(2500))
+                lingShuControlLog("skill/contract: 「\(title)」未用契约小节(专业要点/交付物模板),已用正文兜底进 promptBlock(\(raw.count)字),建议改用契约小节名。")
+            }
         }
 
         let profile = LingShuExpertProfile(
@@ -99,6 +112,25 @@ enum LingShuSkillLoader {
         let sections = splitSections(body)
         let raw = extractCodeBlock(sections["生成脚本"] ?? sections["script"] ?? "")
         return raw.isEmpty ? nil : raw
+    }
+
+    /// 从多个候选小节名里取第一个非空小节(契约小节的别名容错)。
+    private static func section(_ sections: [String: String], _ keys: [String]) -> String {
+        for k in keys {
+            if let v = sections[k], !v.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return v }
+        }
+        return ""
+    }
+
+    /// 正文去掉所有围栏代码块(```…```,即生成脚本)后的纯方法/说明文字,顺序不变——供契约小节都没命中时兜底进 promptBlock。
+    private static func bodyMethodText(_ body: String) -> String {
+        var out: [String] = []
+        var inFence = false
+        for line in body.components(separatedBy: .newlines) {
+            if line.trimmingCharacters(in: .whitespaces).hasPrefix("```") { inFence.toggle(); continue }
+            if !inFence { out.append(line) }
+        }
+        return out.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private static func splitSections(_ body: String) -> [String: String] {
