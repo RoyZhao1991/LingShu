@@ -59,6 +59,9 @@ extension LingShuState {
             },
             interruptAudio: { [weak self] in self?.interruptSpeechOutput?() }   // 取消/打断 → 立刻掐 TTS
         ))
+        // 演示窗口文本输入框 → 答疑路由:打字提问/控制(暂停、继续、跳页…)走 submitTextInput,
+        // 演示进行中由 handlePresentationInputIfNeeded 拦成答疑(替代原来的语音打断,不再抢麦)。
+        presentationController.onAsk = { [weak self] text in _ = self?.submitTextInput(text) }
     }
 
     /// present_documents 工具:大脑用它正式演示一篇/多篇文档(脚本化 + 答疑 + 连播)。
@@ -80,13 +83,11 @@ extension LingShuState {
         guard !paths.isEmpty else { return "没有给文档路径。" }
         let missing = paths.filter { !FileManager.default.fileExists(atPath: $0) }
         guard missing.isEmpty else { return "这些文件不存在:\(missing.joined(separator: "、"))" }
-        // **演示=自主模式交互**(本体在位、麦克风在听、语音答疑才生效)。不进自主模式→麦克风没在听→
-        // 用户真实语音打断收不到(实测 bug 2026-06-25)。上岗用**空目标**:只本体在位+开麦,不给大脑任务
-        // (演示由我的 presentationController 驱动,不是大脑),已在岗则幂等跳过。
-        if !isStandingPersonOnDuty {
-            enteringViaManagedHandoff = true   // 本体立即出现,免入场仪式盖住演示开场
-            goLiveAsStandingPerson()
-        }
+        // **演示不再强制进自主模式抢麦**(2026-06-27 用户定调):自主模式开麦 + VPIO 会把共享物理麦克风重配
+        // (AGC 压增益 + 输出 ducking),干扰同时在用的腾讯会议等(收音弱、播放小声)。演示本质只需 TTS 念稿
+        // (纯输出、不碰麦、不开 VPIO),交互改用演示窗口里的**文本输入框**(见 LingShuPreviewSheet → onAsk →
+        // submitTextInput → handlePresentationInputIfNeeded 答疑,把语音打断换成打字)。故这里不再 goLiveAsStandingPerson。
+        // (用户若自己已上岗,保持原样、不强行下岗;但演示自身绝不主动抢麦。)
         // **重演/新演前先彻底停掉在跑的老演示**(取消播放任务 + 停循环 + 清 shownDocumentPath)。
         // 否则老 play 循环会在下面 buildQueue 通读生成讲稿那十几秒里**继续推画面**,而新演示从第1页念
         // → 画面跑到前面、语音却在第1页 = 脱节(2026-06-25 用户实测 bug)。必须在 buildQueue 之前停。

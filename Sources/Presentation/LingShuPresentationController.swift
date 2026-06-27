@@ -39,6 +39,9 @@ final class LingShuPresentationController: ObservableObject {
     var currentTitle: String { queue.currentScript?.title ?? "" }
 
     private var hooks: Hooks?
+    /// **演示窗口文本输入框 → 答疑路由**(2026-06-27):演示不再进自主模式抢麦,改用窗口里的输入框打字交互。
+    /// 视图里输入框提交即调它,由 State 接到 `submitTextInput`(→ handlePresentationInputIfNeeded 答疑)。
+    var onAsk: ((String) -> Void)?
     /// 答疑/手动打断请求:play 循环在**每拍之间**检查它,置位即停在当前拍(不丢位)。
     private var pauseRequested = false
     /// **彻底停止**请求(取消/退出):play 循环置位即终止,不再念下一拍(根治"取消后音频还在播")。

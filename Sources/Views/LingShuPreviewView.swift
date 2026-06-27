@@ -65,6 +65,8 @@ struct LingShuPreviewHost: NSViewRepresentable {
 struct LingShuPreviewSheet: View {
     @ObservedObject var controller: LingShuPreviewController
     @ObservedObject var presentation: LingShuPresentationController
+    /// 演示窗口内的**文本交互草稿**(2026-06-27):演示不再抢麦,改在窗口里打字提问/控制。
+    @State private var draft = ""
 
     var body: some View {
         VStack(spacing: 0) {
@@ -119,11 +121,41 @@ struct LingShuPreviewSheet: View {
             }
             .frame(minWidth: 720, minHeight: 540)
             LingShuPresentationProgressBar(presentation: presentation)   // 「文本即进度条」:演示时显示脚本进度+当前讲稿,点格跳转
+            if presentation.isActive { presentationAskBar }              // 演示中:打字提问/控制(替代语音打断,不抢麦)
         }
         .frame(minWidth: controller.slideshow ? nil : 900, maxWidth: .infinity,
                minHeight: controller.slideshow ? nil : 660, maxHeight: .infinity)
         .background(controller.slideshow ? Color.black : Color.lingVoid)
         .background(WindowFullscreenToggler(active: controller.slideshow))
+    }
+
+    /// 演示窗口底部的**文本交互条**:打字即可提问或控制演示(暂停/继续/跳页/任意问题),
+    /// 提交走 `presentation.onAsk` → State.submitTextInput → 演示答疑路由。这样演示无需开麦,腾讯会议等不受影响。
+    private var presentationAskBar: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "text.bubble.fill")
+                .foregroundStyle(Color.lingHolo).font(.system(size: 12))
+            TextField("打字提问或控制演示（暂停 / 继续 / 跳到第N页 / 任何问题）…", text: $draft)
+                .textFieldStyle(.plain)
+                .font(.system(size: 13))
+                .foregroundStyle(.white)
+                .onSubmit { submitAsk() }
+            Button { submitAsk() } label: {
+                Image(systemName: "arrow.up.circle.fill").font(.system(size: 18))
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(Color.lingHolo)
+            .disabled(draft.trimmingCharacters(in: .whitespaces).isEmpty)
+        }
+        .padding(.horizontal, 14).padding(.vertical, 9)
+        .background(Color.black.opacity(0.62))
+    }
+
+    private func submitAsk() {
+        let t = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !t.isEmpty else { return }
+        draft = ""
+        presentation.onAsk?(t)
     }
 }
 
