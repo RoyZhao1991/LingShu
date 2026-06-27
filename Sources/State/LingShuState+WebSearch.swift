@@ -20,6 +20,24 @@ extension LingShuState {
         }
     }
 
+    /// 便宜分类:回答这句话需不需要**联网查最新/实时信息**(会随时间变=YES)。供确定性查证兜底用——
+    /// 不靠模型自觉调 web_search(它判不准也不一定调),系统先判、会变就预取注入。**拿不准当作会变(YES)**。
+    func questionNeedsFreshInfo(_ question: String) async -> Bool {
+        let q = question.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard q.count >= 2 else { return false }
+        let sys = """
+        判断回答下面这句话是否需要**联网查最新/实时信息**,只输出一个词:YES 或 NO。
+        YES(答案会随时间变):汇率/股价/天气/价格、最新进展/版本/排名、产品或工具对比(谁更强/支持什么,如 codex vs claude)、现状、某公司或产品的最新动态、近期事件…
+        NO:铁定不随时间变的理论/定义/数学/算法/已定历史(光速、定义、排序原理、勾股定理);或根本不是事实问题(闲聊/打招呼/让你写代码做任务)。
+        拿不准会不会变 → 当作会变,输出 YES。
+        """
+        let session = LingShuAgentSession(id: "fresh-\(UUID().uuidString.prefix(6))",
+                                          system: sys, tools: [], model: controlPlaneModelAdapter(.triage), maxTurns: 1)
+        guard case .completed(let raw) = await session.send(q) else { return false }
+        let cleaned = LingShuReasoningText.stripThinkTags(raw).trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        return cleaned.hasPrefix("YES") || (cleaned.contains("YES") && !cleaned.contains("NO"))
+    }
+
     /// 联网搜索:优先 OpenRouter web 插件(真实时+来源,无密钥 DDG 已被封),没 key 回退 DDG。
     nonisolated static func performWebSearch(_ query: String, openRouterKey: String = "") async -> String {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)

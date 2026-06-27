@@ -347,7 +347,7 @@ extension LingShuState {
 
         let spokenBaseline = recentSpokenLines.count
 
-        let guidance: String
+        var guidance: String
         if isMinimalVoiceMode {
             guidance = "【对话模式】当前是语音对话,请像聊天一样直接、口语化、简洁地回答。不要派生子任务、不要写文件或跑命令、不要套用 PPT/文档等交付模板——这只是对话。"
         } else {
@@ -361,6 +361,14 @@ extension LingShuState {
             .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
             .joined(separator: "\n\n")
+        }
+        // **确定性查证兜底(2026-06-27)**:prompt 只能兜住带时间词的(汇率),兜不住"没时间词但会变"的(codex vs claude→模型凭2024旧记忆答)。
+        // 故:问答类先用便宜分类判"答案会不会随时间变",会变就**系统替它预取联网资料注入**——不靠模型自觉调 web_search(它判不准也不一定调)。
+        if !isMinimalVoiceMode, await questionNeedsFreshInfo(turn.prompt) {
+            let orKey = credentialStore.apiKey(forProvider: "openrouter") ?? ""
+            let fresh = await Self.performWebSearch(turn.prompt, openRouterKey: orKey)
+            guidance = "【系统已替你联网查到以下实时资料,**据此回答、别用旧记忆**;不够再自己调 web_search 补查】\n\(fresh)\n\n" + guidance
+            appendTrace(kind: .tool, actor: "确定性查证", title: "已预取联网资料", detail: String(turn.prompt.prefix(40)))
         }
 
         let result: LingShuAgentRunResult
