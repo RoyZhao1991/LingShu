@@ -387,6 +387,13 @@ extension LingShuState {
         if !preflightGuidance.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             initialMessages.append(.init(role: .system, content: preflightGuidance))
         }
+        // **通用 skill 可发现性也注入派发任务**(2026-06-27 修覆盖盲区):`matchedSkillHint` 此前只在主会话(executeMainTurn)
+        // 注入、漏了派发任务——而复杂任务一律走派发,于是永远看不到匹配的固化技能、从零现编(端到端实测实锤:做PPT派发
+        // 38次run_command没碰ppt-builder)。这是**通用机制**(按 skill 自己声明的 triggers 匹配,不写死任何场景),
+        // 该和主会话一个待遇。注入后用不用、用哪个仍是大脑判断——系统只负责"呈现",不替它"选用"。
+        if let skillHint = matchedSkillHint(for: prompt) {
+            initialMessages.append(.init(role: .system, content: skillHint))
+        }
         // **maker 是外部 agent(@Codex 等):把开发委托给它,你只编排+验收(maker≠checker 跨厂商)。**
         // 这条让 LOOP 以 codex 当 maker 跑——之前 maker 是灵枢自己的 session,现在换成 codex session,LOOP/验收/目标解析全不变。
         if let makerAgentID, let makerName {
