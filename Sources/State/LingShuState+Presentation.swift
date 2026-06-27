@@ -121,10 +121,17 @@ extension LingShuState {
     /// 返回 true=已直接路由,submitTextInput 不再走常规分诊。
     func handlePresentationStartIfNeeded(_ prompt: String) -> Bool {
         guard !presentationController.isActive else { return false }   // 已在演示 → 交给答疑路由
-        guard let paths = Self.detectPresentationRequest(prompt) else { return false }
+        // 文字里带路径 → 用文字路径;**否则有演示意图 + 附件是可演示文档 → 用附件路径**。
+        // 根治(2026-06-27):用户"讲解一下附件中的PPT"——附件没在文字里写路径,原 detectPresentationRequest 看不到附件
+        // → 落到大脑只读一读写个文稿、不进全屏演示。现在附件形式也能直达 present_documents。
+        var paths = Self.detectPresentationRequest(prompt) ?? []
+        if paths.isEmpty, Self.hasPresentationIntent(prompt) {
+            paths = presentableAttachmentPaths()
+        }
         let existing = paths.filter { FileManager.default.fileExists(atPath: $0) }
         guard !existing.isEmpty else { return false }                  // 路径不存在 → 交大脑常规处理(可能要先生成)
         chatMessages.append(.init(speaker: "你", text: prompt, isUser: true))
+        if !pendingAttachments.isEmpty { clearAttachments() }          // 附件已被演示路由消费,清掉免重复处理
         appendTrace(kind: .route, actor: "演示与答疑", title: "确定性路由",
                     detail: "识别为文档演示请求,直接走 present_documents 插件(\(existing.count) 篇),不靠模型选工具。")
         Task { @MainActor [weak self] in
@@ -148,6 +155,23 @@ extension LingShuState {
             if let m { paths.append(ns.substring(with: m.range)) }
         }
         return paths.isEmpty ? nil : paths
+    }
+
+    /// 仅判**演示意图**(不要求文字里有路径)——供"附件形式给文档 + 说讲解/演示"的路由用。
+    nonisolated static func hasPresentationIntent(_ prompt: String) -> Bool {
+        ["演示", "讲解", "放映", "讲一下", "讲讲", "带我看", "带人看", "过一遍", "present", "演讲", "汇报这", "讲这份", "念一下", "讲这"]
+            .contains { prompt.contains($0) }
+    }
+
+    /// `pendingAttachments` 里**可演示的文档**(演示文稿/文档类 或可演示扩展名 + 有本地路径)的绝对路径。
+    func presentableAttachmentPaths() -> [String] {
+        let exts: Set<String> = ["pdf", "pptx", "ppt", "docx", "doc", "key", "html", "htm", "md", "txt", "xlsx"]
+        return pendingAttachments.compactMap { att in
+            guard let url = att.localURL else { return nil }
+            guard att.kind == .presentation || att.kind == .document
+                || exts.contains(url.pathExtension.lowercased()) else { return nil }
+            return url.path
+        }
     }
 
     /// 演示进行时的用户输入拦截(**实时答疑,主线程线性**):返回 true=已作为演示交互处理,submitTextInput 不再走常规分诊。
