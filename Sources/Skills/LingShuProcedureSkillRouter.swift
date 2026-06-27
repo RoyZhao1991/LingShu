@@ -26,21 +26,22 @@ enum LingShuProcedureSkillRouter {
     /// 在已加载技能里找 replay 目标:触发词命中即匹配;并抽出口头给的参数。无命中返回 nil。
     static func matchReplay(_ input: String, skills: [LingShuProcedureSkill]) -> ReplayMatch? {
         let t = input.replacingOccurrences(of: " ", with: "")
+        let intents = ["用", "跑", "执行", "运行", "replay", "重放", "再做", "重做", "帮我做", "走一遍", "再来一遍"]
         // 命中最长触发词的那个技能(避免「报销」误中而「报销加班」该中更具体的)。
+        // **2026-06-27 修误劫持**:① **忽略单字触发词**(如「打」——录制残留,子串匹配下任何含「打开/打字」的长请求都会误中);
+        // ② 必须**显式调用**:输入以触发词开头,或执行动词**紧贴**触发词(「用输入文本」「跑报销」),而不是长任务里碰巧含触发词子串
+        // (原来「帮我做一个PPT…打开…」因含「打」+泛意图「帮我做」就被劫持,根治)。
         var best: (skill: LingShuProcedureSkill, triggerLen: Int)?
         for skill in skills {
-            for trig in skill.triggers where !trig.isEmpty {
+            for trig in skill.triggers {
                 let key = trig.replacingOccurrences(of: " ", with: "")
-                if t.contains(key), best == nil || key.count > best!.triggerLen {
-                    best = (skill, key.count)
-                }
+                guard key.count >= 2 else { continue }   // 单字触发词太宽,跳过
+                let explicit = t.hasPrefix(key) || intents.contains { t.contains($0 + key) }
+                guard explicit, t.contains(key), best == nil || key.count > best!.triggerLen else { continue }
+                best = (skill, key.count)
             }
         }
         guard let target = best?.skill else { return nil }
-        // 必须有"用/跑/执行/replay/重放/再做"这类执行意图,或直接以触发词开头,免得普通提到技能名也触发。
-        let intents = ["用", "跑", "执行", "运行", "replay", "重放", "再做", "重做", "帮我做", "走一遍", "再来一遍"]
-        let hasIntent = intents.contains { t.contains($0) } || target.triggers.contains { t.hasPrefix($0.replacingOccurrences(of: " ", with: "")) }
-        guard hasIntent else { return nil }
         return ReplayMatch(skill: target, params: extractParams(input, for: target))
     }
 
