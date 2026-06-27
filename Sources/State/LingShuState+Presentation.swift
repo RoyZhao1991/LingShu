@@ -24,7 +24,7 @@ extension LingShuState {
                 guard let self else { return verbatim }
                 let clean = verbatim.trimmingCharacters(in: .whitespacesAndNewlines)
                 guard !clean.isEmpty else { return "（这一页以图为主，我看着画面讲。）" }
-                let sys = "你是演示讲稿撰写者。把给定这一页的真实内容,改写成一段**口语化、可直接念出来**的讲解词(\(pace.narrationGuidance)),像真人当面讲这一页:自然、抓重点、不照本宣科逐字念。**只输出讲解词本身**,不要任何前后缀/页码/「这一页」之类开头,**绝不编造页面没有的事实**。"
+                let sys = "你是演示讲稿撰写者。把给定这一页的真实内容,改写成一段**口语化、可直接念出来**的讲解词(\(pace.narrationGuidance)),像真人当面讲这一页:自然、抓重点、不照本宣科逐字念。**若这份文档/这一页讲的就是你灵枢自己**(介绍灵枢的定位/架构/能力/成果),就**用第一人称('我'/'我的架构')、结合你真实的自我认知讲**,别把自己当外人用第三人称称呼'灵枢'。**只输出讲解词本身**,不要任何前后缀/页码/「这一页」之类开头,**绝不编造页面没有的事实**。"
                 let session = LingShuAgentSession(id: "narrate-\(UUID().uuidString.prefix(5))", system: sys, tools: [],
                                                   model: self.controlPlaneModelAdapter(.deliveryComposer), maxTurns: 1)
                 let r = await session.send("文档《\(title)》第 \(n)/\(total) 页的内容:\n\(String(clean.prefix(1200)))")
@@ -157,6 +157,7 @@ extension LingShuState {
         let trimmed = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return false }
         chatMessages.append(.init(speaker: "你", text: trimmed, isUser: true))   // 交互进聊天流(线性)
+        LingShuCueSound.playAcknowledgeChime()   // 处理中音效:收到输入立刻"受令"提示音(让用户听到指令已收到、进入处理)
         Task { @MainActor [weak self] in
             guard let self else { return }
             switch c.phase {
@@ -167,7 +168,9 @@ extension LingShuState {
                 if c.phase == .playing { c.requestPauseForQA(); await self.waitUntilPresentationPaused() }   // 先立刻停念稿
                 // **按语义让模型分类**听众这句话(暂停/继续/停止/提问),不靠硬编码关键词枚举(那覆盖不全)。
                 let beat = c.queue.currentScript?.currentBeat
+                let pulse = self.startPresentationProcessingPulse()   // 思考期"处理中"低忙音脉冲
                 let (intent, answer) = await self.classifyPresentationUtterance(trimmed, beat: beat, title: c.currentTitle)
+                pulse.cancel(); LingShuCueSound.busyStop()            // 出结果即停忙音,接着念答案/执行
                 switch intent {
                 case .resume:
                     self.appendPresentationLine("好,接着讲。"); await c.resume()
@@ -191,6 +194,17 @@ extension LingShuState {
             }
         }
         return true
+    }
+
+    /// 演示文本交互的"处理中"低忙音脉冲驱动:演示**不在自主模式**(没了那条自驱循环),故自带一条每 ~0.9s 驱动一次
+    /// `busyTick` 的 Task;调用方在拿到结果后 `cancel()` + `busyStop()`。
+    private func startPresentationProcessingPulse() -> Task<Void, Never> {
+        Task { @MainActor in
+            while !Task.isCancelled {
+                LingShuCueSound.busyTick()
+                try? await Task.sleep(nanoseconds: 900_000_000)
+            }
+        }
     }
 
     private func waitUntilPresentationPaused() async {
@@ -217,6 +231,7 @@ extension LingShuState {
         - 想**换讲解节奏/深度**(如「后面快速讲」「简要过一下就行」「概要说说剩下的」「详细讲」「恢复正常速度」)→ {"intent":"pace","pace":"detailed"或"brief"或"overview"}(快速=brief、概要=overview、详细/正常=detailed)
         - 想**跳到/翻到某一页**(如「跳到第5页」「翻到第3页」「我想看第8页」「回到第一页」)→ {"intent":"seek","page":页号数字}
         - 对内容提问、或说别的话 → {"intent":"question","answer":"结合当前这页内容、像真人当面口语简洁回答(40-140字),不复述整页、不编造页面没有的事"}
+        **重要:若这份文档讲的就是你灵枢自己(介绍灵枢的定位/架构/能力/课题成果),回答用第一人称('我'/'我的')、结合你真实的自我认知,别把自己当外人。**
         \(context)
         """
         let session = LingShuAgentSession(id: "qa-\(UUID().uuidString.prefix(5))", system: sys, tools: [],
