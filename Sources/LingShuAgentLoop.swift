@@ -484,14 +484,20 @@ actor LingShuAgentSession: LingShuAgentSessioning {
                     lastExitReason = .blockedAwaitingInput
                     return .blocked(question: Self.blockedPrompt(for: blocking))
                 }
-                // 停滞检测:连续 N 次发起完全相同(同名+同参)的工具调用 = 原地打转。
-                let signature = calls.map { "\($0.name)#\($0.argumentsJSON)" }.joined(separator: "|")
+                // 停滞检测:连续 N 次发起完全相同的工具调用 = 原地打转。**空/畸形参数归一为 #EMPTY**——
+                // 否则任何弱脑反复空调用同一工具(参数JSON略有差异)签名不同会漏判(实测某脑空 run_command×8 没被拦)。通用,非特判。
+                let signature = calls.map { Self.normalizedToolSignature(name: $0.name, argsJSON: $0.argumentsJSON) }.joined(separator: "|")
                 recentToolSignatures.append(signature)
                 let tail = recentToolSignatures.suffix(Self.stuckRepeatThreshold)
                 var pendingSteer: String? = nil
                 if tail.count == Self.stuckRepeatThreshold, Set(tail).count == 1 {
                     let name = calls.first?.name ?? "同一动作"
-                    if Self.optionalScaffoldTools.contains(name) {
+                    if tail.first?.contains("#EMPTY") == true {
+                        // **空/畸形参数反复调用同一工具(任何弱脑通病,非特判)**:它只是没填对参数、不是任务做不动 →
+                        // 纠偏让它带齐参数重调,别交还。清签名史给它重来的机会。
+                        recentToolSignatures.removeAll()
+                        pendingSteer = "【系统纠偏】你连续多次调用「\(name)」都没带上必需参数(空调用),所以一直没成。请**带齐完整参数重新调用**(如 run_command 要给 command、write_file 要给 path 和 content),或换个工具/方式把事做出来——别再发空调用了。"
+                    } else if Self.optionalScaffoldTools.contains(name) {
                         // 卡在**可选脚手架工具**(如 update_plan)上:计划不是目标——绝不为它交还。
                         // 清掉签名史 + 执行完这次后注入纠偏,让模型跳过计划、直接用通用工具把任务做出来。
                         recentToolSignatures.removeAll()
@@ -558,6 +564,24 @@ actor LingShuAgentSession: LingShuAgentSessioning {
         // 撞到安全天花板(极少):同样诚实交还,不假装收尾。
         lastExitReason = .maxTurnsCeiling
         return .maxTurnsReached(lastText: lastText.isEmpty ? "（已推进很多步仍未收敛，先停下交还以免空耗。）" : lastText)
+    }
+
+    /// 把工具调用签名归一:**实质为空的参数**(空对象 / 全空串 / 全 null)统一成 `name#EMPTY`,
+    /// 让停滞检测能抓住"反复空/畸形调用同一工具"(任何弱脑通病,非特判);非空则保留原始 name#args 签名。
+    nonisolated static func normalizedToolSignature(name: String, argsJSON: String) -> String {
+        let trimmed = argsJSON.trimmingCharacters(in: .whitespacesAndNewlines)
+        let empty: Bool
+        if let data = trimmed.data(using: .utf8),
+           let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            empty = obj.isEmpty || obj.values.allSatisfy { v in
+                if let s = v as? String { return s.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+                if v is NSNull { return true }
+                return false
+            }
+        } else {
+            empty = trimmed.isEmpty || trimmed == "{}" || trimmed.lowercased() == "null"
+        }
+        return empty ? "\(name)#EMPTY" : "\(name)#\(argsJSON)"
     }
 
     /// 给一组**未执行就交还**的 tool_calls 补上合成 tool 结果,保持 OpenAI 协议良构(每个 tool_call 必有 tool 响应)。
