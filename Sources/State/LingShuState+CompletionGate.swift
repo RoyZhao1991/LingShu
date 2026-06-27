@@ -129,7 +129,22 @@ extension LingShuState {
     func userPrerequisiteChoicePromptIfNeeded(resultText: String, taskRecordID: String?) -> LingShuRouteChoicePrompt? {
         guard let recordID = taskRecordID else { return nil }
         let original = resultText.trimmingCharacters(in: .whitespacesAndNewlines)
-        let hasTypedUserGap = !(gapAnalysis(for: recordID)?.blockingGaps.filter { Self.isActionableUserGap($0) } ?? []).isEmpty
+        // **修1(2026-06-27):任务已产出真实产物 → 别再要授权。** 产物在 = 能力本来就够、活已干成。
+        // 实测:红黑树PPT已核验交付,却因 gap 残留"本地文件系统授权"又弹授权框、用户授权后还把整份重做了一遍。
+        if (taskExecutionRecords.first { $0.id == recordID }?.artifacts ?? [])
+            .contains(where: { FileManager.default.fileExists(atPath: $0.location) }) {
+            return nil
+        }
+        // **修2(2026-06-27·权限级别,参考 codex/claude):权限给得够高(完整授权 / 开发全权)→ 系统/账号"授权"类(.permission)
+        // gap 视为已授权,不再每次弹框**(真缺凭据要人给 .humanConfirmation、要花钱 .funding、缺硬件 .device 仍问——
+        // 授权级别变不出别人的密钥/钱/硬件)。这就是"给的权限够高就不要每次授权"。
+        let fullyAuthorized = developmentPhaseFullAccess || autonomousPermissionLevel == .full
+        let actionableGaps = (gapAnalysis(for: recordID)?.blockingGaps ?? []).filter { gap in
+            guard Self.isActionableUserGap(gap) else { return false }
+            if fullyAuthorized, gap.kind == .permission { return false }
+            return true
+        }
+        let hasTypedUserGap = !actionableGaps.isEmpty
         let hasTextUserGate = Self.replyRequestsUserPrerequisite(original)
         guard hasTypedUserGap || hasTextUserGate else { return nil }
         let askFromGap = capabilityUserAsk(taskRecordID: recordID)
