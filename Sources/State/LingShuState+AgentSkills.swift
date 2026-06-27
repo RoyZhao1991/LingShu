@@ -153,9 +153,21 @@ extension LingShuState {
     func matchedSkillHint(for prompt: String) -> String? {
         let profile = expertProfileRegistry.profile(for: prompt)
         guard profile.id.hasPrefix("skill-") else { return nil }
+        // **降低摩擦(2026-06-27):把方法直接摆出来,而不是只说"先去调 apply_skill"。**
+        // 实测大脑(Kimi/DeepSeek 都有此病)看见"先 apply_skill"那一步嫌麻烦就跳过、改从零现编。把固化技能的
+        // **完整方法内联**进呈现,大脑不必多走一步就能照做。仍是"呈现 + 让大脑自己判断用不用",不强制、不写死场景
+        // (内联的是该 skill **自己声明的内容** promptBlock,通用机制非特判)。
+        let method = profile.promptBlock.trimmingCharacters(in: .whitespacesAndNewlines)
         let hasGenerator = profile.bundledScriptName != nil
-        return "【可用技能】本任务匹配到固化专家技能「\(profile.title)」\(hasGenerator ? "(含自带生成器脚本)" : "")。"
-            + "先调用 apply_skill 取它的设计系统/交付模板/评审清单\(hasGenerator ? "并就绪自带生成器" : "")，按它推进，别从零硬写。"
+        var out = "【本任务有现成的固化方法】匹配到固化专家技能「\(profile.title)」。**下面是它的完整方法——照它做通常更快更稳、产出更一致(你若判断确实不合适,也可以不照它做):**\n\n"
+        out += String(method.prefix(1800))
+        if hasGenerator {
+            out += "\n\n(它自带生成器脚本:调用 apply_skill 可把生成器就绪到工作目录再跑。)"
+        }
+        if !profile.reviewChecklist.isEmpty {
+            out += "\n\n交付前自查:" + profile.reviewChecklist.prefix(3).joined(separator: " / ")
+        }
+        return out
     }
 
     /// apply_skill 工具:模型按任务调取匹配技能(组合注册表:用户 > 策展 > 内置),
