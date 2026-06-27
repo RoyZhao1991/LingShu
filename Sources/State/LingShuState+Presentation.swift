@@ -91,11 +91,12 @@ extension LingShuState {
         // **重演/新演前先彻底停掉在跑的老演示**(取消播放任务 + 停循环 + 清 shownDocumentPath)。
         // 否则老 play 循环会在下面 buildQueue 通读生成讲稿那十几秒里**继续推画面**,而新演示从第1页念
         // → 画面跑到前面、语音却在第1页 = 脱节(2026-06-25 用户实测 bug)。必须在 buildQueue 之前停。
-        // **只有真有老演示在跑才停它**(取消播放+停循环+掐其音频);全新开演时不要 requestStop——否则它会顺手
-        // 掐掉刚播的开场"好的我开始演示了"那段(用户实测:开场音频没说完就被切)。开场音频独立输出,让它自然念完。
-        if presentationController.isActive || presentationPlaybackTask != nil {
-            presentationPlaybackTask?.cancel()
-            presentationPlaybackTask = nil
+        // 清掉可能残留的老播放任务(防僵尸);但**只有真有老演示在跑(presentationController.isActive)才 requestStop**——
+        // requestStop 会 `interruptAudio` 切掉刚说的开场音频。退出演示走 `c.stop()` 并不清 presentationPlaybackTask,
+        // 残留的(已结束的)task 让 "!= nil" 误判成"有老演示"→ 误 requestStop → 把开场音频切了(用户实测:退出后再开演,开场被切)。
+        presentationPlaybackTask?.cancel()
+        presentationPlaybackTask = nil
+        if presentationController.isActive {
             presentationController.requestStop()
         }
         installPresentationHooks()
