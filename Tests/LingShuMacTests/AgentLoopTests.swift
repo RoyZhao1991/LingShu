@@ -180,6 +180,41 @@ final class AgentLoopTests: XCTestCase {
         XCTAssertLessThan(used, 40, "停止位是停滞检测,不是 maxTurns 天花板")
     }
 
+    func testBigArgEmptySteersToChunkingEarly() async {
+        // 真实战(30min 报告任务)挖出:write_file 的 content 因单次体积过大被通道截断,**空着到达**,模型自认已带齐、
+        // 反复整块重传,最终自己绕了 20+ 轮才悟出"分块写"。本测证明:harness 在第 2 次空 content 就识别并 steer 到分块,
+        // 模型据此一步收尾——把弯路从 20+ 轮压到 2 轮。
+        final class StripsContentModel: LingShuAgentModel, @unchecked Sendable {
+            private(set) var writeAttempts = 0
+            private(set) var sawChunkSteer = false
+            func respond(messages: [LingShuAgentMessage], tools: [LingShuAgentTool]) async -> LingShuAgentModelResponse {
+                if messages.contains(where: { $0.role == .user && $0.content.contains("分块写小段") }) {
+                    sawChunkSteer = true
+                    return .text("已改用 heredoc 分块写,文件已落盘完成")
+                }
+                writeAttempts += 1   // 每轮都"整块写"——但 content 被通道吞掉,只剩 path
+                return .toolCalls([.init(id: "w\(writeAttempts)", name: "write_file",
+                                        argumentsJSON: "{\"path\":\"/Users/x/report.py\"}")])
+            }
+        }
+        let model = StripsContentModel()
+        // write_file 工具按真实 schema 声明 content 必需,停滞检测才能据此判"漏必需参数"。
+        let writeFile = LingShuAgentTool(
+            name: "write_file", description: "写文件",
+            parametersJSON: "{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"content\":{\"type\":\"string\"}},\"required\":[\"path\",\"content\"]}"
+        ) { _ in "已写入(但 content 为空)" }
+        let session = LingShuAgentSession(id: "bigarg", tools: [writeFile], model: model, maxTurns: 40)
+
+        let result = await session.send("生成一份很大的报告脚本并运行")
+        XCTAssertEqual(result, .completed(text: "已改用 heredoc 分块写,文件已落盘完成"))
+        XCTAssertTrue(model.sawChunkSteer, "应在空 content 反复出现时 steer 到分块写")
+        XCTAssertEqual(model.writeAttempts, LingShuAgentSession.bigArgEmptyChunkSteerThreshold,
+                       "第 2 次空 content 就该 steer,不应让模型整块重传超过阈值")
+        let messages = await session.messages
+        XCTAssertTrue(messages.contains { $0.role == .user && $0.content.contains("被通道截断丢了") && $0.content.contains("cat >>") },
+                      "纠偏应明确告知是体积截断、并给出 heredoc 分块的确定性做法")
+    }
+
     func testReadOnlyStallHandsBackWhenNeverMutating() async {
         // 弱模型只反复读/查看、从不动手改:停滞检测抓不到(每次参数不同),但「只读空转门」应在阈值处诚实交还,
         // 而非跑满天花板。证明对各种模型的犹豫空转有兜底。

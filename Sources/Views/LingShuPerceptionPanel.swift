@@ -22,7 +22,7 @@ struct LingShuPerceptionPanel: View {
                     title: "嘴巴",
                     value: state.voiceOutputEnabled ? (voice.isSpeaking ? "发声中" : "可发声") : "静音",
                     icon: state.voiceOutputEnabled ? "speaker.wave.2.fill" : "speaker.slash.fill",
-                    color: state.voiceOutputEnabled ? .lingHolo : .white.opacity(0.46)
+                    color: state.voiceOutputEnabled ? .lingHolo : Color.lingFg.opacity(0.46)
                 )
 
                 PerceptionStatusPill(
@@ -86,7 +86,7 @@ struct LingShuPerceptionPanel: View {
                     VStack(alignment: .leading, spacing: 5) {
                         Text(primaryPerceptionSummary)
                             .font(.system(size: 12.5, weight: .semibold))
-                            .foregroundStyle(.white.opacity(0.84))
+                            .foregroundStyle(Color.lingFg.opacity(0.84))
                             .lineLimit(2)
 
                         if let observation = vision.latestObservation {
@@ -96,7 +96,7 @@ struct LingShuPerceptionPanel: View {
                                 Label(observation.recognizedText.isEmpty ? "无文字" : "有文字", systemImage: "text.viewfinder")
                             }
                             .font(.system(size: 10.5, weight: .semibold, design: .monospaced))
-                            .foregroundStyle(.white.opacity(0.46))
+                            .foregroundStyle(Color.lingFg.opacity(0.46))
 
                             if !observation.recognizedText.isEmpty {
                                 Text(observation.recognizedText)
@@ -114,7 +114,7 @@ struct LingShuPerceptionPanel: View {
                             }
                         }
                         .font(.system(size: 10.5, weight: .semibold, design: .monospaced))
-                        .foregroundStyle(.white.opacity(0.46))
+                        .foregroundStyle(Color.lingFg.opacity(0.46))
                     }
 
                     Spacer(minLength: 0)
@@ -122,7 +122,7 @@ struct LingShuPerceptionPanel: View {
             }
         }
         .padding(12)
-        .background(Color.white.opacity(0.052), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .background(Color.lingFg.opacity(0.052), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .stroke(Color.lingHolo.opacity(vision.isCameraRunning || voice.isRecording ? 0.26 : 0.12))
@@ -191,7 +191,7 @@ struct PerceptionSelfTestReportSheet: View {
             HStack {
                 Label("感知自检报告", systemImage: "stethoscope")
                     .font(.system(size: 15, weight: .bold))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(Color.lingFg)
                 Spacer()
                 Text(report.summaryLine)
                     .font(.system(size: 11.5, weight: .semibold))
@@ -201,9 +201,9 @@ struct PerceptionSelfTestReportSheet: View {
                 } label: {
                     Image(systemName: "xmark")
                         .font(.system(size: 11, weight: .bold))
-                        .foregroundStyle(.white.opacity(0.7))
+                        .foregroundStyle(Color.lingFg.opacity(0.7))
                         .frame(width: 26, height: 26)
-                        .background(Color.white.opacity(0.07), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+                        .background(Color.lingFg.opacity(0.07), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
                 }
                 .buttonStyle(.plain)
             }
@@ -223,25 +223,25 @@ struct PerceptionSelfTestReportSheet: View {
                                 HStack(spacing: 8) {
                                     Text(item.name)
                                         .font(.system(size: 12.5, weight: .bold))
-                                        .foregroundStyle(.white.opacity(0.92))
+                                        .foregroundStyle(Color.lingFg.opacity(0.92))
                                     Text(item.verdict.label)
                                         .font(.system(size: 10.5, weight: .bold))
                                         .foregroundStyle(color(for: item.verdict))
                                     if let latency = item.latencyMillis {
                                         Text("\(latency)ms")
                                             .font(.system(size: 10.5, weight: .semibold, design: .monospaced))
-                                            .foregroundStyle(.white.opacity(0.4))
+                                            .foregroundStyle(Color.lingFg.opacity(0.4))
                                     }
                                 }
                                 Text(item.detail)
                                     .font(.system(size: 11.5, weight: .medium))
-                                    .foregroundStyle(.white.opacity(0.6))
+                                    .foregroundStyle(Color.lingFg.opacity(0.6))
                                     .fixedSize(horizontal: false, vertical: true)
                             }
                             Spacer(minLength: 0)
                         }
                         .padding(10)
-                        .background(Color.white.opacity(0.045), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                        .background(Color.lingFg.opacity(0.045), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
                     }
                 }
                 .padding(14)
@@ -265,7 +265,7 @@ struct PerceptionSelfTestReportSheet: View {
         case .pass: Color.lingHolo
         case .degraded: .orange
         case .fail: .red
-        case .skipped: .white.opacity(0.4)
+        case .skipped: Color.lingFg.opacity(0.4)
         }
     }
 }
@@ -286,7 +286,7 @@ struct PerceptionStatusPill: View {
             VStack(alignment: .leading, spacing: 1) {
                 Text(title)
                     .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.46))
+                    .foregroundStyle(Color.lingFg.opacity(0.46))
                 Text(value)
                     .font(.system(size: 11.5, weight: .bold))
                     .foregroundStyle(color)

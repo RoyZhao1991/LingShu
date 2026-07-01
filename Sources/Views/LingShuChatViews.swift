@@ -20,12 +20,12 @@ struct LingShuTaskProgressIndicator: View {
                     .frame(width: 16, height: 16)
                 Text(stage)
                     .font(.system(size: 13.5, weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.85))
+                    .foregroundStyle(Color.lingFg.opacity(0.85))
                 TimelineView(.periodic(from: .now, by: 1)) { context in
                     let elapsed = max(0, Int(context.date.timeIntervalSince(startedAt)))
                     Text("\(elapsed)s")
                         .font(.system(size: 11.5, weight: .medium, design: .monospaced))
-                        .foregroundStyle(.white.opacity(0.4))
+                        .foregroundStyle(Color.lingFg.opacity(0.4))
                 }
                 Spacer(minLength: 8)
                 if onOpen != nil {
@@ -45,6 +45,9 @@ struct LingShuTaskProgressIndicator: View {
     }
 }
 
+/// 点开附件重新预览时的目标(`.sheet(item:)` 要 Identifiable)。
+struct AttachmentPreviewItem: Identifiable { let id = UUID(); let url: URL }
+
 struct ChatBubbleView: View {
     let message: ChatMessage
     @ObservedObject var state: LingShuState
@@ -52,6 +55,8 @@ struct ChatBubbleView: View {
     @State private var glow = false
     /// 气泡内"追加信息"输入(任务等用户输入时)。
     @State private var taskReplyText = ""
+    /// 点击已发送附件 → 重新预览的目标。
+    @State private var previewItem: AttachmentPreviewItem?
 
     private var accent: Color { message.isUser ? .lingHolo : .lingHoloAlt }
 
@@ -72,7 +77,7 @@ struct ChatBubbleView: View {
             VStack(alignment: .leading, spacing: 6) {
                 Text(message.isUser ? state.loc("你", "You") : state.appName)
                     .font(.system(size: 11, weight: .bold))
-                    .foregroundStyle(message.isUser ? .white.opacity(0.72) : Color.lingHolo.opacity(0.84))
+                    .foregroundStyle(message.isUser ? Color.lingFg.opacity(0.72) : Color.lingHolo.opacity(0.84))
 
                 if message.isLoading && !message.isUser {
                     // 已有流式正文(message.text 非空)→ 逐字显示;还没正文(工具执行中/未开始)→ 紧凑进度行。
@@ -89,7 +94,7 @@ struct ChatBubbleView: View {
                                 Button { state.deletePendingChatTurn(bubbleID: message.id) } label: {
                                     Image(systemName: "xmark.circle.fill")
                                         .font(.system(size: 15))
-                                        .foregroundStyle(.white.opacity(0.35))
+                                        .foregroundStyle(Color.lingFg.opacity(0.35))
                                 }
                                 .buttonStyle(.plain)
                                 .help("删除这条等待中的问答(执行中的不可删)")
@@ -108,7 +113,7 @@ struct ChatBubbleView: View {
                                 if message.text.isEmpty {
                                     Text("思考中…")
                                         .font(.system(size: 14.5, weight: .medium))
-                                        .foregroundStyle(.white.opacity(0.5))
+                                        .foregroundStyle(Color.lingFg.opacity(0.5))
                                 } else {
                                     LingShuMessageContentView(text: message.text)
                                 }
@@ -118,7 +123,7 @@ struct ChatBubbleView: View {
                             if let thinking = message.thinkingPreview, !thinking.isEmpty {
                                 Text(thinking)
                                     .font(.system(size: 11.5, weight: .regular))
-                                    .foregroundStyle(.white.opacity(0.38))
+                                    .foregroundStyle(Color.lingFg.opacity(0.38))
                                     .lineLimit(4)
                                     .fixedSize(horizontal: false, vertical: true)
                                     .padding(.leading, 25)
@@ -130,12 +135,15 @@ struct ChatBubbleView: View {
                 } else if message.isUser {
                     Text(message.text)
                         .font(.system(size: 14.5, weight: .medium))
-                        .foregroundStyle(.white.opacity(0.94))
+                        .foregroundStyle(Color.lingFg.opacity(0.94))
                         .fixedSize(horizontal: false, vertical: true)
                         .textSelection(.enabled)
                     if let names = message.attachmentNames, !names.isEmpty {
-                        // 已发送的附件:在消息气泡里展示(发出去了、留痕),输入框托盘已清空。
-                        FlowChips(names: names)
+                        // 已发送的附件:在消息气泡里展示(留痕);**点击可重新预览**(发送时已落到稳定目录,见 persistedSentAttachmentPath)。
+                        FlowChips(names: names, paths: message.attachmentPaths) { url in previewItem = .init(url: url) }
+                            .sheet(item: $previewItem) { item in
+                                LingShuArtifactPreviewSheet(title: item.url.lastPathComponent, fileURL: item.url) { previewItem = nil }
+                            }
                     }
                 } else {
                     // 灵枢回复：结构化分块（代码块单独成卡片，正文走 Markdown）。
@@ -207,7 +215,7 @@ struct ChatBubbleView: View {
                 LinearGradient(
                     colors: message.isUser
                         ? [Color.lingHolo.opacity(0.16), Color.lingHolo.opacity(0.05)]
-                        : [Color.white.opacity(0.06), Color.white.opacity(0.02)],
+                        : [Color.lingFg.opacity(0.06), Color.lingFg.opacity(0.02)],
                     startPoint: message.isUser ? .topTrailing : .topLeading,
                     endPoint: message.isUser ? .bottomLeading : .bottomTrailing
                 )
@@ -239,29 +247,45 @@ struct ChatBubbleView: View {
 /// 已发送附件的小芯片(在用户消息气泡里展示):文件图标 + 文件名。竖排,最多展示 6 个 + 计数。
 struct FlowChips: View {
     let names: [String]
+    /// 与 names 平行的本地路径(可点重新预览);nil/空串=该条不可预览(旧记录/无落地文件)。
+    var paths: [String]? = nil
+    var onPreview: ((URL) -> Void)? = nil
     var body: some View {
-        let shown = Array(names.prefix(6))
         VStack(alignment: .leading, spacing: 5) {
-            ForEach(Array(shown.enumerated()), id: \.offset) { _, name in
-                HStack(spacing: 6) {
-                    Image(systemName: icon(for: name))
-                        .font(.system(size: 10.5, weight: .bold))
-                        .foregroundStyle(Color.lingHolo)
-                    Text(name)
-                        .font(.system(size: 11.5, weight: .medium))
-                        .foregroundStyle(.white.opacity(0.82))
-                        .lineLimit(1).truncationMode(.middle)
+            ForEach(Array(names.enumerated().prefix(6)), id: \.offset) { idx, name in
+                let path = (paths.flatMap { idx < $0.count ? $0[idx] : nil }) ?? ""
+                let previewable = !path.isEmpty && onPreview != nil && FileManager.default.fileExists(atPath: path)
+                if previewable {
+                    Button { onPreview?(URL(fileURLWithPath: path)) } label: { chip(name, previewable: true) }
+                        .buttonStyle(.plain).help("点击重新预览")
+                } else {
+                    chip(name, previewable: false)
                 }
-                .padding(.horizontal, 8).padding(.vertical, 4)
-                .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 7))
             }
-            if names.count > shown.count {
+            if names.count > 6 {
                 Text("等 \(names.count) 个文件")
                     .font(.system(size: 10.5, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.5))
+                    .foregroundStyle(Color.lingFg.opacity(0.5))
             }
         }
         .padding(.top, 2)
+    }
+
+    @ViewBuilder private func chip(_ name: String, previewable: Bool) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: icon(for: name))
+                .font(.system(size: 10.5, weight: .bold))
+                .foregroundStyle(Color.lingHolo)
+            Text(name)
+                .font(.system(size: 11.5, weight: .medium))
+                .foregroundStyle(Color.lingFg.opacity(0.82))
+                .lineLimit(1).truncationMode(.middle)
+            if previewable {
+                Image(systemName: "eye").font(.system(size: 9, weight: .bold)).foregroundStyle(Color.lingFg.opacity(0.4))
+            }
+        }
+        .padding(.horizontal, 8).padding(.vertical, 4)
+        .background(Color.lingFg.opacity(previewable ? 0.12 : 0.08), in: RoundedRectangle(cornerRadius: 7))
     }
     private func icon(for name: String) -> String {
         switch (name as NSString).pathExtension.lowercased() {

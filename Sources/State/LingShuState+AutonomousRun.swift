@@ -107,12 +107,10 @@ extension LingShuState {
             appendTrace(kind: .warning, actor: "独立运行", title: "等待答复", detail: autonomousPendingQuestion ?? "")
             return
         }
-        // **演示被暂停 → 从暂停页继续演示**(不是去续自主循环)。否则「继续」按钮不会让演示接着念(2026-06-25 bug)。
-        if presentationController.phase == .pausedForQA {
-            enterAutonomousRunningState(statusLine: "继续演示。")
-            appendTrace(kind: .runtime, actor: "演示与答疑", title: "继续演示", detail: "从暂停页接着念。")
-            presentationPlaybackTask?.cancel()
-            presentationPlaybackTask = Task { @MainActor [weak self] in await self?.presentationController.resume() }
+        // **内置技能可续暂停 → 让它接着跑**(如演示从暂停页继续,不是去续自主循环)。否则「继续」按钮不会让演示接着念。
+        // 通用遍历,内核不点名;技能 onResume 内部自行 cancel 旧任务 + 续 + 落 trace。
+        for skill in builtinSkills where skill.onResume() {
+            enterAutonomousRunningState(statusLine: "继续。")
             return
         }
         enterAutonomousRunningState(statusLine: "已从暂停恢复，继续推进。")
@@ -122,9 +120,9 @@ extension LingShuState {
 
     func stopAutonomousRun() {
         guard autonomousRun.phase != .idle else { return }
-        // **退出时也彻底停演示**:否则只关了预览窗、我的 presentationController play 循环还在后台念稿/推页,
-        // 且 presentation 仍 isActive → 之后再发「演示」会被确定性路由挡掉、转给大脑追问(2026-06-25 实测)。
-        stopPresentationIfActive()
+        // **退出时也彻底停内置技能(演示等)**:否则只关了预览窗、演示 play 循环还在后台念稿/推页,
+        // 且仍 isActive → 之后再发「演示」会被确定性路由挡掉、转给大脑追问(2026-06-25 实测)。
+        builtinSkills.forEach { $0.onCancel() }
         let previousObjective = autonomousRun.objective
         autonomousRunTask?.cancel()
         autonomousRunTask = nil
@@ -196,12 +194,22 @@ extension LingShuState {
             }
             let result: LingShuAgentRunResult
             let isStandingKickoff = objective.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !continuing
+            // **托管模式演示交接**:本次上岗是为「演示与答疑」确定性接管 → **不寒暄、不发起 kickoff 回合**
+            // (演示的"好的我开始演示了"就是开场,招呼会盖掉它);只静默在岗(开麦/本体在位),语音由演示答疑处理。
+            if isStandingKickoff, self.presentationManagedHandoff {
+                self.presentationManagedHandoff = false
+                self.updateAutonomousRun(phase: .running, statusLine: "在岗 · 演示中。")
+                self.missionTitle = "灵枢在岗 · 演示中"
+                self.missionStatus = "演示与答疑播放中;语音可随时打断提问。"
+                self.enterCoreState(.standby, resetTimer: false)
+                return
+            }
             if isStandingKickoff {
                 // 常驻上岗开场白:用**无工具一次性会话**生成一句招呼。主会话带 speak 工具会一边出声(①)
                 // 一边产出回复气泡被自动朗读(②)→ 双份音频(实测日志确认);无工具会话只回一句文本 → 自动朗读念一次。
                 let greeter = LingShuAgentSession(
                     id: "greet-\(UUID().uuidString.prefix(6))",
-                    system: "你是灵枢,刚上岗。用一句自然的话向主人示意你已就位待命即可。**别自我介绍、别用具体名字称呼(历史里的名字可能是误识别)、别调任何工具**,只输出这一句招呼。",
+                    system: LingShuPersona.system("你刚上岗。用一句自然的话向主人示意你已就位待命即可。**别自我介绍、别用具体名字称呼(历史里的名字可能是误识别)、别调任何工具**,只输出这一句招呼。"),
                     tools: [],
                     model: self.makeAgentModelAdapter(),
                     maxTurns: 1

@@ -27,7 +27,7 @@ struct LingShuTopPerceptionStrip: View {
             }
             .padding(.horizontal, 10)
             .frame(height: 34)
-            .background(Color.white.opacity(0.065), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .background(Color.lingFg.opacity(0.065), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
             .overlay {
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
                     .stroke(Color.lingHolo.opacity(0.12))
@@ -98,12 +98,12 @@ struct PerceptionDotStatus: View {
 
             Text(title)
                 .font(.system(size: 11.5, weight: .bold))
-                .foregroundStyle(.white.opacity(0.86))
+                .foregroundStyle(Color.lingFg.opacity(0.86))
 
             if !compact {
                 Text(value)
                     .font(.system(size: 10.5, weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.48))
+                    .foregroundStyle(Color.lingFg.opacity(0.48))
                     .lineLimit(1)
             }
         }
@@ -121,7 +121,7 @@ struct LingShuPerceptionPopoverContent: View {
             HStack {
                 Text("实时感知")
                     .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(Color.lingFg)
 
                 Spacer()
 
@@ -144,7 +144,7 @@ struct LingShuPerceptionPopoverContent: View {
                 HStack(spacing: 8) {
                     Text("语音理解")
                         .font(.system(size: 11.5, weight: .semibold))
-                        .foregroundStyle(.white.opacity(0.48))
+                        .foregroundStyle(Color.lingFg.opacity(0.48))
                         .frame(width: 56, alignment: .leading)
 
                     Picker("", selection: Binding<String>(
@@ -169,7 +169,7 @@ struct LingShuPerceptionPopoverContent: View {
                             .font(.system(size: 11.5, weight: .bold))
                             .foregroundStyle(Color.lingHolo)
                             .frame(width: 24, height: 24)
-                            .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                            .background(Color.lingFg.opacity(0.06), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
                     }
                     .buttonStyle(.plain)
                     .help("重新检测本地语音模型")
@@ -177,7 +177,7 @@ struct LingShuPerceptionPopoverContent: View {
 
                 Text(voice.transcriptionProvider.note)
                     .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.48))
+                    .foregroundStyle(Color.lingFg.opacity(0.48))
                     .fixedSize(horizontal: false, vertical: true)
 
                 HStack(spacing: 7) {
@@ -187,18 +187,18 @@ struct LingShuPerceptionPopoverContent: View {
 
                     Text("SenseVoice")
                         .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(.white.opacity(0.56))
+                        .foregroundStyle(Color.lingFg.opacity(0.56))
 
                     Text(voice.embeddedASRStatus.compactDiagnostic)
                         .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(voice.embeddedASRStatus.isAvailable ? Color.green.opacity(0.85) : .white.opacity(0.46))
+                        .foregroundStyle(voice.embeddedASRStatus.isAvailable ? Color.green.opacity(0.85) : Color.lingFg.opacity(0.46))
                         .lineLimit(1)
 
                     Spacer(minLength: 0)
                 }
             }
             .padding(10)
-            .background(Color.white.opacity(0.045), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .background(Color.lingFg.opacity(0.045), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
             .overlay {
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
                     .stroke(Color.lingHolo.opacity(0.1))
@@ -208,7 +208,7 @@ struct LingShuPerceptionPopoverContent: View {
                 HStack(spacing: 8) {
                     Text("语音输出")
                         .font(.system(size: 11.5, weight: .semibold))
-                        .foregroundStyle(.white.opacity(0.48))
+                        .foregroundStyle(Color.lingFg.opacity(0.48))
                         .frame(width: 56, alignment: .leading)
 
                     Picker("", selection: Binding<String>(
@@ -231,7 +231,7 @@ struct LingShuPerceptionPopoverContent: View {
                 HStack(spacing: 8) {
                     Text("音色")
                         .font(.system(size: 11.5, weight: .semibold))
-                        .foregroundStyle(.white.opacity(0.48))
+                        .foregroundStyle(Color.lingFg.opacity(0.48))
                         .frame(width: 56, alignment: .leading)
 
                     Picker("", selection: Binding<String>(
@@ -255,10 +255,10 @@ struct LingShuPerceptionPopoverContent: View {
                     TextField("TTS endpoint", text: $voice.speechOutputEndpoint)
                         .textFieldStyle(.plain)
                         .font(.system(size: 11.5, weight: .semibold, design: .monospaced))
-                        .foregroundStyle(.white)
+                        .foregroundStyle(Color.lingFg)
                         .padding(.horizontal, 9)
                         .frame(height: 28)
-                        .background(Color.white.opacity(0.075), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+                        .background(Color.lingFg.opacity(0.075), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
                         .overlay {
                             RoundedRectangle(cornerRadius: 7, style: .continuous)
                                 .stroke(Color.lingHolo.opacity(0.14))
@@ -267,7 +267,7 @@ struct LingShuPerceptionPopoverContent: View {
 
                 Text(voice.speechOutputProvider.note)
                     .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.48))
+                    .foregroundStyle(Color.lingFg.opacity(0.48))
                     .fixedSize(horizontal: false, vertical: true)
 
                 HStack(spacing: 7) {
@@ -278,18 +278,18 @@ struct LingShuPerceptionPopoverContent: View {
 
                     Text("云端 TTS")
                         .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(.white.opacity(0.56))
+                        .foregroundStyle(Color.lingFg.opacity(0.56))
 
                     Text(isConfigured ? "已配置" : "待配置")
                         .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(isConfigured ? Color.green.opacity(0.85) : .white.opacity(0.46))
+                        .foregroundStyle(isConfigured ? Color.green.opacity(0.85) : Color.lingFg.opacity(0.46))
                         .lineLimit(1)
 
                     Spacer(minLength: 0)
                 }
             }
             .padding(10)
-            .background(Color.white.opacity(0.045), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .background(Color.lingFg.opacity(0.045), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
             .overlay {
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
                     .stroke(Color.lingHolo.opacity(0.1))
@@ -299,21 +299,21 @@ struct LingShuPerceptionPopoverContent: View {
                 Toggle("使用触发词", isOn: $state.requiresVoiceWakeWord)
                     .toggleStyle(.switch)
                     .font(.system(size: 11.5, weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.72))
+                    .foregroundStyle(Color.lingFg.opacity(0.72))
 
                 HStack(spacing: 8) {
                     Text("触发词")
                         .font(.system(size: 11.5, weight: .semibold))
-                        .foregroundStyle(.white.opacity(0.48))
+                        .foregroundStyle(Color.lingFg.opacity(0.48))
                         .frame(width: 42, alignment: .leading)
 
                     TextField("灵枢", text: $state.voiceWakeWord)
                         .textFieldStyle(.plain)
                         .font(.system(size: 12.5, weight: .semibold))
-                        .foregroundStyle(.white)
+                        .foregroundStyle(Color.lingFg)
                         .padding(.horizontal, 9)
                         .frame(height: 28)
-                        .background(Color.white.opacity(0.075), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+                        .background(Color.lingFg.opacity(0.075), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
                         .overlay {
                             RoundedRectangle(cornerRadius: 7, style: .continuous)
                                 .stroke(Color.lingHolo.opacity(0.14))
@@ -322,11 +322,11 @@ struct LingShuPerceptionPopoverContent: View {
 
                 Text(voiceModeHint)
                     .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.48))
+                    .foregroundStyle(Color.lingFg.opacity(0.48))
                     .fixedSize(horizontal: false, vertical: true)
             }
             .padding(10)
-            .background(Color.white.opacity(0.045), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .background(Color.lingFg.opacity(0.045), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
             .overlay {
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
                     .stroke(Color.lingHolo.opacity(0.1))
@@ -374,7 +374,7 @@ struct LingShuPerceptionPopoverContent: View {
 
             Text(primaryPerceptionSummary)
                 .font(.system(size: 12.5, weight: .medium))
-                .foregroundStyle(.white.opacity(0.72))
+                .foregroundStyle(Color.lingFg.opacity(0.72))
                 .fixedSize(horizontal: false, vertical: true)
 
             HStack {
@@ -397,7 +397,7 @@ struct LingShuPerceptionPopoverContent: View {
                 }
             }
             .font(.system(size: 11, weight: .semibold, design: .monospaced))
-            .foregroundStyle(.white.opacity(0.46))
+            .foregroundStyle(Color.lingFg.opacity(0.46))
         }
     }
 
@@ -438,11 +438,11 @@ struct PerceptionActionButton: View {
         Button(action: action) {
             Label(title, systemImage: icon)
                 .font(.system(size: 11.5, weight: .semibold))
-                .foregroundStyle(isActive ? Color.lingVoid : .white.opacity(0.82))
+                .foregroundStyle(isActive ? Color.lingVoid : Color.lingFg.opacity(0.82))
                 .frame(maxWidth: .infinity)
                 .frame(height: 30)
                 .background(
-                    isActive ? Color.lingHolo : Color.white.opacity(0.075),
+                    isActive ? Color.lingHolo : Color.lingFg.opacity(0.075),
                     in: RoundedRectangle(cornerRadius: 7, style: .continuous)
                 )
                 .overlay {
@@ -468,12 +468,12 @@ struct PerceptionDetailRow: View {
 
             Text(label)
                 .font(.system(size: 11.5, weight: .semibold))
-                .foregroundStyle(.white.opacity(0.58))
+                .foregroundStyle(Color.lingFg.opacity(0.58))
                 .frame(width: 36, alignment: .leading)
 
             Text(value)
                 .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(.white.opacity(0.82))
+                .foregroundStyle(Color.lingFg.opacity(0.82))
                 .lineLimit(1)
 
             Spacer(minLength: 0)

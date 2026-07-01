@@ -11,20 +11,20 @@ struct LingShuSelfCheckPanel: View {
             HStack(spacing: 8) {
                 Image(systemName: "scope").font(.system(size: 14, weight: .bold)).foregroundStyle(Color.lingHolo)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("自检 · 灵枢掌握的自己").font(.system(size: 14, weight: .bold)).foregroundStyle(.white.opacity(0.92))
+                    Text("自检 · 灵枢掌握的自己").font(.system(size: 14, weight: .bold)).foregroundStyle(Color.lingFg.opacity(0.92))
                     Text("整体架构 + 实时能力——大脑也经 self_inspect 工具拉同一份自我认知,用于答自指/规划/自进化")
-                        .font(.system(size: 11)).foregroundStyle(.white.opacity(0.45))
+                        .font(.system(size: 11)).foregroundStyle(Color.lingFg.opacity(0.45))
                 }
                 Spacer(minLength: 0)
                 Button { snapshot = state.assembleSelfInspection() } label: {
                     Image(systemName: "arrow.clockwise").font(.system(size: 12, weight: .bold))
                 }
-                .buttonStyle(.plain).foregroundStyle(.white.opacity(0.5)).help("刷新自检")
+                .buttonStyle(.plain).foregroundStyle(Color.lingFg.opacity(0.5)).help("刷新自检")
             }
 
             if let snap = snapshot {
                 Text(snap.oneLiner)
-                    .font(.system(size: 12.5, weight: .medium)).foregroundStyle(.white.opacity(0.85))
+                    .font(.system(size: 12.5, weight: .medium)).foregroundStyle(Color.lingFg.opacity(0.85))
                     .padding(12).frame(maxWidth: .infinity, alignment: .leading)
                     .background(Color.lingHolo.opacity(0.08), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
 
@@ -40,8 +40,8 @@ struct LingShuSelfCheckPanel: View {
 
     @ViewBuilder private func groupHeader(_ t: String, _ sub: String) -> some View {
         VStack(alignment: .leading, spacing: 2) {
-            Text(t).font(.system(size: 13, weight: .bold)).foregroundStyle(.white.opacity(0.9))
-            Text(sub).font(.system(size: 11)).foregroundStyle(.white.opacity(0.4))
+            Text(t).font(.system(size: 13, weight: .bold)).foregroundStyle(Color.lingFg.opacity(0.9))
+            Text(sub).font(.system(size: 11)).foregroundStyle(Color.lingFg.opacity(0.4))
         }
         .padding(.top, 6)
     }
@@ -52,13 +52,13 @@ struct LingShuSelfCheckPanel: View {
             ForEach(Array(s.items.enumerated()), id: \.offset) { _, item in
                 HStack(alignment: .top, spacing: 6) {
                     Circle().fill(accent.opacity(0.6)).frame(width: 4, height: 4).padding(.top, 6)
-                    Text(item).font(.system(size: 12)).foregroundStyle(.white.opacity(0.78))
+                    Text(item).font(.system(size: 12)).foregroundStyle(Color.lingFg.opacity(0.78))
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
         }
         .padding(12).frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.white.opacity(0.04), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+        .background(Color.lingFg.opacity(0.04), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 9, style: .continuous).stroke(accent.opacity(0.18), lineWidth: 1))
     }
 }

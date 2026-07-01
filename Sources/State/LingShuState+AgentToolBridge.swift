@@ -171,11 +171,24 @@ extension LingShuState {
         }
     }
 
+    /// 从一段 JSON 里取某个字段的**字符串形式**。
+    /// **标量数字/布尔也照取**(返回其字符串形式):大模型常把 `page`/`index`/`lines`/`on` 这类字段直接出成
+    /// JSON 数字/布尔(`{"page":4}` 而非 `{"page":"4"}`)——尤其当提示词要求"出阿拉伯整数"时它必然出数字。
+    /// 旧实现只 `as? String`,碰上数字一律返回 nil,导致 `Int(jsonField(...))` 全线静默回退默认值
+    /// (实测 bug:演示中说"从第四页开始演示",大脑出 `{"intent":"seek","page":4}`,page 被读成 nil→回退追问页号)。
+    /// 故这里把数字/布尔标量也归一成字符串,所有 `Int(...)`/布尔判定的调用方一并修好(通用,非某场景定制)。
     nonisolated static func jsonField(_ json: String, _ key: String) -> String? {
         guard
             let data = json.data(using: .utf8),
             let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         else { return nil }
-        return object[key] as? String
+        switch object[key] {
+        case let s as String: return s
+        case let n as NSNumber:
+            // JSON 布尔在 Foundation 里也是 NSNumber——单独认出来,回 "true"/"false" 而非 "1"/"0"(布尔调用方据此判定)。
+            if CFGetTypeID(n) == CFBooleanGetTypeID() { return n.boolValue ? "true" : "false" }
+            return n.stringValue                                  // 数字:整数回 "4"、小数回 "4.5"
+        default: return nil                                       // 对象/数组/null/缺失 → nil(语义不变)
+        }
     }
 }

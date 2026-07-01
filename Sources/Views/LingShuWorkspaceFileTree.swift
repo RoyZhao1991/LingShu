@@ -25,10 +25,10 @@ struct LingShuWorkspaceFileTree: View {
                         HStack(spacing: 6) {
                             Image(systemName: "doc").font(.system(size: 10, weight: .bold)).foregroundStyle(Color.lingHolo)
                             Text(selected.lastPathComponent).font(.system(size: 11, weight: .semibold, design: .monospaced))
-                                .foregroundStyle(.white.opacity(0.85)).lineLimit(1).truncationMode(.middle)
+                                .foregroundStyle(Color.lingFg.opacity(0.85)).lineLimit(1).truncationMode(.middle)
                             Spacer()
                             Button { NSWorkspace.shared.activateFileViewerSelecting([selected]) } label: {
-                                Image(systemName: "folder").font(.system(size: 10)).foregroundStyle(.white.opacity(0.55))
+                                Image(systemName: "folder").font(.system(size: 10)).foregroundStyle(Color.lingFg.opacity(0.55))
                             }.buttonStyle(.plain).help("在 Finder 中显示")
                         }
                         .padding(.horizontal, 10).padding(.vertical, 7)
@@ -41,19 +41,19 @@ struct LingShuWorkspaceFileTree: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-            Divider().overlay(Color.white.opacity(0.08))
+            Divider().overlay(Color.lingFg.opacity(0.08))
 
             // 右:文件树 + 筛选
             VStack(spacing: 0) {
                 HStack(spacing: 6) {
-                    Image(systemName: "magnifyingglass").font(.system(size: 10)).foregroundStyle(.white.opacity(0.4))
+                    Image(systemName: "magnifyingglass").font(.system(size: 10)).foregroundStyle(Color.lingFg.opacity(0.4))
                     TextField("筛选文件…", text: $filter)
                         .textFieldStyle(.plain).font(.system(size: 11.5))
-                        .foregroundStyle(.white.opacity(0.9))
+                        .foregroundStyle(Color.lingFg.opacity(0.9))
                 }
                 .padding(.horizontal, 9).padding(.vertical, 7)
-                .background(Color.white.opacity(0.05))
-                Divider().overlay(Color.white.opacity(0.06))
+                .background(Color.lingFg.opacity(0.05))
+                Divider().overlay(Color.lingFg.opacity(0.06))
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 0) {
                         LingShuFileTreeNode(url: root, depth: 0, filter: filter, selected: $selected)
@@ -69,9 +69,9 @@ struct LingShuWorkspaceFileTree: View {
 
     private var emptyPreview: some View {
         VStack(spacing: 10) {
-            Image(systemName: "folder").font(.system(size: 32)).foregroundStyle(.white.opacity(0.25))
-            Text("打开文件").font(.system(size: 13, weight: .bold)).foregroundStyle(.white.opacity(0.55))
-            Text("从右侧工作区目录树中选择文件").font(.system(size: 11)).foregroundStyle(.white.opacity(0.35))
+            Image(systemName: "folder").font(.system(size: 32)).foregroundStyle(Color.lingFg.opacity(0.25))
+            Text("打开文件").font(.system(size: 13, weight: .bold)).foregroundStyle(Color.lingFg.opacity(0.55))
+            Text("从右侧工作区目录树中选择文件").font(.system(size: 11)).foregroundStyle(Color.lingFg.opacity(0.35))
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -122,14 +122,14 @@ struct LingShuFileTreeNode: View {
         } label: {
             HStack(spacing: 5) {
                 if isDir {
-                    Image(systemName: expanded ? "chevron.down" : "chevron.right").font(.system(size: 7.5, weight: .bold)).foregroundStyle(.white.opacity(0.45)).frame(width: 10)
+                    Image(systemName: expanded ? "chevron.down" : "chevron.right").font(.system(size: 7.5, weight: .bold)).foregroundStyle(Color.lingFg.opacity(0.45)).frame(width: 10)
                 } else {
                     Spacer().frame(width: 10)
                 }
                 Image(systemName: isDir ? "folder.fill" : "doc.text")
-                    .font(.system(size: 10)).foregroundStyle(isDir ? Color.lingHoloAlt.opacity(0.8) : .white.opacity(0.5))
+                    .font(.system(size: 10)).foregroundStyle(isDir ? Color.lingHoloAlt.opacity(0.8) : Color.lingFg.opacity(0.5))
                 Text(url.lastPathComponent).font(.system(size: 11, weight: isDir ? .semibold : .regular))
-                    .foregroundStyle(selected == url ? Color.lingHolo : .white.opacity(0.82)).lineLimit(1).truncationMode(.middle)
+                    .foregroundStyle(selected == url ? Color.lingHolo : Color.lingFg.opacity(0.82)).lineLimit(1).truncationMode(.middle)
                 Spacer(minLength: 0)
             }
             .padding(.leading, CGFloat(depth) * 11 + 8).padding(.trailing, 8).padding(.vertical, 3)

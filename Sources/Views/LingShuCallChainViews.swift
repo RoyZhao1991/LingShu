@@ -13,10 +13,10 @@ struct LingShuCallChainPanel: View {
                 VStack(alignment: .leading, spacing: 8) {
                     Text(state.missionTitle)
                         .font(.system(size: 20, weight: .semibold))
-                        .foregroundStyle(.white)
+                        .foregroundStyle(Color.lingFg)
                     Text(state.missionStatus)
                         .font(.system(size: 12.5, weight: .medium))
-                        .foregroundStyle(.white.opacity(0.58))
+                        .foregroundStyle(Color.lingFg.opacity(0.58))
                         .fixedSize(horizontal: false, vertical: true)
                 }
 
@@ -33,7 +33,7 @@ struct LingShuCallChainPanel: View {
             .padding(18)
             .frame(maxWidth: .infinity, alignment: .topLeading)
         }
-        .background(Color.white.opacity(0.055), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .background(Color.lingFg.opacity(0.055), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .stroke(Color.lingHolo.opacity(0.16))
@@ -47,7 +47,7 @@ struct LingShuCallChainPanel: View {
                 .foregroundStyle(Color.orange.opacity(0.92))
             Text(state.loc("主通道就绪后这里会实时显示灵枢正在做什么；未接入时不展示任何虚假进展。", "Once the model channel is ready, this shows what \(state.appName) is doing in real time; nothing fake is shown while offline."))
                 .font(.system(size: 11.5, weight: .medium))
-                .foregroundStyle(.white.opacity(0.56))
+                .foregroundStyle(Color.lingFg.opacity(0.56))
                 .fixedSize(horizontal: false, vertical: true)
         }
     }
@@ -76,7 +76,7 @@ struct LingShuCallChainPanel: View {
                 VStack(alignment: .leading, spacing: 6) {
                     Text(state.loc("当前 Runbook 步", "Current step"))
                         .font(.system(size: 12.5, weight: .bold))
-                        .foregroundStyle(.white)
+                        .foregroundStyle(Color.lingFg)
                     HStack(alignment: .top, spacing: 10) {
                         Text(String(format: "%02d/%02d", running.index, running.total))
                             .font(.system(size: 11, weight: .bold, design: .monospaced))
@@ -86,10 +86,10 @@ struct LingShuCallChainPanel: View {
                         VStack(alignment: .leading, spacing: 2) {
                             Text(running.step.title)
                                 .font(.system(size: 12, weight: .bold))
-                                .foregroundStyle(.white.opacity(0.88))
+                                .foregroundStyle(Color.lingFg.opacity(0.88))
                             Text(running.step.detail)
                                 .font(.system(size: 10.8, weight: .medium))
-                                .foregroundStyle(.white.opacity(0.5))
+                                .foregroundStyle(Color.lingFg.opacity(0.5))
                                 .lineLimit(2)
                         }
                     }
@@ -101,12 +101,12 @@ struct LingShuCallChainPanel: View {
             VStack(alignment: .leading, spacing: 9) {
                 Text(state.loc("执行轨迹", "Execution trace"))
                     .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(Color.lingFg)
                 let messages = state.recentExecutionMessages
                 if messages.isEmpty {
                     Text(state.coreState == .thinking ? state.loc("灵枢正在思考，尚未发起动作。", "\(state.appName) is thinking; no action yet.") : state.loc("本轮刚开始，等待第一步动作。", "Just started; waiting for the first action."))
                         .font(.system(size: 11.5, weight: .medium))
-                        .foregroundStyle(.white.opacity(0.5))
+                        .foregroundStyle(Color.lingFg.opacity(0.5))
                 } else {
                     ForEach(messages) { message in
                         LiveExecutionStepRow(message: message)
@@ -125,11 +125,11 @@ struct LingShuCallChainPanel: View {
                     .foregroundStyle(Color.lingHolo.opacity(0.8))
                 Text(state.loc("空闲中 · 随时待命", "Idle · ready"))
                     .font(.system(size: 13.5, weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.85))
+                    .foregroundStyle(Color.lingFg.opacity(0.85))
             }
             Text(state.loc("当前没有进行中的任务。在对话里发指令，或让灵枢上岗成为常驻灵枢——这里会实时显示它正在执行的步骤、调用的工具与执行轨迹。", "No active task. Send a command in chat, or have \(state.appName) go on duty — its live steps, tools and trace will show here."))
                 .font(.system(size: 11.5, weight: .medium))
-                .foregroundStyle(.white.opacity(0.55))
+                .foregroundStyle(Color.lingFg.opacity(0.55))
                 .fixedSize(horizontal: false, vertical: true)
             HoloMetricRow(label: state.loc("主记忆", "Memory"), value: state.mainMemoryStatus, icon: "memorychip", color: .cyan)
             HoloMetricRow(label: state.loc("冷备库", "Cold store"), value: state.coldMemoryStatus, icon: "externaldrive", color: .orange)
@@ -149,7 +149,7 @@ struct LiveExecutionStepRow: View {
                 .frame(width: 18, height: 18)
             Text(message.text)
                 .font(.system(size: 11.5, weight: .medium))
-                .foregroundStyle(.white.opacity(0.8))
+                .foregroundStyle(Color.lingFg.opacity(0.8))
                 .lineLimit(2)
                 .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 0)
@@ -170,7 +170,7 @@ struct LiveExecutionStepRow: View {
         case .toolCall: return .cyan
         case .toolResult(_, let success, _): return success ? .green : .orange
         case .fileEdit: return .lingHolo
-        case .none: return .white.opacity(0.5)
+        case .none: return Color.lingFg.opacity(0.5)
         }
     }
 }
@@ -178,7 +178,7 @@ struct LiveExecutionStepRow: View {
 struct LingShuDivider: View {
     var body: some View {
         Rectangle()
-            .fill(Color.white.opacity(0.10))
+            .fill(Color.lingFg.opacity(0.10))
             .frame(height: 1)
     }
 }

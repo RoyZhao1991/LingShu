@@ -51,7 +51,7 @@ struct TaskExecutionRecordSheet: View {
                 VStack(alignment: .leading, spacing: 5) {
                     Text(record.title)
                         .font(.system(size: 18, weight: .semibold))
-                        .foregroundStyle(.white)
+                        .foregroundStyle(Color.lingFg)
                         .lineLimit(1)
                     HStack(spacing: 8) {
                         Text(record.status.rawValue)
@@ -59,10 +59,10 @@ struct TaskExecutionRecordSheet: View {
                             .foregroundStyle(record.status.color)
                         Text("\(agentList(record).count) 个参与方")   // 与下方过滤 chip 同源(排除「你」+内部机制标签),不再头部5/下面4 对不上
                             .font(.system(size: 11, weight: .semibold))
-                            .foregroundStyle(.white.opacity(0.52))
+                            .foregroundStyle(Color.lingFg.opacity(0.52))
                         Text(record.updatedAt.taskRecordDisplayTime)
                             .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                            .foregroundStyle(.white.opacity(0.42))
+                            .foregroundStyle(Color.lingFg.opacity(0.42))
                         // 开发任务:头部补仓库 + 分支 chip(对齐 codex 开发窗口)。
                         if let code = record.codeChanges {
                             headerChip(code.repoName, icon: "folder.fill")
@@ -94,9 +94,9 @@ struct TaskExecutionRecordSheet: View {
                 } label: {
                     Image(systemName: panelHidden ? "sidebar.right" : "rectangle.righthalf.inset.filled")
                         .font(.system(size: 13, weight: .bold))
-                        .foregroundStyle(panelHidden ? .white.opacity(0.5) : Color.lingHolo)
+                        .foregroundStyle(panelHidden ? Color.lingFg.opacity(0.5) : Color.lingHolo)
                         .frame(width: 30, height: 30)
-                        .background(Color.white.opacity(0.07), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                        .background(Color.lingFg.opacity(0.07), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
                 }
                 .buttonStyle(.plain)
                 .help(panelHidden ? "显示右侧面板" : "隐藏右侧面板")
@@ -106,14 +106,15 @@ struct TaskExecutionRecordSheet: View {
                 } label: {
                     Image(systemName: "xmark")
                         .font(.system(size: 12, weight: .bold))
-                        .foregroundStyle(.white.opacity(0.72))
+                        .foregroundStyle(Color.lingFg.opacity(0.72))
                         .frame(width: 30, height: 30)
-                        .background(Color.white.opacity(0.07), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                        .background(Color.lingFg.opacity(0.07), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
                 }
                 .buttonStyle(.plain)
             }
             .padding(18)
-            .background(Color.black.opacity(0.72))
+            .background(Color.lingBar)   // 跟随外观:浅=白 chrome / 深=半透明暗条(原 black@0.72 在浅色=突兀黑条)
+            .overlay(alignment: .bottom) { Divider().overlay(Color.lingFg.opacity(0.08)) }
 
             HStack(spacing: 0) {
                 // 左时间线:面板展开铺满时隐藏(给浏览器/终端/文件树宽度);面板隐藏时则始终显示、独占整窗。
@@ -121,12 +122,12 @@ struct TaskExecutionRecordSheet: View {
                     VStack(spacing: 0) {
                         agentFilterBar(record: record)
                         timelineColumn(record: record)
-                        Divider().overlay(Color.white.opacity(0.08))
+                        Divider().overlay(Color.lingFg.opacity(0.08))
                         // 窗口内追问 + 模型选择 + 反馈(codex 式聊天窗口)。
                         TaskWindowFooter(state: state, recordID: record.id)
                     }
                     if !panelHidden {
-                        Divider().overlay(Color.white.opacity(0.1))
+                        Divider().overlay(Color.lingFg.opacity(0.1))
                     }
                 }
                 // 右侧多模态面板:概览/审查/文件/浏览器/终端 一键切;可经标题栏按钮整列隐藏。
@@ -167,8 +168,8 @@ struct TaskExecutionRecordSheet: View {
                 }
                 .padding(.horizontal, 14).padding(.vertical, 8)
             }
-            .background(Color.black.opacity(0.4))
-            .overlay(alignment: .bottom) { Divider().overlay(Color.white.opacity(0.08)) }
+            .background(Color.lingBar)
+            .overlay(alignment: .bottom) { Divider().overlay(Color.lingFg.opacity(0.08)) }
         }
     }
 
@@ -179,9 +180,9 @@ struct TaskExecutionRecordSheet: View {
                 Text(name).font(.system(size: 11, weight: .semibold)).lineLimit(1)
                 Text("\(count)").font(.system(size: 9.5, weight: .bold, design: .monospaced)).opacity(0.7)
             }
-            .foregroundStyle(selected ? Color.black.opacity(0.85) : .white.opacity(0.82))
+            .foregroundStyle(selected ? Color.lingVoid : Color.lingFg.opacity(0.82))
             .padding(.horizontal, 9).padding(.vertical, 4)
-            .background(selected ? Color.lingHolo : Color.white.opacity(0.07), in: Capsule())
+            .background(selected ? Color.lingHolo : Color.lingFg.opacity(0.07), in: Capsule())
         }
         .buttonStyle(.plain)
         .help("只看「\(name)」的对话")
@@ -199,10 +200,10 @@ struct TaskExecutionRecordSheet: View {
                                         .foregroundStyle(Color.lingHolo)
                                     Text("续接历史流程")
                                         .font(.system(size: 12.5, weight: .bold))
-                                        .foregroundStyle(.white.opacity(0.92))
+                                        .foregroundStyle(Color.lingFg.opacity(0.92))
                                     Text("\(lineageRecords.count) 段")
                                         .font(.system(size: 11, weight: .bold, design: .monospaced))
-                                        .foregroundStyle(.white.opacity(0.42))
+                                        .foregroundStyle(Color.lingFg.opacity(0.42))
                                 }
 
                                 ForEach(lineageRecords) { historicalRecord in
@@ -211,7 +212,7 @@ struct TaskExecutionRecordSheet: View {
                             }
 
                             Divider()
-                                .overlay(Color.white.opacity(0.12))
+                                .overlay(Color.lingFg.opacity(0.12))
                                 .padding(.vertical, 4)
 
                             HStack(spacing: 8) {
@@ -220,7 +221,7 @@ struct TaskExecutionRecordSheet: View {
                                     .foregroundStyle(Color.lingHolo)
                                 Text("本轮执行")
                                     .font(.system(size: 12.5, weight: .bold))
-                                    .foregroundStyle(.white.opacity(0.92))
+                                    .foregroundStyle(Color.lingFg.opacity(0.92))
                             }
                         }
 
@@ -233,7 +234,7 @@ struct TaskExecutionRecordSheet: View {
                         }
                         if shownMessages.isEmpty {
                             Text("「\(selectedAgent ?? "")」这个参与方在本任务里还没有消息。")
-                                .font(.system(size: 12, weight: .medium)).foregroundStyle(.white.opacity(0.4))
+                                .font(.system(size: 12, weight: .medium)).foregroundStyle(Color.lingFg.opacity(0.4))
                         }
 
                         Color.clear
@@ -288,7 +289,8 @@ struct TaskArtifactFilesPanel: View {
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 9)
-            .background(Color.black.opacity(0.5))
+            .background(Color.lingBar)
+            .overlay(alignment: .bottom) { Divider().overlay(Color.lingFg.opacity(0.08)) }
 
             Group {
                 if tab == .code, let code = record.codeChanges {
@@ -297,10 +299,10 @@ struct TaskArtifactFilesPanel: View {
                     VStack(spacing: 10) {
                         Image(systemName: "tray")
                             .font(.system(size: 24, weight: .medium))
-                            .foregroundStyle(.white.opacity(0.22))
+                            .foregroundStyle(Color.lingFg.opacity(0.22))
                         Text("本任务还没有登记产出文件")
                             .font(.system(size: 11.5, weight: .medium))
-                            .foregroundStyle(.white.opacity(0.38))
+                            .foregroundStyle(Color.lingFg.opacity(0.38))
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
@@ -314,7 +316,7 @@ struct TaskArtifactFilesPanel: View {
                 }
             }
         }
-        .background(Color.black.opacity(0.28))
+        .background(Color.lingFg.opacity(0.03))   // 极淡面板底(适配两侧),原 black@0.28 在浅色=脏暗块
         .onChange(of: hasCode) { _, has in if !has, tab == .code { tab = .artifacts } }
     }
 
@@ -326,7 +328,7 @@ struct TaskArtifactFilesPanel: View {
                 Text(title).font(.system(size: 12, weight: .bold))
                 Text("\(count)").font(.system(size: 10, weight: .bold, design: .monospaced)).opacity(0.6)
             }
-            .foregroundStyle(active ? Color.lingHolo : .white.opacity(0.5))
+            .foregroundStyle(active ? Color.lingHolo : Color.lingFg.opacity(0.5))
             .padding(.horizontal, 11).padding(.vertical, 6)
             .background(active ? Color.lingHolo.opacity(0.12) : Color.clear, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
         }
@@ -343,7 +345,7 @@ struct TaskArtifactFilesPanel: View {
                     .foregroundStyle(Color.lingHoloAlt)
                 Text("代码改动")
                     .font(.system(size: 11, weight: .bold))
-                    .foregroundStyle(.white.opacity(0.6))
+                    .foregroundStyle(Color.lingFg.opacity(0.6))
                 Spacer()
                 Text(code.branch)
                     .font(.system(size: 10.5, weight: .bold, design: .monospaced))
@@ -352,7 +354,7 @@ struct TaskArtifactFilesPanel: View {
             }
             Text("\(code.repoName) · \(code.files.count) 个未提交改动(已提交的不计)")
                 .font(.system(size: 10, weight: .medium))
-                .foregroundStyle(.white.opacity(0.4))
+                .foregroundStyle(Color.lingFg.opacity(0.4))
             ForEach(code.files) { f in
                 HStack(spacing: 7) {
                     Text(f.label)
@@ -361,7 +363,7 @@ struct TaskArtifactFilesPanel: View {
                         .frame(width: 34, alignment: .leading)
                     Text(f.path)
                         .font(.system(size: 11, weight: .regular, design: .monospaced))
-                        .foregroundStyle(.white.opacity(0.82))
+                        .foregroundStyle(Color.lingFg.opacity(0.82))
                         .lineLimit(1).truncationMode(.middle)
                         .textSelection(.enabled)
                 }
@@ -383,7 +385,7 @@ struct TaskArtifactFilesPanel: View {
                 HStack(spacing: 5) {
                     Circle().fill(color).frame(width: 6, height: 6)
                     Text(title).font(.system(size: 10.5, weight: .bold)).foregroundStyle(color)
-                    Text("\(entries.count)").font(.system(size: 10, weight: .bold, design: .monospaced)).foregroundStyle(.white.opacity(0.4))
+                    Text("\(entries.count)").font(.system(size: 10, weight: .bold, design: .monospaced)).foregroundStyle(Color.lingFg.opacity(0.4))
                 }
                 ForEach(entries, id: \.artifact.id) { entry in
                     TaskArtifactFileCard(artifact: entry.artifact, fromHistory: entry.fromHistory)
@@ -440,14 +442,14 @@ struct TaskArtifactFileCard: View {
             HStack(alignment: .top, spacing: 9) {
                 Image(systemName: fileIcon)
                     .font(.system(size: 13, weight: .bold))
-                    .foregroundStyle(localFileURL != nil ? Color.lingHolo : Color.white.opacity(0.4))
+                    .foregroundStyle(localFileURL != nil ? Color.lingHolo : Color.lingFg.opacity(0.4))
                     .frame(width: 30, height: 30)
                     .background(Color.lingHolo.opacity(localFileURL != nil ? 0.13 : 0.05), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
 
                 VStack(alignment: .leading, spacing: 3) {
                     Text(artifact.title)
                         .font(.system(size: 11.5, weight: .bold))
-                        .foregroundStyle(.white.opacity(0.9))
+                        .foregroundStyle(Color.lingFg.opacity(0.9))
                         .lineLimit(2)
                     HStack(spacing: 6) {
                         let op = artifact.operation ?? .created
@@ -460,18 +462,18 @@ struct TaskArtifactFileCard: View {
                         if fromHistory {
                             Text("历史")
                                 .font(.system(size: 9, weight: .bold))
-                                .foregroundStyle(.white.opacity(0.5))
+                                .foregroundStyle(Color.lingFg.opacity(0.5))
                                 .padding(.horizontal, 4)
                                 .padding(.vertical, 1)
-                                .background(Color.white.opacity(0.08), in: Capsule())
+                                .background(Color.lingFg.opacity(0.08), in: Capsule())
                         }
                         Text(artifact.createdAt.taskRecordDisplayTime)
                             .font(.system(size: 9.5, weight: .medium, design: .monospaced))
-                            .foregroundStyle(.white.opacity(0.36))
+                            .foregroundStyle(Color.lingFg.opacity(0.36))
                         if let sizeText = fileSizeText {
                             Text(sizeText)
                                 .font(.system(size: 9.5, weight: .semibold, design: .monospaced))
-                                .foregroundStyle(.white.opacity(0.42))
+                                .foregroundStyle(Color.lingFg.opacity(0.42))
                         }
                     }
                 }
@@ -480,7 +482,7 @@ struct TaskArtifactFileCard: View {
 
             Text(fileName)
                 .font(.system(size: 10.5, weight: .medium, design: .monospaced))
-                .foregroundStyle(.white.opacity(localFileURL != nil ? 0.6 : 0.34))
+                .foregroundStyle(Color.lingFg.opacity(localFileURL != nil ? 0.6 : 0.34))
                 .lineLimit(1)
                 .truncationMode(.middle)
                 .textSelection(.enabled)
@@ -505,14 +507,14 @@ struct TaskArtifactFileCard: View {
         }
         .padding(10)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.white.opacity(0.045), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+        .background(Color.lingFg.opacity(0.045), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: 9, style: .continuous)
                 .stroke(Color.lingHolo.opacity(localFileURL != nil ? 0.18 : 0.07))
         }
         .sheet(isPresented: $isPreviewing) {
             if let url = localFileURL {
-                LingShuArtifactPreviewSheet(title: artifact.title, fileURL: url)
+                LingShuArtifactPreviewSheet(title: artifact.title, fileURL: url) { isPreviewing = false }
             }
         }
     }
@@ -542,7 +544,7 @@ struct TaskExecutionRecordHistoryBlock: View {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 Text(record.title)
                     .font(.system(size: 13.5, weight: .bold))
-                    .foregroundStyle(.white.opacity(0.9))
+                    .foregroundStyle(Color.lingFg.opacity(0.9))
                     .lineLimit(1)
                 Text(record.status.rawValue)
                     .font(.system(size: 10.5, weight: .bold))
@@ -550,12 +552,12 @@ struct TaskExecutionRecordHistoryBlock: View {
                 Spacer()
                 Text(record.updatedAt.taskRecordDisplayTime)
                     .font(.system(size: 10.5, weight: .semibold, design: .monospaced))
-                    .foregroundStyle(.white.opacity(0.34))
+                    .foregroundStyle(Color.lingFg.opacity(0.34))
             }
 
             Text(record.summary)
                 .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(.white.opacity(0.58))
+                .foregroundStyle(Color.lingFg.opacity(0.58))
                 .fixedSize(horizontal: false, vertical: true)
 
             VStack(alignment: .leading, spacing: 8) {
@@ -565,13 +567,13 @@ struct TaskExecutionRecordHistoryBlock: View {
                 if record.messages.count > visibleMessages.count {
                     Text("已折叠更早的 \(record.messages.count - visibleMessages.count) 条历史进度。")
                         .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(.white.opacity(0.38))
+                        .foregroundStyle(Color.lingFg.opacity(0.38))
                         .padding(.leading, 38)
                 }
             }
         }
         .padding(12)
-        .background(Color.white.opacity(0.045), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .background(Color.lingFg.opacity(0.045), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .stroke(Color.lingHolo.opacity(0.16))
@@ -602,14 +604,14 @@ struct TaskExecutionArtifactRow: View {
                 HStack(spacing: 7) {
                     Text(artifact.title)
                         .font(.system(size: 12.5, weight: .bold))
-                        .foregroundStyle(.white.opacity(0.9))
+                        .foregroundStyle(Color.lingFg.opacity(0.9))
                         .lineLimit(1)
                     Text(artifact.producer)
                         .font(.system(size: 10.5, weight: .semibold))
-                        .foregroundStyle(.white.opacity(0.42))
+                        .foregroundStyle(Color.lingFg.opacity(0.42))
                     Text(artifact.createdAt.taskRecordDisplayTime)
                         .font(.system(size: 10.5, weight: .medium, design: .monospaced))
-                        .foregroundStyle(.white.opacity(0.34))
+                        .foregroundStyle(Color.lingFg.opacity(0.34))
                     Spacer()
                     if localFileURL != nil {
                         Button {
@@ -625,14 +627,14 @@ struct TaskExecutionArtifactRow: View {
 
                 Text(artifact.location)
                     .font(.system(size: 12, weight: .medium, design: .monospaced))
-                    .foregroundStyle(.white.opacity(0.62))
+                    .foregroundStyle(Color.lingFg.opacity(0.62))
                     .textSelection(.enabled)
                     .lineLimit(2)
             }
         }
         .sheet(isPresented: $isPreviewing) {
             if let url = localFileURL {
-                LingShuArtifactPreviewSheet(title: artifact.title, fileURL: url)
+                LingShuArtifactPreviewSheet(title: artifact.title, fileURL: url) { isPreviewing = false }
             }
         }
     }
@@ -694,10 +696,10 @@ struct TaskExecutionMessageRow: View {
                         .foregroundStyle(message.kind.color.opacity(0.94))
                     Text(message.role)
                         .font(.system(size: 10.5, weight: .semibold))
-                        .foregroundStyle(.white.opacity(0.42))
+                        .foregroundStyle(Color.lingFg.opacity(0.42))
                     Text(message.timestamp.taskRecordDisplayTime)
                         .font(.system(size: 10.5, weight: .medium, design: .monospaced))
-                        .foregroundStyle(.white.opacity(0.34))
+                        .foregroundStyle(Color.lingFg.opacity(0.34))
                 }
 
                 Group {
@@ -705,15 +707,15 @@ struct TaskExecutionMessageRow: View {
                         // 用户输入:纯文本气泡。
                         Text(message.text)
                             .font(.system(size: 13.5, weight: .medium))
-                            .foregroundStyle(.white.opacity(0.92))
+                            .foregroundStyle(Color.lingFg.opacity(0.92))
                             .fixedSize(horizontal: false, vertical: true)
                     } else {
                         // 灵枢分析/答复:markdown 渲染(代码块/列表/表格),对齐 codex 阅读体验。
-                        LingShuMessageContentView(text: message.text, textColor: .white.opacity(0.88))
+                        LingShuMessageContentView(text: message.text, textColor: Color.lingFg.opacity(0.88))
                     }
                 }
                 .padding(12)
-                .background(isUser ? Color.lingHolo.opacity(0.20) : Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .background(isUser ? Color.lingHolo.opacity(0.20) : Color.lingFg.opacity(0.06), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
                 .overlay {
                     RoundedRectangle(cornerRadius: 8, style: .continuous)
                         .stroke(isUser ? Color.lingHolo.opacity(0.28) : message.kind.color.opacity(0.18))

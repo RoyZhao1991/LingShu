@@ -62,7 +62,7 @@ struct LingShuMinimalVoiceView: View {
             Text("实时通话")
                 .font(.system(size: 11, weight: .bold, design: .monospaced))
                 .tracking(2)
-                .foregroundStyle(.white.opacity(0.4))
+                .foregroundStyle(Color.lingFg.opacity(0.4))
         }
         .overlay(alignment: .bottomLeading) {
             // 麦克风没进音(权限/设备)时浮一句可见告警,别让用户对着没反应的麦克风干等(原来静默无错)。
@@ -87,15 +87,15 @@ struct LingShuMinimalVoiceView: View {
                     .clipShape(RoundedRectangle(cornerRadius: 12))
             } else {
                 RoundedRectangle(cornerRadius: 12)
-                    .fill(Color.white.opacity(0.04))
+                    .fill(Color.lingFg.opacity(0.04))
                     .overlay {
                         VStack(spacing: 7) {
                             Image(systemName: "video.slash")
                                 .font(.system(size: 22, weight: .medium))
-                                .foregroundStyle(.white.opacity(0.3))
+                                .foregroundStyle(Color.lingFg.opacity(0.3))
                             Text("摄像头关闭")
                                 .font(.system(size: 10.5, weight: .medium))
-                                .foregroundStyle(.white.opacity(0.35))
+                                .foregroundStyle(Color.lingFg.opacity(0.35))
                         }
                     }
             }
@@ -133,8 +133,8 @@ struct LingShuMinimalVoiceView: View {
             // 摄像头开关
             circleButton(
                 icon: vision.isCameraRunning ? "video.fill" : "video.slash.fill",
-                bg: vision.isCameraRunning ? Color.white.opacity(0.12) : Color.white.opacity(0.06),
-                fg: vision.isCameraRunning ? .white : .white.opacity(0.6),
+                bg: vision.isCameraRunning ? Color.lingFg.opacity(0.12) : Color.lingFg.opacity(0.06),
+                fg: vision.isCameraRunning ? .white : Color.lingFg.opacity(0.6),
                 size: 44
             ) {
                 LingShuPerceptionActions.toggleVision(state: state, vision: vision)
@@ -146,8 +146,8 @@ struct LingShuMinimalVoiceView: View {
             // 静音麦克风（暂停/恢复连续监听）
             circleButton(
                 icon: voice.isRecording ? "mic.fill" : "mic.slash.fill",
-                bg: voice.isRecording ? Color.lingHolo : Color.white.opacity(0.06),
-                fg: voice.isRecording ? Color.lingVoid : .white.opacity(0.6),
+                bg: voice.isRecording ? Color.lingHolo : Color.lingFg.opacity(0.06),
+                fg: voice.isRecording ? Color.lingVoid : Color.lingFg.opacity(0.6),
                 size: 44
             ) {
                 if call.isActive {
@@ -201,7 +201,7 @@ struct LingShuLiveWaveform: View {
                 )
             }
         }
-        .background(RoundedRectangle(cornerRadius: 10).fill(Color.white.opacity(0.03)))
+        .background(RoundedRectangle(cornerRadius: 10).fill(Color.lingFg.opacity(0.03)))
         .overlay { LingShuHUDCorners(accent: color.opacity(0.4), cornerLength: 10) }
         .task {
             // 在渲染之外、约 30fps 读取实时电平并推进历史，得到滚动波形。

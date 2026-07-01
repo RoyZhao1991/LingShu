@@ -568,6 +568,8 @@ final class LingShuControlRouter {
                 "endpoint": state.endpoint,
                 "keyConfigured": !state.apiKey.isEmpty
             ]), false)
+        case "lingshu_channel_balance":   // 查通道(脑)账号余额(按厂商适配,见 LingShuChannelBalance)。args: provider(空/缺=supported:false)
+            return (jsonText(await state.controlChannelBalancePayload(provider: (arguments["provider"] as? String) ?? "")), false)
         case "lingshu_export_model_config":   // 口令加密导出脑/通道/密钥(换机/分享/开源安全);args: passphrase, path
             return state.controlExportModelConfig(passphrase: arguments["passphrase"] as? String, path: arguments["path"] as? String)
         case "lingshu_import_model_config":   // 一键导入口令加密配置 → 恢复并立即可用;args: passphrase, path

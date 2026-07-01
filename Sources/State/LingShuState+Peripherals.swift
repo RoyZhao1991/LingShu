@@ -83,7 +83,7 @@ extension LingShuState {
         """
         let session = LingShuAgentSession(
             id: "periph-classify-\(UUID().uuidString.prefix(6))",
-            system: "你是灵枢的外设识别器:看懂每台外设到底是什么、起语义别名、把同一物理设备的多通道归一、列能力、判能否接入、判是否已被驱动接管。access 取给定词表之一。只输出 JSON 数组。",
+            system: LingShuPersona.system("现在你来识别外设:看懂每台外设到底是什么、起语义别名、把同一物理设备的多通道归一、列能力、判能否接入、判是否已被驱动接管。access 取给定词表之一。只输出 JSON 数组。"),
             tools: [], model: makeAgentModelAdapter(), maxTurns: 1)
         guard case .completed(let text) = await session.send(prompt) else { return }
         let clean = LingShuReasoningText.stripThinkTags(text)

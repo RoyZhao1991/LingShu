@@ -65,28 +65,13 @@ final class ProcedureSkillTests: XCTestCase {
         XCTAssertEqual(s.missingParameters(given: ["金额": "4800", "日期": "6月20号"]), ["审批人"])
     }
 
-    // MARK: 路由
+    // MARK: 参数抽取(显式 `@<技能名>` replay 在用;原 matchReplay/detectRecordRequest 关键词嗅探已于 2026-06-30 删)
 
-    func testDetectRecordRequest() {
-        XCTAssertEqual(LingShuProcedureSkillRouter.detectRecordRequest("记录一个技能叫报销")?.name, "报销")
-        XCTAssertEqual(LingShuProcedureSkillRouter.detectRecordRequest("看我做一遍")?.name, nil)
-        XCTAssertNil(LingShuProcedureSkillRouter.detectRecordRequest("帮我演示一下这个文档"), "非录制请求不拦")
-    }
-
-    func testMatchReplayAndExtractParams() {
+    func testExtractParams() {
         let skill = LingShuProcedureSkill.parse(markdown: sampleMarkdown(), fallbackID: "x")!
-        let m = LingShuProcedureSkillRouter.matchReplay("用报销技能,金额4800,日期6月20号", skills: [skill])
-        XCTAssertNotNil(m)
-        XCTAssertEqual(m?.skill.id, "expense")
-        XCTAssertEqual(m?.params["金额"], "4800")
-        XCTAssertEqual(m?.params["日期"], "6月20号")
-    }
-
-    func testReplayNeedsExecutionIntent() {
-        let skill = LingShuProcedureSkill.parse(markdown: sampleMarkdown(), fallbackID: "x")!
-        // 只是聊到"报销"没执行意图 → 不触发 replay。
-        XCTAssertNil(LingShuProcedureSkillRouter.matchReplay("这个月报销好麻烦", skills: [skill]))
-        // 触发词开头(报销...)算意图。
-        XCTAssertNotNil(LingShuProcedureSkillRouter.matchReplay("报销技能,金额5000", skills: [skill]))
+        // `@报销 金额4800,日期6月20号` → 显式触发后从口头抽参数填进步骤。
+        let params = LingShuProcedureSkillRouter.extractParams("金额4800,日期6月20号", for: skill)
+        XCTAssertEqual(params["金额"], "4800")
+        XCTAssertEqual(params["日期"], "6月20号")
     }
 }

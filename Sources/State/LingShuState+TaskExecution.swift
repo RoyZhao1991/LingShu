@@ -78,6 +78,10 @@ extension LingShuState {
               let index = taskExecutionRecords.firstIndex(where: { $0.id == recordID }) else { return }
 
         taskExecutionRecords[index].finish(status: status, summary: summary)
+        // **停止留残影根治(2026-06-29)**:记录进终态 → 把还在转圈、指向这条记录的聊天气泡一并收口。
+        // 原来 finishTaskRecord 只改记录、不碰气泡,声明式@agent / 角色管线 / 派发这类**非主回合**路径
+        // 停止或出错后会留下永久"进行中/推进中"转圈气泡 + 点开报"任务记录不存在"。这里统一收口(各路径通用,非特判)。
+        syncLoadingBubblesToFinishedRecord(recordID, status: status, summary: summary)
         persistTaskExecutionRecords()
         recordWorldTask(.init(
             id: recordID,
@@ -102,6 +106,24 @@ extension LingShuState {
             // 任务收尾 → 触发 dreaming 离线固化(内部有空闲守卫 + 1h 节流,不打扰当前流程)。
             scheduleDreamingConsolidationIfIdle()
         }
+    }
+
+    /// 记录进终态时,把**还在转圈、指向这条记录**的聊天气泡一并收口:停掉 loading、空文本回灌结果摘要、清掉派发气泡映射。
+    /// 只动 loading 中的助手气泡;已有正文的不覆盖(角色管线等自己写过结果的,保留它写的)。修"停止/出错留永久转圈残影"。
+    func syncLoadingBubblesToFinishedRecord(_ recordID: String, status: LingShuTaskExecutionStatus, summary: String) {
+        let ans = summary.trimmingCharacters(in: .whitespacesAndNewlines)
+        let ok = (status == .completed || status == .verified || status == .answered)
+        let icon = ok ? "✅ " : (status == .failed || status == .blocked ? "⏹ " : "")
+        var touched = false
+        for i in chatMessages.indices
+        where chatMessages[i].taskRecordID == recordID && chatMessages[i].isLoading && !chatMessages[i].isUser {
+            chatMessages[i].isLoading = false
+            if chatMessages[i].text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                chatMessages[i].text = ans.isEmpty ? "（任务已结束：\(status.rawValue)）" : "\(icon)\(ans)"
+            }
+            touched = true
+        }
+        if touched { dispatchedTaskBubbles.removeValue(forKey: recordID) }   // 终态了,别再被当"在跑的派发气泡"
     }
 
     /// 抓**本任务自己改动**的代码文件(分支 + 未提交文件),落进记录——代码交付的右侧信息块。

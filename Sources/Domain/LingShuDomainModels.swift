@@ -345,7 +345,7 @@ struct ModelProviderPreset: Identifiable {
         dataNetGateway,
         .init(id: "openai", name: "OpenAI", region: "海外", category: "原厂 API", endpoint: "https://api.openai.com/v1", protocolName: "Responses / OpenAI", authMode: "API Key", defaultModels: ["gpt-5.5", "gpt-5", "gpt-4.1", "gpt-4o"], note: "适合作为灵枢主中枢和复杂推理模型。"),
         .init(id: "azure-openai", name: "Azure OpenAI", region: "海外/企业", category: "云厂商托管", endpoint: "https://{resource}.openai.azure.com/openai", protocolName: "Azure OpenAI", authMode: "API Key / Entra ID", defaultModels: ["gpt-5.5", "gpt-5", "gpt-4.1", "gpt-4o"], note: "适合企业账号、私有网络和合规场景。"),
-        .init(id: "anthropic", name: "Anthropic Claude", region: "海外", category: "原厂 API", endpoint: "https://api.anthropic.com/v1", protocolName: "Anthropic", authMode: "API Key", defaultModels: ["claude-opus-4.1", "claude-opus-4", "claude-sonnet-4.5", "claude-haiku-4.5"], note: "适合长文档、规划、审查和高质量写作。"),
+        .init(id: "anthropic", name: "Anthropic Claude", region: "海外", category: "原厂 API", endpoint: "https://api.anthropic.com/v1", protocolName: "Anthropic", authMode: "API Key", defaultModels: ["claude-opus-4-8", "claude-sonnet-4-6", "claude-haiku-4-5", "claude-opus-4.1", "claude-sonnet-4.5"], note: "适合长文档、规划、审查和高质量写作。"),
         .init(id: "google-gemini", name: "Google Gemini", region: "海外", category: "原厂 API", endpoint: "https://generativelanguage.googleapis.com/v1beta/openai", protocolName: "OpenAI 兼容 / Gemini", authMode: "API Key", defaultModels: ["gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.0-flash"], note: "适合多模态、长上下文和低延迟场景。"),
         .init(id: "xai", name: "xAI Grok", region: "海外", category: "OpenAI 兼容", endpoint: "https://api.x.ai/v1", protocolName: "OpenAI 兼容", authMode: "API Key", defaultModels: ["grok-4", "grok-3", "grok-3-mini"], note: "适合实时问答和通用助理分支。"),
         .init(id: "mistral", name: "Mistral AI", region: "欧洲", category: "原厂 API", endpoint: "https://api.mistral.ai/v1", protocolName: "OpenAI 兼容 / Mistral", authMode: "API Key", defaultModels: ["mistral-large-latest", "codestral-latest", "ministral-8b-latest"], note: "适合代码、欧洲部署和轻量模型。"),
@@ -397,6 +397,8 @@ struct ChatMessage: Identifiable, Codable, Equatable, Sendable {
     var thinkingPreview: String?
     /// 本条用户消息随附的附件文件名(发送时携带的)；nil/空=无附件。Optional 保证旧持久化记录向后兼容解码。
     var attachmentNames: [String]?
+    /// 与 `attachmentNames` 平行的**本地文件路径**(发送时已落到稳定目录),供事后**点击重新预览**;nil=旧记录/不可预览。
+    var attachmentPaths: [String]?
     /// 是否是「上岗开场白」气泡:用于去重——每次上岗只保留一句,不让历史里的旧招呼越堆越多。Optional 向后兼容。
     var isStandingGreeting: Bool?
     /// 多项确认表单(灵枢一次要主人确认多个事项时):每字段一行各带选择菜单;nil=普通消息。Optional 向后兼容。
@@ -419,6 +421,7 @@ struct ChatMessage: Identifiable, Codable, Equatable, Sendable {
         resolvedChoice: String? = nil,
         thinkingPreview: String? = nil,
         attachmentNames: [String]? = nil,
+        attachmentPaths: [String]? = nil,
         isStandingGreeting: Bool? = nil,
         form: LingShuConfirmForm? = nil,
         formAnswers: [String: String]? = nil,
@@ -435,6 +438,7 @@ struct ChatMessage: Identifiable, Codable, Equatable, Sendable {
         self.resolvedChoice = resolvedChoice
         self.thinkingPreview = thinkingPreview
         self.attachmentNames = attachmentNames
+        self.attachmentPaths = attachmentPaths
         self.isStandingGreeting = isStandingGreeting
         self.form = form
         self.formAnswers = formAnswers

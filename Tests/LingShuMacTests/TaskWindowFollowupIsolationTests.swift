@@ -5,6 +5,21 @@ import XCTest
 /// 核心保证:不论该记录有没有现存隔离子会话,追问都不进主问答线(`pendingChatTurnIDs`/`runMainAgentTurn`)。
 @MainActor
 final class TaskWindowFollowupIsolationTests: XCTestCase {
+    private func assertTaskWindowStartedOrReported(
+        _ state: LingShuState,
+        recordID: String,
+        _ message: String,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        let stillRunning = state.dispatchedTaskBubbles[recordID] != nil
+        let record = state.taskExecutionRecordLookup.first { $0.id == recordID }
+        let hasNonUserRecordProgress = record?.messages.contains { $0.kind != .user } ?? false
+        let hasAssistantBubble = state.chatMessages.contains {
+            $0.taskRecordID == recordID && !$0.isUser && (!$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || $0.isLoading)
+        }
+        XCTAssertTrue(stillRunning || hasNonUserRecordProgress || hasAssistantBubble, message, file: file, line: line)
+    }
 
     func testFollowupOnRecordWithoutSubSessionReDispatchesIsolatedNotMain() {
         let state = LingShuState()
@@ -36,8 +51,10 @@ final class TaskWindowFollowupIsolationTests: XCTestCase {
         // 等异步注入检查 + 兜底续跑跑完。
         for _ in 0..<30 { await Task.yield() }
         try? await Task.sleep(nanoseconds: 300_000_000)
-        XCTAssertNotNil(state.dispatchedTaskBubbles[rid],
-                        "纠正没被在飞循环接住 → 应兜底重新派发隔离会话续跑(不石沉大海、要有执行+回复)")
+        assertTaskWindowStartedOrReported(
+            state,
+            recordID: rid,
+            "纠正没被在飞循环接住 → 应兜底重新派发隔离会话续跑或可见收口(不石沉大海、要有执行+回复)")
         XCTAssertFalse(state.batchInterruptRequested, "兜底时复位 batchInterrupt,防泄漏卡后续验收")
     }
 
@@ -48,8 +65,10 @@ final class TaskWindowFollowupIsolationTests: XCTestCase {
         state.continueTaskThread("把这个PPT改一下，体现整体架构", recordID: rid)
         for _ in 0..<30 { await Task.yield() }
         try? await Task.sleep(nanoseconds: 300_000_000)
-        XCTAssertNotNil(state.dispatchedTaskBubbles[rid],
-                        "子线程消息没被在飞循环接住 → 兜底重新起隔离会话续跑(始终有执行+回复,对齐 codex)")
+        assertTaskWindowStartedOrReported(
+            state,
+            recordID: rid,
+            "子线程消息没被在飞循环接住 → 兜底重新起隔离会话续跑或可见收口(始终有执行+回复,对齐 codex)")
         XCTAssertTrue(state.pendingChatTurnIDs.isEmpty, "续的是隔离线程,绝不落主会话问答线")
         XCTAssertFalse(state.batchInterruptRequested, "复位 batchInterrupt 防泄漏")
     }
@@ -67,5 +86,24 @@ final class TaskWindowFollowupIsolationTests: XCTestCase {
         let rec = state.taskExecutionRecords.first { $0.id == rid }
         XCTAssertTrue(rec?.messages.contains { $0.text.contains("继续推进") } ?? false,
                       "追问应记进这条任务自己的记录(窗口可见)")
+    }
+
+    /// **续接守住原始工作目录(2026-06-30 修 cancel+resume 丢上下文)**:goal 被 GoalSpec 抽象掉了字面目录,
+    /// 续接上下文必须从原始请求把 `/tmp/lingshu-e2e`、`scraper.py` 这些字面目录/文件名带回来。
+    func testResumeContextCarriesOriginalRequestDirectory() {
+        let ctx = LingShuState.resumeContextPrompt(
+            originalRequest: "在 /tmp/lingshu-e2e 下写一个 Python 爬虫框架 scraper.py,带单测。",
+            summary: nil,
+            goal: "在指定目录创建一个功能完整的爬虫框架文件",   // GoalSpec 抽象,丢了字面目录
+            resumeInput: "接着上面的进度继续写完")
+        XCTAssertTrue(ctx.contains("/tmp/lingshu-e2e"), "续接上下文必须保留原始请求里的字面目录")
+        XCTAssertTrue(ctx.contains("scraper.py"), "也要保留字面文件名")
+        XCTAssertTrue(ctx.contains("接着上面的进度继续写完"), "续接指令要在")
+    }
+
+    /// 原始请求为空(老记录无 prompt)→ 退回纯续接指令,不崩、不加空壳。
+    func testResumeContextEmptyOriginalFallsBack() {
+        XCTAssertEqual(LingShuState.resumeContextPrompt(originalRequest: nil, summary: nil, goal: nil, resumeInput: "继续"), "继续")
+        XCTAssertEqual(LingShuState.resumeContextPrompt(originalRequest: "   ", summary: "", goal: nil, resumeInput: "继续"), "继续")
     }
 }

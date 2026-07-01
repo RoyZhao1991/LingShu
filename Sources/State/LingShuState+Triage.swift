@@ -301,8 +301,12 @@ extension LingShuState {
     func dispatchIsolatedTask(prompt: String, taskRecordID: String, goal: String?, existingBubbleID: UUID? = nil,
                               makerAgentID: String? = nil, makerName: String? = nil,
                               checkerAgentID: String? = nil, checkerName: String? = nil,
-                              extraCheckerAgentIDs: [String] = []) -> String {
+                              extraCheckerAgentIDs: [String] = [], imageDataURLs: [String]? = nil) -> String {
         installAgentEventSinkIfNeeded()
+        // **附件直接入脑·覆盖派发任务**(2026-06-28 修):复杂任务都走这条隔离路,以前只把附件 VL→文字塞进 objective、
+        // 原图没进多模态脑(实测:改 PPT 任务只拿到"图片内容摘要"、看不见红框、改错了箭头)。这里把原图随首轮目标直发大脑。
+        // 即时派发从 pending 消费;排队后派发由调用方把当时暂存的图传进来(pending 那会儿已被清/被后续覆盖)。
+        let directImages = imageDataURLs ?? consumePendingDirectBrainImages()
         interruptSpeechOutput?()
         let subID = "task-\(UUID().uuidString.prefix(6))"
         agentSubTaskRecords[subID] = taskRecordID   // 预映射:.spawned 据此复用这条记录,不另建
@@ -394,6 +398,15 @@ extension LingShuState {
         if let skillHint = matchedSkillHint(for: prompt) {
             initialMessages.append(.init(role: .system, content: skillHint))
         }
+        // **产物邻里勘探(通用,2026-06-28)**:任务引用了绝对路径文件 → 把这些文件**所在目录**的清单 + "改源而非改成品"铁律注入,
+        // 让 agent 看见旁边的源 / 模板 / 生成器(根治实测:改 PPT 图时只点验 PNG、从没整列目录、没认出 `.gen.py` 源 → 退化成像素手术)。
+        let neighborhood = Self.artifactNeighborhoodContext(for: prompt)
+        if !neighborhood.isEmpty { initialMessages.append(.init(role: .system, content: neighborhood)) }
+        // **能看就别写像素码**(仅多模态脑):有眼睛就直接看图识别标记/核验结果,别写逐像素扫描比对
+        // (实测把"删一行字"拖成 20+ 分钟还判错——把方框描边当文字)。非多模态脑没眼睛,不注入。
+        if LingShuMultimodal.isVisionCapable(provider: modelProvider, model: modelName) {
+            initialMessages.append(.init(role: .system, content: Self.visionOverPixelsDirective))
+        }
         // **maker 是外部 agent(@Codex 等):把开发委托给它,你只编排+验收(maker≠checker 跨厂商)。**
         // 这条让 LOOP 以 codex 当 maker 跑——之前 maker 是灵枢自己的 session,现在换成 codex session,LOOP/验收/目标解析全不变。
         if let makerAgentID, let makerName {
@@ -432,14 +445,14 @@ extension LingShuState {
         )
         let orchestrator = agentOrchestrator
         Task { @MainActor [weak self] in
-            if await orchestrator.spawnDetached(id: subID, objective: prompt, session: sub) { return }   // 有空位,直接派出
+            if await orchestrator.spawnDetached(id: subID, objective: prompt, session: sub, imageDataURLs: directImages) { return }   // 有空位,直接派出(带真图)
             // 满并发上限(N=3)→ **不直接拒绝用户任务,改排队**:轮询等空位再自动派出(bubble 保持加载=排队中)。
             // 老练度补齐(2026-06-19):用户快速连发几条任务时旧逻辑直接拒"重发一次"体验差;改为自动排队续派。
             // (注:模型自己 spawn_task 的路径仍保持硬背压不变——那是防模型一次甩几十个子任务 runaway,与用户连发不同。)
             for _ in 0..<300 {   // 最长约 10 分钟(每 2s 查一次空位)
                 try? await Task.sleep(nanoseconds: 2_000_000_000)
                 guard let self, self.agentSubTaskRecords[subID] != nil else { return }   // 已被取消/清掉 → 停止排队
-                if await orchestrator.spawnDetached(id: subID, objective: prompt, session: sub) { return }   // 轮到了,编排器事件接管 bubble
+                if await orchestrator.spawnDetached(id: subID, objective: prompt, session: sub, imageDataURLs: directImages) { return }   // 轮到了,编排器事件接管 bubble
             }
             guard let self else { return }
             self.fillDispatchedBubble(taskRecordID, text: "前面任务排队较久仍没轮到,先没派出去——稍后重发即可。")

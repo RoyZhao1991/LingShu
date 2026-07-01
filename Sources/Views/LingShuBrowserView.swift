@@ -71,16 +71,16 @@ struct LingShuBrowserChrome: View {
                         Text(tab.title.isEmpty ? "新标签页" : tab.title)
                             .font(.system(size: 11.5, weight: .medium)).lineLimit(1)
                         Button { _ = controller.closeTab(index: i) } label: { Image(systemName: "xmark").font(.system(size: 8, weight: .bold)) }
-                            .buttonStyle(.plain).foregroundStyle(.white.opacity(0.5))
+                            .buttonStyle(.plain).foregroundStyle(Color.lingFg.opacity(0.5))
                     }
                     .padding(.horizontal, 12).padding(.vertical, 7)
                     .frame(maxWidth: 200)
-                    .background(tab.id == controller.activeTabID ? Color.lingHolo.opacity(0.25) : Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 8))
-                    .foregroundStyle(tab.id == controller.activeTabID ? Color.lingHolo : .white.opacity(0.7))
+                    .background(tab.id == controller.activeTabID ? Color.lingHolo.opacity(0.25) : Color.lingFg.opacity(0.06), in: RoundedRectangle(cornerRadius: 8))
+                    .foregroundStyle(tab.id == controller.activeTabID ? Color.lingHolo : Color.lingFg.opacity(0.7))
                     .onTapGesture { _ = controller.switchTab(index: i) }
                 }
                 Button { _ = controller.openTab("about:blank") } label: { Image(systemName: "plus").font(.system(size: 12, weight: .bold)) }
-                    .buttonStyle(.plain).foregroundStyle(.white.opacity(0.7)).padding(.horizontal, 8)
+                    .buttonStyle(.plain).foregroundStyle(Color.lingFg.opacity(0.7)).padding(.horizontal, 8)
             }
             .padding(.horizontal, 12).padding(.vertical, 8)
         }
@@ -98,9 +98,9 @@ struct LingShuBrowserChrome: View {
             })
             .textFieldStyle(.roundedBorder).font(.system(size: 12))
             Button { _ = controller.setFullscreen(!controller.fullscreen) } label: { Image(systemName: controller.fullscreen ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right") }.buttonStyle(.plain)
-            Button { _ = controller.close() } label: { Image(systemName: "xmark.circle.fill") }.buttonStyle(.plain).foregroundStyle(.white.opacity(0.6))
+            Button { _ = controller.close() } label: { Image(systemName: "xmark.circle.fill") }.buttonStyle(.plain).foregroundStyle(Color.lingFg.opacity(0.6))
         }
-        .foregroundStyle(.white.opacity(0.85))
+        .foregroundStyle(Color.lingFg.opacity(0.85))
         .padding(.horizontal, 14).padding(.vertical, 8)
         .background(Color.black.opacity(0.4))
         .onChange(of: controller.activeTabID) { _ in addressText = controller.activeTab?.url ?? "" }

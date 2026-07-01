@@ -33,7 +33,7 @@ private struct MiniOrbStack: View {
         let angle: Double = now * 54
         return ZStack {
             Circle()
-                .fill(Color.black.opacity(0.68))
+                .fill(Color.lingOrbCore)
 
             Circle()
                 .stroke(snapshot.accent.opacity(voiceActive ? 0.24 : 0.14), lineWidth: 7)
@@ -61,7 +61,7 @@ private struct MiniOrbStack: View {
         .clipShape(Circle())
         .overlay {
             Circle()
-                .stroke(Color.white.opacity(0.14), lineWidth: 0.8)
+                .stroke(Color.lingFg.opacity(0.14), lineWidth: 0.8)
         }
     }
 }
@@ -80,7 +80,7 @@ private struct MiniOrbRotatingRing: View {
                     colors: [
                         accent.opacity(0.08),
                         accent.opacity(ringOpacity),
-                        .white.opacity(0.82),
+                        Color.lingFg.opacity(0.82),
                         accent.opacity(ringOpacity),
                         accent.opacity(0.08)
                     ],
@@ -108,7 +108,7 @@ private struct MiniOrbSignalDots: View {
                 let active = snapshot.signalIsActive(signal)
 
                 Circle()
-                    .fill(active ? snapshot.accent : Color.white.opacity(0.18))
+                    .fill(active ? snapshot.accent : Color.lingFg.opacity(0.18))
                     .frame(width: active ? 4.5 : 3.2, height: active ? 4.5 : 3.2)
                     .shadow(color: active ? snapshot.accent.opacity(0.8) : .clear, radius: 4)
                     .position(
@@ -219,7 +219,7 @@ struct LingShuDigitalHumanOrbView: View {
         let idleBreath = 0.03 * pulse * (1 - level)
         let orbRadius = radius * (0.24 + 0.42 * level + idleBreath)
         let coreGradient = Gradient(stops: [
-            .init(color: .white.opacity(0.92), location: 0),
+            .init(color: Color.lingOrbSeed.opacity(0.92), location: 0),
             .init(color: accent.opacity(0.75), location: 0.34),
             .init(color: accent.opacity(0.16), location: 0.78),
             .init(color: .clear, location: 1)
@@ -237,7 +237,7 @@ struct LingShuDigitalHumanOrbView: View {
         let seed = radius * (0.035 + 0.02 * intensity + 0.05 * level)
         context.fill(
             Path(ellipseIn: CGRect(x: center.x - seed, y: center.y - seed, width: seed * 2, height: seed * 2)),
-            with: .color(.white.opacity(0.96))
+            with: .color(Color.lingOrbSeed.opacity(0.96))
         )
     }
 

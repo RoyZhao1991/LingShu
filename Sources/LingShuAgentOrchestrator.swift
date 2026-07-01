@@ -51,6 +51,8 @@ actor LingShuAgentOrchestrator {
     private var suspendedForReconnect: Set<String> = []
     /// 各子任务的目标(续跑时 acceptanceHook 要用,且暂停后 entries 仍保有,这里冗余存一份保险)。
     private var objectives: [String: String] = [:]
+    /// 各子任务**随首轮目标直发大脑的图片/PDF**(多模态脑看真图;附件直接入脑覆盖派发任务这条路)。
+    private var imageURLsByID: [String: [String]] = [:]
     private(set) var pushes: [String] = []
     /// 事件回灌 UI(MainActor 隔离闭包);由 LingShuState 注入。
     private var onEvent: (@MainActor @Sendable (LingShuOrchestratorEvent) -> Void)?
@@ -88,12 +90,12 @@ actor LingShuAgentOrchestrator {
     /// 派生一条隔离子会话并跑到第一个停止点(完成/卡住/失败),把摘要事件落账本 + 推送。
     /// 真并行 = 并发调用本方法(每条子会话是独立 actor)。
     @discardableResult
-    func spawn(id: String, objective: String, session: any LingShuAgentSessioning) async -> LingShuAgentRunResult {
+    func spawn(id: String, objective: String, session: any LingShuAgentSessioning, imageDataURLs: [String]? = nil) async -> LingShuAgentRunResult {
         sessions[id] = session
         let admitted = concurrency.requestAdmission(threadID: id, summary: objective)
         upsert(id: id, objective: objective, status: .running, summary: admitted ? "已开始" : "排队中(超并发上限)")
         await onEvent?(.spawned(id: id, objective: objective))
-        let result = await session.send(objective)
+        let result = await session.send(objective, imageDataURLs: imageDataURLs)
         record(id: id, objective: objective, result: result)
         return result
     }
@@ -105,10 +107,11 @@ actor LingShuAgentOrchestrator {
     /// spawn_task 把"已满,稍后再派/本会话顺序做"如实回报给模型。这样杜绝无界排队堆积(模型一次
     /// 甩出几十个子任务排队空耗),把"最多 3 条正在运行"做成派生点的硬闸,而非仅靠内部队列兜。
     @discardableResult
-    func spawnDetached(id: String, objective: String, session: any LingShuAgentSessioning) async -> Bool {
+    func spawnDetached(id: String, objective: String, session: any LingShuAgentSessioning, imageDataURLs: [String]? = nil) async -> Bool {
         guard concurrency.hasCapacity else { return false }   // 满 3 → 拒绝(背压),不排队
         sessions[id] = session
         objectives[id] = objective
+        if let imageDataURLs, !imageDataURLs.isEmpty { imageURLsByID[id] = imageDataURLs }   // 首轮直发大脑的真图
         concurrency.requestAdmission(threadID: id, summary: objective)   // 有容量,必纳入运行
         upsert(id: id, objective: objective, status: .running, summary: "已开始(后台)")
         await onEvent?(.spawned(id: id, objective: objective))
@@ -155,7 +158,8 @@ actor LingShuAgentOrchestrator {
 
     private func drive(id: String, objective: String) async {
         guard let session = sessions[id] else { return }
-        var result = await session.send(objective)
+        var result = await session.send(objective, imageDataURLs: imageURLsByID[id])   // 首轮带真图(多模态脑)
+        imageURLsByID[id] = nil   // 图只随首轮发一次,后续续跑不重复带
         // 子任务**验收 + 恢复**:委托主状态统一的 verifyAndContinue(与主会话/自主运行同一套——撞顶当检查点续跑恢复、
         // 多轮验收、测试/运行门、停滞才诚实交还)。不再在编排器里跑弱化的 3 轮验收 + 撞顶直接判失败。
         if let hook = acceptanceHook {

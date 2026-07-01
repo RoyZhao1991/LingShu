@@ -2,9 +2,9 @@ import Foundation
 
 /// **声明式调插件**(对标 Codex 输入框「+」):用户**显式声明用哪个插件/能力**→ 确定性直达该插件,
 /// **跳过大脑分诊**。根治反复踩的坑——模型常绕开新插件/不去委托([[presentation-qa-plugin]] 记的「GLM绕开新工具」)。
-/// 两种声明方式:① 文本里 `@演示`/`用演示插件`/`/present` 前缀;② 输入框「+」菜单选中(置 pinned)。
+/// 声明入口只保留一种可见形式:`@别名`。输入框「+」菜单选中也应插入 `@别名`,避免隐藏关键词路由。
 struct LingShuInvocablePlugin: Identifiable, Sendable, Equatable {
-    enum Kind: String, Sendable { case plugin, agent }   // 插件(演示/录制) vs 外部 agent(Codex/Claude)
+    enum Kind: String, Sendable { case plugin, agent, agentCapability }   // 插件(演示/录制) / 外部 agent(Codex/Claude) / agent 的子能力(@Codex·picsart)
     let id: String
     let displayName: String
     let aliases: [String]    // 触发别名(自动并入 displayName + id)
@@ -23,7 +23,8 @@ struct LingShuInvocablePlugin: Identifiable, Sendable, Equatable {
 enum LingShuDeclarativeInvocation {
 
     /// 识别输入是否**显式声明**调某插件;返回(插件 id, 去掉声明前缀后**余下的真实输入**)。无声明返回 nil。
-    /// 支持前缀:`@别名`、`/别名`、`用别名[插件]`、`调[用]别名`、`切[换]到别名`。匹配**最长别名**(避免短别名误命中)。
+    /// 只支持 `@别名`。自然语言里的「用/调用/切到」都回到 Triage,由大脑按语义判断,不在快路径里偷偷抢路由。
+    /// 匹配**最长别名**(避免短别名误命中)。
     static func detect(_ input: String, plugins: [LingShuInvocablePlugin]) -> (id: String, rest: String)? {
         let t = input.trimmingCharacters(in: .whitespaces)
         guard !t.isEmpty else { return nil }
@@ -32,22 +33,14 @@ enum LingShuDeclarativeInvocation {
             .flatMap { p in p.allAliases.map { (p.id, $0) } }
             .sorted { $0.alias.count > $1.alias.count }
         for (id, alias) in pairs {
-            for prefix in markers(for: alias) {
-                if t.hasPrefix(prefix) {
-                    let rest = String(t.dropFirst(prefix.count))
-                        .trimmingCharacters(in: CharacterSet(charactersIn: " :：,，、"))
-                    return (id, rest)
-                }
+            let prefix = "@\(alias)"
+            if t.hasPrefix(prefix) {
+                let rest = String(t.dropFirst(prefix.count))
+                    .trimmingCharacters(in: CharacterSet(charactersIn: " :：,，、"))
+                return (id, rest)
             }
         }
         return nil
-    }
-
-    /// 某别名的全部声明前缀写法。
-    private static func markers(for alias: String) -> [String] {
-        ["@\(alias)", "/\(alias)",
-         "用\(alias)插件", "用\(alias)", "调用\(alias)", "调\(alias)",
-         "切换到\(alias)", "切到\(alias)", "使用\(alias)"]
     }
 
     /// 解析输入里的**多个 `@调用`**(`@Codex 开发X @Claude 验收Y`)→ 有序 [(id, 该段任务文本)]。

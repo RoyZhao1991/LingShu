@@ -40,6 +40,14 @@ extension LingShuState {
             ? "真实落盘文件:(无——盘上没有任何本回合产出文件)"
             : "真实落盘文件(盘上确实存在,已逐一核实):\n" + realFiles.map { "- \($0)" }.joined(separator: "\n")
 
+        // **交付位置门(2026-06-30 用户定调)**:请求里**明确指定了目标目录**(如「在 /tmp/x 下」「存到 ~/y」),
+        // 产物却一个都没落在那里 → 确定性返工。「交错地方」=没真交付到要求处,口头"已完成"不能推翻文件系统事实。
+        // 只在【明确指定目录 + 确有产物】时才查;没指定目录(走默认工作区)不查,避免误伤。
+        if let locViolation = Self.deliveryLocationViolation(userRequest: userRequest, artifactPaths: realFiles) {
+            appendTrace(kind: .warning, actor: "验收", title: "交付位置不对", detail: locViolation)
+            return (false, locViolation)
+        }
+
         // P3 通用验收(全类型,详见 LingShuState+Acceptance):把 GoalSpec 成功标准分类后逐条确定性核验。
         // 任一**能确定性核验**的条未达成(文件不存在 / 命令·测试没成功)→ 硬门返工,模型口头"已完成"不能推翻文件系统事实;
         // 其余(内容质量/设备/环境/用户确认)注入评审官逐条核对(unverifiable 如实标,不假定达成)。无成功标准 → 空报告、零成本跳过。
@@ -232,6 +240,39 @@ extension LingShuState {
         return exts.contains((path as NSString).pathExtension.lowercased())
     }
 
+    /// **请求里明确指定的目标目录**(纯函数,可单测):只认「目录意图 + 绝对路径」——
+    /// 「在 /tmp/x 下」「存到 ~/y」「保存到/放到/写到/输出到 /z」。只读取(如「读取 /etc/hosts」)**不算目标**,避免误伤。
+    nonisolated static func requestedTargetDirectories(_ request: String) -> [String] {
+        var dirs: [String] = []
+        let patterns = [
+            "在\\s*(~?/[^\\s,，。;；:：、）)]+?)\\s*[下里中]",
+            "(?:存到|存放到|放到|放在|保存到|写到|写入到|输出到|落到|落进|生成到|导出到)\\s*(~?/[^\\s,，。;；:：、）)]+)"
+        ]
+        let ns = request as NSString
+        for p in patterns {
+            guard let re = try? NSRegularExpression(pattern: p) else { continue }
+            re.enumerateMatches(in: request, range: NSRange(location: 0, length: ns.length)) { m, _, _ in
+                guard let m, m.numberOfRanges >= 2 else { return }
+                let d = ns.substring(with: m.range(at: 1)).trimmingCharacters(in: .whitespaces)
+                guard !d.isEmpty else { return }
+                dirs.append((d as NSString).expandingTildeInPath)
+            }
+        }
+        var seen = Set<String>(); return dirs.filter { seen.insert($0).inserted }
+    }
+
+    /// **交付位置门(纯函数,可单测)**:请求**明确指定了目标目录**、确有产物、却**一个都没落在那里** → 返违规说明;否则 nil(过)。
+    /// 只在"指定了目录 + 有产物"时判;没指定目录(走默认工作区)或没产物 → 不查(返 nil),零误伤。
+    nonisolated static func deliveryLocationViolation(userRequest: String, artifactPaths: [String]) -> String? {
+        let targets = requestedTargetDirectories(userRequest)
+        guard !targets.isEmpty, !artifactPaths.isEmpty else { return nil }
+        func under(_ path: String) -> Bool {
+            targets.contains { t in path == t || path.hasPrefix(t.hasSuffix("/") ? t : t + "/") }
+        }
+        if artifactPaths.contains(where: under) { return nil }   // 至少一个落在要求的目录 → 过
+        return "交付位置不对:你被要求把产物放到「\(targets.joined(separator: "」或「"))」,但本回合的产出文件都不在那里(落在了 \(artifactPaths.prefix(3).joined(separator: "、")))。请把产物落到要求的目录里,别改交付位置。"
+    }
+
     /// 文件名是否像测试文件(test_x / x_test / x.spec / FooTests / 在 tests 目录下)。
     nonisolated static func looksLikeTestFile(_ path: String) -> Bool {
         let lower = (path as NSString).lastPathComponent.lowercased()
@@ -390,7 +431,7 @@ extension LingShuState {
         """
         let composer = LingShuAgentSession(
             id: "deliver-\(UUID().uuidString.prefix(6))",
-            system: "你是交付播报助手,只输出面向用户的最终交付说明,不复述任何内部过程。",
+            system: LingShuPersona.system("现在你把这次交付向用户播报:只输出面向用户的最终交付说明,不复述任何内部过程。"),
             tools: [],
             model: controlPlaneModelAdapter(.deliveryComposer, taskRecordID: taskRecordID),
             maxTurns: 1

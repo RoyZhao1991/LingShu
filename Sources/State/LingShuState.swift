@@ -8,6 +8,7 @@ private enum LingShuPreferenceKeys {
     static let modelProvider = "lingshu.model.provider"
     static let modelName = "lingshu.model.name"
     static let modelEndpoint = "lingshu.model.endpoint"
+    static let agentWorkingDirectory = "lingshu.agent.workdir"
     static let asrLocalMode = "lingshu.perception.asrLocalMode"
     static let ttsLocalMode = "lingshu.perception.ttsLocalMode"
 }
@@ -97,13 +98,31 @@ final class LingShuState: ObservableObject {
     @Published var endpoint = UserDefaults.standard.string(forKey: LingShuPreferenceKeys.modelEndpoint) ?? ModelProviderPreset.minimaxOfficial.endpoint {
         didSet { UserDefaults.standard.set(endpoint, forKey: LingShuPreferenceKeys.modelEndpoint) }
     }
+    /// **实际在用的脑(地面真相,2026-06-29)**:最近一次真实模型请求**实际**用的 provider/model + 时间。
+    /// 与"选中的通道"(modelProvider/modelName)分开显示——会话快照滞后/选择漂移时,这条才是此刻真在干活的脑。
+    @Published var actualBrainProvider: String = ""
+    @Published var actualBrainModel: String = ""
+    @Published var actualBrainAt: Date?
     @Published var apiKey = "" {
         didSet {
             guard apiKey != oldValue, let preset = selectedModelPreset else { return }
             credentialStore.setAPIKey(apiKey, forProvider: preset.id)
         }
     }
-    @Published var agentWorkingDirectory = "/Users/example/app"
+    /// **未指定位置时的默认工作目录 = 灵枢自己的工作区**(2026-06-30 用户定调:别落进源码仓库/某人主目录)。
+    /// `~/Library/Application Support/LingShu/Workspace`——属于灵枢、跨机可移植(不写死 /Users/某人)、不存在则建。
+    /// 用户可在 UI 改;改了持久化跨重启。任务里写了字面目录/绝对路径的,照样按它来(这只是"没说时"的默认值)。
+    static let defaultWorkspaceDirectory: String = {
+        let fm = FileManager.default
+        let base = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? fm.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support")
+        let ws = base.appendingPathComponent("LingShu/Workspace", isDirectory: true)
+        try? fm.createDirectory(at: ws, withIntermediateDirectories: true)
+        return ws.path
+    }()
+    @Published var agentWorkingDirectory = UserDefaults.standard.string(forKey: LingShuPreferenceKeys.agentWorkingDirectory) ?? LingShuState.defaultWorkspaceDirectory {
+        didSet { UserDefaults.standard.set(agentWorkingDirectory, forKey: LingShuPreferenceKeys.agentWorkingDirectory) }
+    }
     @Published var executionPermissionMode: LingShuExecutionPermissionMode = .sandbox
     @Published var modelTimeoutSeconds = 180.0
     @Published var isModelReplying = false
@@ -210,6 +229,9 @@ final class LingShuState: ObservableObject {
     ]
     @Published var supervisorEvents: [SupervisorEvent] = []
     @Published var pendingAttachments: [LingShuAttachment] = []
+    /// 粘贴图片去重:一次 Cmd+V 可能被多次投递(performKeyEquivalent 在视图层级里被命中多次),记下上次粘贴的内容指纹+时刻,
+    /// 极短时间内同一张图重复进来就只收一次,保证"一次粘贴=一个附件"。
+    var lastPastedImageFingerprint: (hash: Int, at: Date)?
     /// 极简语音模式：全屏只显示输入/输出两条音频波形，纯语音对话。
     @Published var isMinimalVoiceMode = false
     /// 灵枢身体表现层：由大脑/工具临时下发的表现指令；为空时由实时状态自动推导。
@@ -240,6 +262,10 @@ final class LingShuState: ObservableObject {
     /// 核心循环变体开关(新旧循环热切换):`.classic`=经典连续循环 / `.nested`=嵌套分阶段验收循环。
     /// 持久化到 UserDefaults(跨重启保留所选引擎);经 `setAgentLoopVariant` 切换(默认常量/MCP 调试口)。
     var agentLoopVariant: LingShuAgentLoopVariant = UserDefaults.standard.string(forKey: "lingshu.agentLoopVariant").flatMap(LingShuAgentLoopVariant.init(rawValue:)) ?? .classic
+    // 附件入脑不再用手动开关(2026-06-28 用户定调:能自动判多模态脑就不需要开关)。自动按脑能力判——
+    // 多模态脑→显式附件原图直发,否则 VL→文字。逻辑见 LingShuState+DirectMultimodal.swift;态势感知一律强制 VL(perceptionVLTask),不在此列。
+    /// 一次性缓冲:submitTextWithAttachments 算好的"直发大脑"图片/PDF data URL,由下一次 runMainAgentTurn 消费挂到该回合。
+    var pendingDirectBrainImages: [String]?
     var mainAgentSessionHolder: (any LingShuAgentSessioning)?
     /// 编排器子会话 id → 任务执行记录 id(让每条并行子任务成为列表里独立任务号)。
     var agentSubTaskRecords: [String: String] = [:]
@@ -249,6 +275,17 @@ final class LingShuState: ObservableObject {
     /// 主线程分诊「派发」的任务:记录 id → 它在对话里的加载气泡 id(完成时回填这条气泡而非另起一条)。
     /// Stage 2 多任务真隔离:每条派发任务有自己的气泡 + 独立 session,互不串。
     var dispatchedTaskBubbles: [String: UUID] = [:]
+    /// **正在被角色管线驱动的记录 id**(根治孤儿看门狗误杀:2026-06-27)。角色管线(`runRolePipelineDispatch`)是**直接 Task**、
+    /// 不走 orchestrator 的 driveTasks,故 `activeDriveIDs()` 永远不含它 → 孤儿看门狗会把"还在跑的角色管线任务"当孤儿在 ~20s 时
+    /// 误收口成 .partial(agent 子进程还在跑、产出没登记)。本集合在管线驱动期间持有 rid(defer 移除),看门狗据此跳过。
+    /// 安全:agent 运行有滚动空闲超时(默认10分钟无输出才 terminate),管线 Task 必然有界返回 → defer 必然执行,集合不会泄漏。
+    var livePipelineRecordIDs: Set<String> = []
+    /// 已自动续跑过的角色管线孤儿记录 id(一会话内同一条不重复续,防 re-dispatch 死循环)。
+    var resumedOrphanRecordIDs: Set<String> = []
+    /// **第三方 agent 子能力缓存(适配器发现结果,2026-06-29)**:各已注册 agent 跑自己的发现命令归一出的能力清单。
+    @Published var discoveredAgentCapabilities: [LingShuAgentCapability] = []
+    /// 上次刷新 agent 子能力的时间(供 TTL/面板"刷新"判定)。
+    var agentCapabilitiesRefreshedAt: Date?
     /// 派发任务的「评审绑定」:记录 id →(maker 引擎 / checker 引擎 / 是否异源)。创建子线程时解析并标注,验收时据 checker 复核。
     var taskReviewBindings: [String: LingShuReviewBinding] = [:]
     /// **多 checker**(用户定调:可让两个 agent 同时当 checker):记录 id → 主 checker 之外的**额外 checker agent id 列表**。
@@ -339,6 +376,10 @@ final class LingShuState: ObservableObject {
     }
     /// 正在校验中的 channelKey(UI 转圈)。
     @Published var validatingChannels: Set<String> = []
+    /// 各通道账号余额(channelKey → 余额结果),按需查询、内存态(不持久;余额是实时值)。
+    @Published var channelBalances: [String: LingShuChannelBalance.Result] = [:]
+    /// 正在查余额的 channelKey(UI 转圈)。
+    @Published var channelBalanceFetching: Set<String> = []
     /// 各能力通道(口/眼/耳,中枢走 preset)的用户配置(channelKey → 名/端点/模型),持久化。
     /// 写死名不准(如"男声"实为女声)或要改端点/模型时用户自己配;密钥仍走 credentialStore(按 channelKey)。
     @Published var channelConfigs: [String: ModelChannelConfig] = LingShuState.loadChannelConfigs() {
@@ -484,6 +525,9 @@ final class LingShuState: ObservableObject {
     @Published var pendingShellApproval: LingShuPendingShellApproval?
     /// 经托管模式确认转入(goLiveForInteractiveTask)→ 本体**立即出现**(跳过 2.5s 入场仪式,免演示开场那段没本体)。见根视图 onChange。
     var enteringViaManagedHandoff = false
+    /// **托管模式演示交接**:本次上岗是为了「演示与答疑」确定性接管(present_fullscreen 同意托管)→ 上岗 kickoff
+    /// **不寒暄、不发起回合**(演示的"好的我开始演示了"就是开场),只静默在岗(开麦/本体在位)。launchAutonomousExecution 消费后复位。
+    var presentationManagedHandoff = false
     /// 用户在本次会话里选了「完全授权」后置真：后续 run_command 不再逐条弹窗。
     var sessionShellAlwaysAllowed = false
     /// 自发现高风险 skill 脚本的隔离表(运行期):materialize 时按 skillID 隔离清单填入,
@@ -512,10 +556,14 @@ final class LingShuState: ObservableObject {
     @Published var meetingConversation = LingShuMeetingConversationController()
     /// 文件预览中枢(灵枢的"眼睛+手"):大脑用四肢工具打开 PPT/PDF/Word/Excel 并翻页/滚动(演示/阅读)。
     let previewController = LingShuPreviewController()
-    /// 「演示与答疑」插件的演示编排引擎(脚本/答疑/续演/多文档队列);钩子由 installPresentationHooks 装配。
-    let presentationController = LingShuPresentationController()
-    /// 在飞的演示播放任务(后台照稿念;用户输入经 handlePresentationInputIfNeeded 拦成答疑)。
-    var presentationPlaybackTask: Task<Void, Never>?
+    /// **内置技能注册表**:随 app 出厂的可信原生能力模块,经 `LingShuBuiltinSkill` 协议**统一挂载**。
+    /// 硬性架构要求(用户定调 2026-06-27):内置技能的代码归各自模块,**绝不糊进内核**;内核(取消/暂停/续/分诊/工具/菜单)
+    /// 一律遍历本表调协议,**不出现任一具体技能的专属逻辑**。加/换技能 = 加模块 + 注册进表,不碰内核。
+    let presentationSkill = LingShuPresentationSkill()
+    lazy var builtinSkills: [any LingShuBuiltinSkill] = [presentationSkill]
+    /// 演示编排引擎(脚本/答疑/续演/多文档队列)。**仅供视图层**(预览宿主/进度条)按名取它渲染;
+    /// 编排逻辑一律走 `builtinSkills` 协议,不直接点名"演示"。
+    var presentationController: LingShuPresentationController { presentationSkill.controller }
     /// **Record & Replay**:正在录制的过程技能会话(用户边做边说、逐步截帧);非录制时为 nil。见 LingShuState+ProcedureRecording。
     @Published var procedureRecording: LingShuProcedureRecordingSession?
     /// 在飞的 replay 执行任务(按 SKILL.md 步骤用计算机控制逐步操作)。
@@ -530,6 +578,8 @@ final class LingShuState: ObservableObject {
 
     init() {
         installGeneralHubInfrastructure()
+        // 内置技能挂载:把内核宿主交给各技能(它们经此取预览/语音/聊天/控制面模型等内核服务)。通用,不点名具体技能。
+        for skill in builtinSkills { skill.mount(host: self) }
         restoreChatHistory()
         // 非交互裁决策略：自主运行中且非观察模式时，待确认问题自动按安全默认定夺，
         // 不阻塞无人值守执行（任务续接死锁那一类的根治）。其余场景照常逐题询问用户。
@@ -549,11 +599,20 @@ final class LingShuState: ObservableObject {
         // 启动清理:后台任务不跨重启存活,所以加载到的"执行中"记录都是上次没收尾的僵尸——标为"已暂停",
         // 别让任务列表挂一堆永远"执行中"(实测困惑)。状态本身不触发自动续跑(那靠内存里的暂停集合,重启已空)。
         var hadZombie = false
+        var rolePipelineOrphans: [LingShuTaskExecutionRecord] = []   // 角色管线孤儿:复用产物自动续跑(用户定调 2026-06-28),别只 .suspended 摆死
         for i in taskExecutionRecords.indices where taskExecutionRecords[i].status == .running {
+            if isRolePipelineRecord(taskExecutionRecords[i]) { rolePipelineOrphans.append(taskExecutionRecords[i]) }
             taskExecutionRecords[i].status = .suspended
             hadZombie = true
         }
         if hadZombie { persistTaskExecutionRecords() }
+        // 也捞回**最近停在 .suspended 的角色管线孤儿**(上次中断/续跑没跑完的)——一并原地续跑(不限次,直到做完)。
+        let recentCutoff = Date().addingTimeInterval(-3 * 3600)
+        for rec in taskExecutionRecords where rec.status == .suspended && rec.updatedAt >= recentCutoff
+            && isRolePipelineRecord(rec) && !rolePipelineOrphans.contains(where: { $0.id == rec.id }) {
+            rolePipelineOrphans.append(rec)
+        }
+        if !rolePipelineOrphans.isEmpty { resumeOrphanedRolePipelinesOnLaunch(rolePipelineOrphans) }
         taskRecordFeedback = (UserDefaults.standard.dictionary(forKey: "lingshu.taskFeedback") as? [String: Bool]) ?? [:]
         archivedTaskExecutionRecords = taskExecutionJournal.loadArchivedRecords()
         refreshRemoteSessionStatus()
@@ -832,9 +891,9 @@ final class LingShuState: ObservableObject {
             || activeAgentTurnTask != nil
             || autonomousRunTask != nil
             || pendingShellApproval != nil
-        // 「演示与答疑」在跑 → **先**彻底停掉(置停止位 + 掐音频),必须在下面 interruptSpeechOutput 之前,
-        // 否则音频被掐后 play 循环会抢着念下一页(竞态)→ 用户感知"取消后还在播"。
-        stopPresentationIfActive()
+        // 内置技能(演示与答疑等)在跑 → **先**彻底停掉(置停止位 + 掐音频),必须在下面 interruptSpeechOutput 之前,
+        // 否则音频被掐后演示 play 循环会抢着念下一页(竞态)→ 用户感知"取消后还在播"。通用遍历,内核不点名具体技能。
+        builtinSkills.forEach { $0.onCancel() }
         // 停止时若正在全屏演示:一并关预览 + 设防重弹窗(停止演示=别再让大脑下一步把它弹回来,与关窗硬中断一致)。
         if previewController.slideshow {
             previewController.suppressAutoReopenUntil = Date().addingTimeInterval(5)
@@ -904,7 +963,7 @@ final class LingShuState: ObservableObject {
     /// 设防重弹抑制窗:挡住"关窗瞬间批量还有一步在飞又把预览拉起"的竞态(根治"手动退出后它又自己把 PPT 弹出来")。
     func abortActiveFlow(reason: String) {
         lingShuControlLog("flow/abort: \(reason)")
-        stopPresentationIfActive()               // 「演示与答疑」在跑 → 先彻底停(置停止位 + 掐音频,避免掐后抢念下一页)
+        builtinSkills.forEach { $0.onCancel() }  // 内置技能(演示等)在跑 → 先彻底停(置停止位 + 掐音频,避免掐后抢念下一页)
         previewController.suppressAutoReopenUntil = Date().addingTimeInterval(5)  // 5s 内拒绝任何 open/进全屏
         batchInterruptRequested = true          // run_steps 批量在下一步边界停,别再翻页/讲
         interruptSpeechOutput?()                 // 立刻掐断当前 TTS 朗读
@@ -918,7 +977,7 @@ final class LingShuState: ObservableObject {
     /// 故全屏演示中任何输入=用户在夺回控制(计算机控制类占屏因灵枢自身会动鼠标,不走此暂停)。
     func pauseActiveFlow(reason: String) {
         lingShuControlLog("flow/pause: \(reason)")
-        if presentationController.isActive { presentationController.requestPauseForQA() }   // 「演示与答疑」一并暂停(掐音频+不再狂翻)
+        builtinSkills.forEach { $0.onPause() }   // 内置技能(演示等)一并暂停(掐音频+不再狂翻);通用遍历,内核不点名
         batchInterruptRequested = true     // 停 run_steps 自动翻页/连续执行
         interruptSpeechOutput?()            // 停当前朗读
         missionStatus = "已暂停(检测到你在手动操作)。点「继续演示」接着讲,或直接下新指令。"
@@ -948,7 +1007,10 @@ final class LingShuState: ObservableObject {
                 if let rid = msg.taskRecordID,
                    let rec = taskExecutionRecords.first(where: { $0.id == rid }),
                    rec.status == .completed || rec.status == .verified || rec.status == .partial {
-                    chatMessages[index].text = "（已转入后台任务并完成，详见下方任务记录。）"
+                    // **任何问题都不能埋答案(2026-06-28 用户定调)**:把任务的实质结果(summary)回灌进聊天气泡,
+                    // 别只写"已转入后台任务并完成、详见记录"让用户去记录里翻答案。summary 由 finishTaskRecord 写入=最终答案。
+                    let answer = rec.summary.trimmingCharacters(in: .whitespacesAndNewlines)
+                    chatMessages[index].text = answer.isEmpty ? "（任务已完成,详见下方任务记录。）" : "✅ \(answer)"
                 } else {
                     chatMessages[index].text = "（上一轮交互已中断，我已收起等待状态。）"
                 }
@@ -1133,22 +1195,27 @@ final class LingShuState: ObservableObject {
         }
         // **结构化输入 {message: userText, files: attachedPaths}(2026-06-27 用户定调)**:附件路径随消息带出
         // (不只把正文折进 prompt、不丢路径)。把随发的附件名挂到这条用户消息上(气泡里展示)。
-        let attachedPaths = pendingAttachments.compactMap { $0.localURL?.path }
         let names = pendingAttachments.map(\.filename)
+        // 与 names 平行的稳定路径(供事后重新预览):有 localURL 的落到稳定目录,没有的留空串(那条不可预览)。
+        let paths = pendingAttachments.map { $0.localURL.map { Self.persistedSentAttachmentPath($0) } ?? "" }
         let displayText = userText.isEmpty ? "已上传 \(names.count) 个文件" : userText
-        chatMessages.append(.init(speaker: "你", text: displayText, isUser: true, attachmentNames: names))
-        // **演示路由直接用结构化输入**:演示意图(看 userText)+ 附件里有可演示文档 → 直接全屏演示(不折正文、不进大脑)。
-        // 附件是输入的一部分,不是侧信道、不是特例分支——根治"讲解一下附件中的PPT"不进演示。
-        if handlePresentationStartIfNeeded(userText, attachedFiles: attachedPaths, appendUserMessage: false) {
-            clearAttachments()
-            return ""
-        }
-        // 否则:附件正文折入提示发给大脑(原行为;attachmentContextBlock 必须在 clear 之前读)。
+        chatMessages.append(.init(speaker: "你", text: displayText, isUser: true, attachmentNames: names,
+                                  attachmentPaths: paths.contains(where: { !$0.isEmpty }) ? paths : nil))
+        // **演示不再靠关键词自动认领**(2026-06-27 用户定调:删关键词启动路由):带附件的演示请求改走**显式 `@演示`**
+        // 或交大脑调 `present_documents`(附件正文连同路径折进 prompt,大脑自己决定要不要演示)。这里不再特判演示。
+        // 附件正文折入提示发给大脑(attachmentContextBlock 读 pendingAttachments,必须在 clear 之前读)。
         let attachmentContext = attachmentContextBlock()
+        // **附件直接入脑**(开关开 + 多模态脑):把图片/PDF 暂存成 data URL,由本次回合直发大脑原生视觉;否则为空走 VL→文字。
+        // 必须在 clearAttachments 之前算(读 pendingAttachments)。
+        let directImages = directBrainImageDataURLs()
+        if !directImages.isEmpty { pendingDirectBrainImages = directImages }
         clearAttachments()
         let combined = attachmentContext.isEmpty ? userText
             : (userText.isEmpty ? "\(attachmentContext)\n\n请按上述文件落地交付。"
                                 : "\(attachmentContext)\n\n用户指令：\n\(userText)")
+        // **显式声明(@演示 / @Codex…)即便带附件也走确定性直达**:在 userText 上检测声明,combined 当路由上下文
+        // (含附件折进来的「本机路径:…」)→ @演示 能从整条消息抽到附件路径开演(根治"@演示+附件没认领")。气泡已 append → 不再重复。
+        if handleDeclarativeInvocationIfNeeded(userText, fullPrompt: combined, appendUserMessage: false) { return "" }
         return submitTextInput(combined, source: source, appendUserMessage: false)
     }
 
@@ -1172,17 +1239,20 @@ final class LingShuState: ObservableObject {
     ) -> String {
         let trimmedPrompt = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedPrompt.isEmpty else { return "" }
-        // 「演示与答疑」进行时:用户开口=实时答疑(**主线程线性**,保真人交互感),拦下来处理,不走常规分诊/派发。
-        if appendUserMessage, handlePresentationInputIfNeeded(trimmedPrompt) { return "" }
+        // **内置技能活动中拦截**:如演示与答疑进行时,用户开口=实时答疑(主线程线性),拦下来处理,不走常规分诊/派发。
+        // 通用遍历,内核不点名具体技能。
+        if appendUserMessage {
+            for skill in builtinSkills where skill.interceptActiveInput(trimmedPrompt) { return "" }
+        }
         // 「Record & Replay」录制进行时:用户开口=记一步(或完成/取消),拦下来,不走常规分诊。
         if appendUserMessage, handleProcedureRecordingInputIfNeeded(trimmedPrompt) { return "" }
-        // **声明式调插件**:`@演示`/`用录制技能`/输入框「+」菜单 pinned → 确定性直达,跳过大脑分诊(根治误调用)。
+        // **声明式调插件**:`@演示`/输入框「+」菜单插入 @ → 确定性直达,跳过大脑分诊(根治误调用)。
+        // 注:**演示「启动」只走这条显式 `@演示` + 大脑的 `present_documents` 工具**——已删掉旧的「关键词嗅探演示意图」自动启动路由
+        // (`detectPresentationRequest` 之类),它对"句子里只是提到'演示'+ 带个文档路径"过度误触发(2026-06-27 用户定调)。
         if appendUserMessage, handleDeclarativeInvocationIfNeeded(trimmedPrompt) { return "" }
-        // 「演示文档」请求:确定性路由到 present_documents 插件(实测模型会习惯性绕开新插件,故硬路由保证用上)。
-        if appendUserMessage, handlePresentationStartIfNeeded(trimmedPrompt) { return "" }
-        // 「记录技能」请求 → 进录制;「用X技能…」请求 → 确定性匹配并 replay(声明式直达,不靠大脑瞎选)。
-        if appendUserMessage, handleProcedureRecordStartIfNeeded(trimmedPrompt) { return "" }
-        if appendUserMessage, handleProcedureReplayIfNeeded(trimmedPrompt) { return "" }
+        // **录制/重放只走显式 `@`**(2026-06-30 砍推断快路径):`@录制`→startProcedureRecording、`@<技能名>`→replayProcedure
+        // 已在上面声明式层(handleDeclarativeInvocationIfNeeded)确定性全覆盖。原来这里的「记录技能/用X跑」关键词嗅探
+        // (detectRecordRequest/matchReplay)是冗余二次猜测,也是「打→打开」误劫持来源——显式优于推断,删之。
         cancelMainRemoteHealthProbe(reason: "探活让路", detail: "收到用户指令，已停止后台探活，把主通道让给本轮任务。")
 
         // 记录**按需建**(不再在最顶 eager 建):被续答/在岗/答复等早返回接管的轮次用各自的记录,

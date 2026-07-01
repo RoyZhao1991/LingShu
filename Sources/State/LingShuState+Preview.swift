@@ -75,14 +75,30 @@ extension LingShuState {
                 let alreadyManaged = await MainActor.run { self.isStandingPersonOnDuty }
                 if on, !alreadyManaged {
                     let title = await MainActor.run { self.previewController.title }
-                    let approved = await self.requestManagedMode(reason: "全屏演示「\(title.isEmpty ? "当前文档" : title)」")
-                    guard approved else { return "(主人未同意占屏全屏演示。可留在普通预览窗里讲,或换不占屏的方式——别再尝试进全屏。)" }
                     let docPath = await MainActor.run { self.previewController.document?.documentURL?.path ?? "" }
-                    await MainActor.run {
-                        self.goLiveForInteractiveTask(prompt: docPath.isEmpty
-                            ? "全屏演示并逐页讲解刚打开的文档" : "全屏演示并逐页讲解这个文档:\(docPath)")
+                    let approved = await self.requestManagedMode(reason: "全屏演示「\(title.isEmpty ? "当前文档" : title)」")
+                    guard approved else {
+                        // **留在普通模式 → 不放弃,走「演示与答疑」插件**(本体在位、不抢麦的脚本化全屏演示;通读→逐页讲稿→照念→可答疑)。
+                        // 这是用户定调的演示正路:两个选项=进托管(本体接管·实时互动)/留普通(演示与答疑脚本化播放),都真做事,不再"留普通=啥也不干"。
+                        guard !docPath.isEmpty, FileManager.default.fileExists(atPath: docPath) else {
+                            return "(主人选了留在普通模式;但当前没有可演示的已打开文档,你可以普通预览窗里讲。)"
+                        }
+                        let msg = await self.presentationSkill.startPresentation(paths: [docPath])
+                        return msg + "\n(留在普通模式:已由「演示与答疑」插件脚本化全屏演示——你这条到此停,别再 present_fullscreen / speak / preview_next 重复演示。)"
                     }
-                    return "(主人已同意,转入托管会话全屏演示——你这条到此停止,不要重复打开或演示。)"
+                    // **进入托管模式 = 演示与答疑 + 开麦语音**(与"留在普通模式"同一引擎,差别仅麦克风/本体在位)。
+                    // 先上岗(开麦 + 本体在位,kickoff 抑制寒暄),再**确定性**启动演示与答疑——不再把"演示讲解"当口播任务交给大脑(避免它手搓老路径)。
+                    guard !docPath.isEmpty, FileManager.default.fileExists(atPath: docPath) else {
+                        await MainActor.run { self.goLiveForInteractiveTask(prompt: "全屏演示并逐页讲解刚打开的文档") }  // 没拿到路径才退回老交接
+                        return "(主人已同意,转入托管会话——你这条到此停止,不要重复打开或演示。)"
+                    }
+                    await MainActor.run {
+                        self.presentationManagedHandoff = true   // 上岗 kickoff 不寒暄(演示开场即开场)
+                        self.enteringViaManagedHandoff = true
+                        self.goLiveAsStandingPerson()            // 上岗:开麦 + 本体在位(语音通道)
+                    }
+                    let msg = await self.presentationSkill.startPresentation(paths: [docPath])
+                    return msg + "\n(已进入托管模式:开麦语音互动 + 演示与答疑脚本化全屏演示——你这条到此停,别再 present_fullscreen / speak / preview_next 重复演示。)"
                 }
                 return await MainActor.run { self.previewController.setSlideshow(on) ?? "预览不可用" }
             },
@@ -91,7 +107,8 @@ extension LingShuState {
                 description: "关闭预览面板。",
                 parametersJSON: "{\"type\":\"object\",\"properties\":{}}"
             ) { [weak self] _ in await MainActor.run { self?.previewController.close() ?? "预览不可用" } },
-            presentDocumentsTool()   // 「演示与答疑」插件:通读→脚本化演示→实时答疑→视频流式续演→多文档连播
         ]
+        // **内置技能暴露的工具**(如演示与答疑的 present_documents):通用并入,内核不点名具体技能。
+        + builtinSkills.flatMap { $0.tools() }
     }
 }

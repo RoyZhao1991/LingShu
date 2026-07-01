@@ -23,8 +23,12 @@ extension LingShuState {
         let msgID = taskExecutionRecords.first(where: { $0.id == rid })?.messages.last?.id
         let startedAt = Date()
         let isStream = LingShuAgentStreamParser.isStreamJSON(plugin.argsTemplate)
+        let workDir = agentWorkingDirectory
+        // **产出物归属真相源(2026-06-28,影子 git)**:跑前打基线、跑后量 delta——只认本次**真改/新建**的文件,
+        // 取代"mtime 足迹/agent 自报",根治共享工作目录里旧文件被串进产出物(见 [[artifact-attribution-shadow-git]])。
+        let shadowBaseline = await Task.detached { LingShuShadowGit.baseline(workDir: workDir) }.value
         let result = await LingShuAgentPluginStore.run(
-            plugin, objective: objective, workingDirectory: agentWorkingDirectory,
+            plugin, objective: objective, workingDirectory: workDir,
             progress: { tail in
                 Task { @MainActor [weak self] in
                     guard let self else { return }
@@ -32,10 +36,8 @@ extension LingShuState {
                     self.updateTaskRecordMessageText(rid, messageID: msgID,
                         text: startText + "\n\n⏳ 运行中(\(secs)s):\n" + String(tail.suffix(700)))
                 }
-            },
-            producedFilesSink: { files in
-                Task { @MainActor [weak self] in self?.registerAgentTouchedFiles(recordID: rid, paths: files) }
             })
+        // producedFilesSink 不再传:agent 自报"碰过"的文件会多报(连只 touch 的旧文件都报)→ 不当归属真相,改用跑后影子 delta。
         // 收尾:把这条流式气泡定格成最终结论尾部,并持久化一次。
         let finalText: String
         switch result {
@@ -43,30 +45,41 @@ extension LingShuState {
         case .failure(let f):   finalText = startText + "\n\n✗ 未完成:" + String(f.prefix(300))
         }
         updateTaskRecordMessageText(rid, messageID: msgID, text: finalText)
-        // **产出物补登(2026-06-26)**:agent CLI 用自己的工具写文件、绕过灵枢 write_file → 不会自动进产出物列表。
-        // stream-json(claude)已由 producedFilesSink **精确**登记(只认它 tool_use 真写过的文件,根治共享目录串台);
-        // 非 stream(codex/text)拿不到 tool_use,回退**扫工作目录 mtime**(本次运行期间真新建/改动的文件)。
-        if !isStream {
-            registerAgentProducedArtifacts(recordID: rid, workingDirectory: agentWorkingDirectory, since: startedAt)
+        // **跑后量影子 git delta 登记产出物**——归属的唯一真相源,替换原来三条易串台的旧路径(扫盘mtime/agent自报/抽输出路径)。
+        if let shadowBaseline {
+            let changes = await Task.detached { LingShuShadowGit.delta(since: shadowBaseline) }.value
+            registerArtifactsFromShadowDelta(recordID: rid, changes: changes)
+        } else if !isStream {
+            // 影子 git 不可用(目标非目录/git 缺失)→ 保守退回旧扫盘兜底。
+            registerAgentProducedArtifacts(recordID: rid, workingDirectory: workDir, since: startedAt)
+            if case .completed(let reply) = result {
+                registerAgentArtifactsFromReply(recordID: rid, reply: reply, since: startedAt)
+            }
         }
         persistTaskExecutionRecords()
         return result
     }
 
-    /// 登记 agent **真碰过的文件**(来自 stream-json tool_use)为产出物,并**刷新其 mtime**——
-    /// 用户定调(2026-06-26):改已有项目必须在原项目里做、不隔离目录;就算是已有产出物,处理时也迭代一下修改时间,
-    /// 这样无论文件是本次新建、还是改了已有项目里的旧文件,都被一致认作本任务产出 + 兼容下游 mtime 逻辑。
-    func registerAgentTouchedFiles(recordID: String, paths: [String]) {
-        let fm = FileManager.default
-        var any = false
-        for p in paths where fm.fileExists(atPath: p) {
-            try? fm.setAttributes([.modificationDate: Date()], ofItemAtPath: p)   // 迭代修改时间,保持兼容
-            appendTaskRecordArtifact(recordID, title: (p as NSString).lastPathComponent, location: p,
-                                     producer: "agent产出", operation: .created)
-            any = true
+    /// 按**影子 git delta** 登记产出物(新增→"新增"、修改→"修改";删除不登记)。归属唯一真相源:只认本次真改/新建的文件,
+    /// 不再因 agent 在共享工作目录里碰过旧文件就误登(根治坦克文档串进超级玛丽任务,见 [[artifact-attribution-shadow-git]])。
+    func registerArtifactsFromShadowDelta(recordID: String, changes: [LingShuShadowGit.FileChange]) {
+        for c in changes where c.kind != .deleted && !LingShuShadowGit.isBuildOrCacheNoise(c.path) {
+            appendTaskRecordArtifact(recordID, title: (c.path as NSString).lastPathComponent, location: c.path,
+                                     producer: "agent产出", operation: c.kind == .added ? .created : .modified)
         }
-        if any { persistTaskExecutionRecords() }
     }
+
+    /// 从 agent **输出文本**抽它声称写的文件路径,凡**存在且本次运行期间(mtime≥起跑)改动过**就补登产出物。
+    /// 覆盖写到工作目录外绝对路径的产物(扫工作目录漏掉的);mtime 闸防止把 agent 只是**读过/提到**的旧文件误登。去重由 append 负责。
+    func registerAgentArtifactsFromReply(recordID: String, reply: String, since: Date) {
+        let fm = FileManager.default
+        let cutoff = since.addingTimeInterval(-1)
+        for p in Self.extractFilePaths(from: reply) where fm.fileExists(atPath: p) {
+            guard let mtime = (try? fm.attributesOfItem(atPath: p)[.modificationDate]) as? Date, mtime >= cutoff else { continue }
+            appendTaskRecordArtifact(recordID, title: (p as NSString).lastPathComponent, location: p, producer: "agent产出", operation: .created)
+        }
+    }
+
 
     /// 扫 `workingDirectory`,把【`since` 之后真新建/改动】的交付型文件补登进产出物(去重由 appendArtifact 负责)。
     /// agent(claude/codex…)用自己的工具/Bash 写文件不经灵枢 write_file,只能靠运行后扫盘 + mtime 认本次产出。

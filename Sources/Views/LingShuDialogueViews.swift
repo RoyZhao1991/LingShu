@@ -25,8 +25,10 @@ struct LingShuDialogueSurface: View {
             if state.selectedTaskRecord != nil {
                 TaskExecutionRecordSheet(state: state)
             } else {
-                Text("任务记录不存在")
-                    .frame(width: 520, height: 320)
+                // 记录不在内存(被清理/归档,或派发churn时存→render间消失)→ **直接自动关掉,别弹无用的死框**。
+                // 原来弹"记录不存在"提示,被孤儿resume/派发事件反复触发=一直弹;改成无记录就立即收起,根治反复弹。
+                Color.clear
+                    .onAppear { DispatchQueue.main.async { state.isTaskRecordPresented = false } }
             }
         }
     }
@@ -58,7 +60,7 @@ private struct LingShuChatScroll: View {
                         } label: {
                             Text("加载更早的对话")
                                 .font(.system(size: 11, weight: .medium))
-                                .foregroundStyle(.white.opacity(0.45))
+                                .foregroundStyle(Color.lingFg.opacity(0.45))
                                 .padding(.vertical, 4)
                         }
                         .buttonStyle(.plain)
@@ -206,7 +208,7 @@ struct LingShuAttachmentTray: View {
                 pageArrow("chevron.right", enabled: start + pageSize < total) { startIndex = min(maxStart, start + 1) }
                 Text("\(start + 1)-\(min(start + pageSize, total))/\(total)")
                     .font(.system(size: 9.5, weight: .bold, design: .monospaced))
-                    .foregroundStyle(.white.opacity(0.45))
+                    .foregroundStyle(Color.lingFg.opacity(0.45))
             }
             Spacer(minLength: 0)
         }
@@ -217,9 +219,9 @@ struct LingShuAttachmentTray: View {
         Button(action: action) {
             Image(systemName: icon)
                 .font(.system(size: 11, weight: .bold))
-                .foregroundStyle(enabled ? Color.lingHolo : .white.opacity(0.2))
+                .foregroundStyle(enabled ? Color.lingHolo : Color.lingFg.opacity(0.2))
                 .frame(width: 22, height: 38)
-                .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                .background(Color.lingFg.opacity(0.05), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
         }
         .buttonStyle(.plain)
         .disabled(!enabled)
@@ -233,7 +235,7 @@ struct LingShuAttachmentTray: View {
             VStack(alignment: .leading, spacing: 1) {
                 Text(attachment.filename)
                     .font(.system(size: 11.5, weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.9))
+                    .foregroundStyle(Color.lingFg.opacity(0.9))
                     .lineLimit(1)
                 Text(attachment.status ?? (attachment.extractedContext.isEmpty ? "已登记" : "已解析 · 可改写"))
                     .font(.system(size: 9, weight: .bold, design: .monospaced))
@@ -246,7 +248,7 @@ struct LingShuAttachmentTray: View {
             } label: {
                 Image(systemName: "xmark")
                     .font(.system(size: 9, weight: .bold))
-                    .foregroundStyle(.white.opacity(0.6))
+                    .foregroundStyle(Color.lingFg.opacity(0.6))
             }
             .buttonStyle(.plain)
         }
@@ -265,13 +267,13 @@ struct LingShuAttachmentTray: View {
                 .aspectRatio(contentMode: .fill)
                 .frame(width: 34, height: 34)
                 .clipShape(RoundedRectangle(cornerRadius: 6))
-                .overlay(RoundedRectangle(cornerRadius: 6).stroke(.white.opacity(0.12), lineWidth: 1))
+                .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.lingFg.opacity(0.12), lineWidth: 1))
         } else {
             Image(systemName: attachment.kind.icon)
                 .font(.system(size: 15, weight: .bold))
                 .foregroundStyle(Color.lingHolo)
                 .frame(width: 34, height: 34)
-                .background(RoundedRectangle(cornerRadius: 6).fill(.white.opacity(0.06)))
+                .background(RoundedRectangle(cornerRadius: 6).fill(Color.lingFg.opacity(0.06)))
         }
     }
 }
@@ -290,7 +292,7 @@ struct LingShuDispatchQueueTray: View {
                     .foregroundStyle(Color.lingHolo)
                 Text("队列区 · \(items.count) 条等待中(任务串行,前一条完成后开始;晋级前可删)")
                     .font(.system(size: 10, weight: .bold, design: .monospaced))
-                    .foregroundStyle(.white.opacity(0.5))
+                    .foregroundStyle(Color.lingFg.opacity(0.5))
                 Spacer(minLength: 0)
             }
             ScrollView(.horizontal, showsIndicators: false) {
@@ -309,7 +311,7 @@ struct LingShuDispatchQueueTray: View {
             VStack(alignment: .leading, spacing: 1) {
                 Text((item.goal?.isEmpty == false ? item.goal! : item.prompt))
                     .font(.system(size: 11.5, weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.9))
+                    .foregroundStyle(Color.lingFg.opacity(0.9))
                     .lineLimit(1)
                 Text("排队中")
                     .font(.system(size: 9, weight: .bold, design: .monospaced))
@@ -318,7 +320,7 @@ struct LingShuDispatchQueueTray: View {
             Button { state.removeQueuedDispatchTask(id: item.id) } label: {
                 Image(systemName: "xmark")
                     .font(.system(size: 9, weight: .bold))
-                    .foregroundStyle(.white.opacity(0.6))
+                    .foregroundStyle(Color.lingFg.opacity(0.6))
             }
             .buttonStyle(.plain)
         }
@@ -343,7 +345,7 @@ struct LingShuSerialInputTray: View {
                     .foregroundStyle(Color.lingHolo)
                 Text("队列区 · \(items.count) 条等待中(单串行,前一件事完成后自动开始;开始前可删)")
                     .font(.system(size: 10, weight: .bold, design: .monospaced))
-                    .foregroundStyle(.white.opacity(0.5))
+                    .foregroundStyle(Color.lingFg.opacity(0.5))
                 Spacer(minLength: 0)
             }
             ScrollView(.horizontal, showsIndicators: false) {
@@ -362,7 +364,7 @@ struct LingShuSerialInputTray: View {
             VStack(alignment: .leading, spacing: 1) {
                 Text(item.prompt)
                     .font(.system(size: 11.5, weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.9))
+                    .foregroundStyle(Color.lingFg.opacity(0.9))
                     .lineLimit(1)
                 Text("排队中")
                     .font(.system(size: 9, weight: .bold, design: .monospaced))
@@ -371,7 +373,7 @@ struct LingShuSerialInputTray: View {
             Button { state.removeSerialInput(id: item.id) } label: {
                 Image(systemName: "xmark")
                     .font(.system(size: 9, weight: .bold))
-                    .foregroundStyle(.white.opacity(0.6))
+                    .foregroundStyle(Color.lingFg.opacity(0.6))
             }
             .buttonStyle(.plain)
         }
@@ -397,7 +399,7 @@ struct LingShuRunningTaskBar: View {
                     .foregroundStyle(Color.lingHolo)
                 Text(rec.title.isEmpty ? rec.prompt : rec.title)
                     .font(.system(size: 11.5, weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.92))
+                    .foregroundStyle(Color.lingFg.opacity(0.92))
                     .lineLimit(1)
                 Spacer(minLength: 6)
                 Button { state.openTaskRecord(rec.id) } label: {
@@ -445,14 +447,14 @@ struct LingShuInvocationHintBar: View {
                 .foregroundStyle(Color.lingHolo)
             Text(chips.count > 1 ? "将编排(\(chips.count) 步):" : "将调用:")
                 .font(.system(size: 10.5, weight: .bold, design: .monospaced))
-                .foregroundStyle(.white.opacity(0.55))
+                .foregroundStyle(Color.lingFg.opacity(0.55))
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 7) {
                     ForEach(Array(chips.enumerated()), id: \.offset) { idx, chip in
                         if idx > 0 {
                             Image(systemName: "arrow.right")
                                 .font(.system(size: 8, weight: .bold))
-                                .foregroundStyle(.white.opacity(0.35))
+                                .foregroundStyle(Color.lingFg.opacity(0.35))
                         }
                         chipView(chip)
                     }
@@ -464,7 +466,7 @@ struct LingShuInvocationHintBar: View {
     }
 
     private func roleColor(_ chip: LingShuInvocationChip) -> Color {
-        guard chip.isAgent else { return .white.opacity(0.5) }
+        guard chip.isAgent else { return Color.lingFg.opacity(0.5) }
         switch chip.role {
         case "maker": return .orange
         case "checker": return .green
@@ -511,7 +513,7 @@ struct LingShuMentionPopup: View {
                     if !p.subtitle.isEmpty {
                         Text(p.subtitle)
                             .font(.system(size: 10.5))
-                            .foregroundStyle(idx == selected ? Color.lingVoid.opacity(0.7) : .white.opacity(0.45))
+                            .foregroundStyle(idx == selected ? Color.lingVoid.opacity(0.7) : Color.lingFg.opacity(0.45))
                             .lineLimit(1)
                     }
                     Spacer(minLength: 4)
@@ -610,6 +612,12 @@ struct LingShuInputDock: View {
                 inputAliases = state.invocableAliases()
                 invocablePluginsCache = state.invocablePlugins()
             }
+            // **修(2026-06-29)**:agent 子能力是启动后**异步发现**的,onAppear 那一刻还没出来 → 刷新缓存,
+            // 否则 @ 补全/内嵌高亮永远看不到技能(如 @Codex·Image Gen)。发现完成(count 变)即重算一次。
+            .onChange(of: state.discoveredAgentCapabilities.count) { _, _ in
+                inputAliases = state.invocableAliases()
+                invocablePluginsCache = state.invocablePlugins()
+            }
             // 选中 agent 编排时(chips 变)顺带刷新别名快照——新注册的 agent 也能即时高亮。
             .onChange(of: state.detectedInvocationChips) { _, _ in
                 if inputAliases.isEmpty { inputAliases = state.invocableAliases() }
@@ -625,9 +633,9 @@ struct LingShuInputDock: View {
                 } label: {
                     Image(systemName: "paperclip")
                         .font(.system(size: 16, weight: .bold))
-                        .foregroundStyle(state.pendingAttachments.isEmpty ? .white.opacity(0.86) : Color.lingVoid)
+                        .foregroundStyle(state.pendingAttachments.isEmpty ? Color.lingFg.opacity(0.86) : Color.lingVoid)
                         .frame(width: 46, height: 42)
-                        .background(state.pendingAttachments.isEmpty ? Color.white.opacity(0.08) : Color.lingHolo, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                        .background(state.pendingAttachments.isEmpty ? Color.lingFg.opacity(0.08) : Color.lingHolo, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
                 }
                 .buttonStyle(.plain)
                 .help("上传图片 / PPT / 文档给灵枢理解或修改")
@@ -649,9 +657,9 @@ struct LingShuInputDock: View {
                 } label: {
                     Image(systemName: state.voiceOutputEnabled ? "speaker.wave.2.fill" : "speaker.slash.fill")
                         .font(.system(size: 16, weight: .bold))
-                        .foregroundStyle(.white.opacity(0.86))
+                        .foregroundStyle(Color.lingFg.opacity(0.86))
                         .frame(width: 46, height: 42)
-                        .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                        .background(Color.lingFg.opacity(0.08), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
                 }
                 .buttonStyle(.plain)
                 .help(state.voiceOutputEnabled ? "关闭语音输出" : "开启语音输出")
@@ -663,7 +671,7 @@ struct LingShuInputDock: View {
                     } label: {
                         Image(systemName: "stop.circle.fill")
                             .font(.system(size: 17, weight: .bold))
-                            .foregroundStyle(.white)
+                            .foregroundStyle(Color.lingFg)
                             .frame(width: 46, height: 42)
                             .background(Color.red.opacity(0.9), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
                     }
@@ -677,9 +685,9 @@ struct LingShuInputDock: View {
                 } label: {
                     Image(systemName: "square.and.pencil")
                         .font(.system(size: 15, weight: .bold))
-                        .foregroundStyle(.white.opacity(0.86))
+                        .foregroundStyle(Color.lingFg.opacity(0.86))
                         .frame(width: 46, height: 42)
-                        .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                        .background(Color.lingFg.opacity(0.08), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
                 }
                 .buttonStyle(.plain)
                 .help("清空上下文 / 新会话")
@@ -695,9 +703,9 @@ struct LingShuInputDock: View {
                 } label: {
                     Image(systemName: vision.isCameraRunning ? "eye.fill" : "eye")
                         .font(.system(size: 16, weight: .bold))
-                        .foregroundStyle(vision.isCameraRunning ? Color.lingVoid : .white.opacity(0.86))
+                        .foregroundStyle(vision.isCameraRunning ? Color.lingVoid : Color.lingFg.opacity(0.86))
                         .frame(width: 46, height: 42)
-                        .background(vision.isCameraRunning ? Color.cyan.opacity(0.92) : Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                        .background(vision.isCameraRunning ? Color.cyan.opacity(0.92) : Color.lingFg.opacity(0.08), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
                 }
                 .buttonStyle(.plain)
                 .help(vision.isCameraRunning ? "关闭视觉解析" : "打开视觉解析")
@@ -708,7 +716,7 @@ struct LingShuInputDock: View {
                     } label: {
                         Image(systemName: "stop.fill")
                             .font(.system(size: 15, weight: .bold))
-                            .foregroundStyle(.white.opacity(0.92))
+                            .foregroundStyle(Color.lingFg.opacity(0.92))
                             .frame(width: 46, height: 42)
                             .background(Color.orange.opacity(0.88), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
                     }
@@ -744,8 +752,14 @@ struct LingShuInputDock: View {
                     .foregroundStyle(state.isModelConnected ? Color.lingHolo : Color.orange.opacity(0.86))
             }
             .font(.system(size: 11.5, weight: .semibold, design: .monospaced))
-            .foregroundStyle(.white.opacity(0.48))
+            .foregroundStyle(Color.lingFg.opacity(0.48))
         }
+        // 输入坞=上浮的白色 compose 卡(浅色:白底+柔阴影浮于灰画布,与顶栏 chrome 呼应撑出层次;深色:透明=零回归)。
+        .padding(14)
+        .background(
+            Color.lingDockSurface.shadow(.drop(color: .black.opacity(0.07), radius: 14, y: 3)),
+            in: RoundedRectangle(cornerRadius: 18, style: .continuous)
+        )
     }
 
     /// 底部告警栏的数据源：把分散在各处、用户容易忽略的"降级/不可用"状态收集起来集中提示。
@@ -775,25 +789,65 @@ struct LingShuInputDock: View {
     @ViewBuilder private var invocationMenu: some View {
         Menu {
             Text("选一个插进输入框(@名字);可多选拼成编排:@Codex 开发 @Claude 验收")
-            ForEach(state.invocablePlugins()) { p in
-                Button {
-                    let sep = (state.prompt.isEmpty || state.prompt.hasSuffix(" ")) ? "" : " "
-                    state.prompt += "\(sep)@\(p.displayName) "
-                } label: {
-                    Label(p.displayName, systemImage: p.icon)
+            let all = state.invocablePlugins()
+            // **三块分区(2026-06-29 用户定调):① 外部 agent ② 外部 agent 技能 ③ 灵枢插件**——别堆成一锅。
+            Section("外部 agent") {
+                ForEach(all.filter { $0.kind == .agent }) { p in
+                    Button { insertMention(p.displayName) } label: { Label(p.displayName, systemImage: p.icon) }
+                }
+            }
+            let caps = all.filter { $0.kind == .agentCapability }
+            if !caps.isEmpty {
+                // **按 agent 收成二级子菜单(2026-06-29 用户定调)**:技能多(Claude 官方市场就 50 个),全平铺太长;
+                // 每个 agent 一个子菜单,展开才看它的技能。agent 名取技能 displayName 的「·」前缀,顺序保原序。
+                Section("外部 agent 技能") {
+                    let agentOrder = caps.map { Self.capAgentPrefix($0.displayName) }
+                        .reduce(into: [String]()) { if !$0.contains($1) { $0.append($1) } }
+                    ForEach(agentOrder, id: \.self) { agentName in
+                        let group = caps.filter { Self.capAgentPrefix($0.displayName) == agentName }
+                        let agentIcon = all.first { $0.kind == .agent && $0.displayName == agentName }?.icon ?? "puzzlepiece.extension"
+                        Menu {
+                            ForEach(group) { c in
+                                Button { insertMention(c.displayName) } label: { Label(Self.capShortName(c.displayName), systemImage: c.icon) }
+                            }
+                        } label: {
+                            Label("\(agentName)（\(group.count)）", systemImage: agentIcon)
+                        }
+                    }
+                }
+            }
+            Section("灵枢插件") {
+                ForEach(all.filter { $0.kind == .plugin }) { p in
+                    Button { insertMention(p.displayName) } label: { Label(p.displayName, systemImage: p.icon) }
                 }
             }
         } label: {
             Image(systemName: "plus")
                 .font(.system(size: 17, weight: .bold))
-                .foregroundStyle(.white.opacity(0.86))
+                .foregroundStyle(Color.lingFg.opacity(0.86))
                 .frame(width: 46, height: 42)
-                .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .background(Color.lingFg.opacity(0.08), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
         }
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
         .fixedSize()
         .help("声明式调插件/agent:选中即在输入框插入 @名字,可 inline 编排「@Codex 开发 @Claude 验收」")
+    }
+
+    /// agent 子能力 displayName 形如「<agent>·<能力>」:取「·」前缀=agent 名(用于二级菜单分组)。
+    static func capAgentPrefix(_ s: String) -> String {
+        String(s.split(separator: "·", maxSplits: 1).first ?? Substring(s))
+    }
+    /// 取「·」后缀=能力短名(在 agent 子菜单里只显示能力名,不重复 agent 名)。
+    static func capShortName(_ s: String) -> String {
+        let parts = s.split(separator: "·", maxSplits: 1)
+        return parts.count > 1 ? String(parts[1]) : s
+    }
+
+    /// 把 `@名字 ` 插进输入框光标处(「+」菜单选中即插)。空/已带空格则不补前导空格。
+    private func insertMention(_ name: String) {
+        let sep = (state.prompt.isEmpty || state.prompt.hasSuffix(" ")) ? "" : " "
+        state.prompt += "\(sep)@\(name) "
     }
 
     private func submit() {
@@ -810,7 +864,8 @@ struct LingShuInputDock: View {
     /// 当前 @查询命中的插件/agent(前缀优先、含次之)。空查询=全列表。
     private var mentionMatches: [LingShuInvocablePlugin] {
         guard let q = mentionQuery?.query.lowercased() else { return [] }
-        if q.isEmpty { return invocablePluginsCache }
+        // 空 `@`:只列 agent + 插件(清爽);agent 的原生技能等输入到 `@Codex·` 收窄时再展开(下面前缀匹配自然命中)。
+        if q.isEmpty { return invocablePluginsCache.filter { $0.kind != .agentCapability } }
         let scored = invocablePluginsCache.compactMap { p -> (LingShuInvocablePlugin, Int)? in
             let names = ([p.displayName] + p.aliases).map { $0.lowercased() }
             if names.contains(where: { $0.hasPrefix(q) }) { return (p, 0) }
@@ -900,7 +955,7 @@ struct LingShuAlertTicker: View {
                             .foregroundStyle(.orange)
                         Text(alert)
                             .font(.system(size: 12))
-                            .foregroundStyle(.white.opacity(0.88))
+                            .foregroundStyle(Color.lingFg.opacity(0.88))
                             .fixedSize(horizontal: false, vertical: true)
                     }
                 }

@@ -119,7 +119,7 @@ struct LingShuQuickAskView: View {
                                     actionButton("arrow.up.forward.app", link.kind == .file ? "打开" : "在浏览器打开") { open(link) }
                                 }
                                 .padding(.vertical, 5).padding(.horizontal, 10)
-                                .background(.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 8))
+                                .background(Color.lingFg.opacity(0.06), in: RoundedRectangle(cornerRadius: 8))
                             }
                         }
                     }
@@ -137,7 +137,7 @@ struct LingShuQuickAskView: View {
         .padding(20)
         .frame(width: 680, alignment: .leading)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
-        .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(.white.opacity(0.08)))
+        .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(Color.lingFg.opacity(0.08)))
         .onAppear { focused = true }
         .onExitCommand(perform: onClose)   // Esc
     }
@@ -158,7 +158,7 @@ struct LingShuQuickAskView: View {
     private func actionButton(_ icon: String, _ help: String, _ action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: icon).font(.system(size: 12)).foregroundStyle(.secondary)
-                .padding(5).background(.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 6))
+                .padding(5).background(Color.lingFg.opacity(0.06), in: RoundedRectangle(cornerRadius: 6))
         }
         .buttonStyle(.plain).help(help)
     }

@@ -16,6 +16,8 @@ struct LingShuPendingMainTurn: Sendable {
     let resumeBlocked: Bool
     let originalPromptForVerification: String?
     let startedAt: Date
+    /// 附件直接入脑:本回合随用户消息直发大脑的图片/PDF data URL(开关关/纯文本脑时为空)。
+    var imageDataURLs: [String]? = nil
 }
 
 /// 范式骨干接线:把统一 agent 循环接到真模型、设为常规对话主入口;主会话带 spawn_task 可自主派生真并行隔离子会话(经编排器+账本)。
@@ -36,7 +38,7 @@ extension LingShuState {
 
     /// 用当前模型配置构造真实模型适配器(@unchecked Sendable,可被工具/会话捕获)。
     func makeAgentModelAdapter(timeout: TimeInterval? = nil, maxAttempts: Int = 3) -> LingShuGatewayAgentModel {
-        LingShuGatewayAgentModel(
+        let adapter = LingShuGatewayAgentModel(
             client: remoteModelClient,
             provider: modelProvider,
             model: modelName,
@@ -47,6 +49,14 @@ extension LingShuState {
             timeout: timeout ?? modelTimeoutSeconds,
             maxAttempts: maxAttempts
         )
+        // **地面真相**:每次真实请求成功就记下实际用的脑(可能与选中的不同)→ UI 显示"实际在用"。
+        adapter.onActualCall = { [weak self] provider, model in
+            Task { @MainActor in
+                guard let self else { return }
+                self.actualBrainProvider = provider; self.actualBrainModel = model; self.actualBrainAt = Date()
+            }
+        }
+        return adapter
     }
 
     nonisolated static func runResultText(_ result: LingShuAgentRunResult) -> String {
@@ -162,7 +172,7 @@ extension LingShuState {
     /// guidance(如命中的 skill 提示)只随本回合发给模型,不进验收门的 userRequest(保持核对口径干净)。
     /// `trustReplyClaim`:见 verifyAndContinue。主会话/常驻=false(编排器,重活派发出去、回复提到既有文件别误进验收);
     /// 自主运行 kickoff=true(执行路径,run_command 产出的真文件靠它兜底触发验收)。
-    func driveAgentDelivery(session: any LingShuAgentSessioning, prompt: String, guidance: String? = nil, taskRecordID: String?, trustReplyClaim: Bool = true) async -> LingShuAgentRunResult {
+    func driveAgentDelivery(session: any LingShuAgentSessioning, prompt: String, guidance: String? = nil, taskRecordID: String?, trustReplyClaim: Bool = true, imageDataURLs: [String]? = nil) async -> LingShuAgentRunResult {
         batchInterruptRequested = false   // 打断标志粘滞泄漏修复(经典引擎,见 [[verify-gate-bypass-batchinterrupt-leak]]):新驱动入口复位,杜绝上回合打断泄漏旁路本回合验收门(复位在 send 前→本回合自身打断照常生效)
         // P1 目标认知消费:记录里有 typed GoalSpec(含重启后从盘加载的)则注入执行引导(据目标/约束/边界/风险/成功标准推进,别跑偏)。
         // P2 能力缺口消费:有缺口分析则在目标引导之上再叠加"缺口与补齐计划"(先按补齐路径取得能力再推进,真补不了如实告知)。
@@ -179,7 +189,8 @@ extension LingShuState {
         // (规划器把整段当待拆解请求→不能混进记忆召回块,否则把召回到的旧 PPT 误当本次任务凭空重做,2026-06-19 修)。
         let sent = agentLoopVariant == .nested ? nestedPlanningSendText(prompt: prompt, guidance: effectiveGuidance)
                                                : memoryAugmentedSendText(prompt: prompt, guidance: effectiveGuidance)
-        let initial = await session.send(sent)
+        // 附件直接入脑:经典引擎带图走多模态,其它/无图走纯文本(逻辑见 LingShuState+DirectMultimodal）。
+        let initial = await sendInitialTurn(session: session, text: sent, imageDataURLs: imageDataURLs)
         return await verifyAndContinue(session: session, result: initial, userRequest: prompt, taskRecordID: taskRecordID, trustReplyClaim: trustReplyClaim)
     }
 
@@ -251,9 +262,10 @@ extension LingShuState {
 
     /// 主入口:常规输入交给主 agent 会话(异步跑循环,结果回填气泡)。
     @discardableResult
-    func runMainAgentTurn(prompt: String, taskRecordID: String?, resumeBlocked: Bool = false, originalPromptForVerification: String? = nil, existingBubbleID: UUID? = nil) -> String {
+    func runMainAgentTurn(prompt: String, taskRecordID: String?, resumeBlocked: Bool = false, originalPromptForVerification: String? = nil, existingBubbleID: UUID? = nil, imageDataURLs: [String]? = nil) -> String {
         // 新一轮开始:先掐掉上一条回复还在放的 TTS,避免旧音频盖到新轮(音频/文字 desync)。
         interruptSpeechOutput?()
+        let directImages = imageDataURLs ?? consumePendingDirectBrainImages()   // 附件直接入脑:一次性消费暂存图片
         let turnStartedAt = Date()   // 计总用时,回复末尾展示
         // pending 气泡正文留空:工具执行中显示紧凑进度行,最终答复流式到达时逐字填充(见 ChatBubbleView)。
         // **顺序修(2026-06-23)**:`existingBubbleID` 给了就**复用 submitTextInput 已同步放在用户消息后的占位气泡**
@@ -274,7 +286,8 @@ extension LingShuState {
             taskRecordID: taskRecordID,
             resumeBlocked: resumeBlocked,
             originalPromptForVerification: originalPromptForVerification,
-            startedAt: turnStartedAt
+            startedAt: turnStartedAt,
+            imageDataURLs: directImages
         )
         pendingMainTurns[pendingID] = turn
         // 问答线可删等待队列:登记这条问答(队首才执行;等待中可删)。
@@ -356,7 +369,8 @@ extension LingShuState {
                 verifyFirstHint,
                 matchedSkillHint(for: turn.prompt),
                 LingShuSelfReferenceIntent.directIntroductionGuidance(for: turn.prompt),
-                selfInspectionGuidance(for: turn.prompt)   // 架构/能力/自检类问题→注入真实自我认知,大脑 grounded 在真架构+实时能力上答
+                selfInspectionGuidance(for: turn.prompt),   // 架构/能力/自检类问题→注入真实自我认知,大脑 grounded 在真架构+实时能力上答
+                agentCapabilitiesGroundingText()            // 已接入 agent 各自带的专长子能力(如 codex 出图)→ 需要专长时优先 @它,别自己硬扛
             ]
             .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
@@ -382,7 +396,7 @@ extension LingShuState {
                 trustReplyClaim: false
             )
         } else {
-            result = await driveAgentDelivery(session: session, prompt: turn.prompt, guidance: guidance, taskRecordID: turn.taskRecordID, trustReplyClaim: false)
+            result = await driveAgentDelivery(session: session, prompt: turn.prompt, guidance: guidance, taskRecordID: turn.taskRecordID, trustReplyClaim: false, imageDataURLs: turn.imageDataURLs)
         }
 
         guard !Task.isCancelled, !cancelledChatTurnIDs.contains(pendingID) else { return }

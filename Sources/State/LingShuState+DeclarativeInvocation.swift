@@ -12,7 +12,7 @@ struct LingShuInvocationChip: Identifiable, Equatable {
     }
 }
 
-/// **声明式调插件**接进 LingShuState:可调插件注册表 + 路由(`@演示`/`用录制技能`/「+」菜单 pinned → 确定性直达)。
+/// **声明式调插件**接进 LingShuState:可调插件注册表 + 路由(`@演示`/「+」菜单插入 @ → 确定性直达)。
 /// 这是对反复出现的「大脑误调用/绕开新插件」的系统性修复——用户一旦显式声明,就不再交给大脑判断。
 @MainActor
 extension LingShuState {
@@ -26,17 +26,22 @@ extension LingShuState {
             list.append(.init(id: "agent:\(a.id)", displayName: a.displayName, aliases: a.aliases,
                               subtitle: a.subtitle.isEmpty ? "已注册 agent(\(a.role.rawValue))" : a.subtitle,
                               icon: a.icon, kind: .agent))
+            // **P2b 子能力曝光(2026-06-29)**:把该 agent **已启用**的子能力 pin 进 @/+ 菜单(`@Codex·picsart` 这种限定别名,
+            // 不用裸名避免误命中正文"pdf/github"等)。只 pin 已启用的(用户定调:菜单别铺 191 项噪声);未装的走按需安装。
+            for cap in agentCapabilities(for: a.id) where cap.enabled && cap.installed {
+                let qualified = "\(a.displayName)·\(cap.name)"
+                list.append(.init(id: "agentcap:\(a.id):\(cap.id)", displayName: qualified, aliases: [qualified],
+                                  subtitle: "\(a.displayName) 自带能力 · 让它用这个做\(cap.summary.isEmpty ? "" : ":\(cap.summary.prefix(28))")",
+                                  icon: "puzzlepiece.extension", kind: .agentCapability))
+            }
         }
-        // **插件**
-        list.append(contentsOf: [
-            .init(id: "present", displayName: "演示与答疑",
-                  aliases: ["演示", "讲解", "present", "放映"],
-                  subtitle: "把文档/网页正式演示讲解,边讲边答疑", icon: "play.rectangle.on.rectangle"),
-            .init(id: "record", displayName: "录制技能",
-                  aliases: ["录制", "记录技能", "学技能", "record"],
-                  subtitle: "看你做一遍→学成可复用技能,以后一句话带新参数 replay", icon: "record.circle"),
-        ])
-        // 已学会的过程技能,每个也可直接声明调用(用 X 技能)。
+        // **内置技能的 @ 菜单项**(演示与答疑等):通用并入,内核不点名具体技能(各技能自报 invocationEntry)。
+        list.append(contentsOf: builtinSkills.compactMap { $0.invocationEntry })
+        // 录制技能(尚未迁入内置技能协议,暂留)。
+        list.append(.init(id: "record", displayName: "录制技能",
+                          aliases: ["录制", "记录技能", "学技能", "record"],
+                          subtitle: "看你做一遍→学成可复用技能,以后一句话带新参数 replay", icon: "record.circle"))
+        // 已学会的过程技能,每个也可通过 `@技能名` 直接声明调用。
         for s in LingShuProcedureSkillRouter.loadProcedures().prefix(8) {
             list.append(.init(id: "proc:\(s.id)", displayName: s.title,
                               aliases: s.triggers, subtitle: "已学会的技能" + (s.parameters.isEmpty ? "" : "(参数:\(s.parameters.map(\.name).joined(separator: "、")))"),
@@ -59,23 +64,26 @@ extension LingShuState {
         return out
     }
 
-    /// 文本声明(`@Codex 开发X @Claude 验收`/`@演示 …`)或「+」菜单 pinned(可多选)→ 确定性路由。返回 true=已接管。
-    func handleDeclarativeInvocationIfNeeded(_ prompt: String) -> Bool {
+    /// 文本声明(`@Codex 开发X @Claude 验收`/`@演示 …`)或「+」菜单插入的 @ 芯片(可多选)→ 确定性路由。返回 true=已接管。
+    /// **声明在 `prompt` 上检测**(用户原话,如 `@演示`);`fullPrompt` 给了就当**路由真上下文**(含附件折进来的「本机路径:…」),
+    /// 让路径类技能从整条消息抽路径——根治"@演示+附件,路径在消息里却没被认领"(附件入口已 append 气泡 → `appendUserMessage:false`)。
+    func handleDeclarativeInvocationIfNeeded(_ prompt: String, fullPrompt: String? = nil, appendUserMessage: Bool = true) -> Bool {
         let plugins = invocablePlugins()
+        let full = fullPrompt ?? prompt
         // 文本 `@链式`(@Codex 开发X @Claude 验收Y)——「+」菜单选中即往输入框插 @名字,inline 编排,提交时按序解析成链。
         let chain = LingShuDeclarativeInvocation.detectChain(prompt, plugins: plugins)
         lingShuControlLog("声明式链解析: 输入「\(prompt.prefix(30))」可调=\(plugins.map(\.id)) → 链=\(chain.map { "\($0.id)::\($0.segment.prefix(14))" })")
         if !chain.isEmpty {
-            chatMessages.append(.init(speaker: "你", text: prompt, isUser: true))
+            if appendUserMessage { chatMessages.append(.init(speaker: "你", text: prompt, isUser: true)) }
             appendTrace(kind: .route, actor: "声明式调用", title: "用户显式指定",
                         detail: "链:\(chain.map { $0.id }.joined(separator: " → "))(跳过大脑分诊)")
-            runInvocationChain(chain.map { (id: $0.id, segment: $0.segment) }, plugins: plugins, fullPrompt: prompt)
+            runInvocationChain(chain.map { (id: $0.id, segment: $0.segment) }, plugins: plugins, fullPrompt: full)
             return true
         }
-        // ③ 单个 `用X插件`/`切到X` 声明。
+        // ③ 单个 `@X` 声明。
         if let hit = LingShuDeclarativeInvocation.detect(prompt, plugins: plugins) {
-            chatMessages.append(.init(speaker: "你", text: prompt, isUser: true))
-            runInvocationChain([(id: hit.id, segment: hit.rest)], plugins: plugins, fullPrompt: prompt)
+            if appendUserMessage { chatMessages.append(.init(speaker: "你", text: prompt, isUser: true)) }
+            runInvocationChain([(id: hit.id, segment: hit.rest)], plugins: plugins, fullPrompt: full)
             return true
         }
         return false
@@ -85,10 +93,20 @@ extension LingShuState {
     /// 顺序执行声明链:agent 步走真委托(后一个 agent 拿到前一步产出→天然 maker≠checker);插件步路由各自插件。
     /// **同一编排任务=一个气泡换行追加**(不拆成多气泡);每步落 trace,运行时(状态/运维)能看清启动的是哪个 agent。
     private func runInvocationChain(_ steps: [(id: String, segment: String)], plugins: [LingShuInvocablePlugin], fullPrompt: String) {
+        // **P3 子能力步(agentcap:agentID:capID)**:定向让该 agent 用某自带能力做 → 增强目标 + 派给它(未装则红线提示)。先摘出处理,剩下的走原逻辑。
+        let capSteps = steps.filter { $0.id.hasPrefix("agentcap:") }
+        for step in capSteps {
+            let body = String(step.id.dropFirst("agentcap:".count))
+            guard let sep = body.firstIndex(of: ":") else { continue }
+            let agentID = String(body[..<sep]); let capID = String(body[body.index(after: sep)...])
+            dispatchAgentCapability(agentID: agentID, capabilityID: capID, task: step.segment.isEmpty ? fullPrompt : step.segment)
+        }
+        let steps = steps.filter { !$0.id.hasPrefix("agentcap:") }
+        guard !steps.isEmpty else { return }
         // 纯插件步(present/record/proc)不进 agent 气泡——它们各自有交互/窗口。
         let agentSteps = steps.filter { id in plugins.first(where: { $0.id == id.id })?.kind == .agent }
         for step in steps where plugins.first(where: { $0.id == step.id })?.kind == .plugin {
-            routePlugin(pluginID: step.id, rest: step.segment)
+            routePlugin(pluginID: step.id, rest: step.segment, fullPrompt: fullPrompt)
         }
         guard !agentSteps.isEmpty else { return }
 
@@ -135,8 +153,8 @@ extension LingShuState {
     func resolveAgentRoleAssembly(prompt: String, agents: [(id: String, name: String)]) async
         -> (makerAgentID: String?, makerName: String?, checkers: [(id: String, name: String)], makerTask: String)? {
         let agentList = agents.map { "- \($0.name)(id=\($0.id))" }.joined(separator: "\n")
-        let system = """
-        你是「角色装配」解析器。用户请求里提到了一个或多个 agent。请**语义判断**(别只抠关键词,读懂用户真实意图):每个被提到的 agent 在这个任务里该当 **maker(负责开发/产出)** 还是 **checker(负责验收/复核/把关)**,以及谁来当 maker。
+        let system = LingShuPersona.identityLine + "\n" + """
+        现在你来做「角色装配」解析。用户请求里提到了一个或多个 agent。请**语义判断**(别只抠关键词,读懂用户真实意图):每个被提到的 agent 在这个任务里该当 **maker(负责开发/产出)** 还是 **checker(负责验收/复核/把关)**,以及谁来当 maker。
         - 用户意思是让某 agent 做/开发/写 → 它是 maker;让某 agent 验收/审/把关/复核 → 它是 checker(可多个)。
         - 若没有 agent 被指派开发(都是验收角色),maker 就是 "灵枢"(灵枢自己开发)。
         - makerTask:给 maker 的真正开发目标(把"让 X 验收"这类装配指令剥掉,只留要做的事)。
@@ -222,20 +240,12 @@ extension LingShuState {
         if chips != detectedInvocationChips { detectedInvocationChips = chips }
     }
 
-    /// 把(已确认的)输入路由给指定**插件**(present/record/proc)。
-    private func routePlugin(pluginID: String, rest: String) {
+    /// 把(已确认的)输入路由给指定**插件**(内置技能 / record / proc)。
+    private func routePlugin(pluginID: String, rest: String, fullPrompt: String = "") {
+        // **内置技能优先**(演示与答疑等):通用遍历,内核不点名;命中即由技能自行路由。
+        // 传 fullPrompt:路径类技能(演示)在 rest 没写路径时从整条消息兜底抽(含附件折进来的「本机路径:…」)。
+        for skill in builtinSkills where skill.routeDeclarative(id: pluginID, rest: rest, fullPrompt: fullPrompt) { return }
         switch pluginID {
-        case "present":
-            let paths = Self.extractExistingFilePaths(rest)
-            guard !paths.isEmpty else {
-                speakAndChat("好,用演示插件——把要演示的文档路径发我(比如 /Users/.../方案.pdf),我就开讲。")
-                return
-            }
-            Task { @MainActor [weak self] in
-                guard let self else { return }
-                let msg = await self.startPresentation(paths: paths)
-                self.chatMessages.append(.init(speaker: "灵枢", text: msg, isUser: false))
-            }
         case "record":
             startProcedureRecording(name: rest.isEmpty ? nil : rest)
         default:

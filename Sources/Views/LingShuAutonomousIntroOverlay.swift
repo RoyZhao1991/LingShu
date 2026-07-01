@@ -54,7 +54,7 @@ struct LingShuAutonomousOrbOnlyView: View {
                     .opacity(paused ? 0.4 : 0.95)        // 暂停=冻结变暗
                     .saturation(paused ? 0.25 : 1)
                     .shadow(color: Color.lingHolo.opacity(paused ? 0.15 : 0.58), radius: 14)
-                    .overlay { if paused { Image(systemName: "pause.fill").font(.system(size: 22, weight: .heavy)).foregroundStyle(.white.opacity(0.85)) } }
+                    .overlay { if paused { Image(systemName: "pause.fill").font(.system(size: 22, weight: .heavy)).foregroundStyle(Color.lingFg.opacity(0.85)) } }
             }
             .frame(width: 124, height: 124)
             phaseLabel
@@ -119,7 +119,7 @@ struct LingShuAutonomousOrbOnlyView: View {
         }
         .padding(.horizontal, 7).padding(.vertical, 5)
         .background(.ultraThinMaterial, in: Capsule())
-        .overlay { Capsule().stroke(Color.white.opacity(0.12), lineWidth: 0.5) }
+        .overlay { Capsule().stroke(Color.lingFg.opacity(0.12), lineWidth: 0.5) }
     }
 
     private func pill(_ label: String, icon: String, tint: Color, action: @escaping () -> Void) -> some View {
@@ -289,7 +289,7 @@ private struct AutonomousIntroCanvas: View {
         )
         // 本体核
         let coreGrad = Gradient(stops: [
-            .init(color: .white.opacity(0.95 * form), location: 0),
+            .init(color: Color.lingFg.opacity(0.95 * form), location: 0),
             .init(color: accent.opacity(0.7 * form), location: 0.4),
             .init(color: .clear, location: 1)
         ])
@@ -303,7 +303,7 @@ private struct AutonomousIntroCanvas: View {
             let br = r * (1.0 + 1.2 * bloom)
             ctx.fill(
                 Path(ellipseIn: CGRect(x: target.x - br, y: target.y - br, width: br * 2, height: br * 2)),
-                with: .color(.white.opacity(0.5 * bloom))
+                with: .color(Color.lingFg.opacity(0.5 * bloom))
             )
         }
     }

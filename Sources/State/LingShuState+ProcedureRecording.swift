@@ -22,15 +22,6 @@ extension LingShuState {
 
     // MARK: 路由
 
-    /// 「记录一个技能」→ 进录制模式。返回 true=已接管。
-    func handleProcedureRecordStartIfNeeded(_ prompt: String) -> Bool {
-        guard procedureRecording == nil else { return false }
-        guard let req = LingShuProcedureSkillRouter.detectRecordRequest(prompt) else { return false }
-        chatMessages.append(.init(speaker: "你", text: prompt, isUser: true))
-        startProcedureRecording(name: req.name)
-        return true
-    }
-
     /// 录制进行时:用户开口=一步(或完成/取消)。返回 true=已接管(录制中不走常规分诊)。
     func handleProcedureRecordingInputIfNeeded(_ prompt: String) -> Bool {
         guard procedureRecording != nil else { return false }
@@ -94,8 +85,8 @@ extension LingShuState {
         let steps = session.frames.enumerated().map { i, f in
             "第\(i + 1)步 用户说:\(f.note)\(f.elementsSummary.isEmpty ? "" : "（当时屏上元素:\(f.elementsSummary)）")"
         }.joined(separator: "\n")
-        let sys = """
-        你在把用户**演示一遍**的操作,整理成一个**可复用的过程技能**(像 Codex 的 SKILL.md)。**只输出一行 JSON**:
+        let sys = LingShuPersona.identityLine + "\n" + """
+        现在你把用户**演示一遍**的操作,整理成一个**可复用的过程技能**(像 Codex 的 SKILL.md)。**只输出一行 JSON**:
         {"title":"技能名","app":"主要在哪个App操作(没有填\\"\\")","steps":["按意图描述的步骤,会变的值用 {{参数名}} 占位"],"params":[{"name":"参数名","desc":"说明","example":"用户这次的示例值"}]}
         要点:
         - **分清参数 vs 配置**:用户每次会变的(金额/日期/收件人/标题…)抽成 {{参数}};固定不变的(选某个固定科目、点提交)直接写进步骤。

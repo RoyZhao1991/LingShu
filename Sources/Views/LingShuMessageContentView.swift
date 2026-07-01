@@ -8,7 +8,7 @@ import AppKit
 /// codex、豆包都是结构化分块。这里做的是「通配」解析：不挑模型、不挑语言，按 Markdown 围栏拆块即可。
 struct LingShuMessageContentView: View {
     let text: String
-    var textColor: Color = .white.opacity(0.88)
+    var textColor: Color = Color.lingFg.opacity(0.88)
 
     var body: some View {
         VStack(alignment: .leading, spacing: 9) {
@@ -93,28 +93,28 @@ struct LingShuCodeBlockView: View {
                         Text(copied ? "已复制" : "复制")
                     }
                     .font(.system(size: 9.5, weight: .semibold, design: .monospaced))
-                    .foregroundStyle(copied ? Color.lingHolo : .white.opacity(0.66))
+                    .foregroundStyle(copied ? Color.lingHolo : Color.lingFg.opacity(0.66))
                 }
                 .buttonStyle(.plain)
                 .help("复制这段代码")
             }
             .padding(.horizontal, 11)
             .padding(.vertical, 6)
-            .background(Color.white.opacity(0.05))
+            .background(Color.lingFg.opacity(0.05))
 
             ScrollView(.horizontal, showsIndicators: false) {
                 Text(code)
                     .font(.system(size: 12.5, weight: .regular, design: .monospaced))
-                    .foregroundStyle(.white.opacity(0.92))
+                    .foregroundStyle(Color.lingFg.opacity(0.92))
                     .textSelection(.enabled)
                     .padding(11)
                     .frame(minWidth: 0, alignment: .leading)
             }
         }
-        .background(Color.black.opacity(0.34), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .background(Color.lingFg.opacity(0.06), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .stroke(Color.white.opacity(0.10), lineWidth: 0.8)
+                .stroke(Color.lingFg.opacity(0.10), lineWidth: 0.8)
         }
     }
 }
@@ -122,7 +122,7 @@ struct LingShuCodeBlockView: View {
 /// 正文 Markdown：逐行识别标题 / 分割线 / 列表，行内交给系统 Markdown 解析（加粗、斜体、行内码、链接）。
 struct LingShuMarkdownText: View {
     let content: String
-    var color: Color = .white.opacity(0.88)
+    var color: Color = Color.lingFg.opacity(0.88)
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -193,7 +193,7 @@ struct LingShuMarkdownText: View {
                         .font(.system(size: 13, weight: .bold)).foregroundStyle(color)
                 }
             }
-            Divider().overlay(Color.white.opacity(0.16)).gridCellColumns(colCount)
+            Divider().overlay(Color.lingFg.opacity(0.16)).gridCellColumns(colCount)
             ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
                 GridRow {
                     ForEach(0..<colCount, id: \.self) { c in
@@ -204,9 +204,9 @@ struct LingShuMarkdownText: View {
             }
         }
         .padding(10)
-        .background(Color.white.opacity(0.04), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+        .background(Color.lingFg.opacity(0.04), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
         .overlay {
-            RoundedRectangle(cornerRadius: 7, style: .continuous).stroke(Color.white.opacity(0.10), lineWidth: 0.8)
+            RoundedRectangle(cornerRadius: 7, style: .continuous).stroke(Color.lingFg.opacity(0.10), lineWidth: 0.8)
         }
     }
 
@@ -216,7 +216,7 @@ struct LingShuMarkdownText: View {
         if trimmed.isEmpty {
             Color.clear.frame(height: 3)
         } else if trimmed == "---" || trimmed == "***" || trimmed == "___" {
-            Divider().overlay(Color.white.opacity(0.14))
+            Divider().overlay(Color.lingFg.opacity(0.14))
         } else if trimmed.hasPrefix("### ") {
             inline(String(trimmed.dropFirst(4)))
                 .font(.system(size: 14, weight: .bold)).foregroundStyle(color)

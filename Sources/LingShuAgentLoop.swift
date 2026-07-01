@@ -24,12 +24,15 @@ struct LingShuAgentMessage: Equatable, Sendable {
     var content: String
     var toolCalls: [LingShuAgentToolCall]
     var toolCallID: String?
+    /// 多模态:内联图片/PDF 的 data URL(附件直接入脑时挂在 user 消息上)。仅 vision 脑用,非空时该消息走多模态 content。
+    var imageDataURLs: [String]?
 
-    init(role: LingShuAgentRole, content: String, toolCalls: [LingShuAgentToolCall] = [], toolCallID: String? = nil) {
+    init(role: LingShuAgentRole, content: String, toolCalls: [LingShuAgentToolCall] = [], toolCallID: String? = nil, imageDataURLs: [String]? = nil) {
         self.role = role
         self.content = content
         self.toolCalls = toolCalls
         self.toolCallID = toolCallID
+        self.imageDataURLs = imageDataURLs
     }
 }
 
@@ -108,10 +111,20 @@ protocol LingShuAgentSessioning: Actor {
     var messages: [LingShuAgentMessage] { get }
     func setTextDeltaSink(_ sink: (@Sendable (String) async -> Void)?)
     func send(_ userText: String) async -> LingShuAgentRunResult
+    /// 多模态:带内联图片/PDF 的 data URL 直发(派发任务也要能让多模态脑看真图,不只 VL→文字)。
+    /// 设为协议要求→对 `any LingShuAgentSessioning` 动态派发到真实实现;非多模态会话用下面的默认(忽略图、退回纯文本)。
+    func send(_ userText: String, imageDataURLs: [String]?) async -> LingShuAgentRunResult
     func resume(_ answer: String) async -> LingShuAgentRunResult
     func continueLoop() async -> LingShuAgentRunResult
     func injectCorrection(_ text: String) -> Bool
     func injectBriefing(_ text: String)
+}
+
+extension LingShuAgentSessioning {
+    /// 默认:纯文本/非多模态会话忽略图片,退回纯文本 send。`LingShuAgentSession` 自带真带图实现(覆盖此默认)。
+    func send(_ userText: String, imageDataURLs: [String]?) async -> LingShuAgentRunResult {
+        await send(userText)
+    }
 }
 
 actor LingShuAgentSession: LingShuAgentSessioning {
@@ -223,11 +236,16 @@ actor LingShuAgentSession: LingShuAgentSessioning {
 
     /// 投入一条用户输入,跑完整循环直到模型收尾、卡住或到轮次上限。
     func send(_ userText: String) async -> LingShuAgentRunResult {
+        await send(userText, imageDataURLs: nil)
+    }
+
+    /// 同上,**附件直接入脑**时把内联图片/PDF 的 data URL 挂到这条 user 消息上(走多模态)。
+    func send(_ userText: String, imageDataURLs: [String]?) async -> LingShuAgentRunResult {
         repairOrphanToolCalls()   // 续接前修齐上一回合飞行中被取消留下的孤儿 tool_call(打断恢复泄漏修复)→ 下面的不变量检查见到的是良构 history
         pendingCorrection = nil   // 新回合不带上一回合可能残留的纠正
         consumePendingBriefings() // 子任务简报先入上下文(在用户新输入之前)——主线程信息同步
         await compactHistoryIfNeeded()   // 回合边界:超窗口的早段**语义压缩成前情提要**(对标 CC auto-compaction),失败回退硬裁剪
-        messages.append(.init(role: .user, content: userText))
+        messages.append(.init(role: .user, content: userText, imageDataURLs: imageDataURLs))
         checkInvariants(at: .afterCompaction)   // 不变量:压缩后历史在预算内且良构(I6+I1+I2)
         return recordTerminal(await runLoop())
     }
@@ -374,6 +392,12 @@ actor LingShuAgentSession: LingShuAgentSessioning {
     /// 连续多少次发起完全相同的工具调用即判"原地打转"(停滞)。
     static let stuckRepeatThreshold = 5
 
+    /// **大参数"空着到达"→ 早 steer 到分块的阈值(2026-06-28,真实战挖出)**:`write_file` 的 `content` / `run_command` 的 `command`
+    /// 连续这么多次空着到达——不是模型漏填,是**单次工具参数体积过大、被模型/网关截断丢了字段**(实测某 Anthropic 兼容网关对超大
+    /// tool_use input 直接吞掉大字符串,只剩 path / 空 {})。通用「带齐参数」纠偏对它没用(模型自认已带齐),唯一出路是**分块写**。
+    /// 设 2:两次就识别并给确定性分块指导,把原来模型要 20+ 轮才自悟的弯路压到 2-3 轮。
+    static let bigArgEmptyChunkSteerThreshold = 2
+
     /// **可选脚手架工具**(非任务目标本身):卡在它们上绝不交还,改为纠偏让模型跳过、直接做任务。
     static let optionalScaffoldTools: Set<String> = ["update_plan"]
 
@@ -492,9 +516,23 @@ actor LingShuAgentSession: LingShuAgentSessioning {
                                                  required: Self.requiredParams(for: $0.name, in: tools))
                 }.joined(separator: "|")
                 recentToolSignatures.append(signature)
-                let tail = recentToolSignatures.suffix(Self.stuckRepeatThreshold)
                 var pendingSteer: String? = nil
-                if tail.count == Self.stuckRepeatThreshold, Set(tail).count == 1 {
+                // **大参数"空着到达" → 早 steer 到分块写(2026-06-28,30min 报告任务挖出)**:write_file 的 content / run_command 的
+                // command 反复空着到达,不是模型漏填,是**单次传的内容太大、被模型/网关截断丢了**。通用「带齐参数」纠偏对它无效
+                // (模型自认已带齐),只有**分块写小段**能过(实测正是模型自己绕了 20+ 轮才悟出的 heredoc 追加)。这里 2 次就识别、
+                // 给确定性分块指导,把 ~28min 的空转弯路压到 2-3 轮。只对单工具的高置信场景出手,不误伤多工具/良构调用。
+                let bigArgEmptyTools: Set<String> = ["write_file", "run_command"]
+                if let only = calls.first, calls.count == 1, bigArgEmptyTools.contains(only.name) {
+                    let bigTail = recentToolSignatures.suffix(Self.bigArgEmptyChunkSteerThreshold)
+                    if bigTail.count == Self.bigArgEmptyChunkSteerThreshold, Set(bigTail).count == 1,
+                       bigTail.first == "\(only.name)#MALFORMED" {
+                        recentToolSignatures.removeAll()   // 给它带着分块指导从头来的机会
+                        let missing = only.name == "write_file" ? "content" : "command"
+                        pendingSteer = "【系统纠偏】你调用「\(only.name)」时 `\(missing)` 一直空着到达——**不是你漏填,是这次要传的内容太大、被通道截断丢了**。再「带齐参数」也没用。唯一出路是**分块写小段**:先 `run_command` 执行 `cat > 目标文件 << 'EOF' … EOF` 写第一小段(几十行),再多次 `cat >> 目标文件 << 'EOF' … EOF` 追加后续小段,每条命令只带一小块文本;全部写完后再 `run_command` 执行/校验。别再把整块大内容塞进一次调用了。"
+                    }
+                }
+                let tail = recentToolSignatures.suffix(Self.stuckRepeatThreshold)
+                if pendingSteer == nil, tail.count == Self.stuckRepeatThreshold, Set(tail).count == 1 {
                     let name = calls.first?.name ?? "同一动作"
                     if tail.first?.contains("#MALFORMED") == true {
                         // **空/漏必需参数反复调用同一工具(任何弱脑通病,非特判)**:它只是没填对参数、不是任务做不动 →

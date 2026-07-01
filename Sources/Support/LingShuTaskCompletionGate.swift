@@ -65,6 +65,14 @@ enum LingShuTaskCompletionGate {
         return needles.contains { t.contains($0) }
     }
 
+    /// **成功标准全部确定性达成 → 投机性 gap 视为已被执行推翻(纯函数,2026-06-30)**。
+    /// 给 `computeCompletionDecision` 用:验收依据逐条确定性核验全过(有 met、无 unmet)、且回复没承认无能力 →
+    /// 那条 gap 并没真挡住交付(如 rev.py 三条标准全绿、pytest 跑通,「Python 测试框架」gap 是误报)→ 清掉它,别找用户要授权。
+    /// **不在 `decide` 里短路**(那会把"真 needsUser 缺口 + 部分达成 → partial"也误判 ok);只在已知"全绿"的实跑层清。
+    nonisolated static func allCriteriaMetResolvesSpeculativeGap(hasCriteria: Bool, someMet: Bool, someUnmet: Bool, admitsIncapacity: Bool) -> Bool {
+        hasCriteria && someMet && !someUnmet && !admitsIncapacity
+    }
+
     /// 确定性裁决(优先级级联)。
     static func decide(_ i: LingShuCompletionInputs) -> LingShuCompletionDecision {
         // ① 有未解除的阻断缺口 → 绝不当成功收尾。

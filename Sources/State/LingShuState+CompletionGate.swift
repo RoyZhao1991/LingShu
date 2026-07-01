@@ -99,11 +99,23 @@ extension LingShuState {
             someMet = !report.deterministicallyMet.isEmpty
             someUnmet = report.hasDeterministicFailure
         }
-        let signals = acquisitionSignals(record: record, requiresUser: blockingNeedsUser)
+        // **全绿推翻投机性 gap(2026-06-30,根治"全绿却找用户要授权")**:成功标准逐条确定性达成(有 met、无 unmet、
+        // 不承认无能力)→ 那条阻断 gap 并没真挡住交付(rev.py 实测:三条标准全绿 + pytest 跑通,「Python 测试框架」
+        // requiresUser gap 是误报)→ 清掉它,别把已全绿的任务拖成 partial + 找用户要"授权"(还没授权入口)。
+        // 安全:真缺口会让对应标准 someUnmet=true、真失败会承认无能力 → 都不清,仍正常拦。
+        let allCriteriaMet = LingShuTaskCompletionGate.allCriteriaMetResolvesSpeculativeGap(
+            hasCriteria: hasCriteria, someMet: someMet, someUnmet: someUnmet, admitsIncapacity: admits)
+        let effBlocking = hasBlocking && !allCriteriaMet
+        let effNeedsUser = blockingNeedsUser && !allCriteriaMet
+        let effSelfAcq = blockingSelfAcquirable && !allCriteriaMet
+        if allCriteriaMet && hasBlocking {
+            appendTrace(kind: .result, actor: "完成闸", title: "全绿推翻投机缺口", detail: "成功标准全部确定性达成,误报阻断缺口已清,判完成(不再找用户要授权)。")
+        }
+        let signals = acquisitionSignals(record: record, requiresUser: effNeedsUser)
         let inputs = LingShuCompletionInputs(
-            hasUnresolvedBlockingGap: hasBlocking,
-            unresolvedGapNeedsUser: blockingNeedsUser,
-            unresolvedGapSelfAcquirable: blockingSelfAcquirable,
+            hasUnresolvedBlockingGap: effBlocking,
+            unresolvedGapNeedsUser: effNeedsUser,
+            unresolvedGapSelfAcquirable: effSelfAcq,
             acquisition: LingShuCapabilityAcquisition.classify(signals),
             replyAdmitsIncapacity: admits,
             someSuccessCriteriaMet: someMet,

@@ -9,11 +9,18 @@ import WebKit
 struct LingShuArtifactPreviewSheet: View {
     let title: String
     let fileURL: URL
+    /// **可靠关闭(2026-06-29 修"图片预览没关闭按钮/关不掉")**:调用方传进来,直接翻 `isPresented` 绑定关掉——
+    /// 不只依赖嵌套 sheet 里常失灵的 `@Environment(\.dismiss)`。给了 onClose 就用它,没给才回退 dismiss()。
+    var onClose: (() -> Void)? = nil
 
     @Environment(\.dismiss) private var dismiss
 
     private var previewKind: LingShuArtifactPreviewKind {
         LingShuArtifactPreviewKind(fileExtension: fileURL.pathExtension)
+    }
+
+    private func close() {
+        if let onClose { onClose() } else { dismiss() }
     }
 
     var body: some View {
@@ -23,7 +30,7 @@ struct LingShuArtifactPreviewSheet: View {
                     .foregroundStyle(Color.lingHolo)
                 Text(title)
                     .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(Color.lingFg)
                     .lineLimit(1)
                 Spacer()
                 Button {
@@ -41,11 +48,17 @@ struct LingShuArtifactPreviewSheet: View {
                         .font(.system(size: 11.5, weight: .semibold))
                 }
                 .buttonStyle(.plain)
-                .foregroundStyle(.white.opacity(0.7))
-                Button { dismiss() } label: {
-                    Image(systemName: "xmark.circle.fill").foregroundStyle(.white.opacity(0.5))
+                .foregroundStyle(Color.lingFg.opacity(0.7))
+                // **醒目的"关闭"按钮**(原来只有个很淡的小 X,用户找不到)+ Esc 也能关。
+                Button(action: close) {
+                    Label("关闭", systemImage: "xmark")
+                        .font(.system(size: 11.5, weight: .bold))
+                        .padding(.horizontal, 10).padding(.vertical, 5)
+                        .background(Color.lingFg.opacity(0.12), in: Capsule())
                 }
                 .buttonStyle(.plain)
+                .foregroundStyle(Color.lingFg)
+                .keyboardShortcut(.cancelAction)
             }
             .padding(12)
             .background(Color.black.opacity(0.6))
@@ -63,6 +76,23 @@ struct LingShuArtifactPreviewSheet: View {
         }
         .frame(width: 900, height: 620)
         .background(Color.lingVoid)
+        .onExitCommand(perform: close)   // Esc 关闭(嵌套窗口里 dismiss 失灵时的兜底)
+        // **悬浮关闭钮(2026-06-29 修"关闭胶囊在哪/没关闭按钮")**:顶部头条在嵌套 sheet 里可能被裁掉/看不见,
+        // 这里在预览右上角再钉一个**绝对定位、永远在最上层**的圆形 ✕,无论头条渲染与否都能一眼看到、点得到。
+        .overlay(alignment: .topTrailing) {
+            Button(action: close) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 14, weight: .heavy))
+                    .foregroundStyle(Color.lingFg)
+                    .frame(width: 32, height: 32)
+                    .background(Circle().fill(Color.black.opacity(0.7)))
+                    .overlay(Circle().stroke(Color.lingFg.opacity(0.35), lineWidth: 1))
+            }
+            .buttonStyle(.plain)
+            .keyboardShortcut(.cancelAction)
+            .padding(14)
+            .help("关闭预览（Esc）")
+        }
     }
 }
 
@@ -133,28 +163,23 @@ struct LingShuQuickLookView: NSViewRepresentable {
 }
 
 /// 本地图片预览，避免把图片上传到云端或外部服务。
+/// **修(2026-06-28)**:原来用 NSScrollView + documentView,documentView 的 frame 取 `scrollView.bounds`——布局前 bounds=0 →
+/// 文档视图塌成 0 尺寸 → 图不显示(用户实测:预览框黑屏)。改用**直接铺满的 NSImageView**(SwiftUI 经 representable 给它父级尺寸),稳。
 struct LingShuImagePreviewView: NSViewRepresentable {
     let fileURL: URL
 
-    func makeNSView(context: Context) -> NSScrollView {
-        let scrollView = NSScrollView()
-        scrollView.drawsBackground = true
-        scrollView.backgroundColor = NSColor.black.withAlphaComponent(0.35)
-        scrollView.hasVerticalScroller = true
-        scrollView.hasHorizontalScroller = true
-
-        let imageView = NSImageView()
-        imageView.imageScaling = .scaleProportionallyUpOrDown
-        imageView.imageAlignment = .alignCenter
-        imageView.image = NSImage(contentsOf: fileURL)
-        scrollView.documentView = imageView
-        return scrollView
+    func makeNSView(context: Context) -> NSImageView {
+        let v = NSImageView()
+        v.imageScaling = .scaleProportionallyUpOrDown
+        v.imageAlignment = .alignCenter
+        v.wantsLayer = true
+        v.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.35).cgColor
+        v.image = NSImage(contentsOf: fileURL)
+        return v
     }
 
-    func updateNSView(_ scrollView: NSScrollView, context: Context) {
-        guard let imageView = scrollView.documentView as? NSImageView else { return }
-        imageView.image = NSImage(contentsOf: fileURL)
-        imageView.frame = scrollView.bounds
+    func updateNSView(_ v: NSImageView, context: Context) {
+        v.image = NSImage(contentsOf: fileURL)
     }
 }
 

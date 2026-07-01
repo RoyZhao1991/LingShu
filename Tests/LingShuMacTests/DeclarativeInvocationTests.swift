@@ -1,7 +1,7 @@
 import XCTest
 @testable import LingShuMac
 
-/// 声明式调插件识别守卫(纯逻辑):`@别名`/`用别名[插件]`/`/别名` → (插件id, 余下输入);自然语句不误命中。
+/// 声明式调插件识别守卫(纯逻辑):只认 `@别名` → (插件id, 余下输入);自然语句不误命中。
 final class DeclarativeInvocationTests: XCTestCase {
 
     private let plugins: [LingShuInvocablePlugin] = [
@@ -15,26 +15,43 @@ final class DeclarativeInvocationTests: XCTestCase {
         XCTAssertEqual(r?.rest, "/tmp/a.pdf")
     }
 
-    func testUsePrefix() {
-        XCTAssertEqual(LingShuDeclarativeInvocation.detect("用演示插件 讲一下 /tmp/x.pdf", plugins: plugins)?.id, "present")
-        XCTAssertEqual(LingShuDeclarativeInvocation.detect("用演示插件 讲一下 /tmp/x.pdf", plugins: plugins)?.rest, "讲一下 /tmp/x.pdf")
+    func testNaturalUsePrefixNotMatched() {
+        XCTAssertNil(LingShuDeclarativeInvocation.detect("用演示插件 讲一下 /tmp/x.pdf", plugins: plugins))
+        XCTAssertNil(LingShuDeclarativeInvocation.detect("调用演示 讲一下 /tmp/x.pdf", plugins: plugins))
+        XCTAssertNil(LingShuDeclarativeInvocation.detect("切到演示 讲一下 /tmp/x.pdf", plugins: plugins))
     }
 
     func testLongestAliasWins() {
         // 「录制技能」(displayName,长)应优先于「录制」(短),rest 不残留「技能」。
-        let r = LingShuDeclarativeInvocation.detect("用录制技能 报销", plugins: plugins)
+        let r = LingShuDeclarativeInvocation.detect("@录制技能 报销", plugins: plugins)
         XCTAssertEqual(r?.id, "record")
         XCTAssertEqual(r?.rest, "报销")
     }
 
-    func testSlashPrefix() {
-        XCTAssertEqual(LingShuDeclarativeInvocation.detect("/present /tmp/a.pdf", plugins: plugins)?.id, "present")
+    func testSlashPrefixNotMatched() {
+        XCTAssertNil(LingShuDeclarativeInvocation.detect("/present /tmp/a.pdf", plugins: plugins))
     }
 
     func testNaturalSentenceNotMatched() {
-        // 自然语句无显式声明前缀 → 不拦(交常规分诊/关键词路由)。
+        // 自然语句无显式 @ → 不拦,交常规分诊。
         XCTAssertNil(LingShuDeclarativeInvocation.detect("演示这个文档", plugins: plugins))
         XCTAssertNil(LingShuDeclarativeInvocation.detect("帮我改一下报销单", plugins: plugins))
+    }
+
+    /// **@演示 + 附件**:附件路径折进消息时在 `@演示` **之前**(attachmentContextBlock 的「本机路径:…」),
+    /// 用户文本只打「@演示」→ 声明在 userText 上识别(rest 为空),路径要从**整条消息**兜底抽到(fullPrompt 兜底)。
+    /// 根治用户实测"@演示+附件,路径在消息里却没被认领"。
+    func testAtMentionWithAttachmentPathBeforeIt() throws {
+        let tmp = NSTemporaryDirectory() + "lingshu-test-\(UUID().uuidString).pptx"
+        try "x".write(toFile: tmp, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+        // ① 声明在 userText("@演示")上识别 → present,segment 为空(后面没路径)
+        let chain = LingShuDeclarativeInvocation.detectChain("@演示", plugins: plugins)
+        XCTAssertEqual(chain.map(\.id), ["present"])
+        XCTAssertEqual(chain.first?.segment, "")
+        // ② 路径在 @演示 之前,但从整条消息抽得到(routeDeclarative 的 fullPrompt 兜底走这条)
+        let combined = "【文档:x.pptx】\n本机路径:\(tmp)\n大小:1B\n\n用户指令:\n@演示"
+        XCTAssertEqual(LingShuState.extractExistingFilePaths(combined), [tmp])
     }
 
     func testDetectChainMultiAgent() {

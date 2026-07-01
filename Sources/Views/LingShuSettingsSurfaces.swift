@@ -14,7 +14,7 @@ struct LingShuOperationsSurface: View {
                 // 能力节点矩阵：每个节点 = 角色名（字面）+ 实时运行态（服务状态）+ 负载条。
                 Text("能力节点 · \(state.activeWorkerCount) 执行 / \(state.activeSupervisorCount) 监控 / \(state.agents.count) 注册")
                     .font(.system(size: 11.5, weight: .bold, design: .monospaced))
-                    .foregroundStyle(.white.opacity(0.5))
+                    .foregroundStyle(Color.lingFg.opacity(0.5))
                 LazyVGrid(columns: gridColumns, spacing: 12) {
                     ForEach(state.agents) { agent in
                         LingShuDualLayerCell(
@@ -30,7 +30,7 @@ struct LingShuOperationsSurface: View {
                 // 运行策略：每条策略的开关真实状态。
                 Text("运行策略")
                     .font(.system(size: 11.5, weight: .bold, design: .monospaced))
-                    .foregroundStyle(.white.opacity(0.5))
+                    .foregroundStyle(Color.lingFg.opacity(0.5))
                 LazyVGrid(columns: gridColumns, spacing: 12) {
                     policyCell("人工确认", on: state.requireHumanApproval, onText: "高风险拦截", offText: "已放行")
                     policyCell("本地审计", on: state.enableLocalAudit, onText: "记录在册", offText: "未记录")
@@ -40,7 +40,7 @@ struct LingShuOperationsSurface: View {
                         label: "会话池",
                         value: state.remoteSessionStatus,
                         stateText: state.remoteSessionPool.stats().running > 0 ? "运行中" : "空闲",
-                        stateColor: state.remoteSessionPool.stats().running > 0 ? .lingHolo : .white.opacity(0.45)
+                        stateColor: state.remoteSessionPool.stats().running > 0 ? .lingHolo : Color.lingFg.opacity(0.45)
                     )
                     LingShuDualLayerCell(
                         label: "主通道",
@@ -53,14 +53,14 @@ struct LingShuOperationsSurface: View {
                 // 事件流：底层服务事件，本身即第二层状态信息。
                 Text("事件流 · \(state.eventLog.count) 条")
                     .font(.system(size: 11.5, weight: .bold, design: .monospaced))
-                    .foregroundStyle(.white.opacity(0.5))
+                    .foregroundStyle(Color.lingFg.opacity(0.5))
                 VStack(alignment: .leading, spacing: 6) {
                     ForEach(Array(state.eventLog.prefix(12).enumerated()), id: \.offset) { _, item in
                         HStack(spacing: 8) {
                             Circle().fill(Color.lingHolo.opacity(0.7)).frame(width: 4, height: 4)
                             Text(item)
                                 .font(.system(size: 12, weight: .medium, design: .monospaced))
-                                .foregroundStyle(.white.opacity(0.66))
+                                .foregroundStyle(Color.lingFg.opacity(0.66))
                                 .frame(maxWidth: .infinity, alignment: .leading)
                         }
                         .padding(.vertical, 7)
@@ -78,7 +78,7 @@ struct LingShuOperationsSurface: View {
             label: label,
             value: on ? onText : offText,
             stateText: on ? "启用" : "关闭",
-            stateColor: on ? .lingHolo : .white.opacity(0.45)
+            stateColor: on ? .lingHolo : Color.lingFg.opacity(0.45)
         )
     }
 
@@ -92,7 +92,7 @@ struct LingShuOperationsSurface: View {
 
     private func agentStateColor(_ s: StepState) -> Color {
         switch s {
-        case .waiting: .white.opacity(0.45)
+        case .waiting: Color.lingFg.opacity(0.45)
         case .running: .lingHolo
         case .done: .green
         }
@@ -151,9 +151,9 @@ struct LingShuModelGatewaySurface: View {
                                 Image(systemName: item.icon).font(.system(size: 11, weight: .semibold))
                                 Text(item.rawValue).font(.system(size: 12, weight: .semibold))
                             }
-                            .foregroundStyle(channelTab == item ? Color.lingVoid : .white.opacity(0.7))
+                            .foregroundStyle(channelTab == item ? Color.lingVoid : Color.lingFg.opacity(0.7))
                             .padding(.horizontal, 12).padding(.vertical, 7)
-                            .background(channelTab == item ? Color.lingHolo : Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+                            .background(channelTab == item ? Color.lingHolo : Color.lingFg.opacity(0.05), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
                         }
                         .buttonStyle(.plain)
                     }
@@ -237,7 +237,7 @@ struct LingShuModelGatewaySurface: View {
 
     private func compactLocalToggle(isOn: Binding<Bool>, help: String) -> some View {
         Toggle(isOn: isOn) {
-            Text("本地模式").font(.system(size: 12, weight: .semibold)).foregroundStyle(.white.opacity(0.7))
+            Text("本地模式").font(.system(size: 12, weight: .semibold)).foregroundStyle(Color.lingFg.opacity(0.7))
         }
         .toggleStyle(.switch)
         .controlSize(.mini)
@@ -246,25 +246,111 @@ struct LingShuModelGatewaySurface: View {
     }
 
     @ViewBuilder private var brainRows: some View {
+        directToBrainStatus
+        actualBrainStatus
         let providers = state.configuredTextProviders()
         if providers.isEmpty {
             Text("还没有接入任何文本模型。点「新增模型」选一个供应商,配置 endpoint / 模型 / 密钥。")
-                .font(.system(size: 12, weight: .medium)).foregroundStyle(.white.opacity(0.5))
+                .font(.system(size: 12, weight: .medium)).foregroundStyle(Color.lingFg.opacity(0.5))
                 .frame(maxWidth: .infinity, minHeight: 50, alignment: .leading)
         } else {
             ForEach(providers) { preset in
-                LingShuChannelRow(
-                    state: state,
-                    title: preset.name,
-                    subtitle: "\(preset.region) · \(preset.name == state.modelProvider ? state.modelName : (preset.defaultModels.first ?? "")) · \(state.prefixCacheStrategy(for: preset).shortLabel)",
-                    channelKey: LingShuState.brainChannelKey(preset.name),
-                    isActive: preset.name == state.modelProvider,
-                    onValidate: { await state.validateBrainChannel(preset.name) },
-                    onUse: preset.name == state.modelProvider ? nil : { state.applyModelProvider(preset.name) },
-                    onEdit: { sheet = .edit(preset.name) }
-                )
+                VStack(spacing: 6) {
+                    LingShuChannelRow(
+                        state: state,
+                        title: preset.name,
+                        subtitle: "\(preset.region) · \(preset.name == state.modelProvider ? state.modelName : (preset.defaultModels.first ?? "")) · \(state.prefixCacheStrategy(for: preset).shortLabel)",
+                        channelKey: LingShuState.brainChannelKey(preset.name),
+                        isActive: preset.name == state.modelProvider,
+                        onValidate: { await state.validateBrainChannel(preset.name) },
+                        onUse: preset.name == state.modelProvider ? nil : { state.applyModelProvider(preset.name) },
+                        onEdit: { sheet = .edit(preset.name) },
+                        balance: state.channelBalance(LingShuState.brainChannelKey(preset.name)),
+                        balanceSupported: LingShuChannelBalance.isSupported(provider: preset.name),
+                        balanceFetching: state.isChannelBalanceFetching(LingShuState.brainChannelKey(preset.name)),
+                        onBalance: { await state.fetchBrainChannelBalance(preset.name) }
+                    )
+                    // **当前激活的供应商有 ≥2 个可选模型 → 内联下拉框**:免开「修改」弹窗即可一键换模型(用过的自定义模型也记着、不消失)。
+                    if preset.name == state.modelProvider {
+                        let options = state.brainModelOptions(for: preset)
+                        if options.count >= 2 { brainModelPicker(options) }
+                    }
+                }
             }
         }
+    }
+
+    /// 当前脑的内联「模型」下拉框:在已激活供应商内一键换模型(端点/密钥不动,会话即时重建)。仅当该供应商有多个可选模型时显示。
+    private func brainModelPicker(_ options: [String]) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "cpu").font(.system(size: 11, weight: .bold)).foregroundStyle(Color.lingHolo.opacity(0.85))
+            Text("模型").font(.system(size: 11.5, weight: .semibold)).foregroundStyle(Color.lingFg.opacity(0.6))
+            Picker("", selection: Binding(
+                get: { state.modelName },
+                set: { state.selectActiveBrainModel($0) }
+            )) {
+                ForEach(options, id: \.self) { Text($0).tag($0) }
+            }
+            .labelsHidden().pickerStyle(.menu).controlSize(.small).frame(maxWidth: 300)
+            Spacer()
+        }
+        .padding(.horizontal, 12).padding(.vertical, 7)
+        .background(RoundedRectangle(cornerRadius: 8).fill(Color.lingFg.opacity(0.04)))
+        .padding(.leading, 18)
+    }
+
+    /// 附件入脑策略(**自动按脑能力,无手动开关** 2026-06-28 用户定调):多模态脑→对话附件原图直发它;非多模态脑→VL 抽成文字(零留存)。
+    /// 态势感知(环境感知)不在此列——一律强制 VL/零留存。这里只做**状态展示**(让用户知道附件会怎么处理),不再是可切换的控制。
+    private var directToBrainStatus: some View {
+        let vision = LingShuMultimodal.isVisionCapable(provider: state.modelProvider, model: state.modelName)
+        return HStack(spacing: 12) {
+            Image(systemName: vision ? "photo.on.rectangle.angled" : "doc.text.magnifyingglass")
+                .font(.system(size: 14, weight: .bold))
+                .foregroundStyle(vision ? Color.lingHolo : Color.lingFg.opacity(0.55))
+            VStack(alignment: .leading, spacing: 3) {
+                Text("附件入脑(自动按脑能力)").font(.system(size: 12.5, weight: .bold)).foregroundStyle(Color.lingFg)
+                Text(vision
+                     ? "当前脑「\(state.modelName)」多模态 → 对话附件(图片/PDF)原图直发它,用原生视觉看。"
+                     : "当前脑「\(state.modelName)」非多模态 → 对话附件走 VL 抽成文字再喂(零留存)。换多模态脑(如 Claude)即原图直发。")
+                    .font(.system(size: 10.5, weight: .medium)).foregroundStyle(Color.lingFg.opacity(0.5))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(12)
+        .background(Color.lingFg.opacity(0.05), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+        .overlay { RoundedRectangle(cornerRadius: 9, style: .continuous).stroke(Color.lingFg.opacity(0.08)) }
+    }
+
+    /// **实际在用(地面真相,2026-06-29)**:最近一次真实请求实际用的脑——和"选中的通道"分开,治"显示的≠真用的"。
+    /// 与选中一致=绿勾;不一致=橙色告警(选中后还没发请求/会话快照滞后)。还没发过请求则提示"发一条消息后显示"。
+    @ViewBuilder private var actualBrainStatus: some View {
+        let selected = "\(state.modelProvider) / \(state.modelName)"
+        let actual = state.actualBrainModel.isEmpty ? "" : "\(state.actualBrainProvider) / \(state.actualBrainModel)"
+        let matches = !actual.isEmpty && state.actualBrainProvider == state.modelProvider && state.actualBrainModel == state.modelName
+        let fmt: (Date) -> String = { let f = DateFormatter(); f.dateFormat = "HH:mm:ss"; return f.string(from: $0) }
+        HStack(spacing: 12) {
+            Image(systemName: actual.isEmpty ? "clock.badge.questionmark" : (matches ? "checkmark.seal.fill" : "exclamationmark.triangle.fill"))
+                .font(.system(size: 14, weight: .bold))
+                .foregroundStyle(actual.isEmpty ? Color.lingFg.opacity(0.45) : (matches ? Color.green.opacity(0.85) : Color.orange))
+            VStack(alignment: .leading, spacing: 3) {
+                Text("实际在用(最近一次真实请求)").font(.system(size: 12.5, weight: .bold)).foregroundStyle(Color.lingFg)
+                if actual.isEmpty {
+                    Text("还没发过真实请求——发一条消息后,这里显示**此刻真在干活的脑**(地面真相,不是选中徽标)。")
+                        .font(.system(size: 10.5, weight: .medium)).foregroundStyle(Color.lingFg.opacity(0.5)).fixedSize(horizontal: false, vertical: true)
+                } else if matches {
+                    Text("\(actual)" + (state.actualBrainAt.map { "(\(fmt($0)))" } ?? "") + " —— 与选中一致 ✓")
+                        .font(.system(size: 10.5, weight: .medium)).foregroundStyle(Color.lingFg.opacity(0.5))
+                } else {
+                    Text("⚠️ 实际:\(actual)" + (state.actualBrainAt.map { "(\(fmt($0)))" } ?? "") + " —— 与选中「\(selected)」**不一致**!可能选中后还没发请求,或会话未重建。再发一条消息以对齐。")
+                        .font(.system(size: 10.5, weight: .medium)).foregroundStyle(Color.orange.opacity(0.95)).fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(12)
+        .background(Color.lingFg.opacity(0.05), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+        .overlay { RoundedRectangle(cornerRadius: 9, style: .continuous).stroke((actual.isEmpty || matches ? Color.lingFg.opacity(0.08) : Color.orange.opacity(0.4))) }
     }
 
     @ViewBuilder private var voiceRows: some View {
@@ -355,7 +441,7 @@ struct LingShuExecutionPolicySurface: View {
                     Text(String(format: "%.1f", state.temperature)).font(.system(size: 12.5, weight: .bold, design: .monospaced)).foregroundStyle(Color.lingHolo)
                 }
 
-                Divider().overlay(Color.white.opacity(0.08))
+                Divider().overlay(Color.lingFg.opacity(0.08))
 
                 row(state.loc("权限模式", "Permission mode")) {
                     Picker("", selection: $state.executionPermissionMode) {
@@ -368,11 +454,11 @@ struct LingShuExecutionPolicySurface: View {
                 row(state.loc("计算机直接操作", "Computer control")) {
                     Toggle("", isOn: $state.computerControlEnabled).toggleStyle(.switch).labelsHidden()
                     Text(state.loc("开启后向系统申请辅助功能 + 屏幕录制授权", "requests Accessibility + Screen Recording"))
-                        .font(.system(size: 10.5)).foregroundStyle(.white.opacity(0.4)).lineLimit(1)
+                        .font(.system(size: 10.5)).foregroundStyle(Color.lingFg.opacity(0.4)).lineLimit(1)
                 }
             }
             .padding(16)
-            .background(Color.white.opacity(0.04), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .background(Color.lingFg.opacity(0.04), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
 
             LingShuSystemPermissionsPanel(state: state)
         }
@@ -384,7 +470,7 @@ struct LingShuExecutionPolicySurface: View {
     @ViewBuilder private func row<C: View>(_ label: String, @ViewBuilder _ content: () -> C) -> some View {
         HStack(spacing: 10) {
             Text(label + state.loc("：", ":"))
-                .font(.system(size: 12.5, weight: .semibold)).foregroundStyle(.white.opacity(0.72))
+                .font(.system(size: 12.5, weight: .semibold)).foregroundStyle(Color.lingFg.opacity(0.72))
                 .frame(width: 152, alignment: .trailing).lineLimit(1)
             content()
             Spacer(minLength: 0)
@@ -394,7 +480,7 @@ struct LingShuExecutionPolicySurface: View {
     /// 带小标题的字段(标题在上、控件在下),用于同行并排多个字段。
     @ViewBuilder private func labeled<C: View>(_ title: String, @ViewBuilder _ content: () -> C) -> some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text(title).font(.system(size: 11, weight: .semibold)).foregroundStyle(.white.opacity(0.6))
+            Text(title).font(.system(size: 11, weight: .semibold)).foregroundStyle(Color.lingFg.opacity(0.6))
             content()
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -439,7 +525,7 @@ struct LingShuSystemPermissionsPanel: View {
             }
         }
         .padding(14)
-        .background(Color.white.opacity(0.045), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .background(Color.lingFg.opacity(0.045), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
         .overlay { RoundedRectangle(cornerRadius: 10, style: .continuous).stroke(Color.lingHolo.opacity(0.14)) }
         .onAppear {
             screenRecordingTrusted = LingShuComputerControl.isScreenCaptureTrusted()
@@ -452,14 +538,14 @@ struct LingShuSystemPermissionsPanel: View {
         HStack(spacing: 10) {
             Image(systemName: icon).foregroundStyle(granted ? .green : Color.lingHolo).frame(width: 22)
             VStack(alignment: .leading, spacing: 2) {
-                Text(title).font(.system(size: 12.5, weight: .bold)).foregroundStyle(.white.opacity(0.9))
-                Text(detail).font(.system(size: 10.5, weight: .medium)).foregroundStyle(.white.opacity(0.45)).lineLimit(1)
+                Text(title).font(.system(size: 12.5, weight: .bold)).foregroundStyle(Color.lingFg.opacity(0.9))
+                Text(detail).font(.system(size: 10.5, weight: .medium)).foregroundStyle(Color.lingFg.opacity(0.45)).lineLimit(1)
             }
             Spacer()
             HStack(spacing: 5) {
                 Circle().fill(granted ? Color.green : Color.orange).frame(width: 7, height: 7)
                 Text(granted ? state.loc("已授权", "Granted") : state.loc("未授权", "Not granted"))
-                    .font(.system(size: 10.5, weight: .semibold)).foregroundStyle(.white.opacity(0.6))
+                    .font(.system(size: 10.5, weight: .semibold)).foregroundStyle(Color.lingFg.opacity(0.6))
             }
             if !granted {
                 Button(action: grant) {
@@ -468,7 +554,7 @@ struct LingShuSystemPermissionsPanel: View {
             }
         }
         .padding(.vertical, 7).padding(.horizontal, 10)
-        .background(Color.white.opacity(0.04), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .background(Color.lingFg.opacity(0.04), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
 
     private func openSettings(_ urlString: String) {
@@ -487,6 +573,11 @@ struct LingShuChannelRow: View {
     let onUse: (() -> Void)?
     let onEdit: (() -> Void)?
     var editLabel: String = "修改"
+    // 账号余额口子(按需,默认关;只有支持余额查询的厂商才传)。
+    var balance: LingShuChannelBalance.Result? = nil
+    var balanceSupported: Bool = false
+    var balanceFetching: Bool = false
+    var onBalance: (() async -> Void)? = nil
 
     private var validation: LingShuChannelValidation? { state.channelValidation(channelKey) }
     private var validating: Bool { state.isChannelValidating(channelKey) }
@@ -495,36 +586,41 @@ struct LingShuChannelRow: View {
         HStack(spacing: 12) {
             Image(systemName: isActive ? "checkmark.circle.fill" : "circle")
                 .font(.system(size: 15, weight: .bold))
-                .foregroundStyle(isActive ? Color.lingHolo : .white.opacity(0.32))
+                .foregroundStyle(isActive ? Color.lingHolo : Color.lingFg.opacity(0.32))
 
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 7) {
-                    Text(title).font(.system(size: 13.5, weight: .bold)).foregroundStyle(.white)
+                    Text(title).font(.system(size: 13.5, weight: .bold)).foregroundStyle(Color.lingFg)
                     if isActive { pill("当前 · 在线", Color.lingHolo) }
                     statusBadge
+                    if let b = balance { pill("余额 " + b.display, b.available ? Color.lingHolo : .orange) }
+                    else if balanceFetching { pill("查余额…", .orange) }
                 }
                 Text(subtitle).font(.system(size: 11, weight: .medium, design: .monospaced))
-                    .foregroundStyle(.white.opacity(0.5)).lineLimit(1)
+                    .foregroundStyle(Color.lingFg.opacity(0.5)).lineLimit(1)
             }
 
             Spacer()
 
+            if balanceSupported, let onBalance {
+                chip(balanceFetching ? "查询中…" : "余额", disabled: balanceFetching) { Task { await onBalance() } }
+            }
             chip(validating ? "校验中…" : "校验", disabled: validating) { Task { await onValidate() } }
             if let onUse { chip("使用") { onUse() } }
             if let onEdit { chip(editLabel) { onEdit() } }
         }
         .padding(12)
-        .background(isActive ? Color.lingHolo.opacity(0.10) : Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+        .background(isActive ? Color.lingHolo.opacity(0.10) : Color.lingFg.opacity(0.05), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: 9, style: .continuous)
-                .stroke(isActive ? Color.lingHolo.opacity(0.34) : Color.white.opacity(0.08))
+                .stroke(isActive ? Color.lingHolo.opacity(0.34) : Color.lingFg.opacity(0.08))
         }
     }
 
     @ViewBuilder private var statusBadge: some View {
         let (text, color): (String, Color) = {
             if validating { return ("校验中…", .orange) }
-            guard let v = validation else { return ("未校验", .white.opacity(0.4)) }
+            guard let v = validation else { return ("未校验", Color.lingFg.opacity(0.4)) }
             return v.ok ? ("✅ 校验通过", .green) : ("❌ " + String(v.detail.prefix(12)), .red)
         }()
         pill(text, color)
@@ -540,9 +636,9 @@ struct LingShuChannelRow: View {
     private func chip(_ label: String, disabled: Bool = false, _ action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Text(label).font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(.white.opacity(disabled ? 0.4 : 0.82))
+                .foregroundStyle(Color.lingFg.opacity(disabled ? 0.4 : 0.82))
                 .padding(.horizontal, 10).padding(.vertical, 5)
-                .background(Color.white.opacity(0.07), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+                .background(Color.lingFg.opacity(0.07), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
         }
         .buttonStyle(.plain)
         .disabled(disabled)
@@ -581,9 +677,9 @@ struct LingShuModelChannelSheet: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack {
-                Text(isAdd ? "新增模型" : "修改 · \(provider)").font(.system(size: 15, weight: .bold)).foregroundStyle(.white)
+                Text(isAdd ? "新增模型" : "修改 · \(provider)").font(.system(size: 15, weight: .bold)).foregroundStyle(Color.lingFg)
                 Spacer()
-                Button { dismiss() } label: { Image(systemName: "xmark.circle.fill").font(.system(size: 17)).foregroundStyle(.white.opacity(0.5)) }.buttonStyle(.plain)
+                Button { dismiss() } label: { Image(systemName: "xmark.circle.fill").font(.system(size: 17)).foregroundStyle(Color.lingFg.opacity(0.5)) }.buttonStyle(.plain)
             }
 
             if isAdd {
@@ -608,7 +704,7 @@ struct LingShuModelChannelSheet: View {
                 fieldLabel("访问密钥")
                 SecureField(isAdd ? (preset?.authMode ?? "API Key") : "已配置(留空保持不变)", text: $key).textFieldStyle(.roundedBorder)
                 if let note = preset?.note {
-                    Text(note).font(.system(size: 11, weight: .medium)).foregroundStyle(.white.opacity(0.45)).fixedSize(horizontal: false, vertical: true)
+                    Text(note).font(.system(size: 11, weight: .medium)).foregroundStyle(Color.lingFg.opacity(0.45)).fixedSize(horizontal: false, vertical: true)
                 }
             }
 
@@ -622,18 +718,17 @@ struct LingShuModelChannelSheet: View {
         .padding(20)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(Color.lingVoid)
-        .preferredColorScheme(.dark)
     }
 
     private func fieldLabel(_ t: String) -> some View {
-        Text(t).font(.system(size: 11.5, weight: .semibold)).foregroundStyle(.white.opacity(0.6))
+        Text(t).font(.system(size: 11.5, weight: .semibold)).foregroundStyle(Color.lingFg.opacity(0.6))
     }
 
     private func save() {
         guard !provider.isEmpty else { return }
         state.applyModelProvider(provider)
         if !endpoint.isEmpty { state.endpoint = endpoint }
-        if !model.isEmpty { state.modelName = model }
+        if !model.isEmpty { state.modelName = model; state.rememberBrainModel(model, for: provider) }   // 记进下拉,手填的自定义模型切走也不丢
         if !key.isEmpty { state.apiKey = key }
         dismiss()
     }
@@ -663,9 +758,9 @@ struct LingShuChannelConfigSheet: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack {
-                Text("配置 · \(title)").font(.system(size: 15, weight: .bold)).foregroundStyle(.white)
+                Text("配置 · \(title)").font(.system(size: 15, weight: .bold)).foregroundStyle(Color.lingFg)
                 Spacer()
-                Button { dismiss() } label: { Image(systemName: "xmark.circle.fill").font(.system(size: 17)).foregroundStyle(.white.opacity(0.5)) }.buttonStyle(.plain)
+                Button { dismiss() } label: { Image(systemName: "xmark.circle.fill").font(.system(size: 17)).foregroundStyle(Color.lingFg.opacity(0.5)) }.buttonStyle(.plain)
             }
             field("显示名(留空用默认)")
             TextField(title, text: $name).textFieldStyle(.roundedBorder)
@@ -688,11 +783,10 @@ struct LingShuChannelConfigSheet: View {
         .padding(20)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(Color.lingVoid)
-        .preferredColorScheme(.dark)
     }
 
     private func field(_ t: String) -> some View {
-        Text(t).font(.system(size: 11.5, weight: .semibold)).foregroundStyle(.white.opacity(0.6))
+        Text(t).font(.system(size: 11.5, weight: .semibold)).foregroundStyle(Color.lingFg.opacity(0.6))
     }
 }
 
@@ -704,15 +798,15 @@ struct LingShuConfigLine: View {
         HStack(spacing: 10) {
             Text(title)
                 .font(.system(size: 12, weight: .bold))
-                .foregroundStyle(.white.opacity(0.48))
+                .foregroundStyle(Color.lingFg.opacity(0.48))
                 .frame(width: 48, alignment: .leading)
             Text(value)
                 .font(.system(size: 12.5, weight: .medium))
-                .foregroundStyle(.white.opacity(0.78))
+                .foregroundStyle(Color.lingFg.opacity(0.78))
                 .lineLimit(2)
             Spacer()
         }
         .padding(10)
-        .background(Color.white.opacity(0.055), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .background(Color.lingFg.opacity(0.055), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
 }

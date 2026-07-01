@@ -18,7 +18,7 @@ struct LingShuPermissionApprovalView: View {
                         .foregroundStyle(pending.riskNotes.isEmpty ? .white : Color.orange)
                     Text(pending.riskNotes.isEmpty ? "需要你授权才会在本机运行" : "自发现 skill 的脚本经风险审被标记,首次运行需你裁决")
                         .font(.system(size: 11.5, weight: .medium))
-                        .foregroundStyle(.white.opacity(0.55))
+                        .foregroundStyle(Color.lingFg.opacity(0.55))
                 }
             }
 
@@ -30,7 +30,7 @@ struct LingShuPermissionApprovalView: View {
                     ForEach(Array(pending.riskNotes.enumerated()), id: \.offset) { _, note in
                         Label(note, systemImage: "exclamationmark.triangle.fill")
                             .font(.system(size: 11.5, weight: .medium))
-                            .foregroundStyle(.white.opacity(0.85))
+                            .foregroundStyle(Color.lingFg.opacity(0.85))
                             .fixedSize(horizontal: false, vertical: true)
                     }
                 }
@@ -50,7 +50,7 @@ struct LingShuPermissionApprovalView: View {
                 ScrollView(.vertical, showsIndicators: true) {
                     Text(pending.command.isEmpty ? "（空命令）" : pending.command)
                         .font(.system(size: 12.5, weight: .regular, design: .monospaced))
-                        .foregroundStyle(.white.opacity(0.92))
+                        .foregroundStyle(Color.lingFg.opacity(0.92))
                         .textSelection(.enabled)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(11)
@@ -59,12 +59,12 @@ struct LingShuPermissionApprovalView: View {
                 .background(Color.black.opacity(0.34), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
                 .overlay {
                     RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .stroke(Color.white.opacity(0.10), lineWidth: 0.8)
+                        .stroke(Color.lingFg.opacity(0.10), lineWidth: 0.8)
                 }
 
                 Label(pending.workingDirectory, systemImage: "folder")
                     .font(.system(size: 10.5, weight: .medium, design: .monospaced))
-                    .foregroundStyle(.white.opacity(0.5))
+                    .foregroundStyle(Color.lingFg.opacity(0.5))
                     .lineLimit(1)
                     .truncationMode(.middle)
             }
@@ -121,7 +121,7 @@ struct LingShuPermissionApprovalView: View {
                         .foregroundStyle(filled ? Color.lingVoid : .white)
                     Text(subtitle)
                         .font(.system(size: 10.5, weight: .medium))
-                        .foregroundStyle(filled ? Color.lingVoid.opacity(0.7) : .white.opacity(0.5))
+                        .foregroundStyle(filled ? Color.lingVoid.opacity(0.7) : Color.lingFg.opacity(0.5))
                 }
                 Spacer()
             }
@@ -129,7 +129,7 @@ struct LingShuPermissionApprovalView: View {
             .padding(.vertical, 10)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(
-                filled ? tint : Color.white.opacity(0.05),
+                filled ? tint : Color.lingFg.opacity(0.05),
                 in: RoundedRectangle(cornerRadius: 9, style: .continuous)
             )
             .overlay {

@@ -123,6 +123,83 @@ extension LingShuState {
         return out
     }
 
+    /// 产物的"源"通常是这些**可改的脚本/矢量/数据/模板**扩展名(用于自动溯源:同名兄弟文件)。
+    nonisolated static let artifactSourceExtensions: Set<String> = [
+        "py", "svg", "json", "sh", "js", "ts", "rb", "go", "yaml", "yml", "toml",
+        "tmpl", "template", "j2", "jinja", "ejs", "dot", "puml", "mmd", "tex", "scss", "less", "gen"
+    ]
+
+    /// **能看就别写像素码(铁律)**——只在**多模态脑**任务里注入(非多模态脑没眼睛,不适用)。
+    /// 根因实测:多模态脑明明能看图,却写 94 段 PIL 逐像素扫红框/绿字、连验收都在算"y=1092 的绿像素是字还是框边",
+    /// 把"删一行字"拖成 20+ 分钟还判错。有眼睛就用眼睛。
+    nonisolated static let visionOverPixelsDirective = """
+    【能看就别写像素码·铁律(你是多模态脑,有眼睛)】你能直接"看"图片 / 截图 / PDF。所以:
+    - **识别**图里的标记(红框 / 圈注 / 箭头 / 某一行字)、判断要改哪儿 → **直接看图说出来**,**别**写 Python 逐像素扫红/扫绿/算坐标;
+    - **核验**结果(改对没、版式坏没坏)→ **重新看一眼成品图**,**别**写代码做像素 diff / 逐行比对。
+    逐像素扫描又慢又脆、还常判错(把方框描边当成文字)。需要"看清楚"就调看图工具(screen_capture / 把图发给自己看),不是写扫描脚本。
+    """
+
+    /// **改产物·统一范式(用户定调 2026-06-28:先溯源→无法溯源再改/重做)**:任务引用了绝对路径产物文件时,
+    /// **替 agent 先溯源**——找同目录、同名(去掉成品扩展名后前缀相同)的源文件(脚本/矢量/数据/模板,如
+    /// `灵枢介绍.diagram.png` → `灵枢介绍.diagram.gen.py`),**把"产物→源"映射直接交到它手里**(不靠它自己发现),
+    /// 再压一条铁律:① 先溯源 → ② 找到改源、重新生成 → ③ 确实溯不到才直接改成品/重做。
+    /// 根因实测:agent 只点验被告知的文件、从不整列目录,没认出源 → 在 PNG 上像素/字节手术(把 PPT 文字删坏了)。
+    /// **纯函数、读文件系统、不挑场景、不写死任何具体文件**——任何带文件的修改任务通用。返回空串=没引用到存在文件(零开销)。
+    nonisolated static func artifactNeighborhoodContext(for text: String, limitDirs: Int = 3, limitEntries: Int = 50,
+                                                        fileManager fm: FileManager = .default) -> String {
+        let paths = extractFilePaths(from: text).filter { fm.fileExists(atPath: $0) }
+        guard !paths.isEmpty else { return "" }
+        var dirs: [String] = []   // 文件所在目录,按出现顺序去重,最多 limitDirs 个
+        var traced: [(artifact: String, sources: [String])] = []   // 自动溯源结果:产物→候选源
+        var seenArtifacts = Set<String>()
+        for p in paths {
+            let d = (p as NSString).deletingLastPathComponent
+            guard !d.isEmpty, d != "/" else { continue }
+            if !dirs.contains(d) && dirs.count < limitDirs { dirs.append(d) }
+            let name = (p as NSString).lastPathComponent
+            guard !seenArtifacts.contains(name) else { continue }
+            seenArtifacts.insert(name)
+            // 溯源:同目录里**去掉最后扩展名后前缀相同**、且扩展名是"源类"的兄弟文件(precise:diagram.png 只配 diagram.*,不串 arch.*)
+            let stem = (name as NSString).deletingPathExtension
+            if let items = try? fm.contentsOfDirectory(atPath: d) {
+                let sources = items.filter { s in
+                    s != name && s.hasPrefix(stem) && artifactSourceExtensions.contains((s as NSString).pathExtension.lowercased())
+                }.sorted()
+                if !sources.isEmpty { traced.append((artifact: name, sources: sources)) }
+            }
+        }
+        let skip: Set<String> = [".git", ".build", "node_modules", "__pycache__", ".venv", "venv", "dist",
+                                 "build", "target", ".pytest_cache", ".idea", ".next", ".cache", "DerivedData"]
+        var blocks: [String] = []
+        for d in dirs {
+            guard let items = try? fm.contentsOfDirectory(atPath: d) else { continue }
+            let entries = items.filter { !$0.hasPrefix(".") && !skip.contains($0) }.sorted().prefix(limitEntries)
+            guard !entries.isEmpty else { continue }
+            let listing = entries.map { name -> String in
+                var isDir: ObjCBool = false
+                fm.fileExists(atPath: (d as NSString).appendingPathComponent(name), isDirectory: &isDir)
+                return isDir.boolValue ? "\(name)/" : name
+            }.joined(separator: "  ")
+            blocks.append("目录 \(d)/:\n\(listing)")
+        }
+        guard !blocks.isEmpty else { return "" }
+        var out = """
+        【改产物·统一范式·铁律(先溯源,无法溯源再改/重做)】
+        修改/删除任何**产物**(图 / PPT / PDF / 网页 / 文档 / 图表)前,**必须先溯源**:
+        ① **先找产生它的源**(脚本 / 矢量 / 数据 / 模板,如 `*.gen.py`、`*.svg`、`*.slides.json`、模板);
+        ② **找到就改源,再用「产生这套产物的那条管线/工具」原样重新生成**(如 gen 脚本 → 渲染器 → `slides_to_pptx`)——
+           **绝不**在成品(PNG / 二进制)上做像素/字节手术,也**别手搓 pptx、别手动摆图/裁图**
+           (又慢又错:上次正因此既把文字删坏、又把整张图摆裁了);
+        ③ **确实溯不到源**,才考虑直接改成品或整页重做。
+        """
+        if !traced.isEmpty {
+            let lines = traced.map { "· `\($0.artifact)` 的源很可能是 → \($0.sources.map { "`\($0)`" }.joined(separator: "、"))" }
+            out += "\n\n🔎 已替你溯源(同目录同名源文件,优先改这些、再重新生成产物):\n" + lines.joined(separator: "\n")
+        }
+        out += "\n\n产物所在目录(自己再核一眼有没有别的源):\n" + blocks.joined(separator: "\n\n")
+        return out
+    }
+
     nonisolated static func matchAll(_ text: String, pattern: String) -> [String] {
         guard let re = try? NSRegularExpression(pattern: pattern, options: [.dotMatchesLineSeparators]) else { return [] }
         let range = NSRange(text.startIndex..., in: text)

@@ -15,7 +15,7 @@ struct LingShuModuleVariantsPanel: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             selfEvolutionSwitch   // P6 自我进化总开关(默认关,开启前弹风险提示)
-            Divider().overlay(Color.white.opacity(0.08))
+            Divider().overlay(Color.lingFg.opacity(0.08))
 
             SectionHeader(icon: "arrow.triangle.branch",
                           title: "模块变体(无界自进化)",
@@ -28,7 +28,7 @@ struct LingShuModuleVariantsPanel: View {
             }
         }
         .padding(14)
-        .background(Color.white.opacity(0.045), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .background(Color.lingFg.opacity(0.045), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
         .overlay { RoundedRectangle(cornerRadius: 10, style: .continuous).stroke(Color.lingHolo.opacity(0.14)) }
         .alert("开启自我进化?", isPresented: $showRiskConfirm) {
             Button("取消", role: .cancel) { }
@@ -42,21 +42,21 @@ struct LingShuModuleVariantsPanel: View {
     @ViewBuilder private var selfEvolutionSwitch: some View {
         HStack(alignment: .top, spacing: 10) {
             Image(systemName: state.selfEvolutionEnabled ? "wand.and.stars" : "wand.and.stars.inverse")
-                .font(.system(size: 15)).foregroundStyle(state.selfEvolutionEnabled ? Color.lingHolo : .white.opacity(0.4))
+                .font(.system(size: 15)).foregroundStyle(state.selfEvolutionEnabled ? Color.lingHolo : Color.lingFg.opacity(0.4))
                 .padding(.top, 1)
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
-                    Text("自我进化").font(.system(size: 13, weight: .bold)).foregroundStyle(.white.opacity(0.92))
+                    Text("自我进化").font(.system(size: 13, weight: .bold)).foregroundStyle(Color.lingFg.opacity(0.92))
                     Text(state.selfEvolutionEnabled ? "已开启" : "已关闭(默认)")
                         .font(.system(size: 9.5, weight: .bold))
-                        .foregroundStyle(state.selfEvolutionEnabled ? Color.lingVoid : .white.opacity(0.55))
+                        .foregroundStyle(state.selfEvolutionEnabled ? Color.lingVoid : Color.lingFg.opacity(0.55))
                         .padding(.horizontal, 6).padding(.vertical, 1)
-                        .background(state.selfEvolutionEnabled ? Color.lingHolo : Color.white.opacity(0.08), in: Capsule())
+                        .background(state.selfEvolutionEnabled ? Color.lingHolo : Color.lingFg.opacity(0.08), in: Capsule())
                 }
                 Text(state.selfEvolutionEnabled
                      ? "灵枢会自检反复弱点 → 提待批改进提案;采纳仍需你逐条批准、可一键回退。"
                      : "关闭时灵枢不挖弱点、不提案、不采纳。开启属高风险授权。")
-                    .font(.system(size: 10.5)).foregroundStyle(.white.opacity(0.5)).fixedSize(horizontal: false, vertical: true)
+                    .font(.system(size: 10.5)).foregroundStyle(Color.lingFg.opacity(0.5)).fixedSize(horizontal: false, vertical: true)
             }
             Spacer(minLength: 8)
             Toggle("", isOn: Binding(
@@ -74,9 +74,9 @@ struct LingShuModuleVariantsPanel: View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 8) {
                 Text(LingShuModuleSlots.label(slot))
-                    .font(.system(size: 12.5, weight: .bold)).foregroundStyle(.white.opacity(0.9))
+                    .font(.system(size: 12.5, weight: .bold)).foregroundStyle(Color.lingFg.opacity(0.9))
                 Text(slot).font(.system(size: 9.5, weight: .medium, design: .monospaced))
-                    .foregroundStyle(.white.opacity(0.35))
+                    .foregroundStyle(Color.lingFg.opacity(0.35))
                 Spacer()
                 Button {
                     _ = state.rollbackModuleVariant(slotID: slot)
@@ -90,24 +90,24 @@ struct LingShuModuleVariantsPanel: View {
             ForEach(variants) { v in variantRow(slot: slot, v: v, isActive: v.id == activeID) }
         }
         .padding(10)
-        .background(Color.white.opacity(0.04), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .background(Color.lingFg.opacity(0.04), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
 
     @ViewBuilder private func variantRow(slot: String, v: LingShuModuleVariant, isActive: Bool) -> some View {
         HStack(alignment: .top, spacing: 8) {
             Image(systemName: isActive ? "largecircle.fill.circle" : "circle")
-                .font(.system(size: 12)).foregroundStyle(isActive ? Color.lingHolo : .white.opacity(0.3))
+                .font(.system(size: 12)).foregroundStyle(isActive ? Color.lingHolo : Color.lingFg.opacity(0.3))
                 .padding(.top, 1)
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 5) {
-                    Text(v.label).font(.system(size: 11.5, weight: .medium)).foregroundStyle(.white.opacity(0.85)).lineLimit(1)
+                    Text(v.label).font(.system(size: 11.5, weight: .medium)).foregroundStyle(Color.lingFg.opacity(0.85)).lineLimit(1)
                     Text(sourceTag(v.source)).font(.system(size: 9, weight: .bold))
-                        .foregroundStyle(.white.opacity(0.55))
+                        .foregroundStyle(Color.lingFg.opacity(0.55))
                         .padding(.horizontal, 5).padding(.vertical, 1)
-                        .background(Color.white.opacity(0.08), in: Capsule())
+                        .background(Color.lingFg.opacity(0.08), in: Capsule())
                 }
                 Text(payloadPreview(v)).font(.system(size: 10.5, weight: .regular))
-                    .foregroundStyle(.white.opacity(0.45)).lineLimit(2)
+                    .foregroundStyle(Color.lingFg.opacity(0.45)).lineLimit(2)
             }
             Spacer(minLength: 6)
             if isActive {
@@ -133,7 +133,7 @@ struct LingShuModuleVariantsPanel: View {
             }
         }
         .padding(.vertical, 5).padding(.horizontal, 8)
-        .background(Color.white.opacity(isActive ? 0.05 : 0.02), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+        .background(Color.lingFg.opacity(isActive ? 0.05 : 0.02), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
     }
 
     private func sourceTag(_ source: String) -> String {

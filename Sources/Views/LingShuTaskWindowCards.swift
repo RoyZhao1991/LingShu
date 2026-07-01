@@ -14,9 +14,9 @@ struct TaskPlanCard: View {
                 Image(systemName: "checklist")
                     .font(.system(size: 12, weight: .bold)).foregroundStyle(Color.lingHolo)
                 Text("执行计划")
-                    .font(.system(size: 12.5, weight: .bold)).foregroundStyle(.white.opacity(0.92))
+                    .font(.system(size: 12.5, weight: .bold)).foregroundStyle(Color.lingFg.opacity(0.92))
                 Text("\(doneCount)/\(steps.count)")
-                    .font(.system(size: 11, weight: .bold, design: .monospaced)).foregroundStyle(.white.opacity(0.45))
+                    .font(.system(size: 11, weight: .bold, design: .monospaced)).foregroundStyle(Color.lingFg.opacity(0.45))
                 Spacer(minLength: 0)
             }
             ForEach(Array(steps.enumerated()), id: \.element.id) { index, step in
@@ -28,7 +28,7 @@ struct TaskPlanCard: View {
                     Text(step.title)
                         .font(.system(size: 12.5, weight: step.status == .inProgress ? .bold : .medium))
                         .foregroundStyle(textColor(step.status))
-                        .strikethrough(step.status == .completed, color: .white.opacity(0.3))
+                        .strikethrough(step.status == .completed, color: Color.lingFg.opacity(0.3))
                         .fixedSize(horizontal: false, vertical: true)
                     Spacer(minLength: 0)
                 }
@@ -36,7 +36,7 @@ struct TaskPlanCard: View {
         }
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .background(Color.lingFg.opacity(0.05), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
         .overlay { RoundedRectangle(cornerRadius: 8, style: .continuous).stroke(Color.lingHolo.opacity(0.18)) }
     }
 
@@ -49,16 +49,16 @@ struct TaskPlanCard: View {
     }
     private func color(_ s: LingShuPlanStep.Status) -> Color {
         switch s {
-        case .pending: return .white.opacity(0.35)
+        case .pending: return Color.lingFg.opacity(0.35)
         case .inProgress: return Color.lingHolo
         case .completed: return .green.opacity(0.85)
         }
     }
     private func textColor(_ s: LingShuPlanStep.Status) -> Color {
         switch s {
-        case .completed: return .white.opacity(0.5)
-        case .inProgress: return .white.opacity(0.95)
-        case .pending: return .white.opacity(0.78)
+        case .completed: return Color.lingFg.opacity(0.5)
+        case .inProgress: return Color.lingFg.opacity(0.95)
+        case .pending: return Color.lingFg.opacity(0.78)
         }
     }
 }
@@ -90,25 +90,25 @@ struct TaskToolCallCard: View {
                     Button { withAnimation(.easeOut(duration: 0.15)) { expanded.toggle() } } label: {
                         Image(systemName: expanded ? "chevron.up" : "chevron.down")
                             .font(.system(size: 9, weight: .bold))
-                            .foregroundStyle(.white.opacity(0.5))
+                            .foregroundStyle(Color.lingFg.opacity(0.5))
                     }
                     .buttonStyle(.plain)
                 }
             }
             Text(summary)
                 .font(.system(size: 12, weight: .medium, design: .monospaced))
-                .foregroundStyle(.white.opacity(0.86))
+                .foregroundStyle(Color.lingFg.opacity(0.86))
                 .textSelection(.enabled)
                 .fixedSize(horizontal: false, vertical: true)
             if expanded, hasMore {
                 Text(arguments)
                     .font(.system(size: 11, weight: .regular, design: .monospaced))
-                    .foregroundStyle(.white.opacity(0.62))
+                    .foregroundStyle(Color.lingFg.opacity(0.62))
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
                     .padding(8)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(Color.black.opacity(0.32), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                    .background(Color.lingFg.opacity(0.06), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
             }
         }
         .padding(10)
@@ -144,7 +144,7 @@ struct TaskToolResultCard: View {
                     Button { withAnimation(.easeOut(duration: 0.15)) { expanded.toggle() } } label: {
                         Text(expanded ? "收起" : "查看输出")
                             .font(.system(size: 9.5, weight: .bold))
-                            .foregroundStyle(.white.opacity(0.55))
+                            .foregroundStyle(Color.lingFg.opacity(0.55))
                     }
                     .buttonStyle(.plain)
                 }
@@ -152,7 +152,7 @@ struct TaskToolResultCard: View {
             if !trimmedOutput.isEmpty {
                 Text(expanded ? trimmedOutput : firstLine)
                     .font(.system(size: 11, weight: .regular, design: .monospaced))
-                    .foregroundStyle(.white.opacity(0.6))
+                    .foregroundStyle(Color.lingFg.opacity(0.6))
                     .textSelection(.enabled)
                     .lineLimit(expanded ? nil : 1)
                     .truncationMode(.tail)
@@ -164,7 +164,7 @@ struct TaskToolResultCard: View {
         }
         .padding(10)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.white.opacity(0.045), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+        .background(Color.lingFg.opacity(0.045), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
         .overlay { RoundedRectangle(cornerRadius: 9, style: .continuous).stroke((success ? Color.green : Color.red).opacity(0.16)) }
     }
 }
@@ -198,7 +198,7 @@ struct TaskFileDiffCard: View {
                     .background((operation == .modified ? Color.lingHoloAlt : Color.lingHolo).opacity(0.16), in: Capsule())
                 Text(fileName)
                     .font(.system(size: 11.5, weight: .bold, design: .monospaced))
-                    .foregroundStyle(.white.opacity(undone ? 0.4 : 0.88))
+                    .foregroundStyle(Color.lingFg.opacity(undone ? 0.4 : 0.88))
                     .strikethrough(undone)
                     .lineLimit(1).truncationMode(.middle)
                 Spacer(minLength: 6)
@@ -218,7 +218,7 @@ struct TaskFileDiffCard: View {
 
                 if undone {
                     Label("已撤销", systemImage: "arrow.uturn.backward")
-                        .font(.system(size: 10, weight: .bold)).foregroundStyle(.white.opacity(0.45))
+                        .font(.system(size: 10, weight: .bold)).foregroundStyle(Color.lingFg.opacity(0.45))
                 } else if canUndo, let onUndo {
                     Button(action: onUndo) {
                         Label("撤销", systemImage: "arrow.uturn.backward")
@@ -230,7 +230,7 @@ struct TaskFileDiffCard: View {
                     .buttonStyle(.plain)
                 } else if onUndo != nil, LingShuLineDiff.isTruncated(diff) {
                     Text("改动过大不可撤销")
-                        .font(.system(size: 9.5, weight: .semibold)).foregroundStyle(.white.opacity(0.36))
+                        .font(.system(size: 9.5, weight: .semibold)).foregroundStyle(Color.lingFg.opacity(0.36))
                 }
                 Spacer(minLength: 0)
             }
@@ -247,12 +247,12 @@ struct TaskFileDiffCard: View {
                 }
                 .padding(8)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .background(Color.black.opacity(0.34), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                .background(Color.lingFg.opacity(0.06), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
             }
         }
         .padding(10)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+        .background(Color.lingFg.opacity(0.05), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
         .overlay { RoundedRectangle(cornerRadius: 9, style: .continuous).stroke(Color.lingHolo.opacity(undone ? 0.08 : 0.2)) }
     }
 
@@ -260,7 +260,7 @@ struct TaskFileDiffCard: View {
         if line.hasPrefix("+ ") { return .green.opacity(0.92) }
         if line.hasPrefix("- ") { return .red.opacity(0.82) }
         if line.hasPrefix("… ") { return .orange.opacity(0.8) }
-        return .white.opacity(0.5)
+        return Color.lingFg.opacity(0.5)
     }
 }
 

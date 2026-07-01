@@ -25,8 +25,8 @@ extension LingShuState {
     func questionNeedsFreshInfo(_ question: String) async -> Bool {
         let q = question.trimmingCharacters(in: .whitespacesAndNewlines)
         guard q.count >= 2 else { return false }
-        let sys = """
-        判断回答下面这句话是否需要**联网查最新/实时信息**,只输出一个词:YES 或 NO。
+        let sys = LingShuPersona.identityLine + "\n" + """
+        现在你判断:回答下面这句话是否需要**联网查最新/实时信息**,只输出一个词:YES 或 NO。
         YES(答案会随时间变):汇率/股价/天气/价格、最新进展/版本/排名、产品或工具对比(谁更强/支持什么,如 codex vs claude)、现状、某公司或产品的最新动态、近期事件…
         NO:铁定不随时间变的理论/定义/数学/算法/已定历史(光速、定义、排序原理、勾股定理);或根本不是事实问题(闲聊/打招呼/让你写代码做任务)。
         拿不准会不会变 → 当作会变,输出 YES。

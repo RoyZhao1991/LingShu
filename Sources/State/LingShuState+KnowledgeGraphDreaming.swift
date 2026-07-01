@@ -80,7 +80,7 @@ extension LingShuState {
         let adapter = makeAgentModelAdapter()
         let session = LingShuAgentSession(
             id: "kg-\(UUID().uuidString.prefix(6))",
-            system: "你是知识抽取器,只输出 JSON 数组,不解释、不写代码。",
+            system: LingShuPersona.system("现在你来抽取知识:只输出 JSON 数组,不解释、不写代码。"),
             tools: [],
             model: adapter,
             maxTurns: 1

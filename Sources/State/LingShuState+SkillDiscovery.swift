@@ -98,7 +98,7 @@ extension LingShuState {
         """
         let session = LingShuAgentSession(
             id: "skill-risk-\(UUID().uuidString.prefix(6))",
-            system: "你是严谨的代码安全审计员,只输出风险评级与风险点,不解释、不寒暄;拿不准时保守判高。",
+            system: LingShuPersona.system("现在你以严谨的代码安全审计视角审这段代码:只输出风险评级与风险点,不解释、不寒暄;拿不准时保守判高。"),
             tools: [],
             model: makeAgentModelAdapter(),
             maxTurns: 1

@@ -375,7 +375,7 @@ extension LingShuState {
         """
         let evaluator = LingShuAgentSession(
             id: "perceive-eval-\(UUID().uuidString.prefix(6))",
-            system: "你是在岗灵枢的'屏幕异常哨兵'。只在发现真正的问题/异常时回 'ACT: ...',其余一律 'IDLE'。不解释、不啰嗦。",
+            system: LingShuPersona.system("现在你在岗盯屏当'异常哨兵':只在发现真正的问题/异常时回 'ACT: ...',其余一律 'IDLE'。不解释、不啰嗦。"),
             tools: [],
             model: makeAgentModelAdapter(),
             maxTurns: 1

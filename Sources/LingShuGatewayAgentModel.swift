@@ -17,6 +17,8 @@ final class LingShuGatewayAgentModel: LingShuAgentModel, @unchecked Sendable {
     /// 每步「边做边想」的旁白:模型在发起工具调用时附带的自然语言推理(剥 think 后)经此上报,
     /// 让执行流像 codex 一样可读(我观察到X→打算做Y→为什么)。@unchecked Sendable 持有。
     var onReasoning: (@Sendable (String) -> Void)?
+    /// **每次真实请求成功后上报(provider, model)**——地面真相:实际在用的脑(可能与 UI 选中的不同,如会话快照滞后)。供 UI 显示"实际在用"。
+    var onActualCall: (@Sendable (String, String) -> Void)?
 
     /// #1·模型通道续接状态(锁保护):上回合会话签名 + 上回合网关返回的原生续接 id。
     /// 据此判"本回合是否干净追加",决定续接模式(改写过历史则降级 prefixStable),并在 native 模式带上 id。
@@ -89,6 +91,7 @@ final class LingShuGatewayAgentModel: LingShuAgentModel, @unchecked Sendable {
             if Task.isCancelled { return .text("（本轮已被取消）") }
             do {
                 let reply = try await client.send(request)
+                onActualCall?(provider, model)   // 地面真相:这颗脑真接了一次请求
                 recordChannel(signature: plan.signature, replyToken: reply.continuationToken)   // #1:捕获原生续接 id 供下回合链上
                 // 前缀缓存可观测:本轮命中 + **累计命中率**(命中率掉=前缀被打乱,立刻看得见)。每次调用都记(含未命中,口径才准)。
                 if let prompt = reply.promptTokens {
@@ -141,6 +144,7 @@ final class LingShuGatewayAgentModel: LingShuAgentModel, @unchecked Sendable {
         )
         do {
             let reply = try await client.streamAgent(request, onContentDelta: onTextDelta)
+            onActualCall?(provider, model)   // 地面真相:这颗脑真接了一次请求
             recordChannel(signature: plan.signature, replyToken: reply.continuationToken)
             if let prompt = reply.promptTokens {
                 let snap = LingShuPrefixCacheMeter.shared.record(prompt: prompt, cached: reply.cachedTokens ?? 0)
@@ -213,7 +217,8 @@ final class LingShuGatewayAgentModel: LingShuAgentModel, @unchecked Sendable {
             toolCalls: message.toolCalls.isEmpty ? nil : message.toolCalls.map {
                 LingShuToolCall(id: $0.id, name: $0.name, arguments: $0.argumentsJSON)
             },
-            toolCallID: message.toolCallID
+            toolCallID: message.toolCallID,
+            imageDataURLs: message.imageDataURLs
         )
     }
 

@@ -44,12 +44,22 @@ final class TaskCompletionGateTests: XCTestCase {
         XCTAssertEqual(d.status, .waitingForUser, "需用户授权/凭据→明确阻断等用户,不伪完成")
     }
 
-    /// 复合任务:A 成功(有成功标准达成)、B 因授权阻断 → partial。
+    /// 复合任务:A 成功(成功标准达成)、B 因授权阻断 → partial。
     func testCompoundPartialWhenSomeMetSomeBlocked() {
         let d = LingShuTaskCompletionGate.decide(.init(
             hasUnresolvedBlockingGap: true, unresolvedGapNeedsUser: true,
             acquisition: .needsUser, someSuccessCriteriaMet: true))
         XCTAssertEqual(d.status, .partial, "部分完成+部分阻断→partial,不是 completed,也不是纯 waitingForUser")
+    }
+
+    /// **成功标准全绿推翻投机 gap 的判据(纯函数,2026-06-30,根治"全绿却找用户要授权")**:
+    /// 有 met、无 unmet、不承认无能力 → true(实跑层据此清掉误报 gap);任一不满足 → 不清(真缺口/真失败照拦)。
+    func testAllCriteriaMetResolvesSpeculativeGap() {
+        let f = LingShuTaskCompletionGate.allCriteriaMetResolvesSpeculativeGap
+        XCTAssertTrue(f(true, true, false, false), "有标准+全绿+不承认无能力 → 清误报 gap")
+        XCTAssertFalse(f(true, true, true, false), "有未达成标准 → 不清(仍 partial)")
+        XCTAssertFalse(f(true, true, false, true), "承认无能力 → 不清(仍按真失败拦)")
+        XCTAssertFalse(f(false, false, false, false), "没成功标准 → 不清(走默认)")
     }
 
     /// 回复承认「无法接入/未授权」→ 禁止 verified(无任何达成→blocked)。

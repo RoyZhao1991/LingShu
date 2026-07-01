@@ -21,7 +21,7 @@ struct LingShuPeripheralsView: View {
             groupedList
         }
         .padding(14)
-        .background(Color.white.opacity(0.045), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .background(Color.lingFg.opacity(0.045), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
         .overlay { RoundedRectangle(cornerRadius: 10, style: .continuous).stroke(Color.lingHolo.opacity(0.14)) }
         .onAppear { if hub.peripherals.count <= 1 { Task { await state.refreshPeripherals() } } }
     }
@@ -29,20 +29,20 @@ struct LingShuPeripheralsView: View {
     private var scanBar: some View {
         HStack(spacing: 10) {
             Image(systemName: hub.scanning ? "dot.radiowaves.left.and.right" : "sensor.tag.radiowaves.forward")
-                .foregroundStyle(hub.scanning ? Color.lingHolo : .white.opacity(0.5))
+                .foregroundStyle(hub.scanning ? Color.lingHolo : Color.lingFg.opacity(0.5))
             Text(hub.scanning ? state.loc("正在发现外设…", "Discovering…")
                               : state.loc("\(deviceCount) 台外设 · 大脑已识别", "\(deviceCount) peripherals · identified"))
-                .font(.system(size: 12.5, weight: .semibold)).foregroundStyle(.white.opacity(0.85))
+                .font(.system(size: 12.5, weight: .semibold)).foregroundStyle(Color.lingFg.opacity(0.85))
             Spacer()
             Button { Task { await state.refreshPeripherals() } } label: {
                 Image(systemName: "arrow.clockwise").font(.system(size: 11.5, weight: .bold))
-                    .foregroundStyle(.white.opacity(0.7)).padding(6)
-                    .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+                    .foregroundStyle(Color.lingFg.opacity(0.7)).padding(6)
+                    .background(Color.lingFg.opacity(0.06), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
             }
             .buttonStyle(.plain).help(state.loc("重新发现", "Rescan"))
         }
         .padding(.vertical, 8).padding(.horizontal, 12)
-        .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .background(Color.lingFg.opacity(0.05), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
 
     private var hintRow: some View {
@@ -85,7 +85,7 @@ struct LingShuPeripheralsView: View {
         VStack(alignment: .leading, spacing: 12) {
             ForEach(grouped, id: \.0) { group, items in
                 VStack(alignment: .leading, spacing: 6) {
-                    Text(group).font(.system(size: 11.5, weight: .bold)).foregroundStyle(.white.opacity(0.55))
+                    Text(group).font(.system(size: 11.5, weight: .bold)).foregroundStyle(Color.lingFg.opacity(0.55))
                     ForEach(items) { row($0) }
                 }
             }
@@ -95,16 +95,16 @@ struct LingShuPeripheralsView: View {
     /// 只读行:图标 + 别名(+原始名)+ 用途 + 能力 chips + 状态(无任何动作按钮)。
     private func row(_ p: LingShuPeripheral) -> some View {
         HStack(alignment: .top, spacing: 10) {
-            Image(systemName: icon(p)).foregroundStyle(.white.opacity(0.6)).frame(width: 16)
+            Image(systemName: icon(p)).foregroundStyle(Color.lingFg.opacity(0.6)).frame(width: 16)
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
-                    Text(p.displayName).font(.system(size: 12.5, weight: .semibold)).foregroundStyle(.white.opacity(0.9))
+                    Text(p.displayName).font(.system(size: 12.5, weight: .semibold)).foregroundStyle(Color.lingFg.opacity(0.9))
                     if p.displayName != p.name {
-                        Text(p.name).font(.system(size: 10)).foregroundStyle(.white.opacity(0.35))
+                        Text(p.name).font(.system(size: 10)).foregroundStyle(Color.lingFg.opacity(0.35))
                     }
                 }
                 Text((p.classification?.what).flatMap { $0.isEmpty ? nil : $0 } ?? p.statusLine)
-                    .font(.system(size: 10.5)).foregroundStyle(.white.opacity(0.45)).lineLimit(2)
+                    .font(.system(size: 10.5)).foregroundStyle(Color.lingFg.opacity(0.45)).lineLimit(2)
                 if let caps = p.classification?.capabilities, !caps.isEmpty {
                     HStack(spacing: 4) { ForEach(caps.prefix(5), id: \.self) { chip($0) } }
                 }
@@ -113,19 +113,19 @@ struct LingShuPeripheralsView: View {
             statusPill(p)
         }
         .padding(.vertical, 9).padding(.horizontal, 12)
-        .background(Color.white.opacity(0.045), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .background(Color.lingFg.opacity(0.045), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
 
     private func chip(_ text: String) -> some View {
-        Text(text).font(.system(size: 8.5, weight: .semibold)).foregroundStyle(.white.opacity(0.6))
+        Text(text).font(.system(size: 8.5, weight: .semibold)).foregroundStyle(Color.lingFg.opacity(0.6))
             .padding(.horizontal, 5).padding(.vertical, 2)
-            .background(Color.white.opacity(0.08), in: Capsule())
+            .background(Color.lingFg.opacity(0.08), in: Capsule())
     }
 
     private func statusPill(_ p: LingShuPeripheral) -> some View {
         let (text, color): (String, Color) =
             p.isControllable ? (state.loc("已接入", "Integrated"), .lingHolo)
-            : p.classification == nil ? (state.loc("待识别", "—"), .white.opacity(0.45))
+            : p.classification == nil ? (state.loc("待识别", "—"), Color.lingFg.opacity(0.45))
             : (p.classification!.integratable ? (state.loc("可接入", "Ready"), .lingHolo) : (state.loc("暂不可接入", "N/A"), .orange))
         return Text(text)
             .font(.system(size: 9, weight: .bold)).foregroundStyle(color)

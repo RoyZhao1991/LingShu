@@ -55,7 +55,7 @@ struct LingShuTaskPoolView: View {
                 .help("主线程是全能中枢;每个任务是一条线程,派生的子线程像专项工作室——其上下文对该任务更聚焦、价值更高。")
             Text("进行中 \(ongoing.count) · 已完成 \(done.count)")
                 .font(.system(size: 12))
-                .foregroundStyle(.white.opacity(0.5))
+                .foregroundStyle(Color.lingFg.opacity(0.5))
             Spacer()
             if !cold.isEmpty {
                 Toggle(isOn: $includeArchived) {
@@ -69,14 +69,14 @@ struct LingShuTaskPoolView: View {
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 14)
-        .background(.white.opacity(0.03))
+        .background(Color.lingFg.opacity(0.03))
     }
 
     private func section(_ title: String, _ items: [LingShuTaskExecutionRecord]) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             Text(title)
                 .font(.system(size: 12.5, weight: .semibold))
-                .foregroundStyle(.white.opacity(0.55))
+                .foregroundStyle(Color.lingFg.opacity(0.55))
             ForEach(items) { row($0) }
         }
     }
@@ -92,7 +92,7 @@ struct LingShuTaskPoolView: View {
                 VStack(alignment: .leading, spacing: 3) {
                     Text(record.title)
                         .font(.system(size: 13.5, weight: .medium))
-                        .foregroundStyle(.white.opacity(0.9))
+                        .foregroundStyle(Color.lingFg.opacity(0.9))
                         .lineLimit(1)
                     HStack(spacing: 9) {
                         Text(record.status.rawValue)
@@ -100,22 +100,22 @@ struct LingShuTaskPoolView: View {
                             .foregroundStyle(statusColor(record.status))
                         Text(record.updatedAt.taskRecordDisplayTime)
                             .font(.system(size: 10.5))
-                            .foregroundStyle(.white.opacity(0.38))
+                            .foregroundStyle(Color.lingFg.opacity(0.38))
                         if !record.artifacts.isEmpty {
                             Label("\(record.artifacts.count)", systemImage: "doc.fill")
                                 .font(.system(size: 10.5))
-                                .foregroundStyle(.white.opacity(0.45))
+                                .foregroundStyle(Color.lingFg.opacity(0.45))
                         }
                     }
                 }
                 Spacer(minLength: 8)
                 Image(systemName: "chevron.right")
                     .font(.system(size: 11, weight: .bold))
-                    .foregroundStyle(.white.opacity(0.25))
+                    .foregroundStyle(Color.lingFg.opacity(0.25))
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 11)
-            .background(RoundedRectangle(cornerRadius: 10).fill(.white.opacity(0.045)))
+            .background(RoundedRectangle(cornerRadius: 10).fill(Color.lingFg.opacity(0.045)))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -125,10 +125,10 @@ struct LingShuTaskPoolView: View {
         VStack(spacing: 10) {
             Image(systemName: "tray")
                 .font(.system(size: 34))
-                .foregroundStyle(.white.opacity(0.25))
+                .foregroundStyle(Color.lingFg.opacity(0.25))
             Text("还没有任务。下达目标后,这里会按时间归集进行中与已完成的任务。")
                 .font(.system(size: 12.5))
-                .foregroundStyle(.white.opacity(0.4))
+                .foregroundStyle(Color.lingFg.opacity(0.4))
                 .multilineTextAlignment(.center)
         }
         .frame(maxWidth: .infinity)
@@ -139,7 +139,7 @@ struct LingShuTaskPoolView: View {
         switch status {
         case .completed, .answered, .verified: return Color.lingHolo
         case .running, .dispatched, .analyzing, .acquiringCapability, .ready: return Color.lingHoloAlt
-        case .queued: return .white.opacity(0.4)
+        case .queued: return Color.lingFg.opacity(0.4)
         case .needsRevision, .partial: return .orange
         case .blocked, .failed: return .red
         case .suspended, .waitingForUser: return .yellow   // 暂停/待用户(可续),区别于红色异常

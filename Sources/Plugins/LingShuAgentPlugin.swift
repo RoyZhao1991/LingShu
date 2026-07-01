@@ -21,13 +21,16 @@ struct LingShuAgentPlugin: Codable, Identifiable, Sendable, Equatable {
     var available: Bool?        // false=探活失败/用时发现不可用(登录失效/认证);nil 或 true=可用
     var unavailableReason: String?  // 不可用原因(登录失效/缺凭据…),给主人看 + UI 标注
     var lastCheckedAt: Date?   // 上次探活/状态更新时间
+    // **子能力链路(适配器,2026-06-29)**:声明这个 agent 怎么发现/启用/安装它自己的子插件能力(纯数据,内核通用走一套)。
+    // optional 向后兼容旧 JSON(缺=没有可枚举子能力,按现在直接跑 objective)。
+    var capabilities: AgentCapabilitySpec?
 
     enum Role: String, Codable, Sendable { case maker, checker, general }
 
     init(id: String, displayName: String, aliases: [String] = [], executable: String,
          argsTemplate: [String], role: Role = .general, subtitle: String = "", icon: String = "cpu",
          timeoutSeconds: Int = 600, available: Bool? = nil, unavailableReason: String? = nil,
-         lastCheckedAt: Date? = nil) {
+         lastCheckedAt: Date? = nil, capabilities: AgentCapabilitySpec? = nil) {
         self.id = id
         self.displayName = displayName
         self.aliases = aliases
@@ -40,6 +43,7 @@ struct LingShuAgentPlugin: Codable, Identifiable, Sendable, Equatable {
         self.available = available
         self.unavailableReason = unavailableReason
         self.lastCheckedAt = lastCheckedAt
+        self.capabilities = capabilities
     }
 
     /// 全部可匹配别名(去重,含 displayName/id)。

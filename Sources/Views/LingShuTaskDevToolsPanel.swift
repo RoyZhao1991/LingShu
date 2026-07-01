@@ -63,16 +63,16 @@ struct TaskDevToolsPanel: View {
             VStack(alignment: .leading, spacing: 16) {
                 goalSection
                 if !record.plan.isEmpty {
-                    Divider().overlay(Color.white.opacity(0.08))
+                    Divider().overlay(Color.lingFg.opacity(0.08))
                     progressSection
                 }
-                Divider().overlay(Color.white.opacity(0.08))
+                Divider().overlay(Color.lingFg.opacity(0.08))
                 filesSection
             }
             .padding(14)
         }
         .frame(maxHeight: .infinity, alignment: .top)
-        .background(Color.black.opacity(0.28))
+        .background(Color.lingFg.opacity(0.03))   // 浅=近白淡面板(原 black@0.28=灰暗块「太黑」)/ 深=极淡亮面
     }
 
     // MARK: - 底部文件区(开发=产出物/代码管理 两 tab;非开发=只产出物)
@@ -91,7 +91,7 @@ struct TaskDevToolsPanel: View {
                 HStack(spacing: 7) {
                     sectionHeader("产出物", systemImage: "shippingbox.fill", tint: .lingHolo)
                     Text("\(allArtifacts.count)")
-                        .font(.system(size: 10.5, weight: .bold, design: .monospaced)).foregroundStyle(.white.opacity(0.42))
+                        .font(.system(size: 10.5, weight: .bold, design: .monospaced)).foregroundStyle(Color.lingFg.opacity(0.42))
                     Spacer(minLength: 0)
                 }
                 artifactsCards
@@ -106,7 +106,7 @@ struct TaskDevToolsPanel: View {
                 Text(title).font(.system(size: 12, weight: .bold))
                 Text("\(count)").font(.system(size: 10, weight: .bold, design: .monospaced)).opacity(0.6)
             }
-            .foregroundStyle(active ? Color.lingHolo : .white.opacity(0.5))
+            .foregroundStyle(active ? Color.lingHolo : Color.lingFg.opacity(0.5))
             .padding(.horizontal, 11).padding(.vertical, 6)
             .background(active ? Color.lingHolo.opacity(0.12) : Color.clear, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
         }
@@ -117,7 +117,7 @@ struct TaskDevToolsPanel: View {
     private var artifactsCards: some View {
         if allArtifacts.isEmpty {
             Text("本任务还没有登记产出文件")
-                .font(.system(size: 11.5, weight: .medium)).foregroundStyle(.white.opacity(0.38))
+                .font(.system(size: 11.5, weight: .medium)).foregroundStyle(Color.lingFg.opacity(0.38))
                 .padding(.vertical, 10)
         } else {
             VStack(alignment: .leading, spacing: 8) {
@@ -137,7 +137,7 @@ struct TaskDevToolsPanel: View {
             HStack(spacing: 8) {
                 Image(systemName: "plusminus.circle.fill")
                     .font(.system(size: 12, weight: .bold)).foregroundStyle(Color.lingHolo)
-                Text("改动").font(.system(size: 12, weight: .semibold)).foregroundStyle(.white.opacity(0.72))
+                Text("改动").font(.system(size: 12, weight: .semibold)).foregroundStyle(Color.lingFg.opacity(0.72))
                 Spacer(minLength: 0)
                 Text("+\(stat.added)").font(.system(size: 11.5, weight: .bold, design: .monospaced)).foregroundStyle(.green.opacity(0.9))
                 Text("-\(stat.removed)").font(.system(size: 11.5, weight: .bold, design: .monospaced)).foregroundStyle(.red.opacity(0.85))
@@ -151,7 +151,7 @@ struct TaskDevToolsPanel: View {
                         .lineLimit(1).truncationMode(.middle)
                     Spacer(minLength: 6)
                     Text(code.repoName)
-                        .font(.system(size: 10, weight: .medium)).foregroundStyle(.white.opacity(0.42))
+                        .font(.system(size: 10, weight: .medium)).foregroundStyle(Color.lingFg.opacity(0.42))
                         .lineLimit(1).truncationMode(.middle)
                 }
                 VStack(alignment: .leading, spacing: 5) {
@@ -160,7 +160,7 @@ struct TaskDevToolsPanel: View {
                 commitButton(fileCount: code.files.count)
             } else {
                 Text("尚未捕获 git 改动(任务收尾后扫描)。")
-                    .font(.system(size: 10.5, weight: .medium)).foregroundStyle(.white.opacity(0.36))
+                    .font(.system(size: 10.5, weight: .medium)).foregroundStyle(Color.lingFg.opacity(0.36))
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
@@ -175,7 +175,7 @@ struct TaskDevToolsPanel: View {
                 .frame(width: 30, alignment: .leading)
             Text((file.path as NSString).lastPathComponent)
                 .font(.system(size: 11, weight: .regular, design: .monospaced))
-                .foregroundStyle(.white.opacity(0.82))
+                .foregroundStyle(Color.lingFg.opacity(0.82))
                 .lineLimit(1).truncationMode(.middle)
                 .help(file.path)
             Spacer(minLength: 0)
@@ -219,11 +219,14 @@ struct TaskDevToolsPanel: View {
                     .padding(.horizontal, 7).padding(.vertical, 2)
                     .background((statusIsComplete ? Color.green : record.status.color).opacity(0.16), in: Capsule())
             }
-            Text(goalText)
+            // 目标正文:优先 GoalSpec 的 objective(模型重述的真实目标),否则 record.goal。**完整显示、可选中**,不再截断到 6 行。
+            Text(goalObjectiveText)
                 .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(.white.opacity(0.78))
+                .foregroundStyle(Color.lingFg.opacity(0.82))
                 .fixedSize(horizontal: false, vertical: true)
-                .lineLimit(6)
+                .textSelection(.enabled)
+            // **目标拆解(GoalSpec)**:之前 record.goalSpec 存了却没渲染——成功标准/约束/边界/风险/待澄清都补上。
+            if let spec = record.goalSpec { goalSpecBreakdown(spec) }
             HStack(spacing: 6) {
                 if !record.plan.isEmpty {
                     statChip("\(doneSteps)/\(record.plan.count) 步", icon: "checklist")
@@ -237,12 +240,49 @@ struct TaskDevToolsPanel: View {
         }
     }
 
+    /// 目标正文:GoalSpec 的 objective(大脑重述的真目标)优先,否则回退 goalText。
+    private var goalObjectiveText: String {
+        if let o = record.goalSpec?.objective.trimmingCharacters(in: .whitespacesAndNewlines), !o.isEmpty { return o }
+        return goalText
+    }
+
+    /// **目标拆解**:把 GoalSpec 的结构化理解逐组展开(成功标准=验收依据最重要)。空组不显示。
+    @ViewBuilder private func goalSpecBreakdown(_ spec: LingShuGoalSpec) -> some View {
+        VStack(alignment: .leading, spacing: 7) {
+            criteriaGroup("成功标准(验收依据)", spec.successCriteria, icon: "checkmark.seal.fill", tint: .green)
+            criteriaGroup("约束", spec.constraints, icon: "ruler.fill", tint: .lingHolo)
+            criteriaGroup("边界 · 不做", spec.boundaries, icon: "hand.raised.fill", tint: .orange)
+            criteriaGroup("风险", spec.risks, icon: "exclamationmark.triangle.fill", tint: .red)
+            criteriaGroup("待澄清", spec.openQuestions, icon: "questionmark.circle.fill", tint: .yellow)
+        }
+        .padding(.top, 2)
+    }
+
+    @ViewBuilder private func criteriaGroup(_ title: String, _ items: [String], icon: String, tint: Color) -> some View {
+        if !items.isEmpty {
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 5) {
+                    Image(systemName: icon).font(.system(size: 9.5, weight: .bold)).foregroundStyle(tint)
+                    Text(title).font(.system(size: 10.5, weight: .bold)).foregroundStyle(Color.lingFg.opacity(0.62))
+                }
+                ForEach(Array(items.enumerated()), id: \.offset) { _, item in
+                    HStack(alignment: .top, spacing: 5) {
+                        Text("·").font(.system(size: 11, weight: .bold)).foregroundStyle(tint.opacity(0.85))
+                        Text(item).font(.system(size: 11, weight: .medium)).foregroundStyle(Color.lingFg.opacity(0.74))
+                            .fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+                    }
+                }
+            }
+            .padding(.leading, 2)
+        }
+    }
+
     private func statChip(_ text: String, icon: String) -> some View {
         HStack(spacing: 4) {
             Image(systemName: icon).font(.system(size: 9, weight: .bold))
             Text(text).font(.system(size: 10, weight: .semibold, design: .monospaced))
         }
-        .foregroundStyle(.white.opacity(0.5))
+        .foregroundStyle(Color.lingFg.opacity(0.5))
     }
 
     // MARK: - 分步计划(抽象里程碑 + 完成打钩;复用执行计划卡。结果摘要不在右侧——具体执行/结论在左侧对话)
@@ -259,7 +299,7 @@ struct TaskDevToolsPanel: View {
     private func sectionHeader(_ title: String, systemImage: String, tint: Color) -> some View {
         HStack(spacing: 7) {
             Image(systemName: systemImage).font(.system(size: 12, weight: .bold)).foregroundStyle(tint)
-            Text(title).font(.system(size: 12.5, weight: .bold)).foregroundStyle(.white.opacity(0.92))
+            Text(title).font(.system(size: 12.5, weight: .bold)).foregroundStyle(Color.lingFg.opacity(0.92))
         }
     }
 }

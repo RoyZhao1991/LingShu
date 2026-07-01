@@ -163,7 +163,9 @@ extension LingShuState {
             let recordID = agentSubTaskRecords[id]
             if let recordID, let idx = taskExecutionRecords.firstIndex(where: { $0.id == recordID }) {
                 taskExecutionRecords[idx].status = .running
-                appendTaskRecordMessage(recordID, actor: "灵枢", role: "续跑", kind: .router, text: "网络恢复,自动接着跑。")
+                // **不写死"网络恢复"(2026-06-30)**:`.resumed` 既用于断网重连、也用于手动「继续」续接——
+                // 手动续接说"网络恢复"是误导(用户实测点继续却显示网络恢复)。改中性;断网那条另有"网络恢复"trace(见下方 resumeAfterReconnect)。
+                appendTaskRecordMessage(recordID, actor: "灵枢", role: "续跑", kind: .router, text: "接着上次进度续跑。")
                 persistTaskExecutionRecords()
             }
             _ = objective

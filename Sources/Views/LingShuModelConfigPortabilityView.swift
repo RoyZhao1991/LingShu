@@ -30,11 +30,11 @@ struct LingShuModelConfigPortabilityBar: View {
             }
             Text("把当前接入的脑/通道/各密钥用口令加密成一个文件;换台机器或给别人,用同一口令一键导入即用。没口令谁也解不开——可安全分享 / 开源。")
                 .font(.system(size: 11))
-                .foregroundStyle(.white.opacity(0.5))
+                .foregroundStyle(Color.lingFg.opacity(0.5))
                 .fixedSize(horizontal: false, vertical: true)
         }
         .padding(12)
-        .background(Color.white.opacity(0.04), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .background(Color.lingFg.opacity(0.04), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
         .sheet(item: $sheet) { s in
             LingShuPassphraseSheet(mode: s) { passphrase in
                 handle(sheet: s, passphrase: passphrase)
@@ -116,11 +116,11 @@ private struct LingShuPassphraseSheet: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             Text(isExport ? "设置导出口令" : "输入导入口令")
-                .font(.system(size: 15, weight: .bold)).foregroundStyle(.white)
+                .font(.system(size: 15, weight: .bold)).foregroundStyle(Color.lingFg)
             Text(isExport
                  ? "这个口令保护导出的密钥;导入时要用同一个。请妥善保管——丢了就解不开。"
                  : "输入导出时设置的口令以解密恢复配置。")
-                .font(.system(size: 11.5)).foregroundStyle(.white.opacity(0.6))
+                .font(.system(size: 11.5)).foregroundStyle(Color.lingFg.opacity(0.6))
                 .fixedSize(horizontal: false, vertical: true)
 
             SecureField("口令(至少 \(LingShuModelConfigPortability.minPassphraseLength) 位)", text: $pass)
@@ -137,12 +137,12 @@ private struct LingShuPassphraseSheet: View {
 
             HStack {
                 Spacer()
-                Button("取消", action: onCancel).buttonStyle(.plain).foregroundStyle(.white.opacity(0.7))
+                Button("取消", action: onCancel).buttonStyle(.plain).foregroundStyle(Color.lingFg.opacity(0.7))
                 Button(isExport ? "导出" : "导入") { onConfirm(pass) }
                     .buttonStyle(.plain)
-                    .foregroundStyle(canConfirm ? Color.lingVoid : .white.opacity(0.3))
+                    .foregroundStyle(canConfirm ? Color.lingVoid : Color.lingFg.opacity(0.3))
                     .padding(.horizontal, 14).padding(.vertical, 7)
-                    .background(canConfirm ? Color.lingHolo : Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+                    .background(canConfirm ? Color.lingHolo : Color.lingFg.opacity(0.08), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
                     .disabled(!canConfirm)
             }
         }

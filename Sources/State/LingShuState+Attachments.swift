@@ -56,9 +56,30 @@ extension LingShuState {
         }
     }
 
+    /// 把**发出去的附件**落到稳定目录(供事后点击**重新预览**):粘贴图等临时文件会被系统清掉,复制一份到
+    /// `~/Library/Application Support/LingShu/SentAttachments`;已是持久路径的(用户上传/拖入的原文件)**原样返回**(不复制)。
+    /// 纯文件系统操作,不挑场景。返回稳定可预览的绝对路径(复制失败则回退原路径)。
+    nonisolated static func persistedSentAttachmentPath(_ url: URL) -> String {
+        let tmp = FileManager.default.temporaryDirectory.path
+        guard url.path.hasPrefix(tmp) else { return url.path }   // 已持久(原文件)→ 直接用,不复制
+        guard let base = try? FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask,
+                                                      appropriateFor: nil, create: true) else { return url.path }
+        let dir = base.appendingPathComponent("LingShu/SentAttachments", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let dest = dir.appendingPathComponent(url.lastPathComponent)
+        if !FileManager.default.fileExists(atPath: dest.path) { try? FileManager.default.copyItem(at: url, to: dest) }
+        return FileManager.default.fileExists(atPath: dest.path) ? dest.path : url.path
+    }
+
     /// 剪贴板粘贴进来的图片：落临时 PNG 后走与上传**完全相同**的解析管线
     /// （图片 → 云视觉 → 文字描述 → 注入模型输入；零留存边界不变）。
     func ingestPastedImage(_ data: Data) {
+        // 去重:一次 Cmd+V 可能多次触发(实测 performKeyEquivalent 命中 3 次→3 个附件)。同一张图在 1.5s 内重复进来只收一次。
+        let fingerprint = data.count ^ (data.prefix(512).hashValue)
+        if let last = lastPastedImageFingerprint, last.hash == fingerprint, Date().timeIntervalSince(last.at) < 1.5 {
+            return
+        }
+        lastPastedImageFingerprint = (fingerprint, Date())
         let stamp = Int(Date().timeIntervalSince1970)
         let tempURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("粘贴图片-\(stamp)-\(UUID().uuidString.prefix(6)).png")
@@ -110,6 +131,7 @@ extension LingShuState {
     }
 
     /// 把当前待发送附件拼成一段上下文，注入到用户消息前；交付落地时模型据此理解/改写。
+    /// (「附件直接入脑」的图片直发逻辑见 LingShuState+DirectMultimodal.swift。)
     ///
     /// 关键约束:附件的**本机路径**也是上下文的一部分。正文抽取是异步的,用户可能在解析完成前就发送;
     /// 只要文件句柄还在,大脑就应该直接用这个路径读取/预览/演示/修改,而不是再去工作目录里猜文件。

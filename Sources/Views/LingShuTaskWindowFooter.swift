@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// 任务窗口底部条(对齐 codex 聊天窗口):模型选择 + 👍👎反馈 + 窗口内追问输入。
 /// 与消息卡片渲染(LingShuTaskWindowCards)分文件——交互/输入 ↔ 展示是两个关注点。
@@ -24,7 +25,8 @@ struct TaskWindowFooter: View {
             followupInput
         }
         .padding(.horizontal, 16).padding(.vertical, 12)
-        .background(Color.black.opacity(0.6))
+        .background(Color.lingBar)   // 浅=白 chrome / 深=半透明暗条(原 black@0.6 在浅色=突兀暗条)
+        .overlay(alignment: .top) { Divider().overlay(Color.lingFg.opacity(0.08)) }
     }
 
     private var modelPicker: some View {
@@ -44,9 +46,9 @@ struct TaskWindowFooter: View {
                 Text(state.modelName).font(.system(size: 10.5, weight: .semibold)).lineLimit(1)
                 Image(systemName: "chevron.up.chevron.down").font(.system(size: 8, weight: .bold))
             }
-            .foregroundStyle(.white.opacity(0.66))
+            .foregroundStyle(Color.lingFg.opacity(0.66))
             .padding(.horizontal, 8).padding(.vertical, 5)
-            .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+            .background(Color.lingFg.opacity(0.06), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
         }
         .menuStyle(.borderlessButton)
         .fixedSize()
@@ -79,9 +81,9 @@ struct TaskWindowFooter: View {
                 Button(action: state.presentAttachmentPicker) {
                     Image(systemName: "paperclip")
                         .font(.system(size: 15, weight: .bold))
-                        .foregroundStyle(state.pendingAttachments.isEmpty ? .white.opacity(0.7) : Color.lingHolo)
+                        .foregroundStyle(state.pendingAttachments.isEmpty ? Color.lingFg.opacity(0.7) : Color.lingHolo)
                         .frame(width: 34, height: 34)
-                        .background(Color.white.opacity(0.07), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+                        .background(Color.lingFg.opacity(0.07), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
                 }
                 .buttonStyle(.plain)
                 .help("为这条任务上传附件")
@@ -89,15 +91,19 @@ struct TaskWindowFooter: View {
                 TextField(running ? "回复这条线程…（执行中也会立即采纳）" : "回复这条线程…（发消息就续跑）", text: $draft, axis: .vertical)
                     .textFieldStyle(.plain)
                     .font(.system(size: 12.5))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(Color.lingFg)
                     .lineLimit(1...4)
                     .padding(.horizontal, 12).padding(.vertical, 9)
-                    .background(Color.white.opacity(0.07), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+                    .background(Color.lingFg.opacity(0.07), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
                     .overlay {
                         RoundedRectangle(cornerRadius: 9, style: .continuous)
                             .stroke((running ? Color.orange : Color.lingHolo).opacity(0.22))
                     }
                     .onSubmit(send)
+                    // **粘贴截图进附件栏**(对齐 codex/claude):Cmd+V 命中图片 → 走稳健取图 → 落成附件(与主输入框同一 ingest 管线)。
+                    .onPasteCommand(of: [UTType.image, UTType.png, UTType.tiff]) { _ in
+                        if let png = LingShuInputTextView.pngFromPasteboard(.general) { state.ingestPastedImage(png) }
+                    }
                     // 拖入文件落成路径文本时,整框=纯路径就转成附件(与主输入框同行为),别直接当路径文本发。
                     .onChange(of: draft) { _, newValue in
                         if state.convertDroppedFilePaths(in: newValue) { draft = "" }
@@ -106,7 +112,7 @@ struct TaskWindowFooter: View {
                 Button(action: send) {
                     Image(systemName: running ? "arrow.triangle.2.circlepath.circle.fill" : "arrow.up.circle.fill")
                         .font(.system(size: 22, weight: .bold))
-                        .foregroundStyle(canSend ? (running ? Color.orange : Color.lingHolo) : Color.white.opacity(0.25))
+                        .foregroundStyle(canSend ? (running ? Color.orange : Color.lingHolo) : Color.lingFg.opacity(0.25))
                 }
                 .buttonStyle(.plain)
                 .disabled(!canSend)
@@ -136,9 +142,9 @@ struct TaskWindowFooter: View {
         } label: {
             Image(systemName: up ? (active ? "hand.thumbsup.fill" : "hand.thumbsup") : (active ? "hand.thumbsdown.fill" : "hand.thumbsdown"))
                 .font(.system(size: 12, weight: .bold))
-                .foregroundStyle(active ? (up ? Color.green : Color.orange) : Color.white.opacity(0.4))
+                .foregroundStyle(active ? (up ? Color.green : Color.orange) : Color.lingFg.opacity(0.4))
                 .frame(width: 28, height: 26)
-                .background(Color.white.opacity(active ? 0.08 : 0.04), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+                .background(Color.lingFg.opacity(active ? 0.08 : 0.04), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
         }
         .buttonStyle(.plain)
     }

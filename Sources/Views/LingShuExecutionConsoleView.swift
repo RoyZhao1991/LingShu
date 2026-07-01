@@ -12,22 +12,22 @@ struct LingShuExecutionConsoleView: View {
 
                 Text(state.hasActiveModelCall ? "实时跟踪中" : "最近轨迹")
                     .font(.system(size: 10.5, weight: .bold, design: .monospaced))
-                    .foregroundStyle(state.hasActiveModelCall ? Color.lingHolo.opacity(0.86) : .white.opacity(0.42))
+                    .foregroundStyle(state.hasActiveModelCall ? Color.lingHolo.opacity(0.86) : Color.lingFg.opacity(0.42))
 
                 Spacer()
 
                 Text("\(state.executionTrace.count) 条")
                     .font(.system(size: 10.5, weight: .bold, design: .monospaced))
-                    .foregroundStyle(.white.opacity(0.42))
+                    .foregroundStyle(Color.lingFg.opacity(0.42))
 
                 Button {
                     state.isExecutionConsoleExpanded.toggle()
                 } label: {
                     Image(systemName: state.isExecutionConsoleExpanded ? "chevron.down" : "chevron.up")
                         .font(.system(size: 11, weight: .bold))
-                        .foregroundStyle(.white.opacity(0.66))
+                        .foregroundStyle(Color.lingFg.opacity(0.66))
                         .frame(width: 28, height: 24)
-                        .background(Color.white.opacity(0.07), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+                        .background(Color.lingFg.opacity(0.07), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
                 }
                 .buttonStyle(.plain)
                 .help(state.isExecutionConsoleExpanded ? "收起底层执行窗" : "展开底层执行窗")
@@ -46,7 +46,7 @@ struct LingShuExecutionConsoleView: View {
                             if state.executionTrace.isEmpty {
                                 Text("待机中。下一道指令开始后，这里会显示灵枢的具体执行轨迹。")
                                     .font(.system(size: 11.5, weight: .medium))
-                                    .foregroundStyle(.white.opacity(0.46))
+                                    .foregroundStyle(Color.lingFg.opacity(0.46))
                                     .frame(maxWidth: .infinity, alignment: .leading)
                                     .padding(.vertical, 8)
                             } else {
@@ -96,7 +96,7 @@ struct LingShuTraceEventRow: View {
 
             Text(event.displayTime)
                 .font(.system(size: 10.5, weight: .medium, design: .monospaced))
-                .foregroundStyle(.white.opacity(0.38))
+                .foregroundStyle(Color.lingFg.opacity(0.38))
                 .frame(width: 52, alignment: .leading)
 
             Text(event.actor)
@@ -109,7 +109,7 @@ struct LingShuTraceEventRow: View {
                 HStack(spacing: 6) {
                     Text(event.title)
                         .font(.system(size: 11.5, weight: .bold))
-                        .foregroundStyle(.white.opacity(0.88))
+                        .foregroundStyle(Color.lingFg.opacity(0.88))
                         .lineLimit(1)
 
                     if event.isStream {
@@ -124,7 +124,7 @@ struct LingShuTraceEventRow: View {
 
                 Text(event.detail)
                     .font(.system(size: 11, weight: .medium, design: event.isStream ? .monospaced : .default))
-                    .foregroundStyle(.white.opacity(event.isStream ? 0.54 : 0.62))
+                    .foregroundStyle(Color.lingFg.opacity(event.isStream ? 0.54 : 0.62))
                     .lineLimit(2)
             }
 

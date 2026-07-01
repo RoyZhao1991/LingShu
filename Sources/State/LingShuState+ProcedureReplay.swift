@@ -6,29 +6,9 @@ import Foundation
 @MainActor
 extension LingShuState {
 
-    /// 「用X技能…」replay 请求 → 确定性匹配 + 执行。返回 true=已接管。
-    func handleProcedureReplayIfNeeded(_ prompt: String) -> Bool {
-        guard procedureRecording == nil else { return false }                    // 录制中不抢
-        let skills = LingShuProcedureSkillRouter.loadProcedures()
-        guard !skills.isEmpty, let match = LingShuProcedureSkillRouter.matchReplay(prompt, skills: skills) else { return false }
-        chatMessages.append(.init(speaker: "你", text: prompt, isUser: true))
-        // 缺参:先问清再跑(别拿占位符瞎操作)。
-        let missing = match.skill.missingParameters(given: match.params)
-        if !missing.isEmpty {
-            let hints = match.skill.parameters.filter { missing.contains($0.name) }
-                .map { $0.example.isEmpty ? $0.name : "\($0.name)(如\($0.example))" }.joined(separator: "、")
-            speakAndChat("用「\(match.skill.title)」还差这些参数:\(hints)。你一次说全,比如『用\(match.skill.triggers.first ?? match.skill.title),\(hints)』,我就跑。")
-            return true
-        }
-        if let gate = computerControlGate(requiresAccessibility: true) {
-            speakAndChat("要替你跑这个技能我得能操作界面。\(gate)")
-            return true
-        }
-        replayProcedure(skill: match.skill, params: match.params)
-        return true
-    }
-
     /// 执行一个过程技能:挂计算机控制工具、强脑、按解析好的步骤逐步操作。限时 5 分钟。
+    /// **入口只剩显式 `@<技能名>`**(2026-06-30 砍推断):缺参追问 + 计算机控制门已搬到声明式 `routePlugin` 的 proc 分支,
+    /// 这里只负责"参数填好后真去操作"。原来的 `handleProcedureReplayIfNeeded`(matchReplay 关键词嗅探)已删。
     func replayProcedure(skill: LingShuProcedureSkill, params: [String: String]) {
         let steps = skill.resolvedSteps(params)
         let stepText = steps.enumerated().map { "\($0 + 1). \($1)" }.joined(separator: "\n")

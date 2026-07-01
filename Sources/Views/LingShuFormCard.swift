@@ -17,7 +17,7 @@ struct LingShuFormCard: View {
         VStack(alignment: .leading, spacing: 11) {
             if !form.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 Text(form.title)
-                    .font(.system(size: 13, weight: .bold)).foregroundStyle(.white.opacity(0.82))
+                    .font(.system(size: 13, weight: .bold)).foregroundStyle(Color.lingFg.opacity(0.82))
             }
             ForEach(Array(form.fields.enumerated()), id: \.element.id) { idx, field in
                 fieldRow(idx: idx, field: field)
@@ -37,8 +37,8 @@ struct LingShuFormCard: View {
             }
         }
         .padding(13)
-        .background(Color.white.opacity(0.045), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
-        .overlay { RoundedRectangle(cornerRadius: 9, style: .continuous).stroke(Color.white.opacity(0.10), lineWidth: 0.8) }
+        .background(Color.lingFg.opacity(0.045), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+        .overlay { RoundedRectangle(cornerRadius: 9, style: .continuous).stroke(Color.lingFg.opacity(0.10), lineWidth: 0.8) }
     }
 
     @ViewBuilder
@@ -48,7 +48,7 @@ struct LingShuFormCard: View {
                 Text("\(idx + 1)").font(.system(size: 10, weight: .bold, design: .monospaced))
                     .foregroundStyle(Color.lingHolo.opacity(0.8))
                     .frame(width: 17, height: 17).background(Color.lingHolo.opacity(0.14), in: RoundedRectangle(cornerRadius: 4))
-                Text(field.question).font(.system(size: 13, weight: .semibold)).foregroundStyle(.white.opacity(0.86))
+                Text(field.question).font(.system(size: 13, weight: .semibold)).foregroundStyle(Color.lingFg.opacity(0.86))
             }
             if let resolved {
                 Text(resolved[field.key]?.isEmpty == false ? resolved[field.key]! : "(未填)")
@@ -67,12 +67,12 @@ struct LingShuFormCard: View {
                         } label: {
                             HStack(spacing: 5) {
                                 Text(picked[field.key] ?? "请选择…")
-                                    .foregroundStyle((picked[field.key] == nil) ? .white.opacity(0.45) : .white.opacity(0.9))
-                                Image(systemName: "chevron.down").font(.system(size: 9, weight: .bold)).foregroundStyle(.white.opacity(0.5))
+                                    .foregroundStyle((picked[field.key] == nil) ? Color.lingFg.opacity(0.45) : Color.lingFg.opacity(0.9))
+                                Image(systemName: "chevron.down").font(.system(size: 9, weight: .bold)).foregroundStyle(Color.lingFg.opacity(0.5))
                             }
                             .font(.system(size: 12.5, weight: .medium))
                             .padding(.horizontal, 11).padding(.vertical, 6)
-                            .background(Color.white.opacity(0.06), in: Capsule())
+                            .background(Color.lingFg.opacity(0.06), in: Capsule())
                         }
                         .buttonStyle(.plain)
                     }
@@ -80,7 +80,7 @@ struct LingShuFormCard: View {
                         TextField(field.options.isEmpty ? "请输入…" : "自行输入…", text: bindingOther(field.key))
                             .textFieldStyle(.plain)
                             .font(.system(size: 12.5))
-                            .foregroundStyle(.white.opacity(0.92))
+                            .foregroundStyle(Color.lingFg.opacity(0.92))
                             .padding(.horizontal, 10).padding(.vertical, 6)
                             .background(Color.black.opacity(0.28), in: RoundedRectangle(cornerRadius: 6))
                             .frame(maxWidth: 240)

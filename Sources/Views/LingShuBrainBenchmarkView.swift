@@ -22,22 +22,22 @@ struct LingShuBrainScoreDetail: View {
     @ObservedObject var state: LingShuState
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("大脑评分").font(.system(size: 14, weight: .bold)).foregroundStyle(.white)
-            Text("当前脑 \(state.brainScore.brainID)").font(.system(size: 11)).foregroundStyle(.white.opacity(0.55))
+            Text("大脑评分").font(.system(size: 14, weight: .bold)).foregroundStyle(Color.lingFg)
+            Text("当前脑 \(state.brainScore.brainID)").font(.system(size: 11)).foregroundStyle(Color.lingFg.opacity(0.55))
 
             HStack(spacing: 10) {
                 Text("\(state.brainScore.score)").font(.system(size: 30, weight: .heavy, design: .rounded)).foregroundStyle(Color.lingHolo)
                 VStack(alignment: .leading, spacing: 1) {
-                    Text("运行累计分").font(.system(size: 10)).foregroundStyle(.white.opacity(0.4))
-                    Text("自主完成 +\(state.brainScore.completed) / 触发兜底 −\(state.brainScore.fallbacks)").font(.system(size: 11)).foregroundStyle(.white.opacity(0.75))
+                    Text("运行累计分").font(.system(size: 10)).foregroundStyle(Color.lingFg.opacity(0.4))
+                    Text("自主完成 +\(state.brainScore.completed) / 触发兜底 −\(state.brainScore.fallbacks)").font(.system(size: 11)).foregroundStyle(Color.lingFg.opacity(0.75))
                 }
             }
             if let b = state.brainBenchmarkResult {
-                Divider().overlay(Color.white.opacity(0.1))
+                Divider().overlay(Color.lingFg.opacity(0.1))
                 HStack(spacing: 8) {
-                    Text("上次测评").font(.system(size: 11)).foregroundStyle(.white.opacity(0.5))
+                    Text("上次测评").font(.system(size: 11)).foregroundStyle(Color.lingFg.opacity(0.5))
                     Text("\(b.score) 分(\(b.grade))").font(.system(size: 13, weight: .bold)).foregroundStyle(Color.lingHolo)
-                    Text("通过 \(b.passedCount)/\(b.totalCount)").font(.system(size: 11)).foregroundStyle(.white.opacity(0.6))
+                    Text("通过 \(b.passedCount)/\(b.totalCount)").font(.system(size: 11)).foregroundStyle(Color.lingFg.opacity(0.6))
                 }
             }
             Button {
@@ -58,7 +58,7 @@ struct LingShuBrainScoreDetail: View {
             }
             .buttonStyle(.plain).disabled(state.isRunningBrainBenchmark)
             Text("检测=拿内置题库真考当前脑,出综合分(含真编码隐藏用例,较慢)。换大脑后可重测。")
-                .font(.system(size: 10)).foregroundStyle(.white.opacity(0.4)).fixedSize(horizontal: false, vertical: true)
+                .font(.system(size: 10)).foregroundStyle(Color.lingFg.opacity(0.4)).fixedSize(horizontal: false, vertical: true)
         }
         .padding(16)
         .background(Color.lingVoid)
@@ -91,12 +91,12 @@ struct LingShuBrainBenchmarkBar: View {
             .disabled(state.isRunningBrainBenchmark)
 
             Text("跑一套难度不等的题(算术/常识/推理/编码…)测当前脑,出综合分。换大脑后可重测。")
-                .font(.system(size: 11)).foregroundStyle(.white.opacity(0.5))
+                .font(.system(size: 11)).foregroundStyle(Color.lingFg.opacity(0.5))
                 .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 0)
         }
         .padding(12)
-        .background(Color.white.opacity(0.04), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .background(Color.lingFg.opacity(0.04), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
         // 结果弹窗挂在根视图(LingShuRootView),不论当前在哪个界面跑完都弹。
     }
 }
@@ -110,20 +110,20 @@ struct LingShuBrainBenchmarkResultView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack(alignment: .firstTextBaseline, spacing: 12) {
-                Text("脑力测评").font(.system(size: 16, weight: .bold)).foregroundStyle(.white)
+                Text("脑力测评").font(.system(size: 16, weight: .bold)).foregroundStyle(Color.lingFg)
                 Spacer()
-                Text("当前脑 \(result.brainID)").font(.system(size: 11)).foregroundStyle(.white.opacity(0.55))
+                Text("当前脑 \(result.brainID)").font(.system(size: 11)).foregroundStyle(Color.lingFg.opacity(0.55))
             }
 
             HStack(alignment: .firstTextBaseline, spacing: 10) {
                 Text("\(result.score)").font(.system(size: 46, weight: .heavy, design: .rounded)).foregroundStyle(Color.lingHolo)
-                Text("/ 100").font(.system(size: 16)).foregroundStyle(.white.opacity(0.5))
+                Text("/ 100").font(.system(size: 16)).foregroundStyle(Color.lingFg.opacity(0.5))
                 Text(result.grade).font(.system(size: 14, weight: .bold))
                     .foregroundStyle(Color.lingVoid)
                     .padding(.horizontal, 10).padding(.vertical, 4)
                     .background(Color.lingHolo, in: Capsule())
                 Spacer()
-                Text("通过 \(result.passedCount)/\(result.totalCount)").font(.system(size: 13, weight: .semibold)).foregroundStyle(.white.opacity(0.8))
+                Text("通过 \(result.passedCount)/\(result.totalCount)").font(.system(size: 13, weight: .semibold)).foregroundStyle(Color.lingFg.opacity(0.8))
             }
 
             // 按难度档的能力水位(易/中/难/极难 各档加权得分)——真正看出模型差距在哪一层
@@ -131,14 +131,14 @@ struct LingShuBrainBenchmarkResultView: View {
                 HStack(spacing: 8) {
                     ForEach(result.tiers, id: \.label) { tier in
                         VStack(spacing: 2) {
-                            Text(tier.label).font(.system(size: 10)).foregroundStyle(.white.opacity(0.5))
+                            Text(tier.label).font(.system(size: 10)).foregroundStyle(Color.lingFg.opacity(0.5))
                             Text("\(tier.pct)%").font(.system(size: 15, weight: .bold))
                                 .foregroundStyle(tier.pct >= 90 ? Color.lingHolo : (tier.pct >= 60 ? .yellow : .orange))
-                            Text("\(tier.passed)/\(tier.total)").font(.system(size: 9)).foregroundStyle(.white.opacity(0.4))
+                            Text("\(tier.passed)/\(tier.total)").font(.system(size: 9)).foregroundStyle(Color.lingFg.opacity(0.4))
                         }
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 6)
-                        .background(Color.white.opacity(0.04), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+                        .background(Color.lingFg.opacity(0.04), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
                     }
                 }
             }
@@ -146,17 +146,17 @@ struct LingShuBrainBenchmarkResultView: View {
             // 跨脑对比:测过多颗脑时并排比各档水位,差距在哪一层一目了然(换脑重测即累积)。
             if history.count >= 2 {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("跨脑对比(各档水位)").font(.system(size: 12, weight: .bold)).foregroundStyle(.white.opacity(0.85))
+                    Text("跨脑对比(各档水位)").font(.system(size: 12, weight: .bold)).foregroundStyle(Color.lingFg.opacity(0.85))
                     HStack(spacing: 0) {
                         Text("脑").frame(maxWidth: .infinity, alignment: .leading)
                         ForEach(["综合","易","中","难","极难"], id: \.self) { h in Text(h).frame(width: 44) }
-                    }.font(.system(size: 9)).foregroundStyle(.white.opacity(0.4))
+                    }.font(.system(size: 9)).foregroundStyle(Color.lingFg.opacity(0.4))
                     ForEach(history) { s in
                         HStack(spacing: 0) {
                             Text(s.brainID.split(separator: "|").first.map(String.init) ?? s.brainID)
                                 .lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
-                                .foregroundStyle(s.brainID == result.brainID ? Color.lingHolo : .white.opacity(0.7))
-                            Text("\(s.score)").frame(width: 44).foregroundStyle(.white)
+                                .foregroundStyle(s.brainID == result.brainID ? Color.lingHolo : Color.lingFg.opacity(0.7))
+                            Text("\(s.score)").frame(width: 44).foregroundStyle(Color.lingFg)
                             ForEach(["易","中","难","极难"], id: \.self) { tier in
                                 let pct = s.tierPct(tier)
                                 Text("\(pct)").frame(width: 44)
@@ -167,10 +167,10 @@ struct LingShuBrainBenchmarkResultView: View {
                     }
                 }
                 .padding(8)
-                .background(Color.white.opacity(0.04), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .background(Color.lingFg.opacity(0.04), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
             }
 
-            Divider().overlay(Color.white.opacity(0.1))
+            Divider().overlay(Color.lingFg.opacity(0.1))
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 8) {
@@ -180,13 +180,13 @@ struct LingShuBrainBenchmarkResultView: View {
                                 .foregroundStyle(row.passed ? .green : (row.scoreText.isEmpty ? .orange : .yellow))
                                 .font(.system(size: 13))
                             VStack(alignment: .leading, spacing: 2) {
-                                Text("\(row.title) · 难度\(row.difficulty)\(row.agentic ? " · 多步工具" : "")\(row.scoreText.isEmpty ? "" : " · \(row.scoreText)")").font(.system(size: 12.5, weight: .semibold)).foregroundStyle(.white.opacity(0.9))
-                                Text(row.replyExcerpt).font(.system(size: 11)).foregroundStyle(.white.opacity(0.45)).lineLimit(2)
+                                Text("\(row.title) · 难度\(row.difficulty)\(row.agentic ? " · 多步工具" : "")\(row.scoreText.isEmpty ? "" : " · \(row.scoreText)")").font(.system(size: 12.5, weight: .semibold)).foregroundStyle(Color.lingFg.opacity(0.9))
+                                Text(row.replyExcerpt).font(.system(size: 11)).foregroundStyle(Color.lingFg.opacity(0.45)).lineLimit(2)
                             }
                             Spacer(minLength: 0)
                         }
                         .padding(8)
-                        .background(Color.white.opacity(0.04), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+                        .background(Color.lingFg.opacity(0.04), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
                     }
                 }
             }

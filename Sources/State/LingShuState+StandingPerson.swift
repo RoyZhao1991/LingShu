@@ -145,10 +145,9 @@ extension LingShuState {
             appendTrace(kind: .system, actor: "灵枢", title: "暂停中·忽略输入", detail: String(prompt.prefix(24)))
             return ""
         }
-        // 「演示与答疑」在跑:**语音提问=实时答疑**,走我的演示控制器(暂停念稿→答→续,留全屏、本体在位),
-        // 不甩给大脑、不走旧 run_steps 框架(根治"打断翻到最后一页+不回答")。
-        if presentationController.isActive {
-            _ = handlePresentationInputIfNeeded(prompt)
+        // 内置技能(演示与答疑等)在跑:**语音提问=实时答疑**,拦给技能(暂停念稿→答→续,留全屏、本体在位),
+        // 不甩给大脑、不走旧 run_steps 框架。通用遍历,内核不点名具体技能。
+        for skill in builtinSkills where skill.interceptActiveInput(prompt) {
             return ""
         }
         // **"退出演示/关闭演示"= 确定性关掉演示窗(2026-06-19 修"说退出演示却没退")**:实测 DeepSeek 口头答应却不调
@@ -253,7 +252,7 @@ extension LingShuState {
     /// 确定性退出演示:停批量 + 掐 TTS + 关预览(抑制重弹)+ 停在飞回合 + 出声确认。不靠大脑(它常口头答应却不真关)。
     /// 出声确认走 chatMessages 追加(根视图 speakLatestReplyIfNeeded 念全文,自主模式主人听得到);保持在岗待命。
     private func exitPresentationDeterministically(prompt: String) -> String {
-        stopPresentationIfActive()                                                // 「演示与答疑」在跑 → 先彻底停(掐音频+停循环)
+        builtinSkills.forEach { $0.onCancel() }                                   // 内置技能(演示等)在跑 → 先彻底停(掐音频+停循环)
         batchInterruptRequested = true                                            // run_steps 批量在下一步边界停
         interruptSpeechOutput?()                                                  // 立刻掐当前 TTS
         previewController.suppressAutoReopenUntil = Date().addingTimeInterval(5)  // 5s 内拒绝任何 open/进全屏(防重弹)

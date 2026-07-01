@@ -8,10 +8,31 @@ extension LingShuState {
     /// 窗口内追问:把追问当本任务记录的续跑——以**同一条记录**继续(执行流追加进窗口,实时可见)。
     /// **线程隔离(2026-06-25):始终走这条记录自己的隔离会话,绝不落主会话**——有现存隔离子会话就续它(`resumeWithInput`),
     /// 没有(主线程直答记录/会话已结束)就为这条记录**重新派发一条隔离会话**续推进;主会话上下文不被污染。**支持附件**(同主输入框 ingest 管线)。
+    /// **续接上下文拼装(纯函数,可单测)**:重派一条已有任务续跑时,上下文必须带**原始请求**——
+    /// 因为 GoalSpec 会把 goal 抽象掉**字面目录/路径/文件名**(「在 /tmp/x 下写 a.py」→「在指定目录创建文件」),
+    /// 只靠 goal+summary 续接,**中途取消、产物还没落盘**的任务一续接就不知道写哪 → 退回默认 workdir 交错地方
+    /// (2026-06-30 E2E 实锤:scraper.py 被写进了 ~/app 而非要求的 /tmp/lingshu-e2e)。带上原始 prompt 即守得住。
+    nonisolated static func resumeContextPrompt(originalRequest: String?, summary: String?, goal: String?, resumeInput: String) -> String {
+        let orig = (originalRequest ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let brief = [summary, goal]
+            .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .first { !$0.isEmpty } ?? ""
+        var parts: [String] = []
+        if !orig.isEmpty {
+            parts.append("原始任务请求(务必沿用其中的**目录/路径/文件名/约束**,别改交付位置):\n\(String(orig.prefix(600)))")
+        }
+        if !brief.isEmpty { parts.append("此前进展/目标:\(String(brief.prefix(200)))") }
+        return parts.isEmpty
+            ? resumeInput
+            : "【接续这条隔离任务】\n" + parts.joined(separator: "\n\n") + "\n\n续接指令:\n\(resumeInput)"
+    }
+
     func submitTaskFollowup(_ text: String, recordID: String, appendUserMessage: Bool = true) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         let attachmentContext = attachmentContextBlock()
-        guard (!trimmed.isEmpty || !attachmentContext.isEmpty), !hasActiveModelCall else { return }
+        // 任务窗口是隔离线程入口,不受主问答线 hasActiveModelCall 阻塞。
+        // 否则主线程正在思考时,窗口续跑会静默 return,用户看到的就是"发了但没动静"。
+        guard !trimmed.isEmpty || !attachmentContext.isEmpty else { return }
         // 有附件时:窗口里显示用户原文,发给模型的提示前置附件正文(与主输入框 sendPrompt 同口径)。
         let combined: String
         if attachmentContext.isEmpty {
@@ -59,12 +80,9 @@ extension LingShuState {
             ? combined + "\n\n" + capabilityResumePreamble(recordID: recordID)
             : combined
         let record = taskExecutionRecords.first { $0.id == recordID }
-        let priorBrief = [record?.goal, record?.summary]
-            .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .first { !$0.isEmpty } ?? ""
-        let isolatedInput = priorBrief.isEmpty
-            ? resumeInput
-            : "【接续这条隔离任务(它此前:\(String(priorBrief.prefix(200))))】\n\n\(resumeInput)"
+        // **续接必带原始请求(2026-06-30 修 cancel+resume 丢工作目录上下文)**:见 `resumeContextPrompt` 注释。
+        let isolatedInput = Self.resumeContextPrompt(
+            originalRequest: record?.prompt, summary: record?.summary, goal: record?.goal, resumeInput: resumeInput)
         _ = dispatchIsolatedTask(prompt: isolatedInput, taskRecordID: recordID, goal: record?.goal)
     }
 
@@ -93,6 +111,11 @@ extension LingShuState {
         let main = mainAgentSessionHolder
         let isMainTaskRunning = (currentAgentTurnRecordID == recordID)
         let orchestrator = agentOrchestrator
+        if subID == nil, !isMainTaskRunning, main == nil {
+            batchInterruptRequested = false
+            submitTaskFollowup(combined, recordID: recordID, appendUserMessage: false)
+            return
+        }
         Task { @MainActor [weak self] in
             guard let self else { return }
             var landed = false
@@ -130,6 +153,11 @@ extension LingShuState {
         // 主/自主会话的 interject 够不到编排器里的子会话(否则空转的派发任务没法从外部叫停/纠偏)。
         let subID = recordID.flatMap { rid in agentSubTaskRecords.first(where: { $0.value == rid })?.key }
         let orchestrator = agentOrchestrator
+        if let recordID, main == nil, autonomous == nil, subID == nil {
+            batchInterruptRequested = false
+            submitTaskFollowup(correction, recordID: recordID, appendUserMessage: false)
+            return
+        }
         Task { @MainActor [weak self] in
             // injectCorrection 返回**是否被一个正在跑的循环接住**(false=当前没在跑,只存了 pendingCorrection 没人消费)。
             var landed = false

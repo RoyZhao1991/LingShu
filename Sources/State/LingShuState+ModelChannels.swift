@@ -103,6 +103,64 @@ extension LingShuState {
         channelDisplayName(Self.ttsChannelKey(descriptor.id), default: descriptor.displayName)
     }
 
+    // MARK: - 中枢模型快速切换(多模型下拉框,2026-06-29 用户要)
+
+    /// 当前供应商在 UI 下拉框里可选的模型清单:**当前模型**(置顶)+ 该供应商**用过的模型**(持久记忆)+ 预设 defaultModels,去重保序。
+    /// 这样既能在预设多模型间一键切,手填的自定义模型(如 claude-sonnet-4-6)切走后也不会从下拉里消失。
+    func brainModelOptions(for preset: ModelProviderPreset) -> [String] {
+        var ordered: [String] = []
+        func add(_ m: String) {
+            let s = m.trimmingCharacters(in: .whitespaces)
+            if !s.isEmpty, !ordered.contains(s) { ordered.append(s) }
+        }
+        if preset.name == modelProvider { add(modelName) }   // 当前模型置顶
+        recentBrainModels(for: preset.name).forEach(add)      // 该供应商用过的(含手填自定义)
+        preset.defaultModels.forEach(add)                     // 预设兜底
+        return ordered
+    }
+
+    /// 在**当前已激活**的供应商内切换模型(下拉框选择):只换模型名、端点/密钥不动;记住新旧模型(供下拉持续可选),
+    /// 并像 applyModelProvider 一样重建常驻会话(换脑即时生效 + 记忆延续)、归零大脑评分。modelName 的 didSet 已负责持久化。
+    func selectActiveBrainModel(_ model: String) {
+        let m = model.trimmingCharacters(in: .whitespaces)
+        guard !m.isEmpty, m != modelName else { return }
+        rememberBrainModel(modelName, for: modelProvider)   // 记住切走前的模型,别让它从下拉消失
+        modelName = m
+        rememberBrainModel(m, for: modelProvider)
+        resetBrainScoreForCurrentBrain()                    // 评分只属于某一颗脑
+        mainAgentSessionHolder = nil
+        autonomousSessionHolder = nil
+        logEvent("当前供应商「\(modelProvider)」内切换模型为 \(m)。")
+        appendTrace(kind: .system, actor: "配置", title: "切换模型", detail: "当前脑模型切换为 \(m)(端点/密钥不变,会话已重建、记忆延续)。")
+    }
+
+    /// 某供应商用过的模型(持久,最近用的在前)。
+    func recentBrainModels(for provider: String) -> [String] {
+        recentBrainModelStore()[provider] ?? []
+    }
+
+    /// 记住一个供应商用过的模型(去重、最近置前、限长 8),持久化。下拉切换 / 修改弹窗保存时都调用。
+    func rememberBrainModel(_ model: String, for provider: String) {
+        let m = model.trimmingCharacters(in: .whitespaces)
+        let p = provider.trimmingCharacters(in: .whitespaces)
+        guard !m.isEmpty, !p.isEmpty else { return }
+        var store = recentBrainModelStore()
+        var list = store[p] ?? []
+        list.removeAll { $0 == m }
+        list.insert(m, at: 0)
+        if list.count > 8 { list = Array(list.prefix(8)) }
+        store[p] = list
+        if let data = try? JSONSerialization.data(withJSONObject: store) {
+            UserDefaults.standard.set(data, forKey: "lingshu.model.recentByProvider")
+        }
+    }
+
+    private func recentBrainModelStore() -> [String: [String]] {
+        guard let data = UserDefaults.standard.data(forKey: "lingshu.model.recentByProvider"),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: [String]] else { return [:] }
+        return obj
+    }
+
     // MARK: - 校验(实测调用)
     /// 中枢/文本:发一句 ping,拿到回复=通过(错 key / 连不上会被 .interrupted 捕获)。
     func validateBrainChannel(_ providerName: String) async {
@@ -135,6 +193,39 @@ extension LingShuState {
             ok = false; detail = "未通过"
         }
         channelValidations[key] = .init(ok: ok, detail: detail, at: Date())
+    }
+
+    // MARK: - 账号余额(按需查,按厂商适配,见 LingShuChannelBalance)
+
+    func channelBalance(_ key: String) -> LingShuChannelBalance.Result? { channelBalances[key] }
+    func isChannelBalanceFetching(_ key: String) -> Bool { channelBalanceFetching.contains(key) }
+
+    /// 查某个中枢通道(脑)的账号余额——用该 provider 存的 key 打它的余额 API,解析后落 `channelBalances`(供 UI 显示)。
+    /// 不支持余额查询的厂商(Anthropic 等)直接 no-op;查失败静默(余额查不到不该打断主流程)。
+    func fetchBrainChannelBalance(_ providerName: String) async {
+        let key = Self.brainChannelKey(providerName)
+        guard let preset = ModelProviderPreset.catalog.first(where: { $0.name == providerName }),
+              let apiKey = credentialStore.apiKey(forProvider: preset.id),
+              let req = LingShuChannelBalance.request(provider: providerName, apiKey: apiKey) else { return }
+        channelBalanceFetching.insert(key); defer { channelBalanceFetching.remove(key) }
+        do {
+            let (data, _) = try await URLSession.shared.data(for: req)
+            if let r = LingShuChannelBalance.parse(provider: providerName, data: data) {
+                channelBalances[key] = r
+            } else {
+                lingShuControlLog("balance: \(providerName) 解析不出余额(响应非预期)")
+            }
+        } catch {
+            lingShuControlLog("balance: \(providerName) 查询失败 \(error.localizedDescription)")
+        }
+    }
+
+    /// MCP `lingshu_channel_balance` 的载荷(查→解析→返回);逻辑放这边,router 只一行委托(保 router 文件瘦)。
+    func controlChannelBalancePayload(provider: String) async -> [String: Any] {
+        let supported = LingShuChannelBalance.isSupported(provider: provider)
+        if supported { await fetchBrainChannelBalance(provider) }
+        let b = channelBalance(Self.brainChannelKey(provider))
+        return ["provider": provider, "supported": supported, "balance": b?.display ?? "", "available": b?.available ?? false]
     }
 
     /// 视觉:发一张小测试图给数据网关 VL,有语义返回=通过(视频同走数据网关,顺带标记)。

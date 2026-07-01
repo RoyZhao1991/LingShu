@@ -5,6 +5,30 @@ import Foundation
 /// **不为 codex/claude 写专门的桥**——任何 CLI agent 同一套注册+执行流程。
 enum LingShuAgentPluginStore {
 
+    /// 用户**登录 shell 的真实 PATH**(含 homebrew/nvm/fnm 等用户自己配的路径),取一次缓存。
+    /// 根因(2026-06-27 用户实测 Claude 退码127 `env: node: No such file or directory`):GUI app 由 launchd 启动、
+    /// PATH 极简(/usr/bin:/bin:…),agent 子进程(如 claude 内部调 node)据此**找不到工具**。
+    /// 解法(**通用·不写死任何路径**,用户定调"别硬编码、让灵枢找到对应的东西"):从用户登录 shell 取它配好的 PATH,
+    /// 让 agent 跑在和**用户终端一样**的环境里——这才是 agent 找得到自己工具的根本(终端能跑 claude→这里也能)。
+    static let loginShellPATH: String? = {
+        let shell = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
+        guard FileManager.default.isExecutableFile(atPath: shell) else { return nil }
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: shell)
+        // 登录+交互 shell(取 .zprofile/.zshrc 里 homebrew/nvm/fnm 配的全部 PATH);marker 包住,免 .zshrc 杂输出污染。
+        p.arguments = ["-lic", "printf '\\nLSPATHMARK=%s\\n' \"$PATH\""]
+        let pipe = Pipe()
+        p.standardOutput = pipe; p.standardError = Pipe(); p.standardInput = FileHandle.nullDevice
+        do { try p.run() } catch { return nil }
+        let deadline = Date().addingTimeInterval(5)
+        while p.isRunning && Date() < deadline { usleep(40_000) }   // 防卡:最多等 5s
+        if p.isRunning { p.terminate() }
+        let out = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        guard let r = out.range(of: "LSPATHMARK=") else { return nil }
+        let path = String(out[r.upperBound...].prefix(while: { $0 != "\n" })).trimmingCharacters(in: .whitespaces)
+        return (path.contains("/") && path.contains(":")) ? path : nil   // 像个真 PATH 才用
+    }()
+
     static let directory = FileManager.default.homeDirectoryForCurrentUser
         .appendingPathComponent("Library/Application Support/LingShu/AgentPlugins", isDirectory: true)
 
@@ -122,7 +146,11 @@ enum LingShuAgentPluginStore {
                 let proc = Process()
                 proc.executableURL = URL(fileURLWithPath: exe)
                 proc.arguments = args
-                if let environment { proc.environment = environment }
+                // **让 agent 跑在用户登录 shell 的真实环境里**(PATH 含 homebrew/nvm 等)→ claude 内部找得到 node 等。
+                // 给定 env 则在其上覆 PATH;否则在继承的(极简)环境上覆。不写死任何路径。
+                var env = environment ?? ProcessInfo.processInfo.environment
+                if let loginPATH = loginShellPATH { env["PATH"] = loginPATH }
+                proc.environment = env
                 let dir = workingDirectory.trimmingCharacters(in: .whitespacesAndNewlines)
                 if !dir.isEmpty, FileManager.default.fileExists(atPath: dir) {
                     proc.currentDirectoryURL = URL(fileURLWithPath: dir)

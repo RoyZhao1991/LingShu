@@ -46,7 +46,9 @@ extension LingShuState {
 
     /// P5 补齐:控制面也走脑路由,不再直连当前单脑。
     /// 未配置多档模型时仍落回当前模型,但使用短 timeout + 单次尝试,避免控制面拖慢/卡死任务入口。
-    func controlPlaneModelAdapter(_ role: LingShuControlPlaneRole, taskRecordID: String? = nil) -> LingShuGatewayAgentModel {
+    /// `timeoutOverride`:某些控制面活儿延迟容忍不同(如**看图生成讲稿**要给多模态脑发整页图、远超分类器的 8s)——
+    /// 演示前预生成讲稿不卡用户,给足超时;分类器仍用 role 自己的短超时(用户在飞等)。
+    func controlPlaneModelAdapter(_ role: LingShuControlPlaneRole, taskRecordID: String? = nil, timeoutOverride: TimeInterval? = nil) -> LingShuGatewayAgentModel {
         let signals: LingShuBrainRoutingSignals
         if let taskRecordID {
             signals = brainRoutingSignals(taskRecordID: taskRecordID)
@@ -54,6 +56,6 @@ extension LingShuState {
             signals = role.defaultSignals
         }
         let tier = LingShuBrainRouter.route(signals, available: availableBrainTiers())
-        return tierModelAdapter(tier, timeout: role.timeoutSeconds, maxAttempts: 1)
+        return tierModelAdapter(tier, timeout: timeoutOverride ?? role.timeoutSeconds, maxAttempts: 1)
     }
 }

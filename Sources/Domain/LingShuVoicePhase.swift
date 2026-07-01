@@ -40,7 +40,7 @@ enum LingShuVoicePhase: String, Equatable {
 
     var tint: Color {
         switch self {
-        case .standby:    .white.opacity(0.55)
+        case .standby:    Color.lingFg.opacity(0.55)
         case .listening:  .green
         case .processing: .cyan
         case .responding: .green

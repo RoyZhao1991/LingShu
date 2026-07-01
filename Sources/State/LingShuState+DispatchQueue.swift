@@ -16,9 +16,12 @@ struct LingShuQueuedDispatchTask: Identifiable, Equatable {
     /// 主对话里紧跟用户消息的答复气泡。任务排队时复用它显示"已入队",晋级时继续复用它显示执行进度,
     /// 保证聊天流永远是一问一答,不把多条用户消息堆在一起。
     let bubbleID: UUID?
+    /// 入队时暂存的**直发大脑的图片/PDF**(排队后 pendingDirectBrainImages 会被清/覆盖,故随队列项带住,晋级时直发)。
+    let imageDataURLs: [String]?
 
     init(prompt: String, goal: String?, goalSpec: LingShuGoalSpec?, gap: LingShuGapAnalysis?,
-         requirements: [LingShuCapabilityRequirement], createdAt: Date = Date(), bubbleID: UUID? = nil) {
+         requirements: [LingShuCapabilityRequirement], createdAt: Date = Date(), bubbleID: UUID? = nil,
+         imageDataURLs: [String]? = nil) {
         self.id = "queued-\(UUID().uuidString.prefix(8))"
         self.prompt = prompt
         self.goal = goal
@@ -27,6 +30,7 @@ struct LingShuQueuedDispatchTask: Identifiable, Equatable {
         self.requirements = requirements
         self.createdAt = createdAt
         self.bubbleID = bubbleID
+        self.imageDataURLs = imageDataURLs
     }
 
     static func == (a: LingShuQueuedDispatchTask, b: LingShuQueuedDispatchTask) -> Bool { a.id == b.id }
@@ -44,8 +48,10 @@ extension LingShuState {
     func enqueueDispatchTask(prompt: String, goal: String?, goalSpec: LingShuGoalSpec?,
                             gap: LingShuGapAnalysis?, requirements: [LingShuCapabilityRequirement],
                             existingBubbleID: UUID? = nil) {
+        // 入队时把"直发大脑的图"消费下来随队列项带住(晋级派发时 pending 早已被清/覆盖)。
         let item = LingShuQueuedDispatchTask(prompt: prompt, goal: goal, goalSpec: goalSpec, gap: gap,
-                                             requirements: requirements, bubbleID: existingBubbleID)
+                                             requirements: requirements, bubbleID: existingBubbleID,
+                                             imageDataURLs: consumePendingDirectBrainImages())
         queuedDispatchTasks.append(item)
         appendTrace(kind: .route, actor: "派发队列", title: "进队列区等待",
                     detail: "并发已满,本条进队列区等空位;晋级前可删除。")
@@ -119,8 +125,17 @@ extension LingShuState {
         for recordID in Array(dispatchedTaskBubbles.keys) {
             guard let status = taskExecutionRecords.first(where: { $0.id == recordID })?.status,
                   active.contains(status) else { continue }
+            if livePipelineRecordIDs.contains(recordID) { continue }   // **角色管线正在驱动它**(直接 Task,不在 orchestrator drive 里)→ 不是孤儿,跳过
             let subID = agentSubTaskRecords.first(where: { $0.value == recordID })?.key
             if let subID, liveIDs.contains(subID) { continue }   // 真有活跃 drive → 不是孤儿,跳过
+            // **角色管线孤儿 → 复用产物自动续跑**(用户定调 2026-06-28),别收口成 .partial 摆死。
+            if let rec = taskExecutionRecords.first(where: { $0.id == recordID }),
+               isRolePipelineRecord(rec), !rolePipelineAgents(for: rec).isEmpty {
+                dispatchedTaskBubbles.removeValue(forKey: recordID)
+                Task { @MainActor [weak self] in await self?.resumeOrphanedRolePipeline(rec) }   // 别 await(续跑是分钟级,看门狗不能被堵)
+                reaped = true
+                continue
+            }
             dispatchedTaskBubbles.removeValue(forKey: recordID)
             if blockedDispatchedRecordID == recordID { blockedDispatchedRecordID = nil }
             appendTaskRecordMessage(recordID, actor: "系统", role: "自动收口", kind: .warning,
@@ -181,7 +196,7 @@ extension LingShuState {
             self.bindGapAnalysis(next.gap, to: rid)
             self.bindCapabilityRequirements(next.requirements, to: rid)
             self.appendTrace(kind: .route, actor: "派发队列", title: "晋级派发", detail: "有空位,队列区最早一条开始执行:\(String(next.prompt.prefix(28)))")
-            self.dispatchIsolatedTask(prompt: next.prompt, taskRecordID: rid, goal: next.goal, existingBubbleID: next.bubbleID)
+            self.dispatchIsolatedTask(prompt: next.prompt, taskRecordID: rid, goal: next.goal, existingBubbleID: next.bubbleID, imageDataURLs: next.imageDataURLs)
             // 可能还有空位 + 更多排队 → 继续晋级下一条。
             self.promoteQueuedDispatchIfPossible()
         }

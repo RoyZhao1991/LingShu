@@ -56,9 +56,9 @@ struct LingShuWorkspaceDiffView: View {
         HStack(spacing: 8) {
             Image(systemName: "doc.badge.plus").foregroundStyle(.green)
             Text(alongsideGit ? "新增文件（非 git 跟踪）" : "本任务产出的代码文件")
-                .font(.system(size: 12.5, weight: .bold)).foregroundStyle(.white.opacity(0.9))
+                .font(.system(size: 12.5, weight: .bold)).foregroundStyle(Color.lingFg.opacity(0.9))
             Spacer()
-            Text("\(count) 个").font(.system(size: 10.5, weight: .semibold)).foregroundStyle(.white.opacity(0.45))
+            Text("\(count) 个").font(.system(size: 10.5, weight: .semibold)).foregroundStyle(Color.lingFg.opacity(0.45))
         }
         .padding(.top, alongsideGit ? 6 : 0).padding(.bottom, 2)
     }
@@ -70,18 +70,18 @@ struct LingShuWorkspaceDiffView: View {
         return VStack(alignment: .leading, spacing: 0) {
             Button { toggleArtifact(a) } label: {
                 HStack(spacing: 8) {
-                    Image(systemName: open ? "chevron.down" : "chevron.right").font(.system(size: 8.5, weight: .bold)).foregroundStyle(.white.opacity(0.5))
+                    Image(systemName: open ? "chevron.down" : "chevron.right").font(.system(size: 8.5, weight: .bold)).foregroundStyle(Color.lingFg.opacity(0.5))
                     Text(isNew ? "新增" : "修改").font(.system(size: 9.5, weight: .bold))
                         .foregroundStyle(isNew ? .green : Color.lingHolo)
                         .padding(.horizontal, 5).padding(.vertical, 1.5)
                         .background((isNew ? Color.green : Color.lingHolo).opacity(0.15), in: Capsule())
                     Text(a.title).font(.system(size: 11, weight: .medium, design: .monospaced))
-                        .foregroundStyle(.white.opacity(0.82)).lineLimit(1).truncationMode(.middle)
+                        .foregroundStyle(Color.lingFg.opacity(0.82)).lineLimit(1).truncationMode(.middle)
                     Spacer()
                     if loading.contains(path) { ProgressView().controlSize(.mini).scaleEffect(0.7) }
                 }
                 .padding(.horizontal, 9).padding(.vertical, 6)
-                .background(Color.white.opacity(0.04), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                .background(Color.lingFg.opacity(0.04), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
             }
             .buttonStyle(.plain)
             if open, let lines = diffs[path] { diffBody(lines) }
@@ -106,13 +106,13 @@ struct LingShuWorkspaceDiffView: View {
     private func header(_ s: LingShuCodeChangeSummary) -> some View {
         HStack(spacing: 8) {
             Image(systemName: "plusminus.circle.fill").foregroundStyle(Color.lingHolo)
-            Text(s.repoName).font(.system(size: 12.5, weight: .bold)).foregroundStyle(.white.opacity(0.9))
+            Text(s.repoName).font(.system(size: 12.5, weight: .bold)).foregroundStyle(Color.lingFg.opacity(0.9))
             Text(s.branch).font(.system(size: 10.5, weight: .semibold, design: .monospaced))
                 .foregroundStyle(Color.lingHoloAlt.opacity(0.9))
                 .padding(.horizontal, 6).padding(.vertical, 1.5)
                 .background(Color.lingHoloAlt.opacity(0.12), in: Capsule())
             Spacer()
-            Text("\(s.files.count) 个文件改动").font(.system(size: 10.5, weight: .semibold)).foregroundStyle(.white.opacity(0.45))
+            Text("\(s.files.count) 个文件改动").font(.system(size: 10.5, weight: .semibold)).foregroundStyle(Color.lingFg.opacity(0.45))
         }
         .padding(.bottom, 2)
     }
@@ -124,18 +124,18 @@ struct LingShuWorkspaceDiffView: View {
                 toggle(s, f)
             } label: {
                 HStack(spacing: 8) {
-                    Image(systemName: open ? "chevron.down" : "chevron.right").font(.system(size: 8.5, weight: .bold)).foregroundStyle(.white.opacity(0.5))
+                    Image(systemName: open ? "chevron.down" : "chevron.right").font(.system(size: 8.5, weight: .bold)).foregroundStyle(Color.lingFg.opacity(0.5))
                     Text(f.label).font(.system(size: 9.5, weight: .bold))
                         .foregroundStyle(statusColor(f.status))
                         .padding(.horizontal, 5).padding(.vertical, 1.5)
                         .background(statusColor(f.status).opacity(0.15), in: Capsule())
                     Text(f.path).font(.system(size: 11, weight: .medium, design: .monospaced))
-                        .foregroundStyle(.white.opacity(0.82)).lineLimit(1).truncationMode(.middle)
+                        .foregroundStyle(Color.lingFg.opacity(0.82)).lineLimit(1).truncationMode(.middle)
                     Spacer()
                     if loading.contains(f.path) { ProgressView().controlSize(.mini).scaleEffect(0.7) }
                 }
                 .padding(.horizontal, 9).padding(.vertical, 6)
-                .background(Color.white.opacity(0.04), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                .background(Color.lingFg.opacity(0.04), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
             }
             .buttonStyle(.plain)
 
@@ -143,7 +143,7 @@ struct LingShuWorkspaceDiffView: View {
                 if let lines = diffs[f.path] {
                     diffBody(lines)
                 } else if !loading.contains(f.path) {
-                    Text("（无 diff 内容）").font(.system(size: 10.5)).foregroundStyle(.white.opacity(0.4)).padding(8)
+                    Text("（无 diff 内容）").font(.system(size: 10.5)).foregroundStyle(Color.lingFg.opacity(0.4)).padding(8)
                 }
             }
         }
@@ -171,9 +171,9 @@ struct LingShuWorkspaceDiffView: View {
 
     private var emptyState: some View {
         VStack(spacing: 10) {
-            Image(systemName: "plusminus.circle").font(.system(size: 30)).foregroundStyle(.white.opacity(0.25))
-            Text("本任务没有代码改动").font(.system(size: 12.5, weight: .semibold)).foregroundStyle(.white.opacity(0.5))
-            Text("有代码交付时,这里按文件列出真实 diff（红减绿增）。").font(.system(size: 10.5)).foregroundStyle(.white.opacity(0.35))
+            Image(systemName: "plusminus.circle").font(.system(size: 30)).foregroundStyle(Color.lingFg.opacity(0.25))
+            Text("本任务没有代码改动").font(.system(size: 12.5, weight: .semibold)).foregroundStyle(Color.lingFg.opacity(0.5))
+            Text("有代码交付时,这里按文件列出真实 diff（红减绿增）。").font(.system(size: 10.5)).foregroundStyle(Color.lingFg.opacity(0.35))
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -243,7 +243,7 @@ struct LingShuDiffLine: Identifiable {
             case .add: return Color(red: 0.55, green: 0.92, blue: 0.6)
             case .del: return Color(red: 0.98, green: 0.55, blue: 0.55)
             case .hunk: return Color.lingHoloAlt
-            case .ctx: return .white.opacity(0.62)
+            case .ctx: return Color.lingFg.opacity(0.62)
             }
         }
         var bg: Color {

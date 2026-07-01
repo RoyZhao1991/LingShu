@@ -134,6 +134,19 @@ final class LingShuPreviewController: ObservableObject {
         return String(lines.joined(separator: "\n").prefix(800))
     }
 
+    /// 把某页**渲染成图片**(给多模态大脑看的:**看着画面理解**图表/表格/流程/版式后讲解,而不是只读抽出来的字)。
+    /// 矢量 PDF 按 2× 栅格化(够清晰看清表格/连线),长边封顶 ~1920px 控 token;返回 PNG data URL,失败 nil。
+    func pageImageDataURL(_ index: Int) -> String? {
+        guard let document, let page = document.page(at: index) else { return nil }
+        let bounds = page.bounds(for: .mediaBox)
+        guard bounds.width > 1, bounds.height > 1 else { return nil }
+        let scale = max(1, min(2, 1920 / max(bounds.width, bounds.height)))
+        let img = page.thumbnail(of: NSSize(width: bounds.width * scale, height: bounds.height * scale), for: .mediaBox)
+        guard let tiff = img.tiffRepresentation, let rep = NSBitmapImageRep(data: tiff),
+              let png = rep.representation(using: .png, properties: [:]) else { return nil }
+        return "data:image/png;base64,\(png.base64EncodedString())"
+    }
+
     /// 把当前页内容包成给大脑看的块:讲解时**照这页实际内容讲**(对不上画面=失职)。
     private func pageContentBlock(_ index: Int) -> String {
         let text = pageText(index)

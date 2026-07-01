@@ -57,7 +57,7 @@ struct LingShuWorkspacePanel: View {
     var body: some View {
         VStack(spacing: 0) {
             tabBar
-            Divider().overlay(Color.white.opacity(0.08))
+            Divider().overlay(Color.lingFg.opacity(0.08))
             content
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
@@ -73,16 +73,17 @@ struct LingShuWorkspacePanel: View {
             Spacer(minLength: 4)
             Button { withAnimation(.easeInOut(duration: 0.16)) { expanded.toggle() } } label: {
                 Image(systemName: expanded ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right")
-                    .font(.system(size: 11, weight: .bold)).foregroundStyle(.white.opacity(0.7))
+                    .font(.system(size: 11, weight: .bold)).foregroundStyle(Color.lingFg.opacity(0.7))
                     .frame(width: 26, height: 24)
-                    .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                    .background(Color.lingFg.opacity(0.06), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
             }
             .buttonStyle(.plain)
             .help(expanded ? "收起为侧栏" : "展开铺满窗口")
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
-        .background(Color.black.opacity(0.5))
+        .background(Color.lingBar)   // 浅=白 chrome / 深=半透明暗条(原 black@0.5 在浅色=突兀暗块)
+        .overlay(alignment: .bottom) { Divider().overlay(Color.lingFg.opacity(0.08)) }
     }
 
     private func tabChip(_ m: Mode) -> some View {
@@ -96,20 +97,20 @@ struct LingShuWorkspacePanel: View {
                         Text("\(reviewCount)").font(.system(size: 9, weight: .bold, design: .monospaced)).opacity(0.7)
                     }
                 }
-                .foregroundStyle(active ? Color.black.opacity(0.85) : .white.opacity(0.82))
+                .foregroundStyle(active ? Color.lingVoid : Color.lingFg.opacity(0.82))
             }
             .buttonStyle(.plain)
             // 概览是常驻锚标签,不可关;其余可关。
             if m != .overview {
                 Button { close(m) } label: {
                     Image(systemName: "xmark").font(.system(size: 8, weight: .bold))
-                        .foregroundStyle(active ? Color.black.opacity(0.6) : .white.opacity(0.5))
+                        .foregroundStyle(active ? Color.lingVoid.opacity(0.7) : Color.lingFg.opacity(0.5))
                 }
                 .buttonStyle(.plain)
             }
         }
         .padding(.horizontal, 10).padding(.vertical, 5)
-        .background(active ? Color.lingHolo : Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+        .background(active ? Color.lingHolo : Color.lingFg.opacity(0.06), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
     }
 
     private var addMenu: some View {
@@ -123,9 +124,9 @@ struct LingShuWorkspacePanel: View {
                 }
             }
         } label: {
-            Image(systemName: "plus").font(.system(size: 11, weight: .bold)).foregroundStyle(.white.opacity(0.75))
+            Image(systemName: "plus").font(.system(size: 11, weight: .bold)).foregroundStyle(Color.lingFg.opacity(0.75))
                 .frame(width: 26, height: 24)
-                .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+                .background(Color.lingFg.opacity(0.06), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
         }
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)

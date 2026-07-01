@@ -180,7 +180,7 @@ extension LingShuState {
         let distill: @Sendable (String) async -> String = { prompt in
             let session = LingShuAgentSession(
                 id: "dream-local-\(UUID().uuidString.prefix(6))",
-                system: "你是事实提炼器,只输出陈述句事实(每行一条),绝不写步骤/指令/代码/客套。",
+                system: LingShuPersona.system("现在你来提炼事实:只输出陈述句事实(每行一条),绝不写步骤/指令/代码/客套。"),
                 tools: [], model: adapter, maxTurns: 1
             )
             if case .completed(let text) = await session.send(prompt) {

@@ -76,7 +76,7 @@ struct LingShuPreviewSheet: View {
                         .foregroundStyle(Color.lingHolo)
                     Text(controller.title.isEmpty ? "预览" : controller.title)
                         .font(.system(size: 13, weight: .bold))
-                        .foregroundStyle(.white)
+                        .foregroundStyle(Color.lingFg)
                         .lineLimit(1)
                     Spacer()
                     if controller.pageCount > 0, !controller.isHTML {
@@ -91,7 +91,7 @@ struct LingShuPreviewSheet: View {
                     Button { _ = controller.prev() } label: { Image(systemName: "chevron.left") }.buttonStyle(.plain)
                     Button { _ = controller.next() } label: { Image(systemName: "chevron.right") }.buttonStyle(.plain)
                     Button { _ = controller.close() } label: { Image(systemName: "xmark.circle.fill") }.buttonStyle(.plain)
-                        .foregroundStyle(.white.opacity(0.6))
+                        .foregroundStyle(Color.lingFg.opacity(0.6))
                 }
                 .padding(.horizontal, 14).padding(.vertical, 10)
                 .background(Color.black.opacity(0.55))
@@ -113,7 +113,7 @@ struct LingShuPreviewSheet: View {
                         Button { _ = controller.next() } label: { Image(systemName: controller.isHTML ? "chevron.down.circle.fill" : "chevron.right.circle.fill") }.buttonStyle(.plain)
                         Button { _ = controller.setSlideshow(false) } label: { Label("退出", systemImage: "xmark").font(.system(size: 11, weight: .bold)) }.buttonStyle(.plain)
                     }
-                    .foregroundStyle(.white.opacity(0.85))
+                    .foregroundStyle(Color.lingFg.opacity(0.85))
                     .padding(.horizontal, 18).padding(.vertical, 9)
                     .background(.black.opacity(0.5), in: Capsule())
                     .padding(.bottom, 18)
@@ -138,7 +138,7 @@ struct LingShuPreviewSheet: View {
             TextField("打字提问或控制演示（暂停 / 继续 / 跳到第N页 / 任何问题）…", text: $draft)
                 .textFieldStyle(.plain)
                 .font(.system(size: 13))
-                .foregroundStyle(.white)
+                .foregroundStyle(Color.lingFg)
                 .onSubmit { submitAsk() }
             Button { submitAsk() } label: {
                 Image(systemName: "arrow.up.circle.fill").font(.system(size: 18))

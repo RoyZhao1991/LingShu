@@ -63,7 +63,6 @@ struct LingShuRootView: View {
                 withAnimation(.easeInOut(duration: 0.3)) { autonomousOrbMode = false }
             }
         }
-        .preferredColorScheme(.dark)
         .background(LingShuPreviewHost(controller: state.previewController, presentation: state.presentationController))   // 大脑 open_preview → 弹出预览(含「演示与答疑」进度条)
         .background(LingShuBrowserHost(controller: state.browserController))   // 大脑 browser_open → 弹出内置浏览器
         .sheet(item: $state.pendingShellApproval) { pending in
@@ -281,7 +280,7 @@ struct LingShuStableTopBar: View {
                 VStack(alignment: .leading, spacing: 1) {
                     Text(state.appName)
                         .font(.system(size: 18, weight: .semibold))
-                        .foregroundStyle(.white)
+                        .foregroundStyle(Color.lingFg)
                     if !dense {
                         Text("NOUS · GENERAL AGENT HUB")
                             .font(.system(size: 8.5, weight: .bold, design: .monospaced))
@@ -319,7 +318,7 @@ struct LingShuStableTopBar: View {
                             .font(.system(size: compact ? 15 : 12.5, weight: .semibold))
                             .lineLimit(1)
                             .fixedSize(horizontal: true, vertical: false)   // 标签(如"线程")不换行:按自然宽度排,别被宽图标挤成两行
-                            .foregroundStyle(isSelected ? Color.lingHolo : .white.opacity(0.6))
+                            .foregroundStyle(isSelected ? Color.lingHolo : Color.lingFg.opacity(0.6))
                             Rectangle()
                                 .fill(isSelected ? Color.lingHolo : .clear)
                                 .frame(height: 2)
@@ -354,7 +353,7 @@ struct LingShuStableTopBar: View {
                     .font(.system(size: 15, weight: .bold))
                     .foregroundStyle(state.autonomousRun.isActive ? Color.lingVoid : Color.lingHolo)
                     .frame(width: 34, height: 30)
-                    .background(state.autonomousRun.isActive ? Color.orange : Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+                    .background(state.autonomousRun.isActive ? Color.orange : Color.lingFg.opacity(0.06), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
                     .overlay { LingShuHUDCorners(accent: state.autonomousRun.isActive ? .orange : .lingHolo, cornerLength: 7) }
                     .contentShape(Rectangle())
             }
@@ -364,7 +363,8 @@ struct LingShuStableTopBar: View {
         }
         .padding(.horizontal, 22)
         .padding(.vertical, 10)
-        .background(Color.black.opacity(0.6))
+        // 顶栏=上浮的白色 chrome 条(浅色纯白+柔阴影浮于灰画布;深色维持半透明暗条透出辉光)。
+        .background(Color.lingBar.shadow(.drop(color: .black.opacity(0.06), radius: 9, y: 2)))
         .background {
             GeometryReader { proxy in
                 Color.clear.onChange(of: proxy.size.width, initial: true) { _, newWidth in
@@ -392,7 +392,7 @@ struct LingShuCompactStatus: View {
         VStack(alignment: .leading, spacing: 1) {
             Text(title)
                 .font(.system(size: 9.5, weight: .bold))
-                .foregroundStyle(.white.opacity(0.42))
+                .foregroundStyle(Color.lingFg.opacity(0.42))
             Text(value)
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(color.opacity(0.92))
@@ -400,6 +400,6 @@ struct LingShuCompactStatus: View {
         }
         .padding(.horizontal, 11)
         .frame(height: 34)
-        .background(Color.white.opacity(0.07), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .background(Color.lingFg.opacity(0.07), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
 }

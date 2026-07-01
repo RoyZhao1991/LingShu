@@ -42,7 +42,7 @@ extension LingShuState {
         let distill: @Sendable (String) async -> String = { prompt in
             let session = LingShuAgentSession(
                 id: "dream-fb-\(UUID().uuidString.prefix(6))",
-                system: "你是经验固化器,只输出提炼后的要点,不写任何可执行代码/脚本。",
+                system: LingShuPersona.system("现在你来固化经验:只输出提炼后的要点,不写任何可执行代码/脚本。"),
                 tools: [], model: adapter, maxTurns: 1
             )
             if case .completed(let text) = await session.send(prompt) { return LingShuReasoningText.stripThinkTags(text) }
@@ -119,7 +119,7 @@ extension LingShuState {
         let distill: @Sendable (String) async -> String = { prompt in
             let session = LingShuAgentSession(
                 id: "dream-\(UUID().uuidString.prefix(6))",
-                system: "你是经验固化器,只输出提炼后的要点,不写任何可执行代码/脚本。",
+                system: LingShuPersona.system("现在你来固化经验:只输出提炼后的要点,不写任何可执行代码/脚本。"),
                 tools: [],
                 model: adapter,
                 maxTurns: 1

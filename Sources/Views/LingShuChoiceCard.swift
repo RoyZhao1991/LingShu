@@ -29,12 +29,12 @@ struct LingShuChoiceCard: View {
                         VStack(alignment: .leading, spacing: 2) {
                             Text(option.label)
                                 .font(.system(size: 13, weight: .semibold))
-                                .foregroundStyle(.white.opacity(isResolved && !isPicked ? 0.4 : 0.92))
+                                .foregroundStyle(Color.lingFg.opacity(isResolved && !isPicked ? 0.4 : 0.92))
                                 .fixedSize(horizontal: false, vertical: true)
                             if let detail = option.detail?.trimmingCharacters(in: .whitespacesAndNewlines), !detail.isEmpty {
                                 Text(detail)
                                     .font(.system(size: 11.5, weight: .medium))
-                                    .foregroundStyle(.white.opacity(isResolved && !isPicked ? 0.28 : 0.55))
+                                    .foregroundStyle(Color.lingFg.opacity(isResolved && !isPicked ? 0.28 : 0.55))
                                     .fixedSize(horizontal: false, vertical: true)
                             }
                         }
@@ -49,12 +49,12 @@ struct LingShuChoiceCard: View {
                     .padding(.horizontal, 10)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .background(
-                        isPicked ? Color.lingHolo.opacity(0.12) : Color.white.opacity(0.045),
+                        isPicked ? Color.lingHolo.opacity(0.12) : Color.lingFg.opacity(0.045),
                         in: RoundedRectangle(cornerRadius: 8, style: .continuous)
                     )
                     .overlay {
                         RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .stroke(isPicked ? Color.lingHolo.opacity(0.45) : Color.white.opacity(0.08))
+                            .stroke(isPicked ? Color.lingHolo.opacity(0.45) : Color.lingFg.opacity(0.08))
                     }
                     .contentShape(Rectangle())
                 }

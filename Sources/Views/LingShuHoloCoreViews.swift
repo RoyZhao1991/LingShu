@@ -131,7 +131,7 @@ struct LingShuHUDPanel: ViewModifier {
 
     func body(content: Content) -> some View {
         content
-            .background(Color.white.opacity(fillOpacity))
+            .background(Color.lingFg.opacity(fillOpacity))
             .background(.ultraThinMaterial.opacity(0.25))
             .overlay { LingShuHUDCorners(accent: accent, cornerLength: cornerLength) }
             .overlay {
@@ -182,7 +182,7 @@ struct LingShuHUDBackground: View {
 
     var body: some View {
         ZStack {
-            Color.lingVoid
+            Color.lingCanvas
 
             RadialGradient(
                 colors: [accent.opacity(0.10), .clear],
@@ -193,7 +193,7 @@ struct LingShuHUDBackground: View {
             .animation(.easeInOut(duration: 0.8), value: accent)
 
             LinearGradient(
-                colors: [.clear, Color.black.opacity(0.42)],
+                colors: [.clear, Color.lingCanvasVignette],
                 startPoint: .top,
                 endPoint: .bottom
             )
@@ -249,7 +249,7 @@ struct LingShuDualLayerCell: View {
                     .shadow(color: stateColor.opacity(0.8), radius: 3)
                 Text(label)
                     .font(.system(size: 11, weight: .bold))
-                    .foregroundStyle(.white.opacity(0.6))
+                    .foregroundStyle(Color.lingFg.opacity(0.6))
                 Spacer(minLength: 4)
                 Text(stateText)
                     .font(.system(size: 9.5, weight: .bold, design: .monospaced))
@@ -258,7 +258,7 @@ struct LingShuDualLayerCell: View {
 
             Text(value)
                 .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(.white.opacity(0.92))
+                .foregroundStyle(Color.lingFg.opacity(0.92))
                 .lineLimit(2)
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -266,7 +266,7 @@ struct LingShuDualLayerCell: View {
             if let load {
                 GeometryReader { geo in
                     ZStack(alignment: .leading) {
-                        Capsule().fill(Color.white.opacity(0.08))
+                        Capsule().fill(Color.lingFg.opacity(0.08))
                         Capsule()
                             .fill(stateColor.opacity(0.7))
                             .frame(width: max(2, geo.size.width * min(max(load, 0), 1)))
@@ -293,7 +293,7 @@ struct LingShuHUDReadout: View {
             Text(label)
                 .font(.system(size: 9, weight: .bold, design: .monospaced))
                 .tracking(1.5)
-                .foregroundStyle(.white.opacity(0.4))
+                .foregroundStyle(Color.lingFg.opacity(0.4))
             Text(value)
                 .font(.system(size: 12.5, weight: .semibold, design: .monospaced))
                 .foregroundStyle(color.opacity(0.94))

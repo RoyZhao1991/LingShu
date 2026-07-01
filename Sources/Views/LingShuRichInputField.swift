@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import UniformTypeIdentifiers
 
 /// 输入框里光标处正在打的 `@查询`(供 @ 自动补全弹层):`query`=@ 后已打的字(可空),`range`=含 @ 的整段范围(用于补全替换)。
 struct LingShuMentionQuery: Equatable {
@@ -49,7 +50,7 @@ struct LingShuRichInputField: NSViewRepresentable {
         tv.allowsUndo = true
         tv.drawsBackground = false
         tv.backgroundColor = NSColor.clear
-        tv.textColor = NSColor.white
+        tv.textColor = NSColor.textColor   // 跟随系统外观:浅=近黑、深=近白(原硬编码 .white 在浅底=白字看不见)
         tv.insertionPointColor = NSColor(accent)
         tv.font = Self.baseFont
         tv.textContainerInset = NSSize(width: 8, height: 10)
@@ -162,14 +163,14 @@ struct LingShuRichInputField: NSViewRepresentable {
             return nil
         }
 
-        /// 把 `@别名` 高亮成 token(青色字 + 半透明底),其余文本回到基线白字。
+        /// 把 `@别名` 高亮成 token(青色字 + 半透明底),其余文本回到基线文字色(跟随系统:浅近黑/深近白)。
         func applyHighlight() {
             guard let tv = textView, let storage = tv.textStorage else { return }
             let accent = NSColor(parent.accent)
             let full = NSRange(location: 0, length: storage.length)
             storage.beginEditing()
             storage.removeAttribute(.backgroundColor, range: full)
-            storage.addAttribute(.foregroundColor, value: NSColor.white, range: full)
+            storage.addAttribute(.foregroundColor, value: NSColor.textColor, range: full)
             storage.addAttribute(.font, value: LingShuRichInputField.baseFont, range: full)
             for range in Self.mentionRanges(in: tv.string, aliases: parent.aliases) {
                 storage.addAttribute(.backgroundColor, value: accent.withAlphaComponent(0.22), range: range)
@@ -209,7 +210,7 @@ final class LingShuInputTextView: NSTextView {
         guard string.isEmpty, !placeholderString.isEmpty else { return }
         let attrs: [NSAttributedString.Key: Any] = [
             .font: font ?? LingShuRichInputField.baseFont,
-            .foregroundColor: NSColor.white.withAlphaComponent(0.32)
+            .foregroundColor: NSColor.placeholderTextColor   // 跟随系统的占位灰(原 .white@0.32 在浅底=白底白字)
         ]
         (placeholderString as NSString).draw(
             at: NSPoint(x: textContainerInset.width + 5, y: textContainerInset.height),
@@ -217,18 +218,45 @@ final class LingShuInputTextView: NSTextView {
         )
     }
 
-    /// 粘贴图片(Cmd+V)→ 走云视觉解析回调;纯文本/其它仍走默认粘贴。
+    /// 粘贴图片(Cmd+V)→ 落成附件(进附件栏,见 `onPasteImage` → `ingestPastedImage`)。
+    /// **稳健取图**(根治"截图粘不进来"):截图到剪贴板是**原始 PNG/TIFF 数据**、复制的图片文件是 **URL**——
+    /// 老逻辑只 `readObjects([NSImage])` 抓不全这些来源(Codex/Claude 能粘、灵枢不能,正是这个差距)。纯文本/其它仍走默认粘贴。
+    /// **在 key-equivalent 阶段直接拦 Cmd+V**(根治"截图粘不进来"):实测 field 已聚焦、打字正常,Cmd+V 却**进不了** `paste:`——
+    /// SwiftUI 应用的标准「编辑>粘贴」并不保证把 `paste:` 路由到自定义 NSTextView。这里在 `performKeyEquivalent` 阶段(早于菜单)
+    /// 自己截 Cmd+V:剪贴板有图就吞掉、走 `onPasteImage` 入附件栏;没图则交回默认(文本粘贴照常,不影响)。
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        if event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command,
+           event.charactersIgnoringModifiers?.lowercased() == "v",
+           let onPasteImage, let png = Self.pngFromPasteboard(.general) {
+            onPasteImage(png)
+            return true
+        }
+        return super.performKeyEquivalent(with: event)
+    }
+
     override func paste(_ sender: Any?) {
-        let pb = NSPasteboard.general
-        if let onPasteImage,
-           let images = pb.readObjects(forClasses: [NSImage.self], options: nil) as? [NSImage],
-           let image = images.first,
-           let tiff = image.tiffRepresentation,
-           let rep = NSBitmapImageRep(data: tiff),
-           let png = rep.representation(using: .png, properties: [:]) {
+        if let onPasteImage, let png = Self.pngFromPasteboard(.general) {
             onPasteImage(png)
             return
         }
         super.pasteAsPlainText(sender)   // 纯文本粘贴(不带富文本格式,与原 TextField 一致)
+    }
+
+    /// 从剪贴板尽力抽出一张图片并归一成 PNG,覆盖:截图原始 PNG / 截图原始 TIFF / NSImage / 复制的图片文件 URL。
+    /// `nonisolated`:纯剪贴板数据读取(不碰视图/actor 状态),任意上下文可调(主输入框 paste、线程页 onPasteCommand、单测)。
+    nonisolated static func pngFromPasteboard(_ pb: NSPasteboard) -> Data? {
+        func toPNG(_ data: Data) -> Data? {
+            NSBitmapImageRep(data: data)?.representation(using: .png, properties: [:])
+        }
+        if let png = pb.data(forType: .png) { return png }                          // 1) 原始 PNG(截图最常见)
+        if let tiff = pb.data(forType: .tiff), let png = toPNG(tiff) { return png }  // 2) 原始 TIFF → PNG
+        if let images = pb.readObjects(forClasses: [NSImage.self], options: nil) as? [NSImage],
+           let tiff = images.first?.tiffRepresentation, let png = toPNG(tiff) { return png }  // 3) NSImage 兜底
+        if let urls = pb.readObjects(forClasses: [NSURL.self],                       // 4) 复制进来的图片文件 URL
+                                     options: [.urlReadingContentsConformToTypes: [UTType.image.identifier]]) as? [URL],
+           let url = urls.first, let data = try? Data(contentsOf: url) {
+            return toPNG(data) ?? data
+        }
+        return nil
     }
 }

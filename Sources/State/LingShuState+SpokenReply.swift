@@ -97,7 +97,7 @@ extension LingShuState {
         """
         let summarizer = LingShuAgentSession(
             id: "speak-\(UUID().uuidString.prefix(6))",
-            system: "你是口播摘要器,只输出一句干净、适合朗读的中文摘要,不含路径/英文/代码。",
+            system: LingShuPersona.system("现在你把要说的话凝成一句口播:只输出一句干净、适合朗读的中文摘要,不含路径/英文/代码。"),
             tools: [],
             model: makeAgentModelAdapter(),
             maxTurns: 1

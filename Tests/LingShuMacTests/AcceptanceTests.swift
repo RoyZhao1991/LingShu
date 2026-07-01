@@ -356,4 +356,38 @@ final class AcceptanceTests: XCTestCase {
         XCTAssertNil(rec.acceptanceChecks, "老记录无字段 → nil 向后兼容")
         XCTAssertNil(rec.acceptanceReport)
     }
+
+    // MARK: - 交付位置门(2026-06-30)
+
+    func testRequestedTargetDirsExtractsDirIntentNotSourcePaths() {
+        XCTAssertEqual(LingShuState.requestedTargetDirectories("在 /tmp/lingshu-e2e 下写 scraper.py"), ["/tmp/lingshu-e2e"])
+        XCTAssertEqual(LingShuState.requestedTargetDirectories("把报告存到 /tmp/out"), ["/tmp/out"])
+        // 只读取的源路径不算目标目录(不误伤)
+        XCTAssertTrue(LingShuState.requestedTargetDirectories("读取 /etc/hosts 并汇总").isEmpty)
+        // 没写绝对目录 → 空(走默认工作区,不查)
+        XCTAssertTrue(LingShuState.requestedTargetDirectories("写个计算器,没说目录").isEmpty)
+    }
+
+    func testDeliveryLocationViolationFlagsWrongDir() {
+        // 要求 /tmp/lingshu-e2e,产物却落在 ~/app → 违规
+        let v = LingShuState.deliveryLocationViolation(
+            userRequest: "在 /tmp/lingshu-e2e 下写 scraper.py,带单测。",
+            artifactPaths: ["/Users/example/app/scraper.py", "/Users/example/app/test_scraper.py"])
+        XCTAssertNotNil(v, "指定了目录、产物却不在那里 → 必须判违规")
+        XCTAssertTrue(v?.contains("/tmp/lingshu-e2e") ?? false)
+    }
+
+    func testDeliveryLocationPassesWhenUnderTarget() {
+        // 至少一个产物落在要求目录 → 过
+        XCTAssertNil(LingShuState.deliveryLocationViolation(
+            userRequest: "在 /tmp/lingshu-e2e 下写 scraper.py",
+            artifactPaths: ["/tmp/lingshu-e2e/scraper.py", "/tmp/lingshu-e2e/sub/test.py"]))
+    }
+
+    func testDeliveryLocationNoCheckWhenNoDirOrNoArtifacts() {
+        // 没指定目录 → 不查(默认工作区)
+        XCTAssertNil(LingShuState.deliveryLocationViolation(userRequest: "写个 hello.py", artifactPaths: ["/anywhere/hello.py"]))
+        // 没产物 → 不查
+        XCTAssertNil(LingShuState.deliveryLocationViolation(userRequest: "在 /tmp/x 下写东西", artifactPaths: []))
+    }
 }

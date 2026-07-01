@@ -76,10 +76,13 @@ final class LingShuPresentationController: ObservableObject {
                 continue
             }
             let title = (path as NSString).lastPathComponent
+            // **并发逐页生成讲稿**(看图讲稿每页要给多模态脑发图、慢;串行 N 页要几分钟。先并发起所有页的 Task,各页网络 await 期间互不阻塞→总耗≈单页)。
+            let tasks = pages.enumerated().map { (i, verbatim) in
+                Task { @MainActor in await hooks.narrate(verbatim, i + 1, pages.count, title, self.pace) }
+            }
             var beats: [LingShuPresentationBeat] = []
             for (i, verbatim) in pages.enumerated() {
-                let narration = await hooks.narrate(verbatim, i + 1, pages.count, title, pace)
-                beats.append(.init(pageIndex: i, verbatim: verbatim, narration: narration, narrationPace: pace))
+                beats.append(.init(pageIndex: i, verbatim: verbatim, narration: await tasks[i].value, narrationPace: pace))
             }
             scripts.append(.init(documentPath: path, title: title, beats: beats))
         }
@@ -90,7 +93,10 @@ final class LingShuPresentationController: ObservableObject {
     // MARK: - 2) 照脚本念(play 循环;每拍之间可被答疑打断)
 
     /// 从当前文档的 playhead 开始照脚本念;念完一篇 → 停在 awaitingNextDoc 等用户确认切下一篇。
-    func play() async {
+    /// `opening` 给了就在**首页画面就位后、念首页讲稿前**先念一次(开场白,如"好的我开始演示了")——
+    /// 经 `announce` 钩子出声并 await 念完,**与首页讲稿串行同一发声通道**,杜绝开场白被首页 `speak` 的代次掐断
+    /// (实测 bug:开场白只念到"演"字就被首页讲稿切掉)。续演/连播无开场白,默认 nil。
+    func play(opening: String? = nil) async {
         guard let hooks, !playing else { return }
         playing = true
         defer { playing = false }
@@ -98,6 +104,7 @@ final class LingShuPresentationController: ObservableObject {
         stopRequested = false
         phase = .playing
         await hooks.setFullscreen(true)   // 续演(同一文档、无 showDocument)据此重进全屏;新文档由下面 open 后再进一次
+        var pendingOpening = opening      // 开场白:首拍画面就位后念一次(只念一次)
 
         while var script = queue.currentScript {
             // 演这篇前先把它显示出来(多文档连播必需;同一篇续演不重复开窗),**open 之后再进全屏单页模式**——
@@ -117,6 +124,18 @@ final class LingShuPresentationController: ObservableObject {
                     return
                 }
                 await hooks.navigate(beat.pageIndex)
+                // **开场白(首拍·画面已就位)**:全屏 + 翻到第一页后,先把开场白念完,再念首页讲稿。
+                // 放在 navigate 之后 = 画面已是第一页时开场,视觉不被开场白拖延;announce 内部 await 念完,
+                // 下面首页 speak 自然排在它后面(同发声通道串行),不会半途掐断它。
+                if let line = pendingOpening {
+                    pendingOpening = nil
+                    // **念确认句/开场白的同时,后台预合成本页讲稿**(仅当本页不需按新档重生成时):
+                    // 跳页/开场进来的这页**从没被预取过**(预取流水线只提前合成 nextBeat),否则念完确认要现等云端首包 3-4s
+                    // = 用户实测"翻页之后较长停顿"。announce 念这句的几秒里把本页首包合成好,念完即时起播本页讲稿,消停顿。
+                    if beat.narrationPace == pace { hooks.prefetchNarration?(beat.narration) }
+                    await hooks.announce?(line)
+                    if stopRequested || Task.isCancelled { phase = .finished; return }
+                }
                 // **据当前讲解档懒重生成本页讲稿**(只在档不匹配时重讲——切档后从这页起按新深度讲)。
                 var narration = beat.narration
                 if beat.narrationPace != pace {
@@ -179,7 +198,9 @@ final class LingShuPresentationController: ObservableObject {
     }
 
     /// 答疑结束后继续:`seekTo` 给了就先拖到那页(视频流式),否则从当前位置续。
-    func resume(seekTo pageIndex: Int? = nil) async {
+    /// `opening` 给了(如"好,翻到第N页。"/"好,接着讲。")就由 play **先翻到该页(画面即时响应)、再串行念这句确认、再念讲稿**——
+    /// 经 announce 钩子(抑制气泡自动朗读)出声,杜绝确认句与续演首页讲稿抢发声通道把讲稿掐掉(实测:跳页后那页没念就被跳过)。
+    func resume(seekTo pageIndex: Int? = nil, opening: String? = nil) async {
         guard phase == .pausedForQA, var script = queue.currentScript else { return }
         if let pageIndex {
             // 把"页号"换算成对应 beat 下标(beat.pageIndex == 目标页)。
@@ -190,7 +211,7 @@ final class LingShuPresentationController: ObservableObject {
             }
             queue.updateCurrent(script)
         }
-        await play()
+        await play(opening: opening)
     }
 
     /// 演示中/暂停时拖动进度条到任意位置(不自动续播,交给调用方决定续不续)。
@@ -215,10 +236,11 @@ final class LingShuPresentationController: ObservableObject {
     // MARK: - 4) 多文档连播:用户确认后切下一篇
 
     /// 用户确认 → 切到下一篇并继续演;无下一篇 → finished。
-    func confirmAndPlayNext() async {
+    /// `opening`(如"好,继续下一篇。")由 play 先显示下一篇首页、再串行念这句、再念讲稿(同 resume 口径,杜绝抢通道)。
+    func confirmAndPlayNext(opening: String? = nil) async {
         guard phase == .awaitingNextDoc else { return }
         if queue.advanceToNext() != nil {
-            await play()
+            await play(opening: opening)
         } else {
             phase = .finished
             await hooks?.setFullscreen(false)

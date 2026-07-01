@@ -28,15 +28,15 @@ struct LingShuAutonomousRunPanel: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text("独立运行模式")
                     .font(.system(size: 15.5, weight: .semibold))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(Color.lingFg)
                 Text("常驻灵枢 · 能听能说能思考能动手 · 人工接管")
                     .font(.system(size: 11.5, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.52))
+                    .foregroundStyle(Color.lingFg.opacity(0.52))
             }
             Spacer()
             Text(state.autonomousRun.phase.rawValue)
                 .font(.system(size: 12, weight: .bold, design: .monospaced))
-                .foregroundStyle(state.autonomousRun.isActive ? .orange : .white.opacity(0.54))
+                .foregroundStyle(state.autonomousRun.isActive ? .orange : Color.lingFg.opacity(0.54))
         }
     }
 
@@ -75,7 +75,7 @@ struct LingShuAutonomousRunPanel: View {
             if standing {
                 Text("在岗待命:直接在对话里说话或发指令,我就理解→思考→动手。")
                     .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.5))
+                    .foregroundStyle(Color.lingFg.opacity(0.5))
                     .fixedSize(horizontal: false, vertical: true)
             }
 
@@ -139,11 +139,11 @@ struct LingShuAutonomousRunPanel: View {
                 .frame(width: 18)
             Text(label)
                 .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(.white.opacity(0.45))
+                .foregroundStyle(Color.lingFg.opacity(0.45))
                 .frame(width: 34, alignment: .leading)
             Text(value)
                 .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(.white.opacity(0.82))
+                .foregroundStyle(Color.lingFg.opacity(0.82))
                 .lineLimit(2)
         }
     }
@@ -152,7 +152,7 @@ struct LingShuAutonomousRunPanel: View {
         VStack(alignment: .leading, spacing: 8) {
             Text(title)
                 .font(.system(size: 12.5, weight: .bold))
-                .foregroundStyle(.white)
+                .foregroundStyle(Color.lingFg)
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 160), spacing: 8)], spacing: 8) {
                 ForEach(report) { item in
                     HStack(spacing: 7) {
@@ -162,16 +162,16 @@ struct LingShuAutonomousRunPanel: View {
                         VStack(alignment: .leading, spacing: 2) {
                             Text(item.title)
                                 .font(.system(size: 11, weight: .bold))
-                                .foregroundStyle(.white.opacity(0.82))
+                                .foregroundStyle(Color.lingFg.opacity(0.82))
                             Text(item.detail)
                                 .font(.system(size: 10, weight: .medium))
-                                .foregroundStyle(.white.opacity(0.45))
+                                .foregroundStyle(Color.lingFg.opacity(0.45))
                                 .lineLimit(2)
                         }
                         Spacer(minLength: 0)
                     }
                     .padding(8)
-                    .background(Color.white.opacity(0.035), in: RoundedRectangle(cornerRadius: 8))
+                    .background(Color.lingFg.opacity(0.035), in: RoundedRectangle(cornerRadius: 8))
                 }
             }
         }
@@ -182,7 +182,7 @@ struct LingShuAutonomousRunPanel: View {
             HStack {
                 Text("动态 Runbook")
                     .font(.system(size: 12.5, weight: .bold))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(Color.lingFg)
                 Spacer()
                 Text(runbook.capabilityHints.joined(separator: " / "))
                     .font(.system(size: 10.5, weight: .bold, design: .monospaced))
@@ -201,20 +201,20 @@ struct LingShuAutonomousRunPanel: View {
                         HStack(spacing: 6) {
                             Text(step.title)
                                 .font(.system(size: 12, weight: .bold))
-                                .foregroundStyle(.white.opacity(0.88))
+                                .foregroundStyle(Color.lingFg.opacity(0.88))
                             Text(step.owner)
                                 .font(.system(size: 10.5, weight: .bold))
                                 .foregroundStyle(color(for: step.status))
                         }
                         Text(step.detail)
                             .font(.system(size: 10.8, weight: .medium))
-                            .foregroundStyle(.white.opacity(0.48))
+                            .foregroundStyle(Color.lingFg.opacity(0.48))
                             .lineLimit(2)
                     }
                     Spacer()
                     Text(step.status.rawValue)
                         .font(.system(size: 10.5, weight: .bold))
-                        .foregroundStyle(.white.opacity(0.45))
+                        .foregroundStyle(Color.lingFg.opacity(0.45))
                 }
                 .padding(.vertical, 4)
             }
@@ -247,7 +247,7 @@ struct LingShuAutonomousRunPanel: View {
 
     private func color(for status: LingShuAutonomousRunbookStepStatus) -> Color {
         switch status {
-        case .waiting: .white.opacity(0.42)
+        case .waiting: Color.lingFg.opacity(0.42)
         case .running: .orange
         case .completed: .green
         case .blocked: .red
@@ -296,7 +296,7 @@ struct JarvisLaunchButton: View {
             )
             .overlay {
                 RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .stroke(Color.white.opacity(0.35), lineWidth: 1)
+                    .stroke(Color.lingFg.opacity(0.35), lineWidth: 1)
             }
             .shadow(color: (isEnabled ? Color.lingHolo : Color.clear).opacity(0.4), radius: hovering ? 22 : 16, y: 4)
             .scaleEffect(pressed ? 0.97 : (hovering ? 1.015 : 1.0))

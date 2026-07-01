@@ -52,12 +52,12 @@ struct LingShuWorkspaceTerminalView: View {
                 .font(.system(size: 11.5, weight: .semibold, design: .monospaced))
                 .foregroundStyle(Color.lingHolo.opacity(0.9))
             if running {
-                Text("运行中…").font(.system(size: 11, design: .monospaced)).foregroundStyle(.white.opacity(0.4))
+                Text("运行中…").font(.system(size: 11, design: .monospaced)).foregroundStyle(Color.lingFg.opacity(0.4))
             } else {
                 TextField("", text: $input)
                     .textFieldStyle(.plain)
                     .font(.system(size: 11.5, design: .monospaced))
-                    .foregroundStyle(.white.opacity(0.92))
+                    .foregroundStyle(Color.lingFg.opacity(0.92))
                     .focused($focused)
                     .onSubmit { run(input) }
                     .onKeyPress(.upArrow) { recallHistory(-1); return .handled }
@@ -104,6 +104,6 @@ struct TermLine: Identifiable {
     let text: String
     enum Kind {
         case cmd, out
-        var color: Color { self == .cmd ? Color.lingHolo.opacity(0.95) : .white.opacity(0.82) }
+        var color: Color { self == .cmd ? Color.lingHolo.opacity(0.95) : Color.lingFg.opacity(0.82) }
     }
 }

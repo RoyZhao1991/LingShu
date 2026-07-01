@@ -207,7 +207,7 @@ extension LingShuState {
         """
         let summarizer = LingShuAgentSession(
             id: "distill-\(UUID().uuidString.prefix(6))",
-            system: "你是记忆蒸馏器,只输出提炼后的要点摘要,不寒暄、不复述原文。",
+            system: LingShuPersona.system("现在你来做记忆蒸馏:只输出提炼后的要点摘要,不寒暄、不复述原文。"),
             tools: [],
             model: makeAgentModelAdapter(),
             maxTurns: 1

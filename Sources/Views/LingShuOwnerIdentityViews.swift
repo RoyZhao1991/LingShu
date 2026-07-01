@@ -13,7 +13,7 @@ struct LingShuOwnerIdentityPanel: View {
             HStack(spacing: 8) {
                 Text("身份锁")
                     .font(.system(size: 11.5, weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.72))
+                    .foregroundStyle(Color.lingFg.opacity(0.72))
 
                 Spacer()
 
@@ -30,10 +30,10 @@ struct LingShuOwnerIdentityPanel: View {
                 TextField("主人名称", text: $ownerName)
                     .textFieldStyle(.plain)
                     .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(Color.lingFg)
                     .padding(.horizontal, 9)
                     .frame(height: 28)
-                    .background(Color.white.opacity(0.075), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+                    .background(Color.lingFg.opacity(0.075), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
                     .overlay {
                         RoundedRectangle(cornerRadius: 7, style: .continuous)
                             .stroke(Color.lingHolo.opacity(0.14))
@@ -58,16 +58,16 @@ struct LingShuOwnerIdentityPanel: View {
 
             Text(snapshot.detailText)
                 .font(.system(size: 11, weight: .medium))
-                .foregroundStyle(.white.opacity(0.55))
+                .foregroundStyle(Color.lingFg.opacity(0.55))
                 .fixedSize(horizontal: false, vertical: true)
 
             Text(hintText)
                 .font(.system(size: 10.5, weight: .medium))
-                .foregroundStyle(.white.opacity(0.4))
+                .foregroundStyle(Color.lingFg.opacity(0.4))
                 .fixedSize(horizontal: false, vertical: true)
         }
         .padding(10)
-        .background(Color.white.opacity(0.045), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .background(Color.lingFg.opacity(0.045), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .stroke(identityStrokeColor.opacity(0.18))
@@ -101,12 +101,12 @@ private struct IdentityMetric: View {
         VStack(alignment: .leading, spacing: 3) {
             Text(title)
                 .font(.system(size: 10.5, weight: .semibold))
-                .foregroundStyle(.white.opacity(0.46))
+                .foregroundStyle(Color.lingFg.opacity(0.46))
 
             HStack(spacing: 5) {
                 Text(value)
                     .font(.system(size: 11.5, weight: .bold, design: .monospaced))
-                    .foregroundStyle(.white.opacity(0.82))
+                    .foregroundStyle(Color.lingFg.opacity(0.82))
 
                 if let confidence {
                     Text(LingShuOwnerIdentitySnapshot.percent(confidence))
@@ -118,7 +118,7 @@ private struct IdentityMetric: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 8)
         .padding(.vertical, 6)
-        .background(Color.white.opacity(0.055), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+        .background(Color.lingFg.opacity(0.055), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
     }
 }
 
@@ -128,11 +128,11 @@ private struct IdentityCapsuleButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(.system(size: 11.5, weight: .semibold))
-            .foregroundStyle(active ? Color.lingVoid : .white.opacity(0.82))
+            .foregroundStyle(active ? Color.lingVoid : Color.lingFg.opacity(0.82))
             .padding(.horizontal, 9)
             .frame(height: 28)
             .background(
-                active ? Color.lingHolo : Color.white.opacity(configuration.isPressed ? 0.14 : 0.075),
+                active ? Color.lingHolo : Color.lingFg.opacity(configuration.isPressed ? 0.14 : 0.075),
                 in: RoundedRectangle(cornerRadius: 7, style: .continuous)
             )
             .overlay {

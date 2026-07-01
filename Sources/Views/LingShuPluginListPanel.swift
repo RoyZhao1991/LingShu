@@ -30,7 +30,7 @@ struct LingShuPluginListPanel: View {
                 }
             }
 
-            Divider().overlay(Color.white.opacity(0.08))
+            Divider().overlay(Color.lingFg.opacity(0.08))
 
             // ── 内置插件 / 技能
             groupTitle("内置插件 / 技能", "随灵枢出厂或学会的能力,@名字 直接调")
@@ -46,14 +46,14 @@ struct LingShuPluginListPanel: View {
 
     @ViewBuilder private func groupTitle(_ t: String, _ sub: String) -> some View {
         VStack(alignment: .leading, spacing: 2) {
-            Text(t).font(.system(size: 13, weight: .bold)).foregroundStyle(.white.opacity(0.9))
-            Text(sub).font(.system(size: 11)).foregroundStyle(.white.opacity(0.45))
+            Text(t).font(.system(size: 13, weight: .bold)).foregroundStyle(Color.lingFg.opacity(0.9))
+            Text(sub).font(.system(size: 11)).foregroundStyle(Color.lingFg.opacity(0.45))
         }
         .padding(.top, 4)
     }
 
     @ViewBuilder private func hint(_ t: String) -> some View {
-        Text(t).font(.system(size: 12)).foregroundStyle(.white.opacity(0.5))
+        Text(t).font(.system(size: 12)).foregroundStyle(Color.lingFg.opacity(0.5))
             .padding(.vertical, 6)
     }
 
@@ -62,13 +62,13 @@ struct LingShuPluginListPanel: View {
                                   onRecheck: (() -> Void)? = nil, onRemove: (() -> Void)?) -> some View {
         HStack(spacing: 10) {
             Circle().fill(available ? Color.green : Color.red.opacity(0.7)).frame(width: 8, height: 8)
-            Text("@\(name)").font(.system(size: 13, weight: .semibold)).foregroundStyle(.white)
+            Text("@\(name)").font(.system(size: 13, weight: .semibold)).foregroundStyle(Color.lingFg)
             if let badge {
                 Text(badge).font(.system(size: 10, weight: .bold)).foregroundStyle(.black.opacity(0.8))
                     .padding(.horizontal, 6).padding(.vertical, 2)
                     .background(badgeColor.opacity(0.85), in: Capsule())
             }
-            Text(detail).font(.system(size: 11)).foregroundStyle(.white.opacity(0.5)).lineLimit(1).truncationMode(.middle)
+            Text(detail).font(.system(size: 11)).foregroundStyle(Color.lingFg.opacity(0.5)).lineLimit(1).truncationMode(.middle)
             Spacer(minLength: 8)
             if !available { Text("不可用").font(.system(size: 10)).foregroundStyle(.red.opacity(0.8)) }
             // 不可用 → 给「重新检测」按钮:重跑探活(登录/补凭据后点一下即恢复可用)。
@@ -87,12 +87,12 @@ struct LingShuPluginListPanel: View {
             }
             if let onRemove {
                 Button(action: onRemove) { Image(systemName: "trash").font(.system(size: 12)) }
-                    .buttonStyle(.plain).foregroundStyle(.white.opacity(0.5))
+                    .buttonStyle(.plain).foregroundStyle(Color.lingFg.opacity(0.5))
                     .help("从插件库移除")
             }
         }
         .padding(.horizontal, 12).padding(.vertical, 9)
-        .background(Color.white.opacity(0.04), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .background(Color.lingFg.opacity(0.04), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
 
     /// 重新探活一个 agent:跑 probeAvailability(短超时实跑一次,检测登录/认证),通过→标可用,否则→保持不可用 + 原因。

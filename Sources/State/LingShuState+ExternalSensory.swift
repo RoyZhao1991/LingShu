@@ -133,7 +133,7 @@ extension LingShuState {
         """
         let session = LingShuAgentSession(
             id: "todo-distill-\(UUID().uuidString.prefix(6))",
-            system: "你是灵枢的'关键待办蒸馏器'。从嘈杂的设备通知里提炼真正需要行动的事，宁缺毋滥。只输出 JSON 数组。",
+            system: LingShuPersona.system("现在你从嘈杂的设备通知里蒸馏真正需要行动的关键待办，宁缺毋滥。只输出 JSON 数组。"),
             tools: [],
             model: makeAgentModelAdapter(),
             maxTurns: 1

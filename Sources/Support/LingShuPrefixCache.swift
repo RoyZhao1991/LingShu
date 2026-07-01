@@ -57,7 +57,6 @@ enum LingShuPrefixCache {
     ///  - Anthropic：`usage.cache_read_input_tokens`
     /// 返回（输入总 token, 命中缓存的 token）。命中越高越省钱。
     static func parseCacheUsage(_ usage: [String: Any]) -> (promptTokens: Int?, cachedTokens: Int?) {
-        let prompt = (usage["prompt_tokens"] as? Int) ?? (usage["input_tokens"] as? Int)
         var cached: Int?
         if let details = usage["prompt_tokens_details"] as? [String: Any], let c = details["cached_tokens"] as? Int {
             cached = c
@@ -66,6 +65,14 @@ enum LingShuPrefixCache {
         } else if let c = usage["cache_read_input_tokens"] as? Int {
             cached = c
         }
-        return (prompt, cached)
+        // **输入总 token**:OpenAI/DeepSeek 的 prompt_tokens 已是总数(cached 是其子集);
+        // **Anthropic 的 input_tokens 只算"未命中缓存且未写缓存"的新增部分**,不含 cache_read / cache_creation——
+        // 必须把这两块加回来才是真·输入总数(否则命中率 cached/input 会算出 >100% 的天文数,见 2026-06-28 Claude 实测 200万%)。
+        if usage["prompt_tokens"] == nil, let input = usage["input_tokens"] as? Int {
+            let read = (usage["cache_read_input_tokens"] as? Int) ?? 0
+            let creation = (usage["cache_creation_input_tokens"] as? Int) ?? 0
+            return (input + read + creation, cached)
+        }
+        return ((usage["prompt_tokens"] as? Int) ?? (usage["input_tokens"] as? Int), cached)
     }
 }

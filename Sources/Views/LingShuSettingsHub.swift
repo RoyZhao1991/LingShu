@@ -57,11 +57,11 @@ struct LingShuSettingsHub: View {
                             Text(state.loc(item.rawValue, item.englishName))
                                 .font(.system(size: 12.5, weight: .semibold))
                         }
-                        .foregroundStyle(tab == item ? Color.lingVoid : .white.opacity(0.7))
+                        .foregroundStyle(tab == item ? Color.lingVoid : Color.lingFg.opacity(0.7))
                         .padding(.horizontal, 12)
                         .padding(.vertical, 7)
                         .background(
-                            tab == item ? Color.lingHolo : Color.white.opacity(0.05),
+                            tab == item ? Color.lingHolo : Color.lingFg.opacity(0.05),
                             in: RoundedRectangle(cornerRadius: 7, style: .continuous)
                         )
                     }
@@ -73,7 +73,7 @@ struct LingShuSettingsHub: View {
             .padding(.top, 14)
             .padding(.bottom, 8)
 
-            Divider().overlay(Color.white.opacity(0.08))
+            Divider().overlay(Color.lingFg.opacity(0.08))
 
             Group {
                 switch tab {
@@ -165,11 +165,11 @@ struct LingShuConnectorsHub: View {
                             Text(state.loc(item.rawValue, item.englishName))
                                 .font(.system(size: 12, weight: .semibold))
                         }
-                        .foregroundStyle(sub == item ? Color.lingVoid : .white.opacity(0.7))
+                        .foregroundStyle(sub == item ? Color.lingVoid : Color.lingFg.opacity(0.7))
                         .padding(.horizontal, 11)
                         .padding(.vertical, 6)
                         .background(
-                            sub == item ? Color.lingHolo : Color.white.opacity(0.05),
+                            sub == item ? Color.lingHolo : Color.lingFg.opacity(0.05),
                             in: RoundedRectangle(cornerRadius: 7, style: .continuous)
                         )
                     }
@@ -217,7 +217,7 @@ struct LingShuSkillsPanel: View {
                 .buttonStyle(.bordered)
                 Text("放入带 frontmatter（title/triggers）的 .md 文件，重启后生效。")
                     .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.45))
+                    .foregroundStyle(Color.lingFg.opacity(0.45))
             }
 
             ForEach(profiles, id: \.id) { profile in
@@ -227,25 +227,25 @@ struct LingShuSkillsPanel: View {
                     VStack(alignment: .leading, spacing: 2) {
                         Text(profile.title)
                             .font(.system(size: 12.5, weight: .bold))
-                            .foregroundStyle(.white.opacity(0.9))
+                            .foregroundStyle(Color.lingFg.opacity(0.9))
                         Text(profile.mission)
                             .font(.system(size: 11, weight: .medium))
-                            .foregroundStyle(.white.opacity(0.5))
+                            .foregroundStyle(Color.lingFg.opacity(0.5))
                             .lineLimit(1)
                     }
                     Spacer()
                     Text(profile.id.hasPrefix("skill-") ? "用户" : "内置")
                         .font(.system(size: 9.5, weight: .bold))
-                        .foregroundStyle(.white.opacity(0.5))
+                        .foregroundStyle(Color.lingFg.opacity(0.5))
                         .padding(.horizontal, 6).padding(.vertical, 2)
-                        .background(Color.white.opacity(0.07), in: Capsule())
+                        .background(Color.lingFg.opacity(0.07), in: Capsule())
                 }
                 .padding(.vertical, 6).padding(.horizontal, 10)
-                .background(Color.white.opacity(0.04), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+                .background(Color.lingFg.opacity(0.04), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
             }
         }
         .padding(14)
-        .background(Color.white.opacity(0.045), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .background(Color.lingFg.opacity(0.045), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
         .overlay { RoundedRectangle(cornerRadius: 10, style: .continuous).stroke(Color.lingHolo.opacity(0.14)) }
     }
 }
@@ -282,16 +282,16 @@ struct LingShuConnectorsPanel: View {
 
             if registry.servers.isEmpty {
                 Text("还没有连接器。MCP server 让灵枢能读 issue、查数据库、发消息——为一个写的连接器在 Claude Code/Codex 里通常也能直接用。")
-                    .font(.system(size: 11.5, weight: .medium)).foregroundStyle(.white.opacity(0.4))
+                    .font(.system(size: 11.5, weight: .medium)).foregroundStyle(Color.lingFg.opacity(0.4))
             } else {
                 ForEach(registry.servers) { server in
                     HStack(spacing: 10) {
-                        Circle().fill(server.enabled ? Color.lingHolo : Color.white.opacity(0.25)).frame(width: 7, height: 7)
+                        Circle().fill(server.enabled ? Color.lingHolo : Color.lingFg.opacity(0.25)).frame(width: 7, height: 7)
                         VStack(alignment: .leading, spacing: 2) {
-                            Text(server.name).font(.system(size: 12.5, weight: .bold)).foregroundStyle(.white.opacity(0.9))
+                            Text(server.name).font(.system(size: 12.5, weight: .bold)).foregroundStyle(Color.lingFg.opacity(0.9))
                             Text("\(server.command) \(server.arguments.joined(separator: " "))")
                                 .font(.system(size: 10.5, weight: .medium, design: .monospaced))
-                                .foregroundStyle(.white.opacity(0.45)).lineLimit(1)
+                                .foregroundStyle(Color.lingFg.opacity(0.45)).lineLimit(1)
                         }
                         Spacer()
                         let toolCount = registry.discoveredTools.filter { $0.serverID == server.id }.count
@@ -305,12 +305,12 @@ struct LingShuConnectorsPanel: View {
                         }.buttonStyle(.plain)
                     }
                     .padding(.vertical, 6).padding(.horizontal, 10)
-                    .background(Color.white.opacity(0.04), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+                    .background(Color.lingFg.opacity(0.04), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
                 }
             }
         }
         .padding(14)
-        .background(Color.white.opacity(0.045), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .background(Color.lingFg.opacity(0.045), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
         .overlay { RoundedRectangle(cornerRadius: 10, style: .continuous).stroke(Color.lingHolo.opacity(0.14)) }
     }
 }
@@ -333,22 +333,22 @@ struct LingShuMemoryStatsPanel: View {
 
             Text("经验规则来自协同管线：任务被评审打回又修正后，灵枢把「问题→修正」提炼成一句通用规则写入语义库，下次同领域任务的规划阶段自动参考——记忆从流水账变成复利。")
                 .font(.system(size: 11.5, weight: .medium))
-                .foregroundStyle(.white.opacity(0.5))
+                .foregroundStyle(Color.lingFg.opacity(0.5))
                 .fixedSize(horizontal: false, vertical: true)
         }
         .padding(14)
-        .background(Color.white.opacity(0.045), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .background(Color.lingFg.opacity(0.045), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
         .overlay { RoundedRectangle(cornerRadius: 10, style: .continuous).stroke(Color.lingHolo.opacity(0.14)) }
     }
 
     private func statCard(title: String, value: String, hint: String) -> some View {
         VStack(alignment: .leading, spacing: 3) {
             Text(value).font(.system(size: 22, weight: .bold, design: .rounded)).foregroundStyle(Color.lingHolo)
-            Text(title).font(.system(size: 11.5, weight: .bold)).foregroundStyle(.white.opacity(0.8))
-            Text(hint).font(.system(size: 10, weight: .medium)).foregroundStyle(.white.opacity(0.42))
+            Text(title).font(.system(size: 11.5, weight: .bold)).foregroundStyle(Color.lingFg.opacity(0.8))
+            Text(hint).font(.system(size: 10, weight: .medium)).foregroundStyle(Color.lingFg.opacity(0.42))
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(12)
-        .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .background(Color.lingFg.opacity(0.05), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
 }

@@ -119,7 +119,7 @@ struct LingShuWorkspaceReviewView: View {
                 }
             }
             .padding(8)
-            .background(.white.opacity(0.04), in: RoundedRectangle(cornerRadius: 8))
+            .background(Color.lingFg.opacity(0.04), in: RoundedRectangle(cornerRadius: 8))
         }
     }
 

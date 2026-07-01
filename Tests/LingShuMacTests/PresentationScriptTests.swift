@@ -91,52 +91,49 @@ final class PresentationScriptTests: XCTestCase {
         XCTAssertNil(q.advanceToNext())
     }
 
-    // MARK: - 「演示文档」确定性路由检测器
-
-    func testDetectPresentationRequestExtractsPaths() {
-        let r = LingShuState.detectPresentationRequest("把 /tmp/a.pdf 这个文档正式演示讲解一下")
-        XCTAssertEqual(r, ["/tmp/a.pdf"])
-    }
-
-    func testDetectPresentationRequestMultipleDocs() {
-        let r = LingShuState.detectPresentationRequest("依次演示 /a/x.pptx 和 /b/y.pdf")
-        XCTAssertEqual(r, ["/a/x.pptx", "/b/y.pdf"])
-    }
-
-    func testDetectPresentationRequestNeedsIntentWord() {
-        // 有路径但无演示意图 → 不拦(交大脑常规处理)。
-        XCTAssertNil(LingShuState.detectPresentationRequest("帮我改一下 /tmp/a.pdf 的内容"))
-    }
-
-    func testDetectPresentationRequestNeedsPath() {
-        // 有演示意图但无文档路径 → 不拦。
-        XCTAssertNil(LingShuState.detectPresentationRequest("给我演示一下你的能力"))
-    }
+    // 注:旧的「演示文档」关键词确定性路由检测器(detectPresentationRequest)已删——
+    // 演示启动只走显式 @演示 + 大脑 present_documents,故这里不再有它的单测(2026-06-27 用户定调)。
 }
 
 // 暂停/继续/停止 意图判定(删除鼠标打断后,暂停走语音命令)
 final class PresentationIntentTests: XCTestCase {
     func testPauseIntentNotStop() {
-        XCTAssertTrue(LingShuState.isPresentationPauseIntent("暂停一下"))
-        XCTAssertTrue(LingShuState.isPresentationPauseIntent("先停一下"))
-        XCTAssertFalse(LingShuState.isPresentationStopIntent("暂停一下"), "「暂停」不能被当成停止")
-        XCTAssertFalse(LingShuState.isPresentationStopIntent("停一下"))
+        XCTAssertTrue(LingShuPresentationSkill.isPresentationPauseIntent("暂停一下"))
+        XCTAssertTrue(LingShuPresentationSkill.isPresentationPauseIntent("先停一下"))
+        XCTAssertFalse(LingShuPresentationSkill.isPresentationStopIntent("暂停一下"), "「暂停」不能被当成停止")
+        XCTAssertFalse(LingShuPresentationSkill.isPresentationStopIntent("停一下"))
     }
     func testStopIntentStillWorks() {
-        XCTAssertTrue(LingShuState.isPresentationStopIntent("停止演示"))
-        XCTAssertTrue(LingShuState.isPresentationStopIntent("不看了"))
-        XCTAssertTrue(LingShuState.isPresentationStopIntent("退出演示"))
+        XCTAssertTrue(LingShuPresentationSkill.isPresentationStopIntent("停止演示"))
+        XCTAssertTrue(LingShuPresentationSkill.isPresentationStopIntent("不看了"))
+        XCTAssertTrue(LingShuPresentationSkill.isPresentationStopIntent("退出演示"))
     }
     func testResumeIntent() {
-        XCTAssertTrue(LingShuState.isPresentationResumeIntent("继续"))
-        XCTAssertTrue(LingShuState.isPresentationResumeIntent("接着讲"))
-        XCTAssertFalse(LingShuState.isPresentationResumeIntent("这页讲的是什么"), "普通问题不算继续")
+        XCTAssertTrue(LingShuPresentationSkill.isPresentationResumeIntent("继续"))
+        XCTAssertTrue(LingShuPresentationSkill.isPresentationResumeIntent("接着讲"))
+        XCTAssertFalse(LingShuPresentationSkill.isPresentationResumeIntent("这页讲的是什么"), "普通问题不算继续")
     }
     @MainActor func testSeekIntentFallback() {
-        if case .seek(let p) = LingShuState.fallbackPresentationIntent("跳到第5页").intent { XCTAssertEqual(p, 5) }
+        if case .seek(let p) = LingShuPresentationSkill.fallbackPresentationIntent("跳到第5页").intent { XCTAssertEqual(p, 5) }
         else { XCTFail("「跳到第5页」应判为 seek(5)") }
-        if case .seek(let p) = LingShuState.fallbackPresentationIntent("翻到第3页").intent { XCTAssertEqual(p, 3) }
+        if case .seek(let p) = LingShuPresentationSkill.fallbackPresentationIntent("翻到第3页").intent { XCTAssertEqual(p, 3) }
         else { XCTFail("「翻到第3页」应判为 seek(3)") }
-        if case .question = LingShuState.fallbackPresentationIntent("这页讲的是啥").intent {} else { XCTFail("普通问题不该判成跳页") }
+        if case .question = LingShuPresentationSkill.fallbackPresentationIntent("这页讲的是啥").intent {} else { XCTFail("普通问题不该判成跳页") }
+    }
+
+    /// 确定性跳页检测(纠正大脑把跳页误判成提问;用户实测「从第2页开始讲解」被当成问题)。
+    func testExplicitSeekPageDetectsNavButNotQuestions() {
+        XCTAssertEqual(LingShuPresentationSkill.explicitSeekPage("从第2页开始讲解"), 2, "「从第2页开始讲解」必须判成跳页")
+        XCTAssertEqual(LingShuPresentationSkill.explicitSeekPage("从第二页开始讲解"), 2, "中文数字「第二页」也必须判成跳页(用户实测失效)")
+        XCTAssertEqual(LingShuPresentationSkill.explicitSeekPage("回到第一页"), 1, "「回到第一页」中文数字")
+        XCTAssertEqual(LingShuPresentationSkill.explicitSeekPage("跳到第十页"), 10)
+        XCTAssertEqual(LingShuPresentationSkill.explicitSeekPage("跳到第5页"), 5)
+        XCTAssertEqual(LingShuPresentationSkill.explicitSeekPage("从第3页讲起"), 3)
+        XCTAssertEqual(LingShuPresentationSkill.explicitSeekPage("第4页"), 4)
+        XCTAssertEqual(LingShuPresentationSkill.explicitSeekPage("2"), 2)
+        // 带数字的提问不能误判成跳页
+        XCTAssertNil(LingShuPresentationSkill.explicitSeekPage("第2页那个引擎为什么选 three.js"))
+        XCTAssertNil(LingShuPresentationSkill.explicitSeekPage("这页有3个要点吗"))
+        XCTAssertNil(LingShuPresentationSkill.explicitSeekPage("讲得不错"))
     }
 }

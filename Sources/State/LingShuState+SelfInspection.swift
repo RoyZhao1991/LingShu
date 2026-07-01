@@ -29,8 +29,14 @@ extension LingShuState {
         if agents.isEmpty {
             capabilities.append(.init(title: "🤝 已接入 agent 插件", items: ["(暂无;跟我说『本机有 X,可执行…,调用…』即注册)"]))
         } else {
+            // 每个 agent 后挂上它**自带的已启用子能力**(适配器发现的,如 codex 的 picsart/film-visual-pipeline 出图)——
+            // 让大脑自检/路由时知道"该 agent 能干这些专长事",而不是自己硬扛(如出图)。
             capabilities.append(.init(title: "🤝 已接入 agent 插件(\(agents.count))",
-                                      items: agents.map { "@\($0.displayName)(\($0.role.rawValue))\($0.isAvailableNow ? "" : " · 当前不可用")" }))
+                items: agents.map { agent in
+                    let caps = agentCapabilities(for: agent.id).filter { $0.enabled && $0.installed }.map(\.name)
+                    let suffix = caps.isEmpty ? "" : " · 自带能力:\(caps.prefix(8).joined(separator: "、"))" + (caps.count > 8 ? "…" : "")
+                    return "@\(agent.displayName)(\(agent.role.rawValue))\(agent.isAvailableNow ? "" : " · 当前不可用")\(suffix)"
+                }))
         }
 
         // 已学会的过程技能。

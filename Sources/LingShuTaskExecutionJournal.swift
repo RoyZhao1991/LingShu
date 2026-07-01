@@ -28,10 +28,11 @@ enum LingShuTaskExecutionStatus: String, Codable, Equatable, Sendable {
         }
     }
 
-    /// 可被「继续」优先恢复的未竟态(spec 第14条:续接优先恢复 blocked/partial/waitingForUser)。
+    /// 可被「继续」优先恢复的未竟态(spec 第14条:续接优先恢复 blocked/partial/needsRevision/waitingForUser)。
+    /// **needsRevision(未达标·评审未通过已交还)同样可续**:「需修正后重验」就是要返工再来,理应能被「继续」恢复(与原 .partial 等价)。
     var isResumableUnfinished: Bool {
         switch self {
-        case .blocked, .partial, .waitingForUser, .suspended, .acquiringCapability: return true
+        case .blocked, .partial, .needsRevision, .waitingForUser, .suspended, .acquiringCapability: return true
         default: return false
         }
     }
