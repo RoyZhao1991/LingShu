@@ -1,14 +1,11 @@
 import Foundation
 
-/// agent 工具集执行策略:决定暴露哪些原语、run_command 是否放行。
-/// 主会话默认 `.standard`;自主运行按权限级映射(观察=只读 / 代理=标准 / 完整授权=直接放行)。
 enum LingShuAgentExecutionPolicy: Equatable {
     case standard        // 常规:全工具,run_command 依 requireHumanApproval 走审批门
     case readOnly        // 只读:仅 read_file/list_directory/fetch_url,不暴露写/执行/外部工具
     case autoAllowShell  // 直接放行:全工具,run_command 不再弹审批(完整授权)
 }
 
-/// 主问答线的一条待执行回合。UI 队列只保存气泡 id;执行需要这些边界数据来保证一问一答不串台。
 struct LingShuPendingMainTurn: Sendable {
     let bubbleID: UUID
     let prompt: String
@@ -78,23 +75,19 @@ extension LingShuState {
             }
             return "我需要你先定一下:\(question)"
         case .maxTurnsReached(let value): return value.isEmpty ? "（本轮未能收尾,请补充信息）" : value
-        case .interrupted(let reason): return reason.isEmpty ? "（网络中断,已暂停——联网后我会自动接着跑。）" : reason
+        case .interrupted(let reason):
+            let message = LingShuModelServiceFailure.suspendedSummary(for: reason)
+            return message.isEmpty ? "（模型通道暂不可用，已暂停——通道恢复后我会自动接着跑。）" : message
         }
     }
 
-    /// 交付是否【真声称产出了文件】(才触发验收门)。必须同时有"产出动词"+"文件线索"——
-    /// 避免自我介绍里提"文件读写/工作目录"这类描述性词被误判(那会拖出无意义的验收循环)。
+    /// 交付是否真声称产出了文件(才触发验收门)。
     nonisolated static func replyClaimsArtifact(_ text: String) -> Bool {
         let producedVerbs = ["已生成", "已写入", "已保存", "已创建", "已落盘", "已导出", "保存到", "写入到", "生成到", "写好了", "已写到"]
         guard producedVerbs.contains(where: { text.contains($0) }) else { return false }
         let fileHints = [".html", ".py", ".pptx", ".docx", ".md", ".csv", ".json", ".txt", ".pdf", ".sh", "/Users/", "文件", "路径"]
         return fileHints.contains { text.contains($0) }
     }
-
-    // 验收门 verifyAgentDeliverable 已移至 LingShuState+DeliveryReview.swift(与看图/取文同处一个子域)。
-    // 跨会话记忆 seed(seededDistilledMemory / identityAnchorMessage / distillConversationMemory)已拆至 LingShuState+AgentMemorySeed.swift(守 500 行架构闸)。
-
-    // 编排器事件桥接 + 子任务→主线程简报已拆为独立模块 → LingShuState+AgentOrchestration.swift。
 
     /// 常驻主 agent 会话(懒构造,保对话连续)。首次构造时蒸馏跨会话记忆做 seed。
     func mainAgentSession() async -> any LingShuAgentSessioning {
@@ -177,7 +170,7 @@ extension LingShuState {
         // P1 目标认知消费:记录里有 typed GoalSpec(含重启后从盘加载的)则注入执行引导(据目标/约束/边界/风险/成功标准推进,别跑偏)。
         // P2 能力缺口消费:有缺口分析则在目标引导之上再叠加"缺口与补齐计划"(先按补齐路径取得能力再推进,真补不了如实告知)。
         let turnGuidance = Self.turnBoundaryGuidance(for: prompt, base: guidance)
-        let contextualGuidance = [turnGuidance, currentVisibleInteractionGuidance(for: prompt)]
+        let contextualGuidance = [turnGuidance, currentWorkingDirectoryGuidance(), currentVisibleInteractionGuidance(for: prompt)]
             .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
             .joined(separator: "\n\n")
@@ -237,12 +230,14 @@ extension LingShuState {
         let page = previewController.displayedPageNumber
         let total = previewController.pageCount > 0 ? "\(previewController.pageCount)" : "连续页面"
         let mode = previewController.slideshow ? "全屏演示中" : "普通预览中"
+        let isQuestion = LingShuInteractionFulfillment.isQuestionLike(prompt)
         let currentPageText: String
         if previewController.isHTML {
             currentPageText = "当前材料是网页/连续预览,需要时用 preview_document_text 或 preview_scroll 获取实际正文。"
         } else {
             currentPageText = previewController.pageText(max(0, page - 1))
         }
+        let documentContext = visibleDocumentContextForGuidance(currentPage: page)
         let spoken = recentSpokenLines.suffix(4)
             .map { LingShuInteractionFulfillment.cleanSpokenLine($0) }
             .filter { !$0.isEmpty }
@@ -250,7 +245,9 @@ extension LingShuState {
         return """
         【当前可视交互上下文】
         灵枢现在正打开材料「\(title)」,\(mode),当前第 \(page)/\(total) 页。用户此轮若在问"刚才/这页/继续/下一页/老师提问/答疑/收尾",默认就是围绕这个可视材料继续互动,不要重新生成材料、不要切到无关旧任务。
+        \(isQuestion ? "本轮输入更像提问/答疑:最终回复必须直接回答用户的问题,先给结论,再用材料里的目标、流程、角色、证据或交付闭环说明理由;不要只复述当前页摘要,不要只写状态。" : "")
         \(currentPageText.isEmpty ? "" : "当前页可读内容:\n\(String(currentPageText.prefix(1200)))")
+        \(documentContext.isEmpty ? "" : "当前材料可读内容摘录:\n\(documentContext)")
         \(spoken.isEmpty ? "" : "最近已经口头讲过:\n\(String(spoken.prefix(1200)))")
 
         交互铁律:
@@ -258,6 +255,30 @@ extension LingShuState {
         - 继续演示/汇报时,保持同一上下文:preview_document_text 读实际内容,用 speak 讲,用 preview_next/preview_scroll 推进;需要占屏连续演示就进入/保持自主模式。
         - 收尾/退出时明确关闭预览或退出全屏,并用一句话确认。
         """
+    }
+
+    /// 给可视材料追问使用的轻量正文摘录。只提供事实上下文,不决定答案、不绑定文件类型或题材。
+    func visibleDocumentContextForGuidance(currentPage: Int, maxPages: Int = 6, maxChars: Int = 2_800) -> String {
+        guard !previewController.isHTML, previewController.pageCount > 0 else { return "" }
+        let total = previewController.pageCount
+        let currentIndex = min(max(currentPage - 1, 0), total - 1)
+        var indices: [Int] = [currentIndex]
+        for idx in 0..<total where indices.count < maxPages {
+            if !indices.contains(idx) { indices.append(idx) }
+        }
+        indices.sort()
+
+        var remaining = maxChars
+        var parts: [String] = []
+        for idx in indices where remaining > 0 {
+            let text = previewController.pageText(idx)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !text.isEmpty else { continue }
+            let chunk = "第 \(idx + 1) 页:\n\(String(text.prefix(min(600, remaining))))"
+            parts.append(chunk)
+            remaining -= chunk.count
+        }
+        return parts.joined(separator: "\n---\n")
     }
 
     /// 主入口:常规输入交给主 agent 会话(异步跑循环,结果回填气泡)。
@@ -325,6 +346,22 @@ extension LingShuState {
         }
         executingChatTurnID = pendingID
         currentAgentTurnRecordID = turn.taskRecordID
+        let previousWorkingDirectoryOverride = currentAgentWorkingDirectoryOverride
+        if let explicitWorkingDirectory = Self.explicitWorkingDirectoryHint(in: turn.prompt) {
+            try? FileManager.default.createDirectory(
+                at: URL(fileURLWithPath: explicitWorkingDirectory),
+                withIntermediateDirectories: true
+            )
+            currentAgentWorkingDirectoryOverride = explicitWorkingDirectory
+            appendTrace(kind: .route, actor: "工作目录", title: "本轮目录已锁定", detail: explicitWorkingDirectory)
+            appendTaskRecordMessage(
+                turn.taskRecordID,
+                actor: "工作目录",
+                role: "本轮边界",
+                kind: .router,
+                text: "本轮产出将默认落到:\(explicitWorkingDirectory)"
+            )
+        }
         isModelReplying = true
         missionTitle = "理解需求"
         missionStatus = "正在推进这件事(按需读写文件、跑命令、联网查证)。"
@@ -336,6 +373,7 @@ extension LingShuState {
             if executingChatTurnID == pendingID { executingChatTurnID = nil }
             completeMainTurnQueueSlot(pendingID)
             if currentAgentTurnRecordID == turn.taskRecordID { currentAgentTurnRecordID = nil }
+            currentAgentWorkingDirectoryOverride = previousWorkingDirectoryOverride
             scheduleNextMainTurnIfIdle()
             // 单串行:本条问答完全返回 → 若已空闲,出队串行队列里的下一条输入。
             drainSerialInputsIfIdle()
@@ -416,12 +454,14 @@ extension LingShuState {
                 return
             }
             suspendedMainTurn = (bubbleID: pendingID, recordID: turn.taskRecordID, prompt: turn.prompt, startedAt: turn.startedAt)
+            suspendedMainReason = reason
+            let message = LingShuModelServiceFailure.suspendedSummary(for: reason)
             if let index = chatMessages.firstIndex(where: { $0.id == pendingID }) {
-                chatMessages[index].text = "🌐 网络中断,已暂停——联网后我会自动接着把这条跑完。\n(\(reason))"
+                chatMessages[index].text = "⏸ \(message)"
                 chatMessages[index].isLoading = false
             }
-            appendTaskRecordMessage(turn.taskRecordID, actor: "灵枢", role: "暂停", kind: .warning, text: "网络中断,已暂停,联网后自动续。")
-            finishTaskRecord(turn.taskRecordID, status: .suspended, summary: "网络中断已暂停,联网后自动续跑。")
+            appendTaskRecordMessage(turn.taskRecordID, actor: "模型通道", role: "暂停", kind: .warning, text: message)
+            finishTaskRecord(turn.taskRecordID, status: .suspended, summary: message)
             startNetworkRetryLoopIfNeeded()
             return
         }
@@ -479,7 +519,9 @@ extension LingShuState {
         if renderHumanInputBlockIfNeeded(result: result, bubbleID: bubbleID, recordID: recordID, prompt: prompt, startedAt: startedAt) {
             return
         }
-        let text = Self.runResultText(result)
+        let rawText = Self.runResultText(result)
+        let visibleRawText = LingShuStructuredModelOutput.visibleText(from: rawText)
+        let text = normalizeFinalVisibleInteractionText(visibleRawText, prompt: prompt, recordID: recordID)
         // 回复末尾加总用时(极简语音模式不加——会被 TTS 念出来,且那是纯对话)。记录/记忆仍存干净 text。
         let elapsed = Date().timeIntervalSince(startedAt)
         let displayText = isMinimalVoiceMode ? text : "\(text)\n\n⏱ 总用时 \(Self.formatElapsed(elapsed))"

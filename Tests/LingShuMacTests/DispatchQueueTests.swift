@@ -4,44 +4,238 @@ import XCTest
 /// 派发队列区:并发判定(纯)+ 入队/删除(状态)。
 final class DispatchQueueTests: XCTestCase {
 
-    func testObviousExecutionRequestsBypassModelTriage() {
-        XCTAssertTrue(
-            LingShuState.isObviousExecutionRequest("把我今天待办同步到一个尚未授权的外部知识库。没有授权就不要假装完成,告诉我下一步需要什么。"),
-            "明确动作+外部系统边界必须先进任务流,不能被模型误分成普通问答"
+    func testContextResolverOnlyRoutesHighConfidenceReplies() {
+        let threads = [TriageThread(label: "T1", recordID: "record-1", summary: "⏳正等你回答")]
+        let decision = LingShuState.parseContextResolverDecision(
+            #"{"route":"reply","thread":"T1","confidence":"high"}"#,
+            threads: threads
+        )
+
+        XCTAssertEqual(decision.kind, .reply)
+        XCTAssertEqual(decision.replyRecordID, "record-1")
+    }
+
+    func testContextResolverDoesNotGuessOnLowConfidenceOrMissingThread() {
+        let threads = [TriageThread(label: "T1", recordID: "record-1", summary: "⏳正等你回答")]
+
+        let low = LingShuState.parseContextResolverDecision(
+            #"{"route":"reply","thread":"T1","confidence":"low"}"#,
+            threads: threads
+        )
+        XCTAssertEqual(low.kind, .chat, "低置信不归属,交主脑按最近上下文处理")
+
+        let missing = LingShuState.parseContextResolverDecision(
+            #"{"route":"reply","thread":"T9","confidence":"high"}"#,
+            threads: threads
+        )
+        XCTAssertEqual(missing.kind, .chat, "模型引用不存在的候选线程时不能兜到第一条,避免错接")
+    }
+
+    func testAttachmentInputContinuationGuard() {
+        XCTAssertFalse(
+            LingShuState.waitingQuestionAcceptsAttachment("需要你提供外部服务授权或 API Key 后才能继续。"),
+            "授权/凭据类待答复不应默认吞掉下一条带附件的新任务"
         )
         XCTAssertTrue(
-            LingShuState.isObviousExecutionRequest("看看现在这个网络里有没有能无线投屏的电视/盒子,找出来告诉我"),
-            "设备/网络发现是现实任务,应进入任务/权限/队列机制"
+            LingShuState.waitingQuestionAcceptsAttachment("请上传要分析的文件或给我本机路径。")
         )
         XCTAssertTrue(
-            LingShuState.isObviousExecutionRequest("在目录 /tmp/lingshu 写 add.py,实现 add(a,b) 并运行测试"),
-            "指定路径和产出物的执行请求必须进入任务流"
+            LingShuState.attachmentInputExplicitlyContinuesPendingThread("这是你要的文件,继续刚才那件事。")
+        )
+        XCTAssertFalse(
+            LingShuState.attachmentInputExplicitlyContinuesPendingThread("总结我刚才附件里的三条待办。"),
+            "附件本身是新证据,没有明确指代旧任务时不应被待答复线程劫持"
         )
         XCTAssertTrue(
-            LingShuState.isObviousExecutionRequest("总结我刚才附件里的三条待办,用三点列表回答。"),
-            "附件总结/分析是新的可执行目标,不能被上一条等待中的任务劫持"
+            LingShuState.inputMentionsGroundedEvidence("总结我刚才附件里的三条待办。"),
+            "即使附件托盘状态没带出,证据型输入也要受归属保护"
+        )
+        XCTAssertFalse(
+            LingShuState.groundedInputCanAnswerPendingQuestion(
+                visiblePrompt: "总结我刚才附件里的三条待办。",
+                pendingQuestion: "请上传要分析的文件或给我本机路径。",
+                hasAttachments: true
+            ),
+            "围绕附件提出新目标时,不能仅因旧问题接受文件就续回旧线程"
+        )
+        XCTAssertTrue(
+            LingShuState.groundedInputCanAnswerPendingQuestion(
+                visiblePrompt: "已上传 1 个文件",
+                pendingQuestion: "请上传要分析的文件或给我本机路径。",
+                hasAttachments: true
+            ),
+            "旧问题明确要文件,而用户只是交附件时,可以续回旧线程"
         )
     }
 
-    func testExplanationQuestionsStayInChatLane() {
-        XCTAssertFalse(LingShuState.isObviousExecutionRequest("什么是 HTTP 第 3 问"))
-        XCTAssertFalse(LingShuState.isObviousExecutionRequest("介绍一下你自己"))
-        XCTAssertFalse(LingShuState.isObviousExecutionRequest("为什么搞个简单计算器还要我来定?"))
-    }
+    func testPendingQuestionGuardDoesNotConsumeStandaloneObjective() {
+        let pending = "需要你提供外部知识库授权或 API Key 后才能继续。"
 
-    func testOneSentenceAdviceStaysInChatLane() {
         XCTAssertFalse(
-            LingShuState.isObviousExecutionRequest("给我一句话提醒如何避免任务切换混乱。"),
-            "一句话提醒是普通答复,不能被硬门误判为系统提醒/落盘任务"
+            LingShuState.inputCanAnswerPendingQuestion(
+                visiblePrompt: "看看现在这台电脑周围有哪些可发现的外设和投屏设备,只做发现和分类,不要要求我提供账号。",
+                pendingQuestion: pending,
+                hasAttachments: false
+            ),
+            "受保护前提等待中,新的完整目标不能被当成旧问题答案"
         )
         XCTAssertFalse(
-            LingShuState.isObviousExecutionRequest("用一句话说明执行记录有什么用。"),
-            "一句话说明是普通答复,不应过度产物化"
+            LingShuState.inputCanAnswerPendingQuestion(
+                visiblePrompt: "灵枢,这是一条语音入口压测。听到后用一句话说:语音入口可用。",
+                pendingQuestion: pending,
+                hasAttachments: false
+            ),
+            "让灵枢说一句话/回答一句话也是新的完整目标,不能被旧授权问题吞掉"
         )
         XCTAssertTrue(
-            LingShuState.isObviousExecutionRequest("明天提醒我开会"),
-            "真正的提醒/日程动作仍应允许进入任务流"
+            LingShuState.inputCanAnswerPendingQuestion(
+                visiblePrompt: "确认授权,继续。",
+                pendingQuestion: pending,
+                hasAttachments: false
+            ),
+            "真正回答授权/凭据前提时仍应续回旧线程"
         )
+    }
+
+    @MainActor
+    func testStandaloneObjectiveDoesNotRouteToUnrelatedPendingMainQuestion() async throws {
+        let state = LingShuState()
+        let rid = state.createTaskExecutionRecord(for: "同步到外部知识库")
+        defer {
+            state.pendingMainQuestionRecordID = nil
+            state.taskExecutionRecords.removeAll { $0.id == rid }
+            state.persistTaskExecutionRecords()
+            state.taskExecutionJournal.flush()
+        }
+        state.pendingMainQuestionRecordID = rid
+        state.appendTaskRecordMessage(
+            rid,
+            actor: "灵枢",
+            role: "待用户",
+            kind: .warning,
+            text: "需要你提供外部知识库授权或 API Key 后才能继续。"
+        )
+
+        let decision = await state.classifyDispatch(
+            "看看现在这台电脑周围有哪些可发现的外设和投屏设备,只做发现和分类,不要要求我提供账号。",
+            hasAttachments: false
+        )
+
+        XCTAssertEqual(decision.kind, .chat)
+        XCTAssertNil(decision.replyRecordID, "无附件的新完整目标也不能续回无关的授权等待线程")
+    }
+
+    @MainActor
+    func testAttachmentInputDoesNotRouteToUnrelatedPendingMainQuestion() async throws {
+        let state = LingShuState()
+        let rid = state.createTaskExecutionRecord(for: "同步到外部知识库")
+        defer {
+            state.pendingMainQuestionRecordID = nil
+            state.taskExecutionRecords.removeAll { $0.id == rid }
+            state.persistTaskExecutionRecords()
+            state.taskExecutionJournal.flush()
+        }
+        state.pendingMainQuestionRecordID = rid
+        state.appendTaskRecordMessage(
+            rid,
+            actor: "灵枢",
+            role: "待用户",
+            kind: .warning,
+            text: "需要你提供外部知识库授权或 API Key 后才能继续。"
+        )
+
+        let decision = await state.classifyDispatch(
+            """
+            总结我刚才附件里的三条待办,用三点列表回答。
+
+            【附件元信息】
+            - meeting_note.md @ /tmp/meeting_note.md
+            """,
+            hasAttachments: true
+        )
+
+        XCTAssertEqual(decision.kind, .chat)
+        XCTAssertNil(decision.replyRecordID, "带附件的新 grounded turn 不应续回无关的授权等待线程")
+    }
+
+    @MainActor
+    func testAttachmentRoutingUsesVisiblePromptInsteadOfExpandedModelPrompt() async throws {
+        let state = LingShuState()
+        let rid = state.createTaskExecutionRecord(for: "等待外部系统授权")
+        defer {
+            state.pendingMainQuestionRecordID = nil
+            state.taskExecutionRecords.removeAll { $0.id == rid }
+            state.persistTaskExecutionRecords()
+            state.taskExecutionJournal.flush()
+        }
+        state.pendingMainQuestionRecordID = rid
+        state.appendTaskRecordMessage(
+            rid,
+            actor: "灵枢",
+            role: "待用户",
+            kind: .warning,
+            text: "需要你提供外部系统授权或 API Key 后才能继续。"
+        )
+
+        let visible = "总结我刚才附件里的三条待办,用三点列表回答。"
+        let expanded = """
+        \(visible)
+
+        【附件元信息】
+        - meeting_note.md @ /tmp/meeting_note.md
+
+        【附件使用规则】
+        如果用户要求读取、预览、演示、修改或基于附件继续工作,优先使用本轮附件。
+        """
+        let decision = await state.classifyDispatch(expanded, hasAttachments: true, visiblePrompt: visible)
+
+        XCTAssertEqual(decision.kind, .chat)
+        XCTAssertNil(decision.replyRecordID, "路由归属只能看用户原话;附件规则里的“继续”不能把输入错接到无关待答复线程")
+    }
+
+    @MainActor
+    func testKernelGateDoesNotHardDispatchChatFromActionHintCompatibilityField() {
+        let state = LingShuState()
+        let decision = LingShuState.DispatchDecision(
+            kind: .chat,
+            goal: nil,
+            replyRecordID: nil,
+            confidence: .high,
+            actionHint: true
+        )
+
+        XCTAssertEqual(state.kernelGate(decision, goalSpec: nil), .execute)
+    }
+
+    func testActiveTurnPreflightCapabilityOnlyForTaskAndInteraction() {
+        XCTAssertTrue(LingShuState.goalKindNeedsCapabilityPreflight(.task))
+        XCTAssertTrue(LingShuState.goalKindNeedsCapabilityPreflight(.interaction))
+        XCTAssertFalse(LingShuState.goalKindNeedsCapabilityPreflight(.question))
+        XCTAssertFalse(LingShuState.goalKindNeedsCapabilityPreflight(.unknown))
+        XCTAssertFalse(LingShuState.goalKindNeedsCapabilityPreflight(nil))
+    }
+
+    func testActiveTurnPreflightTraceUsesStructuredFormat() {
+        let trace = LingShuState.activeTurnPreflightTrace(
+            stage: "bind_record",
+            route: "active_turn",
+            recordID: "record-1",
+            goalKind: .task,
+            capabilityPreflight: true,
+            requirementsCount: 2,
+            hasGap: true,
+            reason: "goal_kind_requires_capability_check"
+        )
+
+        XCTAssertTrue(trace.contains("flow=active_turn"))
+        XCTAssertTrue(trace.contains("stage=bind_record"))
+        XCTAssertTrue(trace.contains("route=active_turn"))
+        XCTAssertTrue(trace.contains("record=record-1"))
+        XCTAssertTrue(trace.contains("goalKind=task"))
+        XCTAssertTrue(trace.contains("capabilityPreflight=on"))
+        XCTAssertTrue(trace.contains("requirements=2"))
+        XCTAssertTrue(trace.contains("gap=present"))
+        XCTAssertTrue(trace.contains("reason=goal_kind_requires_capability_check"))
     }
 
     func testShouldQueueWhenAtOrOverCapacity() {
@@ -77,6 +271,25 @@ final class DispatchQueueTests: XCTestCase {
         let item = state.queuedDispatchTasks.first
         XCTAssertEqual(item?.goalSpec?.objective, "同步到 Notion", "入队带前置认知,晋级时直接绑定免重派生")
         XCTAssertEqual(item?.requirements.first?.verb, .externalSystemWrite)
+    }
+
+    @MainActor
+    func testQueuedDispatchKeepsVisiblePromptSeparateFromModelPrompt() {
+        let state = LingShuState()
+        let modelPrompt = "附件正文:继续/记录/演示\n\n用户指令：\n演示这份 PPT"
+
+        state.enqueueDispatchTask(
+            prompt: modelPrompt,
+            visiblePrompt: "演示这份 PPT",
+            goal: "演示这份 PPT",
+            goalSpec: nil,
+            gap: nil,
+            requirements: []
+        )
+
+        let item = state.queuedDispatchTasks.first
+        XCTAssertEqual(item?.prompt, modelPrompt)
+        XCTAssertEqual(item?.visiblePrompt, "演示这份 PPT")
     }
 
     @MainActor

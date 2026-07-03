@@ -168,6 +168,20 @@ final class PresentationControllerTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(rec.interrupts, 1, "停止时掐了当前 TTS")
     }
 
+    func testRequestStopImmediatelyDeactivatesPresentation() async {
+        let rec = Recorder()
+        rec.pauseAfterSpeak = 1
+        let c = make(["/a.pdf": ["p0", "p1", "p2"]], rec)
+        await c.buildQueue(documentPaths: ["/a.pdf"])
+        await c.play()
+        XCTAssertEqual(c.phase, .pausedForQA)
+        XCTAssertTrue(c.isActive)
+        c.requestStop()
+        XCTAssertEqual(c.phase, .finished, "同步停止必须立即释放演示 active 态,不能等旧播放任务自然收尾")
+        XCTAssertFalse(c.isActive, "停止后下一条普通输入不应再被演示链路截获")
+        XCTAssertGreaterThanOrEqual(rec.interrupts, 1, "同步停止也要掐掉当前 TTS")
+    }
+
     func testPrefetchesNextPageDuringPlayback() async {
         let rec = Recorder()
         let c = make(["/a.pdf": ["p0", "p1", "p2"]], rec)

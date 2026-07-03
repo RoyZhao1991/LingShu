@@ -74,7 +74,10 @@ extension LingShuState {
         let chain = LingShuDeclarativeInvocation.detectChain(prompt, plugins: plugins)
         lingShuControlLog("声明式链解析: 输入「\(prompt.prefix(30))」可调=\(plugins.map(\.id)) → 链=\(chain.map { "\($0.id)::\($0.segment.prefix(14))" })")
         if !chain.isEmpty {
-            if appendUserMessage { chatMessages.append(.init(speaker: "你", text: prompt, isUser: true)) }
+            if appendUserMessage {
+                chatMessages.append(.init(speaker: "你", text: prompt, isUser: true))
+                requestChatScrollToLatestForUserSend()
+            }
             appendTrace(kind: .route, actor: "声明式调用", title: "用户显式指定",
                         detail: "链:\(chain.map { $0.id }.joined(separator: " → "))(跳过大脑分诊)")
             runInvocationChain(chain.map { (id: $0.id, segment: $0.segment) }, plugins: plugins, fullPrompt: full)
@@ -82,7 +85,10 @@ extension LingShuState {
         }
         // ③ 单个 `@X` 声明。
         if let hit = LingShuDeclarativeInvocation.detect(prompt, plugins: plugins) {
-            if appendUserMessage { chatMessages.append(.init(speaker: "你", text: prompt, isUser: true)) }
+            if appendUserMessage {
+                chatMessages.append(.init(speaker: "你", text: prompt, isUser: true))
+                requestChatScrollToLatestForUserSend()
+            }
             runInvocationChain([(id: hit.id, segment: hit.rest)], plugins: plugins, fullPrompt: full)
             return true
         }

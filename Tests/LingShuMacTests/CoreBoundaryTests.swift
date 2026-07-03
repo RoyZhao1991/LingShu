@@ -170,6 +170,29 @@ final class CoreBoundaryTests: XCTestCase {
         XCTAssertNil(LingShuState.explicitLocalMemoryFact(from: "我把记录一下写在材料里, 不是让你记忆。"))
     }
 
+    func testTurnInputEnvelopeKeepsAttachmentBodyOutOfTriage() {
+        let modelPrompt = """
+        用户上传了以下文件，请基于它们的真实内容来理解、读取、修改、预览、演示或按需交付：
+        【演示文稿：灵枢自我介绍_新版.pptx】
+        本机路径:/tmp/灵枢自我介绍_新版.pptx
+        正文片段:这一页包含「继续」「记录一下」「演示」等材料正文。
+
+        用户指令：
+        演示一下这个 PPT
+        """
+        let input = LingShuTurnInputEnvelope(
+            visibleText: "演示一下这个 PPT",
+            modelPrompt: modelPrompt,
+            attachmentNames: ["灵枢自我介绍_新版.pptx"],
+            attachmentPaths: ["/tmp/灵枢自我介绍_新版.pptx"]
+        )
+
+        XCTAssertTrue(input.modelPrompt.contains("记录一下"), "执行层仍能看到附件正文")
+        XCTAssertTrue(input.triageText.contains("演示一下这个 PPT"))
+        XCTAssertTrue(input.triageText.contains("灵枢自我介绍_新版.pptx"))
+        XCTAssertFalse(input.triageText.contains("记录一下"), "分诊只看用户意图和附件元信息,不能被附件正文污染")
+    }
+
     func testRemoteSessionPoolReusesWarmNativeRoutingSession() {
         let defaults = UserDefaults(suiteName: "lingshu.remote-session.tests.\(UUID().uuidString)")!
         let pool = LingShuRemoteSessionPool(defaults: defaults, maxHotSessions: 4, warmTTL: 600)

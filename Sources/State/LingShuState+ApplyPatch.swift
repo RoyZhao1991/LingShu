@@ -8,7 +8,10 @@ extension LingShuState {
 
     /// 构造 apply_patch 工具(像 applySkillTool 一样单独挂,**不走 parseArgs 扁平化**——hunks 是嵌套数组,
     /// handler 直接拿原始 argsJSON 解析)。recordIDProvider/workingDirectory 由 agentBuiltinTools 注入。
-    func applyPatchAgentTool(recordIDProvider: @escaping @MainActor @Sendable () -> String?, workingDirectory: String) -> LingShuAgentTool {
+    func applyPatchAgentTool(
+        recordIDProvider: @escaping @MainActor @Sendable () -> String?,
+        workingDirectoryProvider: @escaping @MainActor @Sendable () -> String
+    ) -> LingShuAgentTool {
         let schema = """
         {"type":"object","properties":{"hunks":{"type":"array","description":"多文件多处编辑的 hunk 列表;每项 {file:绝对路径, old:要替换的原文(带足上下文以唯一定位;新建文件留空), new:替换为}。事务性:任一 hunk 定位失败则整批不改。","items":{"type":"object","properties":{"file":{"type":"string"},"old":{"type":"string"},"new":{"type":"string"}},"required":["file","new"]}}},"required":["hunks"]}
         """
@@ -18,6 +21,7 @@ extension LingShuState {
             parametersJSON: schema
         ) { [weak self] argsJSON in
             guard let self else { return "执行环境不可用" }
+            let workingDirectory = await workingDirectoryProvider()
             return await self.runApplyPatch(argsJSON: argsJSON, recordID: recordIDProvider(), workingDirectory: workingDirectory)
         }
     }

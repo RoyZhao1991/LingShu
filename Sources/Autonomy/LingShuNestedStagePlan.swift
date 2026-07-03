@@ -169,8 +169,12 @@ enum LingShuNestedStagePlanner {
     static func isExitPresentationCommand(_ userText: String) -> Bool {
         let t = userText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !t.isEmpty else { return false }
-        let exits = ["退出演示", "关闭演示", "结束演示", "关掉演示", "关了演示", "退出全屏", "退出放映", "结束放映",
-                     "关掉ppt", "关闭ppt", "关掉PPT", "关闭PPT", "别演示了", "不演示了", "不看了", "关掉幻灯", "关闭幻灯"]
+        let exits = [
+            "退出演示", "关闭演示", "结束演示", "关掉演示", "关了演示",
+            "退出全屏", "退出放映", "结束放映",
+            "关闭预览", "关掉预览", "收起预览", "关闭材料", "收起材料", "演示收尾",
+            "关掉ppt", "关闭ppt", "关掉PPT", "关闭PPT", "别演示了", "不演示了", "不看了", "关掉幻灯", "关闭幻灯"
+        ]
         return exits.contains { t.contains($0) }
     }
 

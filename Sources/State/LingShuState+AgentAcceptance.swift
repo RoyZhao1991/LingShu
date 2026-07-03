@@ -43,7 +43,7 @@ extension LingShuState {
             let composed = await composeDeliveryMessage(userRequest: userRequest, makerText: text, taskRecordID: taskRecordID)
             settled = .completed(text: composed)
         }
-        // 通用中枢 P2 真闭环·**防伪完成闸**(根因修复):据能力缺口/获取结果/承认无能力/成功标准判最终状态,
+        // 通用中枢完成闸(根因修复):据能力缺口/获取结果/结构化完成声明/成功标准判最终状态,
         // 可自补未试→驱动获取;需用户→waitingForUser;部分→partial;仍卡→blocked。模型口头「完成」推不翻。
         return await runCompletionGate(session: session, result: settled, userRequest: userRequest, taskRecordID: taskRecordID)
     }
@@ -131,6 +131,11 @@ extension LingShuState {
         // 对 PPT 挑刺"需修正"→返工循环,把正在演示的回合卡在「结果验证」、还误导主人(演示≠交付一个待 QA 的文件)。
         // 要单独 QA 这个 PPT,主人会另说"检查一下这个PPT"(那才是纯文件交付的工作型回合)。
         if turnDidPresent(taskRecordID) { return result }
+        if case .completed = result,
+           readOnlyObservationDeliveryCanFinish(recordID: taskRecordID, userRequest: userRequest, reply: Self.runResultText(result)) {
+            appendTrace(kind: .result, actor: "验收", title: "只读观察证据充足", detail: "本轮目标是观察/发现/分类,执行记录已有只读证据与可读结论,跳过返工验收。")
+            return result
+        }
         // 动作型任务也要过专家验收:有**真实动作工具成功执行**(控设备/操作电脑/控外设/浏览器…非读取元工具)
         // 但没产文件的回合(如"开灯""下单到真平台")原来不触发验收 → 真做没做到没人核实。现一并送审。
         // (注:run_command/curl 属元工具不计入——纯命令脚本壳无法确定性核实真实世界效果,需经真连接器/动作工具才计。)

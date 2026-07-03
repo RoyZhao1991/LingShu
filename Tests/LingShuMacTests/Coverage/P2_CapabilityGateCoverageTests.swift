@@ -1,8 +1,8 @@
 import XCTest
 @testable import LingShuMac
 
-/// 通用中枢 **P2 能力闭环 / 防伪完成闸**全覆盖(100 case):
-/// 完成闸确定性裁决矩阵 + 承认无能力语 + 获取结果分类 + 缺口阻断语义。纯逻辑无模型。
+/// 通用中枢 **能力闭环 / 防伪完成闸**全覆盖(100 case):
+/// 完成闸确定性裁决矩阵 + 结构化 completion 协议 + 获取结果分类 + 缺口阻断语义。纯逻辑无模型。
 final class P2_CapabilityGateCoverageTests: XCTestCase {
 
     private typealias I = LingShuCompletionInputs
@@ -17,8 +17,8 @@ final class P2_CapabilityGateCoverageTests: XCTestCase {
             (I(someSuccessCriteriaMet: true), .ok, "仅 met → ok"),
             (I(someSuccessCriteriaUnmet: true), .ok, "仅 unmet → ok"),
             (I(someSuccessCriteriaMet: true, someSuccessCriteriaUnmet: true), .partial, "met+unmet → partial"),
-            (I(replyAdmitsIncapacity: true), .blocked, "承认无能力+无met → blocked"),
-            (I(replyAdmitsIncapacity: true, someSuccessCriteriaMet: true), .partial, "承认+met → partial"),
+            (I(modelDeclaredBlocked: true), .blocked, "结构化 blocked+无met → blocked"),
+            (I(modelDeclaredBlocked: true, someSuccessCriteriaMet: true), .partial, "结构化 blocked+met → partial"),
             // 阻断 + 需用户
             (I(hasUnresolvedBlockingGap: true, unresolvedGapNeedsUser: true), .waitingForUser, "阻断+需用户 → 待用户"),
             (I(hasUnresolvedBlockingGap: true, unresolvedGapNeedsUser: true, someSuccessCriteriaMet: true), .partial, "阻断+需用户+met → partial"),
@@ -34,15 +34,15 @@ final class P2_CapabilityGateCoverageTests: XCTestCase {
             // 阻断 + acquiredVerified → 落到 ②
             (I(hasUnresolvedBlockingGap: true, acquisition: .acquiredVerified), .ok, "已验证补齐+无异常 → ok"),
             (I(hasUnresolvedBlockingGap: true, acquisition: .acquiredVerified, someSuccessCriteriaMet: true, someSuccessCriteriaUnmet: true), .partial, "已验证但met+unmet → partial"),
-            (I(hasUnresolvedBlockingGap: true, acquisition: .acquiredVerified, replyAdmitsIncapacity: true), .blocked, "已验证但仍承认无能力 → blocked"),
-            (I(hasUnresolvedBlockingGap: true, acquisition: .acquiredVerified, replyAdmitsIncapacity: true, someSuccessCriteriaMet: true), .partial, "已验证+承认+met → partial"),
-            // 优先级:① 阻断分支压过 ② 承认/met
-            (I(hasUnresolvedBlockingGap: true, unresolvedGapSelfAcquirable: true, acquisition: .notAttempted, replyAdmitsIncapacity: true), .needsAcquisition, "阻断分支压过承认语"),
-            (I(hasUnresolvedBlockingGap: true, unresolvedGapNeedsUser: true, replyAdmitsIncapacity: true), .waitingForUser, "需用户压过承认语"),
+            (I(hasUnresolvedBlockingGap: true, acquisition: .acquiredVerified, modelDeclaredBlocked: true), .blocked, "已验证但结构化 blocked → blocked"),
+            (I(hasUnresolvedBlockingGap: true, acquisition: .acquiredVerified, modelDeclaredBlocked: true, someSuccessCriteriaMet: true), .partial, "已验证+blocked+met → partial"),
+            // 优先级:① 阻断分支压过 ② 结构化 completion/met
+            (I(hasUnresolvedBlockingGap: true, unresolvedGapSelfAcquirable: true, acquisition: .notAttempted, modelDeclaredBlocked: true), .needsAcquisition, "阻断分支压过结构化 blocked"),
+            (I(hasUnresolvedBlockingGap: true, unresolvedGapNeedsUser: true, modelDeclaredBlocked: true), .waitingForUser, "需用户压过结构化 blocked"),
             (I(hasUnresolvedBlockingGap: true, unresolvedGapNeedsUser: true, unresolvedGapSelfAcquirable: true), .waitingForUser, "需用户优先于自补"),
             (I(hasUnresolvedBlockingGap: true, unresolvedGapNeedsUser: true, acquisition: .acquiredVerified), .waitingForUser, "需用户优先于已验证"),
             // 更多无阻断的 ② 组合
-            (I(replyAdmitsIncapacity: true, someSuccessCriteriaUnmet: true), .blocked, "承认+unmet(无met) → blocked"),
+            (I(modelDeclaredBlocked: true, someSuccessCriteriaUnmet: true), .blocked, "blocked+unmet(无met) → blocked"),
             (I(someSuccessCriteriaMet: true, someSuccessCriteriaUnmet: false), .ok, "仅met → ok"),
             (I(acquisition: .acquiredVerified), .ok, "无阻断+已验证 → ok"),
             (I(acquisition: .failed), .ok, "无阻断时 acquisition 不影响 → ok"),
@@ -55,28 +55,46 @@ final class P2_CapabilityGateCoverageTests: XCTestCase {
             (I(hasUnresolvedBlockingGap: true, unresolvedGapSelfAcquirable: true, acquisition: .failed, someSuccessCriteriaMet: true), .partial, "自补失败+met → partial"),
             (I(hasUnresolvedBlockingGap: true, unresolvedGapSelfAcquirable: true, acquisition: .acquiredUnverified, someSuccessCriteriaMet: true), .partial, "自补未验证+met → partial"),
             (I(hasUnresolvedBlockingGap: true, acquisition: .acquiredVerified, someSuccessCriteriaUnmet: true), .ok, "已验证+仅unmet → ok(无met)"),
-            (I(replyAdmitsIncapacity: false, someSuccessCriteriaMet: true, someSuccessCriteriaUnmet: true), .partial, "不承认+met+unmet → partial"),
+            (I(modelDeclaredBlocked: false, someSuccessCriteriaMet: true, someSuccessCriteriaUnmet: true), .partial, "无blocked+met+unmet → partial"),
             (I(hasUnresolvedBlockingGap: true, unresolvedGapNeedsUser: true, acquisition: .notAttempted, someSuccessCriteriaMet: false), .waitingForUser, "需用户+未试 → 待用户"),
             (I(hasUnresolvedBlockingGap: true, unresolvedGapNeedsUser: true, acquisition: .failed, someSuccessCriteriaMet: true), .partial, "需用户+失败+met → partial(需用户分支)"),
             (I(hasUnresolvedBlockingGap: true, acquisition: .needsUser, someSuccessCriteriaUnmet: true), .waitingForUser, "acquisition needsUser+unmet(无met) → 待用户"),
-            (I(replyAdmitsIncapacity: true, someSuccessCriteriaMet: true, someSuccessCriteriaUnmet: true), .partial, "承认+met+unmet → partial"),
+            (I(modelDeclaredBlocked: true, someSuccessCriteriaMet: true, someSuccessCriteriaUnmet: true), .partial, "blocked+met+unmet → partial"),
             (I(hasUnresolvedBlockingGap: true, unresolvedGapSelfAcquirable: true, acquisition: .notAttempted, someSuccessCriteriaMet: true), .needsAcquisition, "可自补未试(即便有met)仍先驱动获取"),
-            (I(hasUnresolvedBlockingGap: false, replyAdmitsIncapacity: false, someSuccessCriteriaMet: false, someSuccessCriteriaUnmet: false), .ok, "干净对话 → ok"),
-            (I(hasUnresolvedBlockingGap: true, acquisition: .acquiredVerified, replyAdmitsIncapacity: false, someSuccessCriteriaMet: false, someSuccessCriteriaUnmet: false), .ok, "已验证收尾 → ok")
+            (I(hasUnresolvedBlockingGap: false, modelDeclaredBlocked: false, someSuccessCriteriaMet: false, someSuccessCriteriaUnmet: false), .ok, "干净对话 → ok"),
+            (I(hasUnresolvedBlockingGap: true, acquisition: .acquiredVerified, modelDeclaredBlocked: false, someSuccessCriteriaMet: false, someSuccessCriteriaUnmet: false), .ok, "已验证收尾 → ok")
         ]
         for (inp, exp, msg) in cases {
             XCTAssertEqual(LingShuTaskCompletionGate.decide(inp).status, exp, msg)
             n += 1
         }
 
-        // —— B. replyAdmitsIncapacity 承认语(20 case)——
-        let admitsTrue = ["我无法接入你的 Notion", "未授权,做不到", "没有权限访问", "暂不支持这个操作",
-                          "需要你提供 API Key", "缺少必要的凭据", "我做不了这件事", "尚未连接到该服务",
-                          "无法同步到日历", "不具备该能力", "暂时无法完成", "无法帮你下单"]
-        for t in admitsTrue { XCTAssertTrue(LingShuTaskCompletionGate.replyAdmitsIncapacity(t), "应判承认: \(t)"); n += 1 }
-        let admitsFalse = ["已完成,文件在 /tmp/a.txt", "好的,这就去做", "已经同步好了", "结果如下:42",
-                           "我已经帮你订好了", "PPT 已生成,共 8 页", "这是分析结论", "明白,马上处理"]
-        for t in admitsFalse { XCTAssertFalse(LingShuTaskCompletionGate.replyAdmitsIncapacity(t), "不应判承认: \(t)"); n += 1 }
+        // —— B. 完整 JSON completion 协议(20 case)——
+        let structuredBlocked = [
+            #"{"reply":"暂不可完成","completion":{"status":"blocked","reason":"缺能力"},"OAuth":null}"#,
+            #"{"reply":"需要用户","completion":{"status":"waiting_for_user","needs_user":true},"OAuth":null}"#,
+            #"{"reply":"部分完成","completion":{"status":"partial","reason":"还有未达成项"},"OAuth":null}"#,
+            #"{"reply":"需补能力","completion":{"status":"needs_acquisition","reason":"缺工具"},"OAuth":null}"#,
+            #"""
+```json
+{"reply":"被代码块包住但整段仍是 JSON","completion":{"status":"blocked"},"OAuth":null}
+```
+"""#
+        ]
+        for t in structuredBlocked {
+            XCTAssertTrue(LingShuStructuredModelOutput.parse(t)?.declaresIncomplete == true, "应从完整 JSON 读出流程字段: \(t)")
+            n += 1
+        }
+        let plainTexts = [
+            "我无法接入你的服务", "未授权,做不到", "没有权限访问", "暂不支持这个操作",
+            "需要你提供 API Key", "缺少必要的凭据", "我做不了这件事", "尚未连接到该服务",
+            "无法同步到日历", "不具备该能力", "暂时无法完成", "无法帮你下单",
+            "已完成,文件在 /tmp/a.txt", "PPT 已生成,共 8 页", "OAuth 是授权框架"
+        ]
+        for t in plainTexts {
+            XCTAssertNil(LingShuStructuredModelOutput.parse(t), "普通文本不得驱动流程状态: \(t)")
+            n += 1
+        }
 
         // —— C. 获取结果分类 classify(12 case)——
         func sig(_ ru: Bool, _ at: Bool, _ su: Bool, _ ve: Bool) -> LingShuAcquisitionSignals {

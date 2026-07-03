@@ -5,13 +5,13 @@ import Foundation
 /// 收尾路径上的确定性裁决:模型口头「完成」推不翻结构化事实。综合
 /// ① 能力缺口(是否有**未解除的阻断缺口**、是否需用户、是否可自补)
 /// ② 能力获取结果([[LingShuCapabilityAcquisition]])
-/// ③ 回复是否**承认无能力**(通用承认语,非领域写死)
+/// ③ 模型是否通过结构化 completion 字段声明未完成 / 待用户 / 部分完成
 /// ④ 成功标准达成情况(P3 [[LingShuAcceptance]]:部分达成→partial)
-/// 判最终状态:有未解除阻断缺口/承认无能力/部分达成 → **禁止当成功收尾**;
+/// 判最终状态:有未解除阻断缺口/结构化未完成/部分达成 → **禁止当成功收尾**;
 /// 自补未试→驱动去获取(needsAcquisition);需用户→waitingForUser;部分→partial;尝试了仍卡→blocked。
 /// 无任何问题 → `ok`(交还既有验收/收尾流程,不越权强判 verified)。**零领域关键词**(无 if Notion / if PPT)。
 enum LingShuCompletionStatus: String, Codable, Sendable, Equatable {
-    case ok               // 无缺口、未承认无能力、成功标准未见部分缺失 → 既有流程正常收尾
+    case ok               // 无缺口、无结构化未完成声明、成功标准未见部分缺失 → 既有流程正常收尾
     case needsAcquisition // 有可自补的阻断缺口且还没尝试 → 应驱动去获取(返工)
     case waitingForUser   // 需用户提供前提(凭据/授权/付费/物理)才能继续
     case partial          // 部分完成(复合任务有的成有的没成)
@@ -28,7 +28,9 @@ struct LingShuCompletionInputs: Sendable, Equatable {
     var unresolvedGapNeedsUser: Bool        // 未解除缺口里含需用户类(凭据/授权/付费/物理)
     var unresolvedGapSelfAcquirable: Bool   // 未解除缺口里含可灵枢自补的
     var acquisition: LingShuAcquisitionOutcome
-    var replyAdmitsIncapacity: Bool         // 回复文本承认无能力(通用承认语)
+    var modelDeclaredBlocked: Bool          // 模型通过结构化 completion.status 声明未完成/阻断
+    var modelDeclaredNeedsUser: Bool        // 模型通过结构化 completion 字段声明需要用户参与
+    var modelDeclaredPartial: Bool          // 模型通过结构化 completion.status 声明部分完成
     var someSuccessCriteriaMet: Bool        // 至少一条成功标准确定性达成(P3 met)
     var someSuccessCriteriaUnmet: Bool      // 至少一条成功标准确定性未达成(P3 unmet)
 
@@ -36,14 +38,18 @@ struct LingShuCompletionInputs: Sendable, Equatable {
          unresolvedGapNeedsUser: Bool = false,
          unresolvedGapSelfAcquirable: Bool = false,
          acquisition: LingShuAcquisitionOutcome = .notAttempted,
-         replyAdmitsIncapacity: Bool = false,
+         modelDeclaredBlocked: Bool = false,
+         modelDeclaredNeedsUser: Bool = false,
+         modelDeclaredPartial: Bool = false,
          someSuccessCriteriaMet: Bool = false,
          someSuccessCriteriaUnmet: Bool = false) {
         self.hasUnresolvedBlockingGap = hasUnresolvedBlockingGap
         self.unresolvedGapNeedsUser = unresolvedGapNeedsUser
         self.unresolvedGapSelfAcquirable = unresolvedGapSelfAcquirable
         self.acquisition = acquisition
-        self.replyAdmitsIncapacity = replyAdmitsIncapacity
+        self.modelDeclaredBlocked = modelDeclaredBlocked
+        self.modelDeclaredNeedsUser = modelDeclaredNeedsUser
+        self.modelDeclaredPartial = modelDeclaredPartial
         self.someSuccessCriteriaMet = someSuccessCriteriaMet
         self.someSuccessCriteriaUnmet = someSuccessCriteriaUnmet
     }
@@ -51,26 +57,12 @@ struct LingShuCompletionInputs: Sendable, Equatable {
 
 enum LingShuTaskCompletionGate {
 
-    /// 通用「承认无能力」承认语(非领域写死)。结构化 gap 为主、文本为辅:它捕获 gap 分析漏掉、但模型自己招供的缺能力。
-    static func replyAdmitsIncapacity(_ text: String) -> Bool {
-        let t = LingShuReasoningText.stripThinkTags(text)
-        let needles = [
-            "无法接入", "无法直接", "无法完成", "无法同步", "无法连接", "没有接入能力", "不具备",
-            "未授权", "没有权限", "没有授权",
-            "账号未连接", "账户未连接", "服务未连接", "尚未连接", "还未连接", "未连接到",
-            "api未连接", "API未连接", "外部系统未连接", "目标系统未连接",
-            "没有能力", "暂时无法", "暂不支持", "做不到", "我做不了", "无法帮你",
-            "需要你授权", "需要你提供", "需要授权", "缺少必要"
-        ]
-        return needles.contains { t.contains($0) }
-    }
-
     /// **成功标准全部确定性达成 → 投机性 gap 视为已被执行推翻(纯函数,2026-06-30)**。
-    /// 给 `computeCompletionDecision` 用:验收依据逐条确定性核验全过(有 met、无 unmet)、且回复没承认无能力 →
+    /// 给 `computeCompletionDecision` 用:验收依据逐条确定性核验全过(有 met、无 unmet)、且模型没有通过结构字段声明未完成 →
     /// 那条 gap 并没真挡住交付(如 rev.py 三条标准全绿、pytest 跑通,「Python 测试框架」gap 是误报)→ 清掉它,别找用户要授权。
     /// **不在 `decide` 里短路**(那会把"真 needsUser 缺口 + 部分达成 → partial"也误判 ok);只在已知"全绿"的实跑层清。
-    nonisolated static func allCriteriaMetResolvesSpeculativeGap(hasCriteria: Bool, someMet: Bool, someUnmet: Bool, admitsIncapacity: Bool) -> Bool {
-        hasCriteria && someMet && !someUnmet && !admitsIncapacity
+    nonisolated static func allCriteriaMetResolvesSpeculativeGap(hasCriteria: Bool, someMet: Bool, someUnmet: Bool, modelDeclaredIncomplete: Bool) -> Bool {
+        hasCriteria && someMet && !someUnmet && !modelDeclaredIncomplete
     }
 
     /// 确定性裁决(优先级级联)。
@@ -99,15 +91,23 @@ enum LingShuTaskCompletionGate {
                 break   // 缺口已补齐 + 验证通过 → 落到下面按成功标准判
             }
         }
-        // ② 无未解除阻断缺口(或已 acquiredVerified):看是否仍承认无能力 / 部分达成。
-        if i.replyAdmitsIncapacity {
+        // ② 无未解除阻断缺口(或已 acquiredVerified):看结构化未完成/部分达成声明。
+        if i.modelDeclaredNeedsUser {
             return i.someSuccessCriteriaMet
-                ? .init(status: .partial, reason: "回复中承认部分能力缺失;已完成的部分照常,缺失部分不算完成。")
-                : .init(status: .blocked, reason: "回复中承认无法完成/无能力,禁止当成功收尾,诚实交还。")
+                ? .init(status: .partial, reason: "部分目标已完成;另一部分需用户提供前提才能继续。")
+                : .init(status: .waitingForUser, reason: "模型通过结构化字段声明需要用户参与,暂不可完成。")
+        }
+        if i.modelDeclaredPartial {
+            return .init(status: .partial, reason: "模型通过结构化字段声明部分完成。")
+        }
+        if i.modelDeclaredBlocked {
+            return i.someSuccessCriteriaMet
+                ? .init(status: .partial, reason: "模型通过结构化字段声明仍有未完成部分;已完成的部分照常,缺失部分不算完成。")
+                : .init(status: .blocked, reason: "模型通过结构化字段声明无法完成/已阻断,禁止当成功收尾。")
         }
         if i.someSuccessCriteriaMet && i.someSuccessCriteriaUnmet {
             return .init(status: .partial, reason: "成功标准部分达成、部分未达成 → 部分完成。")
         }
-        return .init(status: .ok, reason: "未见未解除阻断缺口/承认无能力/部分缺失,交既有验收与收尾流程。")
+        return .init(status: .ok, reason: "未见未解除阻断缺口/结构化未完成声明/部分缺失,交既有验收与收尾流程。")
     }
 }

@@ -88,7 +88,7 @@ extension LingShuState {
             parametersJSON: base.parametersJSON
         ) { [weak self] args in
             guard let self else { return "执行环境不可用。" }
-            let wd = await MainActor.run { self.agentWorkingDirectory }
+            let wd = await MainActor.run { self.effectiveAgentWorkingDirectory() }
             let prompt = LingShuActuatorSafety.confirmationPrompt(actuatorName: name, target: target, command: args)
             let decision = await self.requestShellApproval(command: prompt, workingDirectory: wd, taskRecordID: nil, forceConfirm: true)
             guard decision != .deny else {
@@ -113,7 +113,7 @@ extension LingShuState {
             if stillQuarantined {
                 let wd = await MainActor.run { () -> String in
                     self.quarantinedScriptPaths[runnerPath] = (skillID: skillID, notes: notes)
-                    return self.agentWorkingDirectory
+                    return self.effectiveAgentWorkingDirectory()
                 }
                 let decision = await self.requestShellApproval(
                     command: "首次运行自编外围组件 runner:\(runnerPath)", workingDirectory: wd, taskRecordID: nil)
@@ -172,8 +172,8 @@ extension LingShuState {
 
     /// apply_skill 工具:模型按任务调取匹配技能(组合注册表:用户 > 策展 > 内置),
     /// 返回其专家提示 + 评审清单,并把自带生成器物化到工作目录(给出路径)。
-    func applySkillTool() -> LingShuAgentTool {
-        let workingDir = agentWorkingDirectory
+    func applySkillTool(workingDirectoryOverride: String? = nil) -> LingShuAgentTool {
+        let defaultWorkingDir = agentWorkingDirectory
         return LingShuAgentTool(
             name: "apply_skill",
             description: "调取与任务匹配的固化专家技能(设计系统/交付模板/评审清单)，并把该技能自带的生成器脚本就绪到工作目录。做 PPT/汇报等有固化方案的交付前先调用，拿到方案与生成器后按它推进，别从零硬写。",
@@ -182,6 +182,7 @@ extension LingShuState {
             let task = Self.jsonField(argsJSON, "task") ?? argsJSON
             return await MainActor.run { [weak self] in
                 guard let self else { return "技能库不可用" }
+                let workingDir = self.effectiveAgentWorkingDirectory(override: workingDirectoryOverride, fallback: defaultWorkingDir)
                 let profile = self.expertProfileRegistry.profile(for: task)
                 var out = profile.promptBlock
                 if !profile.reviewChecklist.isEmpty {

@@ -152,6 +152,19 @@ extension LingShuControlRouter {
             } else {
                 object["choices"] = []
             }
+            if let form = message.form {
+                object["form"] = [
+                    "title": form.title,
+                    "fields": form.fields.map { field in
+                        [
+                            "key": field.key,
+                            "question": field.question,
+                            "options": field.options
+                        ] as [String: Any]
+                    }
+                ] as [String: Any]
+            }
+            if let formAnswers = message.formAnswers { object["formAnswers"] = formAnswers }
             if let resolvedChoice = message.resolvedChoice { object["resolvedChoice"] = resolvedChoice }
             if let attachmentNames = message.attachmentNames, !attachmentNames.isEmpty { object["attachmentNames"] = attachmentNames }
             if let thinkingPreview = message.thinkingPreview, !thinkingPreview.isEmpty { object["thinkingPreview"] = thinkingPreview }

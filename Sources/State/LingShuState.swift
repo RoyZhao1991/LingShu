@@ -123,6 +123,10 @@ final class LingShuState: ObservableObject {
     @Published var agentWorkingDirectory = UserDefaults.standard.string(forKey: LingShuPreferenceKeys.agentWorkingDirectory) ?? LingShuState.defaultWorkspaceDirectory {
         didSet { UserDefaults.standard.set(agentWorkingDirectory, forKey: LingShuPreferenceKeys.agentWorkingDirectory) }
     }
+    /// 本轮临时工作目录覆盖:用户明确说"在目录 X 写/生成/保存"时生效。
+    /// 常驻主会话的工具不能在创建时把目录拍死,而要在工具真正执行时读这个值。
+    /// 回合结束会恢复旧值;没有明确目录时回落到 `agentWorkingDirectory`。
+    var currentAgentWorkingDirectoryOverride: String?
     @Published var executionPermissionMode: LingShuExecutionPermissionMode = .sandbox
     @Published var modelTimeoutSeconds = 180.0
     @Published var isModelReplying = false
@@ -193,12 +197,22 @@ final class LingShuState: ObservableObject {
     ] {
         didSet {
             persistChatHistoryIfNeeded()
+            publishControlSnapshot()
         }
     }
+    /// 聊天窗口的一次性滚到底请求。
+    ///
+    /// 只允许在“用户主动发送消息”的瞬间递增。任务执行、流式输出、状态变化、历史加载都不应触发，
+    /// 否则用户向上查历史时会被执行过程反复拽回底部。
+    @Published var chatScrollToLatestRequest = 0
     @Published var hasMoreColdChatHistory = false
     @Published var executionTrace: [ExecutionTraceEvent] = [
         .init(timestamp: Date(), kind: .system, actor: "灵枢", title: "待机", detail: "主对话就绪。下达任务后，这里会显示路由、模型调用、agent 入队和工具输出。", isStream: false)
-    ]
+    ] {
+        didSet {
+            publishControlSnapshot()
+        }
+    }
     @Published var taskRuntime: TaskRuntimeSnapshot = .idle
     /// 通用中枢世界模型:汇总用户、任务、agent、设备、服务、感知与验收事件。
     /// 当前先作为基础设施接线层,后续 UI/执行器统一读写它,避免各模块互相直连。
@@ -337,15 +351,19 @@ final class LingShuState: ObservableObject {
     var activeAgentTurnBubbleID: UUID?
     /// 编排器事件 sink 是否已注入(幂等)。
     var agentEventSinkInstalled = false
-    /// 网络可达性监控(断网重连自动续跑);懒启动(首次有 agent 活动时),见 LingShuState+AgentOrchestration。
+    /// 网络可达性监控(断网时唤醒模型通道重试);懒启动(首次有 agent 活动时),见 LingShuState+AgentOrchestration。
     var connectivityMonitor: LingShuConnectivityMonitor?
-    /// 主会话回合因网络中断而挂起时,保存续跑所需上下文(气泡/记录/原始请求/起算时刻);重连后从中断处续跑。
+    /// 主会话回合因模型通道中断而挂起时,保存续跑所需上下文(气泡/记录/原始请求/起算时刻);恢复后从中断处续跑。
     var suspendedMainTurn: (bubbleID: UUID, recordID: String?, prompt: String, startedAt: Date)?
-    /// 独立运行因网络中断而挂起时的任务记录 id;重连后 continueLoop 续跑(会话在 autonomousSessionHolder)。
+    /// 主会话挂起原因(网络/超时/限流/5xx 等),用于准确展示和重试。
+    var suspendedMainReason: String?
+    /// 独立运行因模型通道中断而挂起时的任务记录 id;恢复后 continueLoop 续跑(会话在 autonomousSessionHolder)。
     var suspendedAutonomousRecordID: String?
-    /// 网络重试循环(断网后主动按退避重试 + 在主对话框可见地展示重试次数/下次间隔),见 LingShuState+NetworkRetry。
+    /// 独立运行挂起原因(网络/超时/限流/5xx 等),用于准确展示和重试。
+    var suspendedAutonomousReason: String?
+    /// 模型通道重试循环(按退避重试 + 在主对话框可见地展示重试次数/下次间隔),见 LingShuState+NetworkRetry。
     var networkRetryTask: Task<Void, Never>?
-    /// 主对话框里那条「网络异常·重试中」状态气泡 id(原地更新次数/间隔,不刷屏)。
+    /// 主对话框里那条「模型通道恢复中」状态气泡 id(原地更新次数/间隔,不刷屏)。
     var networkRetryBubbleID: UUID?
     /// 当前重试次数;NWPathMonitor 检测到链路恢复时置 `networkRetryKick` 让重试循环立即再试(重置退避)。
     var networkRetryAttempt = 0
@@ -415,6 +433,9 @@ final class LingShuState: ObservableObject {
     var autonomousRunTask: Task<Void, Never>?
     var autonomousRunRecordID: String?
     var autonomousSessionHolder: (any LingShuAgentSessioning)?
+    /// 自主/在岗运行生命周期世代号。每次启动/续跑/停止都会推进,异步回合收尾前必须核对,
+    /// 防止 stop 后旧 Task 晚到又把状态写回 running。
+    var autonomousRunGeneration: Int = 0
     /// 在岗答复的**流式气泡** id:在岗答复(对话)边生成边逐字上屏(与主界面同款),收尾时由 finishAutonomousRun 定稿。
     /// nil = 本回合非流式(开场招呼/目标驱动独立运行,仍走末尾一次性回灌)。
     var standingStreamingBubbleID: UUID?
@@ -615,6 +636,7 @@ final class LingShuState: ObservableObject {
         if !rolePipelineOrphans.isEmpty { resumeOrphanedRolePipelinesOnLaunch(rolePipelineOrphans) }
         taskRecordFeedback = (UserDefaults.standard.dictionary(forKey: "lingshu.taskFeedback") as? [String: Bool]) ?? [:]
         archivedTaskExecutionRecords = taskExecutionJournal.loadArchivedRecords()
+        publishControlSnapshot()
         refreshRemoteSessionStatus()
         logEvent("现在  \(report.statusText)")
         appendTrace(
@@ -909,6 +931,13 @@ final class LingShuState: ObservableObject {
         activeAgentTurnTask?.cancel()
         activeAgentTurnTask = nil
         activeAgentTurnBubbleID = nil
+        if let currentChatTurnID {
+            // 停止语义必须同步释放串行闸门:worker 已被取消,但它的 defer 可能要等远端调用返回才执行。
+            // 若这里不立刻清掉 executing/pending 标记,下一条顶层输入会被误判为“前面还有回合在跑”并卡进队列。
+            pendingMainTurns.removeValue(forKey: currentChatTurnID)
+            pendingChatTurnIDs.removeAll { $0 == currentChatTurnID }
+            if executingChatTurnID == currentChatTurnID { executingChatTurnID = nil }
+        }
         autonomousRunTask?.cancel()
         autonomousRunTask = nil
         isModelReplying = false
@@ -924,6 +953,8 @@ final class LingShuState: ObservableObject {
         }
         guard hadActiveWork else {
             reapStaleLoadingBubbles(force: true)   // 即便已无在飞调用,手动停止也要清掉卡住的孤儿加载气泡(否则永久转圈)
+            scheduleNextMainTurnIfIdle()
+            drainSerialInputsIfIdle()
             return
         }
 
@@ -956,6 +987,7 @@ final class LingShuState: ObservableObject {
 
         logEvent("现在  用户停止了本轮模型调用。")
         scheduleNextMainTurnIfIdle()
+        drainSerialInputsIfIdle()
     }
 
     /// **物理硬中断**(用户要求 2026-06-19):关闭灵枢任一窗口(尤其演示窗)= 明确"我不要了" → 彻底中断当前流程,
@@ -1185,6 +1217,10 @@ final class LingShuState: ObservableObject {
         return submitTextWithAttachments(text, source: .typed)
     }
 
+    func requestChatScrollToLatestForUserSend() {
+        chatScrollToLatestRequest &+= 1
+    }
+
     /// 提交一条指令并**带上待发附件**(把附件正文折入提示 + 清空托盘)。
     /// UI sendPrompt 与 MCP `lingshu_send_prompt` 共用——修"MCP 发送时附件没一并带出"的 bug。
     @discardableResult
@@ -1201,6 +1237,7 @@ final class LingShuState: ObservableObject {
         let displayText = userText.isEmpty ? "已上传 \(names.count) 个文件" : userText
         chatMessages.append(.init(speaker: "你", text: displayText, isUser: true, attachmentNames: names,
                                   attachmentPaths: paths.contains(where: { !$0.isEmpty }) ? paths : nil))
+        requestChatScrollToLatestForUserSend()
         // **演示不再靠关键词自动认领**(2026-06-27 用户定调:删关键词启动路由):带附件的演示请求改走**显式 `@演示`**
         // 或交大脑调 `present_documents`(附件正文连同路径折进 prompt,大脑自己决定要不要演示)。这里不再特判演示。
         // 附件正文折入提示发给大脑(attachmentContextBlock 读 pendingAttachments,必须在 clear 之前读)。
@@ -1216,7 +1253,15 @@ final class LingShuState: ObservableObject {
         // **显式声明(@演示 / @Codex…)即便带附件也走确定性直达**:在 userText 上检测声明,combined 当路由上下文
         // (含附件折进来的「本机路径:…」)→ @演示 能从整条消息抽到附件路径开演(根治"@演示+附件没认领")。气泡已 append → 不再重复。
         if handleDeclarativeInvocationIfNeeded(userText, fullPrompt: combined, appendUserMessage: false) { return "" }
-        return submitTextInput(combined, source: source, appendUserMessage: false)
+        let visible = userText.isEmpty ? "请按上述文件落地交付。" : userText
+        return submitTextInput(
+            combined,
+            source: source,
+            appendUserMessage: false,
+            visibleUserText: visible,
+            attachmentNames: names,
+            attachmentPaths: paths
+        )
     }
 
     @discardableResult
@@ -1235,21 +1280,61 @@ final class LingShuState: ObservableObject {
         appendUserMessage: Bool = true,
         bypassActiveGate: Bool = false,
         forcedThreadID: String? = nil,
-        reusePlaceholderID: UUID? = nil
+        reusePlaceholderID: UUID? = nil,
+        visibleUserText: String? = nil,
+        attachmentNames: [String] = [],
+        attachmentPaths: [String] = []
     ) -> String {
-        let trimmedPrompt = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let modelPrompt = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let inferredVisibleText = visibleUserText ?? Self.visibleUserInstructionForDeterministicRouting(from: modelPrompt)
+        let turnInput = LingShuTurnInputEnvelope(
+            visibleText: inferredVisibleText,
+            modelPrompt: modelPrompt,
+            attachmentNames: attachmentNames,
+            attachmentPaths: attachmentPaths
+        )
+        let trimmedPrompt = turnInput.modelPrompt
+        let userFacingPrompt = turnInput.userFacingText
+        let triagePrompt = turnInput.triageText
         guard !trimmedPrompt.isEmpty else { return "" }
+
+        // 当前台预览/演示材料已经打开时,主人明确说“关闭/收起/结束”属于可视控制动作,
+        // 应先确定性落实到 UI 状态,再允许内置技能/大脑解释。否则演示技能会口头答应 stop,
+        // 但只停讲解不关预览,导致测试与真实 UX 都卡在“看似结束、窗口还在”。
+        if appendUserMessage,
+           previewController.isPresented,
+           LingShuNestedStagePlanner.isExitPresentationCommand(userFacingPrompt) {
+            chatMessages.append(.init(speaker: "你", text: userFacingPrompt, isUser: true))
+            requestChatScrollToLatestForUserSend()
+            let recordID = createTaskExecutionRecord(for: userFacingPrompt)
+            appendTaskRecordMessage(recordID, actor: source.displayName, role: "前台控制", kind: .core, text: userFacingPrompt)
+            builtinSkills.forEach { $0.onCancel() }
+            batchInterruptRequested = true
+            interruptSpeechOutput?()
+            previewController.suppressAutoReopenUntil = Date().addingTimeInterval(5)
+            let closeResult = previewController.close()
+            let ack = "已关闭预览材料,本轮演示已收尾。"
+            appendTrace(kind: .system, actor: "灵枢", title: "关闭前台预览", detail: String(userFacingPrompt.prefix(40)))
+            appendTaskRecordMessage(recordID, actor: "预览控制", role: "关闭", kind: .agent, text: closeResult)
+            appendTaskRecordMessage(recordID, actor: "灵枢", role: "确认", kind: .result, text: ack)
+            chatMessages.append(.init(speaker: "灵枢", text: ack, isUser: false, taskRecordID: recordID))
+            finishTaskRecord(recordID, status: .answered, summary: ack)
+            missionStatus = "预览材料已关闭。"
+            enterCoreState(.standby, resetTimer: false)
+            return ack
+        }
+
         // **内置技能活动中拦截**:如演示与答疑进行时,用户开口=实时答疑(主线程线性),拦下来处理,不走常规分诊/派发。
         // 通用遍历,内核不点名具体技能。
         if appendUserMessage {
-            for skill in builtinSkills where skill.interceptActiveInput(trimmedPrompt) { return "" }
+            for skill in builtinSkills where skill.interceptActiveInput(userFacingPrompt) { return "" }
         }
         // 「Record & Replay」录制进行时:用户开口=记一步(或完成/取消),拦下来,不走常规分诊。
-        if appendUserMessage, handleProcedureRecordingInputIfNeeded(trimmedPrompt) { return "" }
+        if appendUserMessage, handleProcedureRecordingInputIfNeeded(userFacingPrompt) { return "" }
         // **声明式调插件**:`@演示`/输入框「+」菜单插入 @ → 确定性直达,跳过大脑分诊(根治误调用)。
         // 注:**演示「启动」只走这条显式 `@演示` + 大脑的 `present_documents` 工具**——已删掉旧的「关键词嗅探演示意图」自动启动路由
         // (`detectPresentationRequest` 之类),它对"句子里只是提到'演示'+ 带个文档路径"过度误触发(2026-06-27 用户定调)。
-        if appendUserMessage, handleDeclarativeInvocationIfNeeded(trimmedPrompt) { return "" }
+        if appendUserMessage, handleDeclarativeInvocationIfNeeded(userFacingPrompt) { return "" }
         // **录制/重放只走显式 `@`**(2026-06-30 砍推断快路径):`@录制`→startProcedureRecording、`@<技能名>`→replayProcedure
         // 已在上面声明式层(handleDeclarativeInvocationIfNeeded)确定性全覆盖。原来这里的「记录技能/用X跑」关键词嗅探
         // (detectRecordRequest/matchReplay)是冗余二次猜测,也是「打→打开」误劫持来源——显式优于推断,删之。
@@ -1258,7 +1343,8 @@ final class LingShuState: ObservableObject {
         // 记录**按需建**(不再在最顶 eager 建):被续答/在岗/答复等早返回接管的轮次用各自的记录,
         // 否则会在任务列表里留一条空壳记录(实测:答"做什么主题"时多出一条空的"介绍你自己的能力·执行中")。
         if appendUserMessage {
-            chatMessages.append(.init(speaker: "你", text: trimmedPrompt, isUser: true))
+            chatMessages.append(.init(speaker: "你", text: userFacingPrompt, isUser: true))
+            requestChatScrollToLatestForUserSend()
         }
         prompt = ""
 
@@ -1266,20 +1352,20 @@ final class LingShuState: ObservableObject {
         if !bypassActiveGate && hasActiveModelCall {
             appendTrace(kind: .runtime, actor: "任务队列", title: "并发接令", detail: "已有回合在跑，本轮在 agent 循环里串行接续。")
         } else {
-            resetExecutionTrace(for: trimmedPrompt)
+            resetExecutionTrace(for: userFacingPrompt)
         }
         appendTrace(kind: .system, actor: source.displayName, title: "文本入队", detail: "\(source.displayName) 已落成文本，进入灵枢 agent 循环。")
-        recordWorldEvent(kind: .userInput, source: source.displayName, summary: trimmedPrompt, relatedEntityIDs: ["agent:lingshu"])
+        recordWorldEvent(kind: .userInput, source: source.displayName, summary: userFacingPrompt, relatedEntityIDs: ["agent:lingshu"])
         // 用户开口的瞬间按需刷新场景理解（异步，不阻塞本轮；本地解析路由不出网）。
         perceptionSceneRefreshTrigger?()
-        let deterministicRoutingPrompt = Self.visibleUserInstructionForDeterministicRouting(from: trimmedPrompt)
+        let deterministicRoutingPrompt = userFacingPrompt
 
         // 弱脑确定性闭环:稳定本体事实/本机时间日期这类问题不需要远端强脑。
         // 仍然创建任务记录、落执行记录、沉淀记忆,避免网关抖动把低风险直答挂起。
         if existingTaskRecordID == nil,
            pendingMainQuestionRecordID == nil,
            let localAnswer = LingShuLocalIntentResolver.answer(for: deterministicRoutingPrompt) {
-            let recordID = createTaskExecutionRecord(for: trimmedPrompt)
+            let recordID = createTaskExecutionRecord(for: userFacingPrompt)
             bindGoalSpec(LingShuGoalSpec(objective: deterministicRoutingPrompt, kind: .question), to: recordID)
             appendTaskRecordMessage(recordID, actor: "弱脑", role: "本地直答", kind: .core, text: "命中本机确定性问答,无需远端模型。")
             appendTaskRecordMessage(recordID, actor: "灵枢", role: "答复", kind: .result, text: localAnswer)
@@ -1292,7 +1378,7 @@ final class LingShuState: ObservableObject {
         if existingTaskRecordID == nil,
            pendingMainQuestionRecordID == nil,
            let localAnswer = localWorkingMemoryAnswer(for: deterministicRoutingPrompt) {
-            let recordID = createTaskExecutionRecord(for: trimmedPrompt)
+            let recordID = createTaskExecutionRecord(for: userFacingPrompt)
             bindGoalSpec(LingShuGoalSpec(objective: deterministicRoutingPrompt, kind: .question), to: recordID)
             appendTaskRecordMessage(recordID, actor: "主线程记忆", role: "本地工作记忆", kind: .core, text: "命中本地工作记忆,无需远端模型。")
             appendTaskRecordMessage(recordID, actor: "灵枢", role: "答复", kind: .result, text: localAnswer)
@@ -1305,7 +1391,13 @@ final class LingShuState: ObservableObject {
 
         // 自主运行卡在 ask_user 提问上时，本轮输入即为答案：回填续跑（优先于一切常规分流）。
         // 这些早返回的续接handler都用各自的记录(自主/在岗/被卡住的派发任务),不需要本轮新建记录。
-        if let answerAck = handleAutonomousAnswerIfNeeded(prompt: trimmedPrompt, taskRecordID: nil) {
+        let isGroundedEvidenceInput = turnInput.hasAttachments || Self.inputMentionsGroundedEvidence(userFacingPrompt)
+        if let answerAck = handleAutonomousAnswerIfNeeded(
+            prompt: trimmedPrompt,
+            visiblePrompt: userFacingPrompt,
+            taskRecordID: nil,
+            hasAttachments: isGroundedEvidenceInput
+        ) {
             return answerAck
         }
 
@@ -1314,18 +1406,23 @@ final class LingShuState: ObservableObject {
         }
 
         // 常驻灵枢在岗时,对话/语音直接喂给在岗执行会话(带其权限级与四肢),让它真去做。
-        if let standingAck = handleStandingPersonInputIfNeeded(prompt: trimmedPrompt, taskRecordID: nil) {
+        if let standingAck = handleStandingPersonInputIfNeeded(
+            prompt: trimmedPrompt,
+            visiblePrompt: userFacingPrompt,
+            taskRecordID: nil,
+            hasAttachments: isGroundedEvidenceInput
+        ) {
             return standingAck
         }
 
         // 续接/追问(已有记录)→ 直接主回合,不分诊(继续这件事,不重新派发)。
         if let existing = existingTaskRecordID {
             let wasWaiting = taskExecutionRecords.first { $0.id == existing }?.taskOutcome == .waitingForUser
-            if wasWaiting && Self.userInputDeniesPrerequisite(trimmedPrompt) {
-                closeDispatchedTaskForDeniedPrerequisite(recordID: existing, answer: trimmedPrompt, appendChatUser: false)
+            if wasWaiting && Self.userInputDeniesPrerequisite(userFacingPrompt) {
+                closeDispatchedTaskForDeniedPrerequisite(recordID: existing, answer: userFacingPrompt, appendChatUser: false)
                 return "已按你的选择停在这里。"
             }
-            let providesPrerequisite = Self.userInputProvidesPrerequisite(trimmedPrompt)
+            let providesPrerequisite = Self.userInputProvidesPrerequisite(userFacingPrompt)
             if wasWaiting && providesPrerequisite { resolveUserProvidedGaps(recordID: existing) }
             let resumePrompt = wasWaiting && providesPrerequisite
                 ? trimmedPrompt + "\n\n" + capabilityResumePreamble(recordID: existing)
@@ -1337,15 +1434,21 @@ final class LingShuState: ObservableObject {
         // 都已在更早返回)。若当前已有回合在真跑(问答线在飞 OR 任务子线程在执行)→ **入串行队列**,不再并行处理;
         // 当前回合完全返回后由 drainSerialInputsIfIdle 自动逐条出队。reusePlaceholderID!=nil=出队重提交,不再二次入队。
         if reusePlaceholderID == nil, !bypassActiveGate, existingTaskRecordID == nil, currentlyExecutingTurn() {
-            enqueueSerialInput(prompt: trimmedPrompt, source: source)
+            enqueueSerialInput(
+                prompt: trimmedPrompt,
+                source: source,
+                visiblePrompt: userFacingPrompt,
+                attachmentNames: attachmentNames,
+                attachmentPaths: attachmentPaths
+            )
             return ""
         }
 
-        // 新顶层输入:**上下文感知分诊**(近全 + 远压缩 + 可续任务线程)——
+        // 新顶层输入:**上下文归属解析**(近全 + 远压缩 + 可续任务线程)——
         //   reply(在回答/延续某条**派发的隔离任务**,如它问"做什么主题",哪怕隔了几条)→ 续跑**那条隔离会话**(带真上下文);
-        //   chat(直答/问答)→ 留主 session(对话连续);
-        //   task(全新执行/落盘/多步)→ 派发独立隔离 session(单串行下不会与主会话并行)。
-        // 记录**按需建**:reply 续用派发线程自己的记录(不另建),task/chat 各建一条。异步,真回复经气泡给出。
+        //   none/chat(新问题/新目标/普通闲聊/无主体"继续")→ 留给当前主脑 active turn,由主脑自行决定直答、用工具或 spawn 子任务。
+        // 第 ③ 站不再判定 chat/task,也不再基于关键词硬派发;任务创建属于后续规划/工具循环。
+        // 记录**按需建**:reply 续用派发线程自己的记录(不另建),主脑输入建一条主回合记录。异步,真回复经气泡给出。
         // **顺序修(2026-06-23,监工"一问一答变成怪格式"):**分诊是异步(控制面往返),若只 append 用户消息、答复气泡
         // 等分诊完才出,rapid 连发就"问题全堆上面、答复全堆下面"。这里**同步先放一个答复占位气泡紧跟用户消息后**,
         // 保持 Q→A 交错;分诊定路由后:chat/派发**复用**它,入队/续接到已有线程则**移除**它。
@@ -1364,31 +1467,84 @@ final class LingShuState: ObservableObject {
         Task { @MainActor [weak self] in
             guard let self else { return }
             // 注:主会话待答问题不再无脑把后续都接回主会话(那会阻塞——新任务本该派子线程并行)。
-            // 改为把它放进分诊上下文(buildTriageContext 标⏳),由分诊器判:答复→续主会话提问;新任务→派子线程。
-            // P1 目标认知:派生 GoalSpec 与分诊**并发**(不加 wall-clock 延迟);新建记录后绑定供执行引导/验收/记忆消费。
-            // **性能优化(2026-06-23):先分诊,前置认知(GoalSpec/缺口/能力需求)仅 task 才派生**——
-            // 问答/续接(chat/reply)直答不需,省掉那几次控制面往返 + 减少并发脑调用(双线串行下脑负载更低)。
-            let triage = await self.classifyDispatch(trimmedPrompt)
-            let isTask = self.goalSpecEnabled && triage.kind == .task
-            // task 的三项前置认知并发(不互相加 wall-clock);非 task 全部跳过。
-            async let goalSpecA: LingShuGoalSpec? = isTask ? self.deriveGoalSpec(for: trimmedPrompt, taskRecordID: nil) : nil
-            async let gapA: LingShuGapAnalysis? = isTask ? self.deriveGapAnalysis(for: trimmedPrompt) : nil
-            async let reqA: [LingShuCapabilityRequirement] = isTask ? self.deriveCapabilityRequirements(for: trimmedPrompt) : []
+            // 改为把它放进分诊上下文(buildTriageContext 标⏳),由分诊器判:答复→续主会话提问;新目标→交主脑 active turn。
+            //
+            // 第④站:新 Active Turn 的前置认知不能再依赖 triage.kind == .task。
+            // 第③站现在只做"上下文归属",入口不再判断 chat/task;所以非 reply 的新回合先派生 GoalSpec,
+            // 再由 GoalSpec.kind 决定是否继续跑能力需求 + 缺口分析。普通 question/chat 不加重,真实 task/interaction 才核验能力。
+            let triage = await self.classifyDispatch(
+                triagePrompt,
+                hasAttachments: isGroundedEvidenceInput,
+                visiblePrompt: userFacingPrompt
+            )
+            let isNewActiveTurn = triage.kind != .reply
+            let shouldDeriveGoalSpec = self.goalSpecEnabled && isNewActiveTurn
+            async let goalSpecA: LingShuGoalSpec? = shouldDeriveGoalSpec ? self.deriveGoalSpec(for: trimmedPrompt, taskRecordID: nil) : nil
             let goalSpec = await goalSpecA
+            let needsCapabilityPreflight = self.goalSpecEnabled && Self.goalKindNeedsCapabilityPreflight(goalSpec?.kind)
+            let activeTurnRoute = triage.kind == .reply ? "reply" : "active_turn"
+            let goalSpecTraceReason: String = {
+                if !self.goalSpecEnabled { return "goal_spec_disabled" }
+                if !isNewActiveTurn { return "reply_reuses_existing_context" }
+                if goalSpec == nil { return "goal_spec_unavailable" }
+                return "new_active_turn_goal_spec"
+            }()
+            self.appendTrace(
+                kind: .system,
+                actor: "第④站",
+                title: "ActiveTurn 前置认知",
+                detail: Self.activeTurnPreflightTrace(
+                    stage: "goal_spec",
+                    route: activeTurnRoute,
+                    recordID: nil,
+                    goalKind: goalSpec?.kind,
+                    capabilityPreflight: needsCapabilityPreflight,
+                    requirementsCount: 0,
+                    hasGap: false,
+                    reason: goalSpecTraceReason
+                )
+            )
+            // 能力需求与缺口分析只在 GoalSpec 判定为 task/interaction 后启动,避免普通问答被重型前置链路拖慢。
+            async let gapA: LingShuGapAnalysis? = needsCapabilityPreflight ? self.deriveGapAnalysis(for: trimmedPrompt) : nil
+            async let reqA: [LingShuCapabilityRequirement] = needsCapabilityPreflight ? self.deriveCapabilityRequirements(for: trimmedPrompt) : []
             let gap = await gapA
             let reqs = await reqA
             let newRecordBoundToGoal: @MainActor (LingShuGoalKind, String?) -> String = { fallbackKind, fallbackObjective in
-                let rid = self.createTaskExecutionRecord(for: trimmedPrompt)
+                let rid = self.createTaskExecutionRecord(for: userFacingPrompt)
                 var boundSpec = goalSpec
                 if boundSpec == nil, fallbackKind != .unknown {
-                    boundSpec = LingShuGoalSpec(objective: fallbackObjective ?? trimmedPrompt, kind: fallbackKind)
+                    boundSpec = LingShuGoalSpec(objective: fallbackObjective ?? userFacingPrompt, kind: fallbackKind)
                 }
                 if fallbackKind == .task, boundSpec?.kind != .task {
                     boundSpec?.kind = .task
                 }
+                let usedFallbackGoal = goalSpec == nil && boundSpec != nil
+                let bindTraceReason: String = {
+                    if !self.goalSpecEnabled { return "goal_spec_disabled" }
+                    if !isNewActiveTurn { return "reply_reuses_existing_context" }
+                    if needsCapabilityPreflight { return "goal_kind_requires_capability_check" }
+                    if usedFallbackGoal { return "fallback_goal_spec" }
+                    if boundSpec == nil { return "goal_spec_unavailable" }
+                    return "goal_kind_lightweight"
+                }()
                 self.bindGoalSpec(boundSpec, to: rid)
                 self.bindGapAnalysis(gap, to: rid)
                 self.bindCapabilityRequirements(reqs, to: rid)
+                self.appendTrace(
+                    kind: .system,
+                    actor: "第④站",
+                    title: "ActiveTurn 记录绑定",
+                    detail: Self.activeTurnPreflightTrace(
+                        stage: "bind_record",
+                        route: activeTurnRoute,
+                        recordID: rid,
+                        goalKind: boundSpec?.kind,
+                        capabilityPreflight: needsCapabilityPreflight,
+                        requirementsCount: reqs.count,
+                        hasGap: gap?.hasBlockingGap == true || !(gap?.gaps.isEmpty ?? true),
+                        reason: bindTraceReason
+                    )
+                )
                 return rid
             }
             // **内核校验闸门(图里 D)**:吃结构化决策,低置信/脑失败 → 追问(chat/task 一视同仁),不进 kind 扇出;
@@ -1400,14 +1556,6 @@ final class LingShuState: ObservableObject {
                                  detail: "意图不明确,先与用户确认再决定,不静默当闲聊、也不擅自开跑。")
                 _ = self.runMainAgentTurn(prompt: trimmedPrompt + "\n\n" + directive,
                                           taskRecordID: newRecordBoundToGoal(.question, nil), existingBubbleID: placeholderID)
-                return
-            case .dispatchAsTask:
-                // 动作信号命中但脑判 chat → 确定性派发去尝试(找能力/授权),不当闲聊(场景8)。
-                self.appendTrace(kind: .route, actor: "内核校验闸门", title: "动作请求·确定性派发",
-                                 detail: "动作信号命中、脑却判闲聊 → 派发去尝试(找能力/要授权),不当闲聊解释/拒绝。")
-                self.dispatchIsolatedTask(prompt: trimmedPrompt,
-                                          taskRecordID: newRecordBoundToGoal(.task, triage.goal),
-                                          goal: triage.goal, existingBubbleID: placeholderID)
                 return
             case .execute:
                 break   // 落到下面的 kind-switch 扇出
@@ -1424,12 +1572,12 @@ final class LingShuState: ObservableObject {
                     // 续答**主会话**的提问:接回主会话(同一条记录,把答复喂回去),不另起新任务。
                     self.pendingMainQuestionRecordID = nil
                     let wasWaiting = self.taskExecutionRecords.first { $0.id == rid }?.taskOutcome == .waitingForUser
-                    if wasWaiting && Self.userInputDeniesPrerequisite(trimmedPrompt) {
+                if wasWaiting && Self.userInputDeniesPrerequisite(userFacingPrompt) {
                         self.removeChatBubble(placeholderID)
-                        self.closeDispatchedTaskForDeniedPrerequisite(recordID: rid, answer: trimmedPrompt, appendChatUser: false)
+                        self.closeDispatchedTaskForDeniedPrerequisite(recordID: rid, answer: userFacingPrompt, appendChatUser: false)
                         return
                     }
-                    let providesPrerequisite = Self.userInputProvidesPrerequisite(trimmedPrompt)
+                    let providesPrerequisite = Self.userInputProvidesPrerequisite(userFacingPrompt)
                     if wasWaiting && providesPrerequisite { self.resolveUserProvidedGaps(recordID: rid) }
                     let resumePrompt = wasWaiting && providesPrerequisite
                         ? trimmedPrompt + "\n\n" + self.capabilityResumePreamble(recordID: rid)
@@ -1443,7 +1591,7 @@ final class LingShuState: ObservableObject {
                     _ = self.runMainAgentTurn(prompt: trimmedPrompt, taskRecordID: newRecordBoundToGoal(.question, nil), existingBubbleID: placeholderID)
                 }
             case .task:
-                if LingShuInteractionFulfillment.requiresLiveInteraction(trimmedPrompt) {
+                if LingShuInteractionFulfillment.requiresLiveInteraction(userFacingPrompt) {
                     let rid = newRecordBoundToGoal(.task, triage.goal)
                     appendTrace(kind: .route, actor: "主线程分诊", title: "前台交互任务", detail: "演示/讲解/答疑类任务留在主线程生成材料并转入托管,不进后台队列。")
                     _ = self.runMainAgentTurn(prompt: trimmedPrompt, taskRecordID: rid, existingBubbleID: placeholderID)
@@ -1451,7 +1599,7 @@ final class LingShuState: ObservableObject {
                 }
                 // **续接继承(用户定调:延续之前角色管线的任务,沿用同样的 agent,不重置回灵枢)**:
                 // 上次跑过角色管线(记下了用的 agent),且大脑判断这条是它的延续 → 沿用同 agent 再跑管线。
-                if !self.lastPipelineAgents.isEmpty, await self.isContinuationOfLastPipeline(prompt: trimmedPrompt) {
+                if !self.lastPipelineAgents.isEmpty, await self.isContinuationOfLastPipeline(prompt: userFacingPrompt) {
                     let inherited = self.lastPipelineAgents.map { (id: $0.id, name: $0.name) }
                     self.appendTrace(kind: .route, actor: "主线程分诊", title: "续接·沿用上次 agent",
                                      detail: "延续上一个角色管线,沿用 " + inherited.map(\.name).joined(separator: "、"))
@@ -1466,7 +1614,8 @@ final class LingShuState: ObservableObject {
                 self.pruneInactiveDispatchedTaskBubbles()
                 let active = self.dispatchedTaskBubbles.count + self.queuedDispatchTasks.count
                 if Self.shouldQueueDispatch(running: active, capacity: cap) {
-                    self.enqueueDispatchTask(prompt: trimmedPrompt, goal: triage.goal, goalSpec: goalSpec, gap: gap,
+                    self.enqueueDispatchTask(prompt: trimmedPrompt, visiblePrompt: userFacingPrompt,
+                                             goal: triage.goal, goalSpec: goalSpec, gap: gap,
                                              requirements: reqs, existingBubbleID: placeholderID)
                 } else {
                     // 要占屏实时演示/互动时,由大脑自己调 enter_managed_mode 申请、弹窗征主人同意后才转入托管。

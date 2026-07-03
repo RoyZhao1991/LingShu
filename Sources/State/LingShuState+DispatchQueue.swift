@@ -7,6 +7,7 @@ import Foundation
 struct LingShuQueuedDispatchTask: Identifiable, Equatable {
     let id: String
     let prompt: String
+    let visiblePrompt: String
     let goal: String?
     /// 入队前已派生的前置认知(GoalSpec/缺口/能力需求)——晋级派发时直接绑定,免重复模型调用。
     let goalSpec: LingShuGoalSpec?
@@ -19,11 +20,12 @@ struct LingShuQueuedDispatchTask: Identifiable, Equatable {
     /// 入队时暂存的**直发大脑的图片/PDF**(排队后 pendingDirectBrainImages 会被清/覆盖,故随队列项带住,晋级时直发)。
     let imageDataURLs: [String]?
 
-    init(prompt: String, goal: String?, goalSpec: LingShuGoalSpec?, gap: LingShuGapAnalysis?,
+    init(prompt: String, visiblePrompt: String? = nil, goal: String?, goalSpec: LingShuGoalSpec?, gap: LingShuGapAnalysis?,
          requirements: [LingShuCapabilityRequirement], createdAt: Date = Date(), bubbleID: UUID? = nil,
          imageDataURLs: [String]? = nil) {
         self.id = "queued-\(UUID().uuidString.prefix(8))"
         self.prompt = prompt
+        self.visiblePrompt = (visiblePrompt ?? prompt).trimmingCharacters(in: .whitespacesAndNewlines)
         self.goal = goal
         self.goalSpec = goalSpec
         self.gap = gap
@@ -45,11 +47,11 @@ extension LingShuState {
     }
 
     /// 并发已满 → 把这条(已分诊为 task)请求放进**可见队列区等待**,不创建记录/不派发。带上已派生的前置认知,晋级时直接用。
-    func enqueueDispatchTask(prompt: String, goal: String?, goalSpec: LingShuGoalSpec?,
+    func enqueueDispatchTask(prompt: String, visiblePrompt: String? = nil, goal: String?, goalSpec: LingShuGoalSpec?,
                             gap: LingShuGapAnalysis?, requirements: [LingShuCapabilityRequirement],
                             existingBubbleID: UUID? = nil) {
         // 入队时把"直发大脑的图"消费下来随队列项带住(晋级派发时 pending 早已被清/覆盖)。
-        let item = LingShuQueuedDispatchTask(prompt: prompt, goal: goal, goalSpec: goalSpec, gap: gap,
+        let item = LingShuQueuedDispatchTask(prompt: prompt, visiblePrompt: visiblePrompt, goal: goal, goalSpec: goalSpec, gap: gap,
                                              requirements: requirements, bubbleID: existingBubbleID,
                                              imageDataURLs: consumePendingDirectBrainImages())
         queuedDispatchTasks.append(item)
@@ -191,11 +193,11 @@ extension LingShuState {
             // 每个 promote 的"读计数→派发(计数+1)"原子完成,第二个 promote 读到已满 → 不再双派发。
             guard self.dispatchedTaskBubbles.count < max(1, cap), !self.queuedDispatchTasks.isEmpty else { return }
             let next = self.queuedDispatchTasks.removeFirst()
-            let rid = self.createTaskExecutionRecord(for: next.prompt)
+            let rid = self.createTaskExecutionRecord(for: next.visiblePrompt)
             self.bindGoalSpec(next.goalSpec, to: rid)
             self.bindGapAnalysis(next.gap, to: rid)
             self.bindCapabilityRequirements(next.requirements, to: rid)
-            self.appendTrace(kind: .route, actor: "派发队列", title: "晋级派发", detail: "有空位,队列区最早一条开始执行:\(String(next.prompt.prefix(28)))")
+            self.appendTrace(kind: .route, actor: "派发队列", title: "晋级派发", detail: "有空位,队列区最早一条开始执行:\(String(next.visiblePrompt.prefix(28)))")
             self.dispatchIsolatedTask(prompt: next.prompt, taskRecordID: rid, goal: next.goal, existingBubbleID: next.bubbleID, imageDataURLs: next.imageDataURLs)
             // 可能还有空位 + 更多排队 → 继续晋级下一条。
             self.promoteQueuedDispatchIfPossible()

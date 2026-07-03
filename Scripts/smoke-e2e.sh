@@ -14,7 +14,8 @@ set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PORT="${LINGSHU_MCP_PORT:-8917}"
-PROBE_DIR="/Users/example/app/.lingshu-smoke-$(date +%s)"
+RUN_TOKEN="lingshu-smoke-$(date +%s)"
+PROBE_DIR="/Users/example/app/.$RUN_TOKEN"
 cleanup() { rm -rf "$PROBE_DIR" 2>/dev/null; }
 trap cleanup EXIT
 
@@ -38,9 +39,9 @@ done
 
 echo "==> [4/4] 端到端冒烟(真模型)"
 mkdir -p "$PROBE_DIR"
-PROBE_DIR="$PROBE_DIR" PORT="$PORT" python3 - <<'PY'
+RUN_TOKEN="$RUN_TOKEN" PROBE_DIR="$PROBE_DIR" PORT="$PORT" python3 - <<'PY'
 import json, os, time, glob, urllib.request
-PORT = os.environ["PORT"]; PROBE = os.environ["PROBE_DIR"]
+PORT = os.environ["PORT"]; PROBE = os.environ["PROBE_DIR"]; TOKEN = os.environ["RUN_TOKEN"]
 
 def call(name, args, timeout=60):
     body = json.dumps({"jsonrpc":"2.0","id":1,"method":"tools/call",
@@ -49,36 +50,109 @@ def call(name, args, timeout=60):
     with urllib.request.urlopen(req, timeout=timeout) as r:
         return json.loads(r.read())["result"]["content"][0]["text"]
 
-def top_status():
+def records():
     try:
-        recs = json.loads(call("lingshu_task_records", {}))["records"]
-        return recs[0]["status"] if recs else "?"
+        return json.loads(call("lingshu_task_records", {"limit": 80}))["records"]
     except Exception as e:
-        return f"查询失败({e})"
+        return [{"status": f"查询失败({e})", "title": ""}]
+
+def chat(limit=80):
+    try:
+        data = json.loads(call("lingshu_get_chat", {"limit": limit}, timeout=20))
+        return data.get("messages", data) if isinstance(data, dict) else data
+    except Exception:
+        return []
+
+def message_by_id(message_id):
+    if not message_id:
+        return {}
+    for m in chat(120):
+        if m.get("id") == message_id:
+            return m
+    return {}
+
+def detail(record_id):
+    try:
+        return json.loads(call("lingshu_task_detail", {"recordId": record_id}, timeout=20))
+    except Exception:
+        return {}
+
+def evidence_text(value):
+    try:
+        return json.dumps(value, ensure_ascii=False, sort_keys=True)
+    except Exception:
+        return str(value)
+
+def record_matches(record, token, probe):
+    haystack = evidence_text(record)
+    if token in haystack or probe in haystack:
+        return True
+    record_id = record.get("id", "")
+    if not record_id:
+        return False
+    detail_payload = detail(record_id)
+    return token in evidence_text(detail_payload) or probe in evidence_text(detail_payload)
+
+def bound_status(token, probe):
+    recs = records()
+    for rec in recs:
+        if record_matches(rec, token, probe):
+            return rec.get("status", "?"), rec.get("id", "")
+    return "等待本轮记录", ""
 
 SUCCESS_TERMINAL = ("已完成", "已直接回答")
 FAILURE_TERMINAL = ("异常", "未达标")
 TERMINAL = SUCCESS_TERMINAL + FAILURE_TERMINAL
-def send_wait(prompt, max_polls=30):
-    call("lingshu_send_prompt", {"text": prompt})
+
+def await_record_from_anchor(anchor, token, probe, before_ids, max_polls=18):
+    rid = (anchor or {}).get("recordId") or ""
+    if rid:
+        return rid
+    assistant_id = (anchor or {}).get("assistantMessageId") or ""
+    for _ in range(max_polls):
+        msg = message_by_id(assistant_id)
+        rid = msg.get("taskRecordID") or ""
+        if rid:
+            return rid
+        for rec in records():
+            candidate = rec.get("id")
+            if candidate and candidate not in before_ids and record_matches(rec, token, probe):
+                return candidate
+        time.sleep(1)
+    return ""
+
+def send_wait(prompt, token, max_polls=30):
+    before_ids = {r.get("id") for r in records()}
+    anchor = json.loads(call("lingshu_send_prompt", {"text": prompt}))
+    assistant_id = (anchor or {}).get("assistantMessageId") or ""
+    anchored = await_record_from_anchor(anchor, token, PROBE, before_ids)
     for _ in range(max_polls):
         time.sleep(10)
-        st = top_status()
+        if assistant_id:
+            msg = message_by_id(assistant_id)
+            if msg.get("isLoading"):
+                continue
+        if anchored:
+            rec = next((r for r in records() if r.get("id") == anchored), None)
+            st, rid = (rec or {}).get("status", "等待本轮记录"), anchored
+        else:
+            st, rid = bound_status(token, PROBE)
         if any(k in st for k in TERMINAL):
-            return st
-    return "超时"
+            return st, rid
+    return "超时", ""
 
 results = []  # (名称, 通过?, 证据)
 
 # 用例1:编码闭环(写源码 + 测试门:写测试且跑绿)——断言**盘上真有源码 + 测试文件**。
-st1 = send_wait(f"在目录 {PROBE} 写 add.py,实现 add(a,b) 返回 a+b;再写测试验证 add(2,3)==5 并真正跑通;最后一句话告诉我结果与文件路径。")
+st1, rid1 = send_wait(f"任务代号 {TOKEN}: 在目录 {PROBE} 写 add.py,实现 add(a,b) 返回 a+b;再写测试验证 add(2,3)==5 并真正跑通;最后一句话告诉我结果与文件路径。", TOKEN)
 has_src = os.path.exists(f"{PROBE}/add.py")
 has_test = len(glob.glob(f"{PROBE}/*test*.py")) > 0 or len(glob.glob(f"{PROBE}/test_*.py")) > 0
-results.append(("编码闭环: 源码+测试真落盘", any(k in st1 for k in SUCCESS_TERMINAL) and has_src and has_test, f"status={st1} add.py={'有' if has_src else '无'} 测试={'有' if has_test else '无'}"))
+results.append(("编码闭环: 源码+测试真落盘", any(k in st1 for k in SUCCESS_TERMINAL) and has_src and has_test, f"status={st1} record={rid1 or '未定位'} add.py={'有' if has_src else '无'} 测试={'有' if has_test else '无'}"))
 
 # 用例2:对话回路——断言任务到达终态(引擎对纯问答也能跑通收尾)。
-st2 = send_wait("1 加 1 等于几?一句话直接回答。", max_polls=12)
-results.append(("对话回路: 纯问答能收尾", any(k in st2 for k in SUCCESS_TERMINAL), f"status={st2}"))
+CHAT_TOKEN = TOKEN + "-chat"
+st2, rid2 = send_wait(f"任务代号 {CHAT_TOKEN}: 1 加 1 等于几?一句话直接回答。", CHAT_TOKEN, max_polls=12)
+results.append(("对话回路: 纯问答能收尾", any(k in st2 for k in SUCCESS_TERMINAL), f"status={st2} record={rid2 or '未定位'}"))
 
 print("\n===== 冒烟结果 =====")
 passed = 0

@@ -36,12 +36,45 @@ final class AgentSkillToolingTests: XCTestCase {
     }
 
     @MainActor
+    func testAgentToolsUseCurrentTurnWorkingDirectoryOverrideAtCallTime() async throws {
+        let state = LingShuState()
+        let defaultDir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("lingshu-tool-default-\(UUID().uuidString)", isDirectory: true)
+        let turnDir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("lingshu-tool-turn-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: defaultDir, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: turnDir, withIntermediateDirectories: true)
+        defer {
+            try? FileManager.default.removeItem(at: defaultDir)
+            try? FileManager.default.removeItem(at: turnDir)
+        }
+        state.agentWorkingDirectory = defaultDir.path
+
+        let tools = state.agentBuiltinTools(recordIDProvider: { nil })
+        guard let writeFile = tools.first(where: { $0.name == "write_file" }) else {
+            return XCTFail("write_file 应在标准工具集中")
+        }
+
+        state.currentAgentWorkingDirectoryOverride = turnDir.path
+        let output = await writeFile.handler(#"{"path":"probe.txt","content":"ok"}"#)
+
+        XCTAssertTrue(output.contains("已写入"), output)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: turnDir.appendingPathComponent("probe.txt").path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: defaultDir.appendingPathComponent("probe.txt").path))
+    }
+
+    @MainActor
     func testApplySkillReturnsCuratedPlanAndDesignKBGenerator() async {
         let state = LingShuState()
         let tempDir = NSTemporaryDirectory() + "lingshu-skill-test-\(UUID().uuidString)"
         try? FileManager.default.createDirectory(atPath: tempDir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(atPath: tempDir) }
         state.agentWorkingDirectory = tempDir
+        // 测试不依赖用户本机已安装的 skill;先屏蔽用户 skill,确保命中内置策展 PPT 能力。
+        if let registry = state.expertProfileRegistry as? LingShuCompositeExpertRegistry {
+            let userSkillIDs = Set(registry.allProfiles.map(\.id).filter { $0.hasPrefix("skill-") })
+            registry.setDisabledSkillIDs(userSkillIDs)
+        }
 
         let tool = state.applySkillTool()
         let output = await tool.handler("{\"task\":\"帮我做一个自我介绍 PPT\"}")
@@ -56,6 +89,10 @@ final class AgentSkillToolingTests: XCTestCase {
     @MainActor
     func testMatchedSkillHintFiresOnlyForRealSkill() {
         let state = LingShuState()
+        if let registry = state.expertProfileRegistry as? LingShuCompositeExpertRegistry {
+            let userSkillIDs = Set(registry.allProfiles.map(\.id).filter { $0.hasPrefix("skill-") })
+            registry.setDisabledSkillIDs(userSkillIDs)
+        }
         XCTAssertNotNil(state.matchedSkillHint(for: "做个自我介绍PPT"), "命中固化技能应广播可发现性提示")
         XCTAssertNil(state.matchedSkillHint(for: "今天天气怎么样"), "无固化技能匹配(内置兜底)不应提示")
     }

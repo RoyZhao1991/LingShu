@@ -66,7 +66,7 @@ extension LingShuState {
             },
             LingShuAgentTool(
                 name: "present_fullscreen",
-                description: "进入/退出**全屏演示模式**(把幻灯片放大铺满整个屏幕讲,像 PPT/Keynote 放映)。**这是占屏动作**:若还没在托管模式,进全屏会**先弹窗征求主人同意进入托管模式**(同意后由托管会话接手演示)。讲完 present_fullscreen(false) 退出。on=true 进、false 出。",
+                description: "进入/退出**全屏演示模式**(把幻灯片放大铺满整个屏幕讲,像 PPT/Keynote 放映)。**这是占屏动作**:若还没在托管模式,进全屏会先请求进入托管模式;开发全权/完整授权下直接审计放行,普通模式会征求主人同意。讲完 present_fullscreen(false) 退出。on=true 进、false 出。",
                 parametersJSON: "{\"type\":\"object\",\"properties\":{\"on\":{\"type\":\"string\",\"description\":\"true 进入全屏演示 / false 退出,默认 true\"}},\"required\":[]}"
             ) { [weak self] args in
                 let on = !((Self.jsonField(args, "on") ?? "true").lowercased() == "false")
@@ -93,6 +93,7 @@ extension LingShuState {
                         return "(主人已同意,转入托管会话——你这条到此停止,不要重复打开或演示。)"
                     }
                     await MainActor.run {
+                        _ = self.previewController.setSlideshow(true)   // 先进入可观测演示态,再启动脚本化讲解,避免 live 状态空窗
                         self.presentationManagedHandoff = true   // 上岗 kickoff 不寒暄(演示开场即开场)
                         self.enteringViaManagedHandoff = true
                         self.goLiveAsStandingPerson()            // 上岗:开麦 + 本体在位(语音通道)
@@ -100,7 +101,7 @@ extension LingShuState {
                     let msg = await self.presentationSkill.startPresentation(paths: [docPath])
                     return msg + "\n(已进入托管模式:开麦语音互动 + 演示与答疑脚本化全屏演示——你这条到此停,别再 present_fullscreen / speak / preview_next 重复演示。)"
                 }
-                return await MainActor.run { self.previewController.setSlideshow(on) ?? "预览不可用" }
+                return await MainActor.run { self.previewController.setSlideshow(on) }
             },
             LingShuAgentTool(
                 name: "close_preview",

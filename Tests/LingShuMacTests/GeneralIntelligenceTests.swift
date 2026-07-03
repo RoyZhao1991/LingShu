@@ -118,12 +118,11 @@ final class TaskAdmissionTests: XCTestCase {
 final class ExpertProfileRegistryTests: XCTestCase {
     private let registry = LingShuExpertProfileRegistry()
 
-    func testSelectionByTaskText() {
-        XCTAssertEqual(registry.profile(for: "做一个高可用的系统架构设计").id, "expert-architect")
-        XCTAssertEqual(registry.profile(for: "写一份产品需求文档 PRD").id, "expert-product")
-        XCTAssertEqual(registry.profile(for: "给这个项目做项目分析和排期").id, "expert-pm")
-        XCTAssertEqual(registry.profile(for: "做一个介绍杭州的PPT").id, "expert-design")
-        XCTAssertEqual(registry.profile(for: "写一个爬虫脚本").id, "expert-engineer")
+    func testDefaultProfileDoesNotKeywordRouteTaskText() {
+        // 默认注册表不再用关键词把自然语言硬派给专家;角色选择由主脑结合能力图谱/GoalSpec 在规划阶段判断。
+        for text in ["做一个高可用的系统架构设计", "写一份产品需求文档 PRD", "给这个项目做项目分析和排期", "做一个介绍杭州的PPT", "写一个爬虫脚本"] {
+            XCTAssertEqual(registry.profile(for: text).id, "expert-engineer")
+        }
     }
 
     func testEveryProfileHasTemplateKnowledgeAndChecklist() {

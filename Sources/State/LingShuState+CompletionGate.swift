@@ -9,7 +9,7 @@ enum LingShuPrerequisiteChoiceSemantics: Equatable {
 
 /// 通用中枢 P2 真闭环·**防伪完成闸接线**(见方案 + [[LingShuTaskCompletionGate]])。
 /// 收尾前的确定性裁决,跑在 `verifyAndContinue` 末尾(主会话/派发/自主共用):
-/// 综合「能力缺口(是否未解除阻断/需用户/可自补)+ 能力获取结果 + 回复是否承认无能力 + P3 成功标准达成」
+/// 综合「能力缺口(是否未解除阻断/需用户/可自补)+ 能力获取结果 + 结构化 completion/OAuth 字段 + P3 成功标准达成」
 /// 判最终状态。可自补但没试 → **驱动模型真去获取**(有界返工);需用户 → waitingForUser;部分达成 → partial;
 /// 仍卡 → blocked。模型口头「完成」推不翻。写 `record.taskOutcome`,`finalizeMainTurn`/编排器据此定 finishTaskRecord 状态。
 @MainActor
@@ -64,14 +64,22 @@ extension LingShuState {
         }
     }
 
-    /// 据 gap / 获取信号 / 承认无能力 / P3 成功标准 计算完成闸裁决(不持久化)。
+    /// 据 gap / 获取信号 / 结构化 completion/OAuth / P3 成功标准 计算完成闸裁决(不持久化)。
     func computeCompletionDecision(taskRecordID: String?, reply: String) async -> LingShuCompletionDecision {
         guard goalSpecEnabled, let recordID = taskRecordID,
               let record = taskExecutionRecords.first(where: { $0.id == recordID }) else {
             return .init(status: .ok, reason: "")
         }
         let gap = record.gapAnalysis
-        let admits = LingShuTaskCompletionGate.replyAdmitsIncapacity(reply)
+        let structured = LingShuStructuredModelOutput.parse(reply)
+        let modelDeclaredNeedsUser = structured?.declaresUserBlock ?? false
+        let modelDeclaredPartial = structured?.declaresPartial ?? false
+        let modelDeclaredBlocked = structured?.declaresBlocked ?? false
+        let modelDeclaredNeedsAcquisition = structured?.declaresNeedsAcquisition ?? false
+        let modelDeclaredIncomplete = structured?.declaresIncomplete ?? false
+        let taskLikeBase = Self.recordNeedsCompletionGate(record) || record.goalSpec?.kind == .task || record.goalSpec?.kind == .interaction
+        // 授权/补前提不再从回复文本里扫关键词推断。
+        // 这些状态只能来自 typed gap / OAuth 结构字段 / ask_user 工具协议,避免 OAuth 科普、token 解释等普通问答误弹授权窗。
         // **根治"部分完成"反复出现(2026-06-27)**:gap 分析常误报"本地文件系统 requiresAuth"这类 .permission gap;
         // 高权限(完整授权/开发全权)下,系统/账号"授权"类视为**已解决**——否则已核验交付+产物在的任务,会因这条
         // 误报的阻断 gap 永远判 partial(实测红黑树/AVL/队列 PPT 全栽在这)。与弹框层 userPrerequisiteChoicePromptIfNeeded
@@ -81,14 +89,21 @@ extension LingShuState {
             if fullyAuthorized, gap.kind == .permission { return false }
             return !gap.requiresUser || Self.isActionableUserGap(gap)
         }
-        let hasBlocking = !actionableBlockingGaps.isEmpty
-        let blockingNeedsUser = actionableBlockingGaps.contains { $0.requiresUser }
-        let blockingSelfAcquirable = actionableBlockingGaps.contains { $0.selfAcquirable }
+        let hasStructuredOAuthRequest = gap?.OAuth?.normalized != nil || structured?.OAuth?.normalized != nil
+        let hasBlocking = hasStructuredOAuthRequest || modelDeclaredNeedsUser || modelDeclaredNeedsAcquisition || !actionableBlockingGaps.isEmpty
+        let blockingNeedsUser = hasStructuredOAuthRequest || modelDeclaredNeedsUser || actionableBlockingGaps.contains { $0.requiresUser }
+        let blockingSelfAcquirable = modelDeclaredNeedsAcquisition || actionableBlockingGaps.contains { $0.selfAcquirable }
         let hasCriteria = !(record.goalSpec?.successCriteria.isEmpty ?? true)
-        let taskLike = Self.recordNeedsCompletionGate(record)
+        let taskLike = taskLikeBase || modelDeclaredIncomplete
         guard taskLike else { return .init(status: .ok, reason: "") }
-        // 快速放行:无阻断缺口、未承认无能力、无成功标准 → 不跑验收,直接 ok(纯对话/常规交付)。
-        if !hasBlocking && !admits && !hasCriteria { return .init(status: .ok, reason: "") }
+        if answerOnlyDeliveryCanFinish(recordID: recordID, userRequest: record.prompt, reply: reply) {
+            return .init(status: .ok, reason: "答复型回合已给出实质回答,且无外部动作/产物/变更证据,不进入任务验收。")
+        }
+        if readOnlyObservationDeliveryCanFinish(recordID: recordID, userRequest: record.prompt, reply: reply) {
+            return .init(status: .ok, reason: "只读观察/发现类目标已有执行证据和可读结论,按证据收口。")
+        }
+        // 快速放行:无阻断缺口、模型未通过结构字段声明未完成、无成功标准 → 不跑验收,直接 ok(纯对话/常规交付)。
+        if !hasBlocking && !modelDeclaredIncomplete && !hasCriteria { return .init(status: .ok, reason: "") }
 
         var someMet = false
         var someUnmet = false
@@ -100,11 +115,11 @@ extension LingShuState {
             someUnmet = report.hasDeterministicFailure
         }
         // **全绿推翻投机性 gap(2026-06-30,根治"全绿却找用户要授权")**:成功标准逐条确定性达成(有 met、无 unmet、
-        // 不承认无能力)→ 那条阻断 gap 并没真挡住交付(rev.py 实测:三条标准全绿 + pytest 跑通,「Python 测试框架」
+        // 未通过结构字段声明未完成)→ 那条阻断 gap 并没真挡住交付(rev.py 实测:三条标准全绿 + pytest 跑通,「Python 测试框架」
         // requiresUser gap 是误报)→ 清掉它,别把已全绿的任务拖成 partial + 找用户要"授权"(还没授权入口)。
-        // 安全:真缺口会让对应标准 someUnmet=true、真失败会承认无能力 → 都不清,仍正常拦。
+        // 安全:真缺口会让对应标准 someUnmet=true、真失败会通过 completion 字段声明 incomplete → 都不清,仍正常拦。
         let allCriteriaMet = LingShuTaskCompletionGate.allCriteriaMetResolvesSpeculativeGap(
-            hasCriteria: hasCriteria, someMet: someMet, someUnmet: someUnmet, admitsIncapacity: admits)
+            hasCriteria: hasCriteria, someMet: someMet, someUnmet: someUnmet, modelDeclaredIncomplete: modelDeclaredIncomplete)
         let effBlocking = hasBlocking && !allCriteriaMet
         let effNeedsUser = blockingNeedsUser && !allCriteriaMet
         let effSelfAcq = blockingSelfAcquirable && !allCriteriaMet
@@ -117,14 +132,228 @@ extension LingShuState {
             unresolvedGapNeedsUser: effNeedsUser,
             unresolvedGapSelfAcquirable: effSelfAcq,
             acquisition: LingShuCapabilityAcquisition.classify(signals),
-            replyAdmitsIncapacity: admits,
+            modelDeclaredBlocked: modelDeclaredBlocked,
+            modelDeclaredNeedsUser: modelDeclaredNeedsUser,
+            modelDeclaredPartial: modelDeclaredPartial,
             someSuccessCriteriaMet: someMet,
             someSuccessCriteriaUnmet: someUnmet
         )
         return LingShuTaskCompletionGate.decide(inputs)
     }
 
-    /// 把 P2/P3 完成闸识别出的「需用户授权/前提」升级为真正的 human-in-the-loop UI 事件。
+    /// 只读观察/发现类任务的证据收口:
+    /// 用户要的是“看一眼/查一下/列出来/分类说明”,且执行记录里已有只读探测证据、回复也给出了实质结论时,
+    /// 不再把它拖进交付物验收/返工循环。写文件、同步外部系统、控制设备等变更类目标不会命中这里。
+    func readOnlyObservationDeliveryCanFinish(recordID: String?, userRequest: String, reply: String) -> Bool {
+        guard let recordID, let record = taskExecutionRecords.first(where: { $0.id == recordID }) else { return false }
+        return Self.readOnlyObservationDeliveryCanFinish(record: record, userRequest: userRequest, reply: reply)
+    }
+
+    /// 答复型回合的结构收口:
+    /// 有些控制面模型会把“解释一下/提醒一句/告诉我”误拆成 task + successCriteria,随后触发验收返工,
+    /// 导致普通问答堵住串行队列。这里不靠领域关键词放行,只看**事实结构**:
+    /// 用户没有要求改变外部状态/落产物,记录里也没有文件改动、真实动作或变更型命令,且回复已经是实质回答。
+    /// 满足这些条件时,这轮的交付物就是“回答本身”,不再进入 maker/checker 验收循环。
+    func answerOnlyDeliveryCanFinish(recordID: String?, userRequest: String, reply: String) -> Bool {
+        guard let recordID, let record = taskExecutionRecords.first(where: { $0.id == recordID }) else { return false }
+        return Self.answerOnlyDeliveryCanFinish(record: record, userRequest: userRequest, reply: reply)
+    }
+
+    nonisolated static func answerOnlyDeliveryCanFinish(record: LingShuTaskExecutionRecord, userRequest: String, reply: String) -> Bool {
+        let spec = record.goalSpec
+        let requestText = [
+            userRequest,
+            record.prompt,
+            spec?.objective ?? "",
+            (spec?.constraints ?? []).joined(separator: " "),
+            (spec?.successCriteria ?? []).joined(separator: " ")
+        ].joined(separator: " ")
+        guard !looksLikeMutatingDeliveryIntent(requestText) else { return false }
+        if record.gapAnalysis?.OAuth?.normalized != nil { return false }
+        if let structured = LingShuStructuredModelOutput.parse(reply),
+           structured.OAuth?.normalized != nil || structured.declaresIncomplete {
+            return false
+        }
+        guard !recordHasAnswerOnlyBlockingExecutionEvidence(record) else { return false }
+        guard replyIsSubstantiveAnswer(reply) else { return false }
+        return true
+    }
+
+    nonisolated static func readOnlyObservationDeliveryCanFinish(record: LingShuTaskExecutionRecord, userRequest: String, reply: String) -> Bool {
+        let spec = record.goalSpec
+        let requestText = [
+            userRequest,
+            record.prompt,
+            spec?.objective ?? "",
+            (spec?.constraints ?? []).joined(separator: " "),
+            (spec?.successCriteria ?? []).joined(separator: " ")
+        ].joined(separator: " ")
+        guard looksLikeReadOnlyObservationIntent(requestText) else { return false }
+        guard !looksLikeMutatingDeliveryIntent(requestText) else { return false }
+        if record.gapAnalysis?.OAuth?.normalized != nil { return false }
+        if let structured = LingShuStructuredModelOutput.parse(reply),
+           structured.OAuth?.normalized != nil || structured.declaresIncomplete {
+            return false
+        }
+        guard recordHasReadOnlyObservationEvidence(record) else { return false }
+        guard replyIsSubstantiveObservationAnswer(reply) else { return false }
+        return true
+    }
+
+    nonisolated static func replyIsSubstantiveAnswer(_ reply: String) -> Bool {
+        let visible = LingShuHumanInputEnvelope.userFacingText(from: LingShuReasoningText.stripThinkTags(reply))
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard visible.count >= 8 else { return false }
+        if looksLikeInternalDump(visible) { return false }
+        if visible.contains("已发起工具调用") || visible.contains("等待工具") { return false }
+        if visible.hasPrefix("需要你") || visible.hasPrefix("请你") { return false }
+        return true
+    }
+
+    nonisolated static func recordHasAnswerOnlyBlockingExecutionEvidence(_ record: LingShuTaskExecutionRecord) -> Bool {
+        if !record.artifacts.isEmpty { return true }
+        var pendingRunCommand = ""
+        for message in record.messages {
+            switch message.detail {
+            case .fileEdit:
+                return true
+            case let .toolCall(tool, summary, arguments):
+                if tool == "run_command" {
+                    pendingRunCommand = summary + " " + arguments
+                    if !commandLooksReadOnlyObservationProbe(pendingRunCommand) { return true }
+                } else if tool == "write_file" || tool == "edit_file" {
+                    return true
+                } else if LingShuOutcomeVerification.isActionTool(tool) {
+                    return true
+                }
+            case let .toolResult(tool, success, _):
+                if tool == "run_command" {
+                    defer { pendingRunCommand = "" }
+                    if success, !commandLooksReadOnlyObservationProbe(pendingRunCommand) { return true }
+                } else if tool == "write_file" || tool == "edit_file" {
+                    if success { return true }
+                } else if success, LingShuOutcomeVerification.isActionTool(tool) {
+                    return true
+                }
+            default:
+                break
+            }
+        }
+        return false
+    }
+
+    nonisolated static func looksLikeReadOnlyObservationIntent(_ text: String) -> Bool {
+        let normalized = LingShuMemoryTextToolkit.normalize(text)
+        guard !normalized.isEmpty else { return false }
+        let observationSignals = [
+            "看看", "看一下", "查一下", "查询", "搜索", "检索", "找一下", "找出", "发现",
+            "扫描", "列出", "分类", "识别", "盘点", "统计", "确认一下", "告诉我",
+            "有哪些", "是什么", "在不在", "是否存在", "摘要", "总结", "观察", "只读",
+            "inspect", "observe", "discover", "scan", "list", "classify", "search", "find",
+            "query", "summarize", "tell me", "what is", "whether"
+        ]
+        return observationSignals.contains { normalized.contains($0) }
+    }
+
+    nonisolated static func looksLikeMutatingDeliveryIntent(_ text: String) -> Bool {
+        let normalized = LingShuMemoryTextToolkit.normalize(text)
+        guard !normalized.isEmpty else { return false }
+        let mutatingSignals = [
+            "生成", "制作", "创建", "新建", "写入", "写一个", "保存", "修改", "删除", "移动",
+            "复制", "同步", "上传", "发布", "发送", "连接到", "接入", "登录", "下单", "付款",
+            "打开", "关闭", "启动", "停止", "运行", "安装", "部署", "控制", "操作", "投屏到",
+            "演示", "播放", "create", "generate", "write", "save", "modify", "delete", "sync",
+            "upload", "publish", "send", "connect", "login", "run", "install", "deploy",
+            "control", "operate", "present", "play"
+        ]
+        return mutatingSignals.contains { normalized.contains($0) }
+    }
+
+    nonisolated static func replyIsSubstantiveObservationAnswer(_ reply: String) -> Bool {
+        let visible = LingShuHumanInputEnvelope.userFacingText(from: LingShuReasoningText.stripThinkTags(reply))
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard visible.count >= 18 else { return false }
+        if looksLikeInternalDump(visible) { return false }
+        if visible.contains("已发起工具调用") || visible.contains("等待工具") { return false }
+        if visible.hasPrefix("需要你") || visible.hasPrefix("请你") { return false }
+        return true
+    }
+
+    nonisolated static func recordHasReadOnlyObservationEvidence(_ record: LingShuTaskExecutionRecord) -> Bool {
+        var pendingRunCommand = ""
+        for message in record.messages {
+            switch message.detail {
+            case let .toolCall(tool, summary, arguments):
+                if tool == "run_command" {
+                    pendingRunCommand = summary + " " + arguments
+                } else if observationReadTool(tool) {
+                    // 工具调用本身不算证据,等待后续成功结果确认。
+                    continue
+                }
+            case let .toolResult(tool, success, output):
+                guard success, !runOutputLooksFailed(output) else {
+                    if tool == "run_command" { pendingRunCommand = "" }
+                    continue
+                }
+                if tool == "run_command" {
+                    defer { pendingRunCommand = "" }
+                    if commandLooksReadOnlyObservationProbe(pendingRunCommand) { return true }
+                } else if observationReadTool(tool) {
+                    return true
+                }
+            default:
+                break
+            }
+        }
+        return false
+    }
+
+    nonisolated static func observationReadTool(_ tool: String) -> Bool {
+        let t = tool.lowercased()
+        let exact: Set<String> = [
+            "discover_devices", "recall_local", "search_local", "read_local", "read_file",
+            "list_directory", "list_files", "fetch_url", "web_search", "browser_read",
+            "screen_capture", "perceive", "list_capabilities", "self_inspect", "time",
+            "location", "list_credentials", "inspect_ui", "list_ui_elements"
+        ]
+        if exact.contains(t) { return true }
+        return t.hasPrefix("read_") || t.hasPrefix("list_") || t.hasPrefix("search_")
+            || t.hasPrefix("inspect_") || t.hasPrefix("discover_") || t.hasPrefix("recall_")
+            || t.hasPrefix("index_query")
+    }
+
+    nonisolated static func commandLooksReadOnlyObservationProbe(_ command: String) -> Bool {
+        let trimmed = command.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+        if LingShuShellCommandPolicy.isReadOnly(trimmed) { return true }
+        let lowered = trimmed.lowercased()
+        let unsafeMarkers = [
+            ">", ">>", " rm ", " rmdir", " mv ", " cp ", " dd ", " tee ", " ln ",
+            " mkdir", " touch", " chmod", " chown", " sudo", " kill", " pkill",
+            " shutdown", " reboot", " install", " uninstall", " curl", " wget",
+            " scp", " rsync", " ssh", " open ", " osascript"
+        ]
+        if unsafeMarkers.contains(where: { lowered.contains($0) || lowered.hasPrefix($0.trimmingCharacters(in: .whitespaces)) }) {
+            return false
+        }
+        let mutationOptions = [
+            " -set", "--set", " set-", " add", " remove", " delete", " erase", " enable",
+            " disable", " start", " stop", " restart", " write", " apply", " create"
+        ]
+        if mutationOptions.contains(where: { lowered.contains($0) }) { return false }
+        let observationHeads: Set<String> = [
+            "arp", "dns-sd", "system_profiler", "ioreg", "ifconfig", "ipconfig", "networksetup",
+            "scutil", "lpstat", "pmset", "profiles", "mdfind", "mdls", "netstat", "lsof"
+        ]
+        let segments = lowered.split(separator: "|").map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
+        guard !segments.isEmpty else { return false }
+        return segments.allSatisfy { segment in
+            guard let head = segment.split(whereSeparator: { $0 == " " || $0 == "\t" }).first else { return false }
+            return observationHeads.contains(String(head)) || LingShuShellCommandPolicy.isReadOnly(segment)
+        }
+    }
+
+    /// 把完成闸识别出的「需用户授权/前提」升级为真正的 human-in-the-loop UI 事件。
     ///
     /// 之前这类阻断只会进入 `honestDeliveryText` 变成一段普通回复,用户看到"需要授权"却没有弹框。
     /// 这里不写任何设备/服务特例:只要 typed gap 判定为需用户参与,就统一转成 `ask_choice`
@@ -140,56 +369,42 @@ extension LingShuState {
         return .blocked(question: Self.askChoiceEnvelope(prompt).encodedPrompt)
     }
 
-    /// 把"需用户前提/授权/凭据/设备确认"统一转成可点击选择卡。
+    /// 把结构化 OAuth / user_input 请求转成可点击选择卡。
     ///
-    /// 这是 human-in-the-loop 的通用边界,不关心具体外部服务:只要 typed gap 或回复文本指向
-    /// 真实受保护对象,就给 UI 一个可恢复的选择入口;否则继续保持普通文本,避免把"用户"这种抽象词误当授权对象。
+    /// 授权弹窗只读 typed JSON 字段 `ModelOutput.OAuth` / `GapAnalysis.OAuth`;为空或 required=false 时绝不弹窗。
+    /// 普通缺前提/澄清只读 `ModelOutput.user_input` 或结构化 `completion.needs_user`;不从 reply 文本扫关键词。
+    /// 不再从回复文本里扫“授权/token/OAuth/登录/权限”等词,避免普通知识问答误伤。
     func userPrerequisiteChoicePromptIfNeeded(resultText: String, taskRecordID: String?) -> LingShuRouteChoicePrompt? {
         guard let recordID = taskRecordID else { return nil }
-        let original = resultText.trimmingCharacters(in: .whitespacesAndNewlines)
         // **修1(2026-06-27):任务已产出真实产物 → 别再要授权。** 产物在 = 能力本来就够、活已干成。
         // 实测:红黑树PPT已核验交付,却因 gap 残留"本地文件系统授权"又弹授权框、用户授权后还把整份重做了一遍。
         if (taskExecutionRecords.first { $0.id == recordID }?.artifacts ?? [])
             .contains(where: { FileManager.default.fileExists(atPath: $0.location) }) {
             return nil
         }
-        // **修2(2026-06-27·权限级别,参考 codex/claude):权限给得够高(完整授权 / 开发全权)→ 系统/账号"授权"类(.permission)
-        // gap 视为已授权,不再每次弹框**(真缺凭据要人给 .humanConfirmation、要花钱 .funding、缺硬件 .device 仍问——
-        // 授权级别变不出别人的密钥/钱/硬件)。这就是"给的权限够高就不要每次授权"。
-        let fullyAuthorized = developmentPhaseFullAccess || autonomousPermissionLevel == .full
-        let actionableGaps = (gapAnalysis(for: recordID)?.blockingGaps ?? []).filter { gap in
-            guard Self.isActionableUserGap(gap) else { return false }
-            if fullyAuthorized, gap.kind == .permission { return false }
-            return true
+        let structured = LingShuStructuredModelOutput.parse(resultText)
+        if let oauth = structured?.OAuth?.normalized ?? gapAnalysis(for: recordID)?.OAuth?.normalized {
+            return LingShuRouteChoicePrompt(
+                question: oauth.question,
+                options: oauth.options.map { .init(label: $0.label, detail: $0.detail) }
+            ).sanitized
         }
-        let hasTypedUserGap = !actionableGaps.isEmpty
-        let hasTextUserGate = Self.replyRequestsUserPrerequisite(original)
-        guard hasTypedUserGap || hasTextUserGate else { return nil }
-        let askFromGap = capabilityUserAsk(taskRecordID: recordID)
-        let ask = askFromGap.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            ? Self.humanizePrerequisiteFromReply(original)
-            : askFromGap
-        guard !ask.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
-        let visibleContext: String
-        if original.isEmpty || Self.looksLikeInternalDump(original) {
-            visibleContext = ""
-        } else {
-            visibleContext = "当前我能做的部分已经推进到这里:\n\(String(original.prefix(260)))\n\n"
+        if let prompt = structured?.userInput?.choicePrompt { return prompt }
+        if let completion = structured?.completion,
+           completion.needsUser || completion.status == .waitingForUser {
+            let question = completion.reason.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                ? (structured?.visibleText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ? structured!.visibleText : "这一步需要你补充信息后才能继续。")
+                : completion.reason
+            return LingShuRouteChoicePrompt(
+                question: question,
+                options: [
+                    .init(label: "我已补充，继续", detail: "我已经提供了缺少的信息或前提，继续当前任务。"),
+                    .init(label: "先停在这里", detail: "当前任务先暂停，不继续推进。"),
+                    .init(label: "改用替代方案", detail: "不等待该前提，尝试可逆的替代路径。")
+                ]
+            ).sanitized
         }
-        let question = """
-        \(visibleContext)这一步需要你授权或提供前提才能继续:
-        \(ask)
-
-        你可以点选下一步;如果要给我 token、账号信息、配对码或具体凭据,也可以直接在输入框发给我,我会接着当前任务继续。
-        """
-        return LingShuRouteChoicePrompt(
-            question: question,
-            options: [
-                .init(label: "确认授权,继续", detail: "我已按上面要求完成授权 / 给了凭据,灵枢继续执行。"),
-                .init(label: "暂不授权", detail: "先停在这里,不要继续访问该资源。"),
-                .init(label: "改用替代方案", detail: "不走这项授权,让灵枢试只读 / 手动指引等可逆方案。")
-            ]
-        ).sanitized
+        return nil
     }
 
     /// Human-in-the-loop 选项语义:不是所有按钮都代表"前提已满足"。
@@ -249,7 +464,10 @@ extension LingShuState {
             chatMessages[idx].isLoading = false
             if chatMessages[idx].resolvedChoice == nil { chatMessages[idx].resolvedChoice = text.isEmpty ? "暂不授权" : text }
         }
-        if appendChatUser, !text.isEmpty { chatMessages.append(.init(speaker: "你", text: text, isUser: true, taskRecordID: recordID)) }
+        if appendChatUser, !text.isEmpty {
+            chatMessages.append(.init(speaker: "你", text: text, isUser: true, taskRecordID: recordID))
+            requestChatScrollToLatestForUserSend()
+        }
         appendTaskRecordMessage(recordID, actor: "你", role: "选项答复", kind: .user, text: text.isEmpty ? "暂不授权" : text)
         let summary = "已按你的选择停在这里:需要授权/凭据/物理前提的部分不再继续执行;已有的本地结果保留。之后你补齐前提或在任务记录里继续,我会接回这条任务。"
         appendTaskRecordMessage(recordID, actor: "灵枢", role: "待用户", kind: .warning, text: summary)
@@ -269,33 +487,6 @@ extension LingShuState {
         let data = (try? JSONEncoder().encode(prompt)) ?? Data("{}".utf8)
         let json = String(data: data, encoding: .utf8) ?? "{}"
         return LingShuHumanInputEnvelope(tool: "ask_choice", argumentsJSON: json)
-    }
-
-    /// 回复文本里明确说"需要授权/凭据/确认"且指向受保护边界时,视为用户前提阻断。
-    /// 这是 gap 之外的第二道兜底:有些能力是内置的,只有实际执行到系统/设备/第三方边界时才发现要授权。
-    nonisolated static func replyRequestsUserPrerequisite(_ text: String) -> Bool {
-        let clean = LingShuReasoningText.stripThinkTags(text)
-        let lower = clean.lowercased()
-        let asksUser = [
-            "需要你", "需要用户", "请授权", "需要授权", "未授权", "没有权限", "没有授权",
-            "登录", "凭据", "token", "api key", "apikey", "oauth", "付费", "付款",
-            "系统设置", "隐私与安全", "提供前提"
-            // 注:删掉"授权后"——它是**描述性**词(如"授权后我能看屏幕"),会把单纯介绍能力的回答误判成需要授权(自检答案踩过)。
-        ].contains { lower.contains($0.lowercased()) }
-        guard asksUser else { return false }
-        return LingShuHumanBoundarySemantics.containsConcreteProtectedBoundary(clean)
-    }
-
-    /// 从回复里取一段用户可理解的前提说明。它只做展示,不参与能力判定。
-    nonisolated static func humanizePrerequisiteFromReply(_ text: String) -> String {
-        let clean = LingShuReasoningText.stripThinkTags(text)
-            .replacingOccurrences(of: "\n\n", with: "\n")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !clean.isEmpty else { return "完成当前目标所需的授权、凭据或设备确认" }
-        if let range = clean.range(of: "需要") {
-            return String(clean[range.lowerBound...].prefix(220))
-        }
-        return String(clean.prefix(220))
     }
 
     /// 完成闸只管「任务交付」,不管普通问答/互动。

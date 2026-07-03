@@ -74,6 +74,83 @@ struct LingShuModelServiceFailure: Equatable, Sendable {
         }
     }
 
+    var retryingMessage: String {
+        switch kind {
+        case .network:
+            return "模型通道网络不可达，已暂停任务，正在重试"
+        case .timeout:
+            return "模型通道响应超时，已暂停任务，正在重试"
+        case .rateLimited:
+            return "模型服务限流，已暂停任务，正在等待可用窗口"
+        case .server:
+            return "模型服务暂不可用，已暂停任务，正在重试"
+        case .auth:
+            return "模型服务认证失败，等待你处理模型配置"
+        case .quota:
+            return "模型服务额度异常，等待你处理额度或切换模型"
+        case .requestInvalid:
+            return "模型请求被拒绝，等待适配修正"
+        case .unknown:
+            return "模型服务返回未知异常，已停止自动重试"
+        }
+    }
+
+    var retryStillUnavailableMessage: String {
+        switch kind {
+        case .network:
+            return "模型通道网络仍不可达"
+        case .timeout:
+            return "模型通道仍响应超时"
+        case .rateLimited:
+            return "模型服务仍在限流"
+        case .server:
+            return "模型服务仍暂不可用"
+        case .auth:
+            return "模型服务认证仍未恢复"
+        case .quota:
+            return "模型服务额度仍不可用"
+        case .requestInvalid:
+            return "模型请求仍被拒绝"
+        case .unknown:
+            return "模型服务仍未知异常"
+        }
+    }
+
+    var resumedMessage: String {
+        switch kind {
+        case .network:
+            return "模型通道网络已恢复，正在接着把任务跑完。"
+        case .timeout, .rateLimited, .server:
+            return "模型通道已恢复，正在接着把任务跑完。"
+        case .auth, .quota, .requestInvalid, .unknown:
+            return userFacingMessage
+        }
+    }
+
+    static func retryingText(for reason: String, pendingCount: Int, attempt: Int) -> String {
+        let base = decodeReason(reason)?.retryingMessage ?? "模型通道暂不可用，已暂停任务，正在重试"
+        return "⏸ \(base)（\(pendingCount) 个任务，第 \(attempt) 次）…"
+    }
+
+    static func stillUnavailableText(for reason: String, attempt: Int, delay: Int) -> String {
+        let base = decodeReason(reason)?.retryStillUnavailableMessage ?? "模型通道仍不可用"
+        return "⏸ \(base)，已重试 \(attempt) 次，约 \(delay)s 后再试…"
+    }
+
+    static func resumedText(for reason: String?) -> String {
+        guard let reason, let failure = decodeReason(reason) else {
+            return "模型通道已恢复，正在接着把任务跑完。"
+        }
+        return failure.resumedMessage
+    }
+
+    static func suspendedSummary(for reason: String) -> String {
+        if let failure = decodeReason(reason) {
+            return failure.userFacingMessage
+        }
+        return reason.isEmpty ? "模型通道暂不可用，已暂停任务，通道恢复后可以继续。" : reason
+    }
+
     var encodedReason: String {
         "\(Self.marker)\(kind.rawValue)::\(statusCode.map(String.init) ?? "-")::\(userFacingMessage)"
     }

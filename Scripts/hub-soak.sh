@@ -81,6 +81,7 @@ SUCCESS_TERMINAL = ("已完成", "已直接回答", "已核验")
 WAITING_STATES = ("待用户", "部分完成")
 FAILURE_STATES = ("异常", "未达标", "失败")
 FINISHED = SUCCESS_TERMINAL + WAITING_STATES + FAILURE_STATES
+ANCHOR_MESSAGES = {}
 
 INTERNAL_LEAK_PATTERNS = [
     "ask_user", "ask_choice", "ask_form",
@@ -126,6 +127,14 @@ def chat(limit=12):
     data = load_call("lingshu_get_chat", {"limit": str(limit)}, 15)
     return data.get("messages", data) if isinstance(data, dict) else data
 
+def message_by_id(message_id, limit=80):
+    if not message_id:
+        return {}
+    for m in chat(limit):
+        if m.get("id") == message_id:
+            return m
+    return {}
+
 def last_assistant():
     for m in reversed(chat(20)):
         if not m.get("isUser") and not m.get("isLoading"):
@@ -135,6 +144,15 @@ def last_assistant():
 def assistant_for_record(record_id, max_wait=0):
     end = time.time() + max_wait
     while True:
+        if (record_id or "").startswith("anchor:"):
+            msg = message_by_id(record_id.split(":", 1)[1])
+            if msg and not msg.get("isLoading"):
+                return msg
+        anchor_id = ANCHOR_MESSAGES.get(record_id)
+        if anchor_id:
+            msg = message_by_id(anchor_id)
+            if msg and not msg.get("isLoading"):
+                return msg
         for m in reversed(chat(40)):
             if not m.get("isUser") and not m.get("isLoading") and m.get("taskRecordID") == record_id:
                 return m
@@ -149,13 +167,15 @@ def reply_text(record_id=None, max_wait=0):
 
 def has_choices(record_id=None, max_wait=0):
     if record_id:
-        return bool(assistant_for_record(record_id, max_wait).get("choices") or [])
-    return bool(last_assistant().get("choices") or [])
+        msg = assistant_for_record(record_id, max_wait)
+        return bool((msg.get("choices") or []) or msg.get("form"))
+    msg = last_assistant()
+    return bool((msg.get("choices") or []) or msg.get("form"))
 
 def invariants():
     return int(status().get("loopInvariantViolations", 0))
 
-def wait_record(record_id=None, max_sec=160):
+def wait_record(record_id=None, max_sec=160, anchor_message_id=None):
     end = time.time() + max_sec
     last = "?"
     while time.time() < end:
@@ -170,36 +190,57 @@ def wait_record(record_id=None, max_sec=160):
         else:
             r = top_record()
         last = (r or {}).get("status", "?")
+        msg = message_by_id(anchor_message_id) if anchor_message_id else {}
+        if msg:
+            if msg.get("isLoading"):
+                time.sleep(2)
+                continue
+            if (msg.get("choices") or []) or msg.get("form"):
+                return "待用户"
+            if (record_id or "").startswith("anchor:") and (msg.get("text") or "").strip():
+                return "已直接回答"
+            if (msg.get("text") or "").strip() and any(k in last for k in FINISHED):
+                return last
         if any(k in last for k in FINISHED):
             return last
         time.sleep(4)
     return f"超时({last})"
 
-def send(prompt, max_sec=160):
-    before = [r.get("id") for r in records(1)]
-    call("lingshu_send_prompt", {"text": prompt}, 30)
-    rid = None
-    for _ in range(12):
-        rs = records(3)
-        if rs and (not before or rs[0].get("id") != before[0]):
-            rid = rs[0].get("id")
-            break
+def await_record_for_anchor(anchor, before_ids, timeout=45):
+    rid = (anchor or {}).get("recordId") or ""
+    if rid:
+        return rid
+    assistant_id = (anchor or {}).get("assistantMessageId") or ""
+    end = time.time() + timeout
+    while time.time() < end:
+        msg = message_by_id(assistant_id)
+        rid = msg.get("taskRecordID") or ""
+        if rid:
+            return rid
+        if msg and not msg.get("isLoading") and (msg.get("text") or "").strip():
+            return f"anchor:{assistant_id}"
         time.sleep(1)
-    st = wait_record(rid, max_sec=max_sec)
-    return rid or (top_record() or {}).get("id"), st
+    return f"anchor:{assistant_id}" if assistant_id else ""
+
+def send(prompt, max_sec=160):
+    before = {r.get("id") for r in records(20)}
+    anchor = load_call("lingshu_send_prompt", {"text": prompt}, 30)
+    assistant_id = (anchor or {}).get("assistantMessageId") or ""
+    rid = await_record_for_anchor(anchor, before, 45)
+    if rid and assistant_id:
+        ANCHOR_MESSAGES[rid] = assistant_id
+    st = wait_record(rid, max_sec=max_sec, anchor_message_id=assistant_id)
+    return rid, st
 
 def voice_text(prompt, max_sec=140):
-    before = [r.get("id") for r in records(1)]
-    call("lingshu_voice_text", {"text": prompt}, 30)
-    rid = None
-    for _ in range(12):
-        rs = records(3)
-        if rs and (not before or rs[0].get("id") != before[0]):
-            rid = rs[0].get("id")
-            break
-        time.sleep(1)
-    st = wait_record(rid, max_sec=max_sec)
-    return rid or (top_record() or {}).get("id"), st
+    before = {r.get("id") for r in records(20)}
+    anchor = load_call("lingshu_voice_text", {"text": prompt}, 30)
+    assistant_id = (anchor or {}).get("assistantMessageId") or ""
+    rid = await_record_for_anchor(anchor, before, 45)
+    if rid and assistant_id:
+        ANCHOR_MESSAGES[rid] = assistant_id
+    st = wait_record(rid, max_sec=max_sec, anchor_message_id=assistant_id)
+    return rid, st
 
 def text_is_clean(text):
     low = text.lower()

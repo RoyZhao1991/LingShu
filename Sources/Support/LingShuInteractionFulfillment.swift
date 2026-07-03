@@ -49,8 +49,22 @@ enum LingShuInteractionFulfillment {
         return followups.contains { value.contains($0.lowercased()) }
     }
 
+    /// 可视交互中的提问/答疑意图。它只决定"最终回复必须回答问题",不决定任务路由。
+    nonisolated static func isQuestionLike(_ text: String) -> Bool {
+        let value = text.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty else { return false }
+        if value.contains("?") || value.contains("？") { return true }
+        let signals = [
+            "老师提问", "提问", "答疑", "请回答", "回答一下", "解释一下", "说明一下",
+            "为什么", "怎么", "如何", "是什么", "什么是", "区别", "相比", "价值",
+            "是否", "能否", "可否", "哪里", "哪个", "哪种", "多少", "吗", "呢"
+        ]
+        return signals.contains { value.contains($0.lowercased()) }
+    }
+
     nonisolated static func isVisiblePresentationControl(_ text: String) -> Bool {
-        isContinuePresentationCommand(text) || isNextPageCommand(text) || isPreviousPageCommand(text)
+        if isQuestionLike(text) { return false }
+        return isContinuePresentationCommand(text) || isNextPageCommand(text) || isPreviousPageCommand(text)
     }
 
     nonisolated static func isContinuePresentationCommand(_ text: String) -> Bool {
@@ -93,12 +107,198 @@ enum LingShuInteractionFulfillment {
         return compact.count < 46 && hasHollowSignal
     }
 
+    /// 页面讲解状态不是答疑正文。用户问问题时,不能把这类状态当成最终答案。
+    nonisolated static func isPageNarrationStatus(_ text: String) -> Bool {
+        let compact = text
+            .replacingOccurrences(of: "\\s+", with: "", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !compact.isEmpty else { return false }
+        if compact.contains("主要说明") && compact.contains("第") && compact.contains("页") { return true }
+        if compact.contains("页面要点") && compact.contains("当前停在第") { return true }
+        if compact.contains("我先根据画面继续讲") { return true }
+        return false
+    }
+
+    /// 交互交付场景里的“产出物库存式回复”:文件路径/表格/清单本身不是演示或讲解正文。
+    /// 这不是针对 PPT 的规则;任何“展示/讲解/演示/带人看”的任务,最终聊天气泡都应描述当前可感知状态,
+    /// 而不是把内部落盘路径当成主要回复。路径仍保留在任务记录和产出物清单里供追溯。
+    nonisolated static func isArtifactInventoryStatus(_ text: String) -> Bool {
+        let value = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty else { return false }
+        let pathPattern = #"/[^\s`"'）)，。、；;】|]+?\.(?:py|txt|md|json|csv|pdf|docx|pptx|html?|wav|mp3|png|jpg|jpeg)"#
+        let pathCount = value.matches(of: try! Regex(pathPattern)).count
+        let tableLike = value.contains("|") && value.contains("---")
+        let inventoryTerms = ["产出物", "文件", "路径", "已生成", "交付物", "artifact", "output"]
+            .filter { value.lowercased().contains($0.lowercased()) }
+            .count
+        let quotedAbsolutePath = value.contains("`/") || value.contains("\"/")
+        let pathColumn = value.contains("路径") && tableLike
+        let extensionMention = [
+            ".py", ".txt", ".md", ".json", ".csv", ".pdf", ".docx", ".pptx", ".html", ".htm", ".wav", ".mp3", ".png", ".jpg", ".jpeg"
+        ].contains { value.lowercased().contains($0) }
+        let hasPathEvidence = pathCount > 0 || quotedAbsolutePath || pathColumn || extensionMention
+        return hasPathEvidence && (tableLike || inventoryTerms >= 2)
+    }
+
+    /// 比 `isArtifactInventoryStatus` 更宽的交付清单判定。只应在"用户明确要展示/讲解/演示"且已有可感知输出时使用,
+    /// 用来避免模型把"文件列表"当成现场讲解/演示的最终回复。
+    nonisolated static func isLikelyDeliveryInventoryStatus(_ text: String) -> Bool {
+        let value = text.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty else { return false }
+        let tableLike = value.contains("|") && value.contains("---")
+        let hasInventoryHeader = ["产出物", "交付物", "文件", "路径", "output", "artifact"]
+            .contains { value.contains($0.lowercased()) }
+        let hasCompletionHeader = ["全部完成", "已完成", "完整交付", "最终交付", "current status", "当前状态"]
+            .contains { value.contains($0.lowercased()) }
+        let hasPreviewOrFileMention = [
+            ".pptx", ".pdf", ".html", ".htm", ".docx", ".xlsx", ".md", "预览", "全屏演示", "打开", "路径"
+        ].contains { value.contains($0.lowercased()) }
+        return (tableLike && hasInventoryHeader)
+            || (hasCompletionHeader && hasInventoryHeader && hasPreviewOrFileMention)
+    }
+
+    /// 交互回复里的尾部库存块。它通常长这样:
+    /// "现场状态/讲解正文 + 分隔线 + 已完成/产出物/文件路径清单"。
+    /// 这里保持通用:不关心材料类型,只识别"完成/交付叙述 + 文件/路径/清单证据"。
+    nonisolated static func isInteractionInventoryTail(_ text: String) -> Bool {
+        let value = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty else { return false }
+        if isArtifactInventoryStatus(value) || isLikelyDeliveryInventoryStatus(value) { return true }
+
+        let lower = value.lowercased()
+        let hasCompletion = [
+            "已完成", "全部完成", "完整交付", "最终交付", "已生成", "已保存",
+            "已打开", "已进入", "completed", "completion", "delivered"
+        ].contains { lower.contains($0.lowercased()) }
+        let hasInventoryEvidence = [
+            "产出物", "交付物", "文件", "路径", "清单",
+            "artifact", "output", "file", "path",
+            ".pptx", ".pdf", ".html", ".htm", ".docx", ".xlsx", ".md", ".txt",
+            "`/", "\"/", "/users/"
+        ].contains { lower.contains($0.lowercased()) }
+        let listLike = [
+            "\n1.", "\n2.", "\n3.", "\n- ", "\n•", "|", "**", "✅"
+        ].contains { value.contains($0) }
+        return hasCompletion && hasInventoryEvidence && listLike
+    }
+
     nonisolated static func latestSubstantiveSpokenLine(after baseline: Int, in lines: [String]) -> String? {
         guard baseline < lines.count else { return nil }
         return lines.dropFirst(baseline)
             .map(cleanSpokenLine)
             .reversed()
-            .first { $0.count >= 40 && !isHollowInteractionStatus($0) }
+            .first { $0.count >= 40 && !isHollowInteractionStatus($0) && !isArtifactInventoryStatus($0) }
+    }
+
+    /// 交互型回复如果前半段已经说明现场状态,后半段又追加了“产出物/文件/路径”库存表,
+    /// 主聊天气泡应保留现场状态,库存明细留在任务记录/产出物面板。这个裁剪只在交互上下文调用。
+    nonisolated static func trimInteractionInventoryTail(_ text: String) -> String? {
+        let value = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard value.count >= 12 else { return nil }
+        let markers = [
+            "\n### 产出物", "\n## 产出物", "\n# 产出物",
+            "\n### 交付物", "\n## 交付物", "\n# 交付物",
+            "\n| 文件 |", "\n| 路径 |",
+            "\n### 演示进度", "\n## 演示进度"
+        ]
+        var hit = markers
+            .compactMap({ marker -> String.Index? in value.range(of: marker, options: [.caseInsensitive])?.lowerBound })
+            .min()
+        if hit == nil {
+            let tailCutMarkers = [
+                "\n---", "\n***", "\n___",
+                "\n**已完成", "\n## 已完成", "\n### 已完成",
+                "\n✅ 全部完成", "\n## ✅", "\n### ✅"
+            ]
+            for marker in tailCutMarkers {
+                var searchStart = value.startIndex
+                while searchStart < value.endIndex,
+                      let range = value.range(
+                        of: marker,
+                        options: [.caseInsensitive],
+                        range: searchStart..<value.endIndex
+                      ) {
+                    let tail = String(value[range.upperBound...])
+                    if isInteractionInventoryTail(tail) {
+                        hit = range.lowerBound
+                        break
+                    }
+                    searchStart = range.upperBound
+                }
+                if hit != nil { break }
+            }
+        }
+        guard let hit else { return nil }
+        var headValue = String(value[..<hit])
+        if let separator = headValue.range(of: "\n---")?.lowerBound {
+            headValue = String(headValue[..<separator])
+        }
+        if let completion = headValue.range(of: "✅")?.lowerBound {
+            headValue = String(headValue[..<completion])
+        }
+        let head = headValue
+            .replacingOccurrences(of: "(?m)^\\s*[-_]{3,}\\s*$", with: "", options: .regularExpression)
+            .replacingOccurrences(of: "\\s+——\\s*$", with: "", options: .regularExpression)
+            .replacingOccurrences(of: "——\\s*$", with: "", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard head.count >= 8 else { return nil }
+        return head
+    }
+
+    nonisolated static func isUsefulInteractionSummary(_ text: String) -> Bool {
+        let compact = text
+            .replacingOccurrences(of: "\\s+", with: "", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard compact.count >= 8 else { return false }
+        if compact.contains("完整交付") && !compact.contains("已进入") && !compact.contains("等待") && !compact.contains("讲解") {
+            return false
+        }
+        let usefulSignals = ["第一页", "第1页", "第1頁", "第1", "当前", "已进入", "演示状态", "等待", "提问", "讲解", "预览", "全屏"]
+        return usefulSignals.contains { compact.contains($0) }
+    }
+
+    /// 流式早读只念“人能听懂的内容”。路径、Markdown 表格、产出物库存适合放在屏幕/任务记录里,
+    /// 不适合在现场语音里逐字读出。
+    nonisolated static func speechSafeStreamText(_ text: String) -> String? {
+        let value = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard value.count >= 2 else { return nil }
+        let compact = value
+            .replacingOccurrences(of: "\\s+", with: "", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !compact.isEmpty else { return nil }
+        if compact.hasPrefix("|") || compact.contains("|------|") || compact == "---" { return nil }
+        if compact == "已完成:" || compact == "已完成：" || compact == "**已完成:**" || compact == "**已完成：**" {
+            return nil
+        }
+        if trimInteractionInventoryTail(value) != nil { return nil }
+        if isArtifactInventoryStatus(value) || isLikelyDeliveryInventoryStatus(value) { return nil }
+        if compact.contains("完整交付") { return nil }
+        if compact.contains("页面结构") || compact.contains("当前状态") { return nil }
+        if compact.contains("全部完成")
+            && ["演示", "交付", "产出", "预览"].contains(where: { compact.contains($0) }) {
+            return nil
+        }
+        if compact.contains("已生成")
+            && [".pptx", ".pdf", ".html", ".htm", ".docx", ".xlsx", ".md", ".txt"].contains(where: { compact.lowercased().contains($0) }) {
+            return nil
+        }
+        if compact.contains("已在灵枢内打开预览") || compact.contains("打开预览并已进入") {
+            return nil
+        }
+        let lower = value.lowercased()
+        let pathOrExtension = [
+            "`/", "\"/", ".pptx", ".pdf", ".html", ".htm", ".docx", ".xlsx", ".md", ".txt", ".py", ".json", ".csv"
+        ].contains { lower.contains($0) }
+        if pathOrExtension && ["产出物", "文件", "路径", "交付物", "artifact", "output"].contains(where: { lower.contains($0.lowercased()) }) {
+            return nil
+        }
+        let structuralHead = [
+            "#", "##", "###", "- ✅", "- ⏸", "✅ **", "|"
+        ].contains { value.hasPrefix($0) }
+        if structuralHead && ["产出物", "演示进度", "文件", "路径"].contains(where: { value.contains($0) }) {
+            return nil
+        }
+        return value
     }
 
     nonisolated static func cleanSpokenLine(_ text: String) -> String {

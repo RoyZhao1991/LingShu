@@ -36,9 +36,19 @@ extension LingShuState {
                 await self?.bindPreflightCognition(request: objective, recordID: recordID)
             }
 
+            let subWorkingDir = await MainActor.run { [weak self] () -> String in
+                guard let self else { return LingShuState.defaultWorkspaceDirectory }
+                let dir = self.effectiveAgentWorkingDirectory(override: Self.explicitWorkingDirectoryHint(in: objective))
+                try? FileManager.default.createDirectory(at: URL(fileURLWithPath: dir), withIntermediateDirectories: true)
+                return dir
+            }
             let subTools = await MainActor.run { [weak self] () -> [LingShuAgentTool] in
                 let policy = self?.dispatchedTaskExecutionPolicy ?? .standard
-                let builtin = self?.agentBuiltinTools(recordIDProvider: { [weak self] in self?.agentSubTaskRecords[subID] }, executionPolicy: policy) ?? []
+                let builtin = self?.agentBuiltinTools(
+                    recordIDProvider: { [weak self] in self?.agentSubTaskRecords[subID] },
+                    executionPolicy: policy,
+                    workingDirectoryOverride: subWorkingDir
+                ) ?? []
                 let extras = self.map { me in [
                     me.searchTextTool(),
                     me.findImagesTool(),
@@ -61,7 +71,7 @@ extension LingShuState {
             let sub: (any LingShuAgentSessioning)? = await MainActor.run { [weak self] in
                 self?.makeAgentSession(
                     id: subID,
-                    system: LingShuPersona.system("现在你作为一条子任务线,独立完成给定目标。**有产出物的必须用 write_file/run_command 真把文件落到工作目录并汇报路径,不要只口头说完成**;写代码必须真构建+运行不崩+测试全绿,跑崩了/报错是要修复的观测、不是交付;信息确实不足才调用 ask_user。"),
+                    system: LingShuPersona.system("现在你作为一条子任务线,独立完成给定目标。工作目录:\(subWorkingDir)。**有产出物的必须用 write_file/run_command 真把文件落到工作目录并汇报路径,不要只口头说完成**;写代码必须真构建+运行不崩+测试全绿,跑崩了/报错是要修复的观测、不是交付;信息确实不足才调用 ask_user。"),
                     tools: subTools,
                     model: adapter,
                     maxTurns: 80,

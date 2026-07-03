@@ -1,4 +1,6 @@
 import XCTest
+import AppKit
+import PDFKit
 @testable import LingShuMac
 
 /// 验证宿主能确定性地把幻灯内容落成**真实可打开的 .pptx**（不依赖 python/run_command）。
@@ -120,6 +122,62 @@ final class PresentationArtifactTests: XCTestCase {
         XCTAssertTrue(LingShuInteractionFulfillment.isNextPageCommand("下一页"))
         XCTAssertTrue(LingShuInteractionFulfillment.isPreviousPageCommand("回上一页"))
         XCTAssertFalse(LingShuInteractionFulfillment.isVisiblePresentationControl("帮我重新生成一版材料"))
+        XCTAssertFalse(
+            LingShuInteractionFulfillment.isVisiblePresentationControl("老师提问:灵枢和 Codex、Claude Code 相比价值是什么?答完继续等待后续问题。"),
+            "答疑问题里出现“继续”等词时,不能被演示控制谓词截走"
+        )
+    }
+
+    @MainActor
+    func testExplicitPreviewCloseCommandClosesOpenPreviewFromMainInput() async throws {
+        let state = LingShuState()
+        let html = workDir.appendingPathComponent("demo.html")
+        try "<html><body><h1>演示材料</h1><p>第一页内容</p></body></html>"
+            .write(to: html, atomically: true, encoding: .utf8)
+
+        _ = await state.previewController.open(path: html.path)
+        XCTAssertTrue(state.previewController.isPresented)
+
+        let reply = state.submitTextInput("本轮汇报结束,关闭预览材料并收尾,一句话确认。")
+
+        XCTAssertFalse(state.previewController.isPresented)
+        XCTAssertTrue(reply.contains("已关闭预览材料"))
+        XCTAssertEqual(state.chatMessages.last?.text, reply)
+    }
+
+    @MainActor
+    func testExplicitPreviewCloseCommandPreemptsActiveBuiltinSkill() async throws {
+        let state = LingShuState()
+        let interceptor = InterceptingBuiltinSkillForTest()
+        state.builtinSkills = [interceptor]
+        let html = workDir.appendingPathComponent("demo-active.html")
+        try "<html><body><h1>演示材料</h1><p>第一页内容</p></body></html>"
+            .write(to: html, atomically: true, encoding: .utf8)
+
+        _ = await state.previewController.open(path: html.path)
+        XCTAssertTrue(state.previewController.isPresented)
+
+        let reply = state.submitTextInput("本轮汇报结束,关闭预览材料并收尾,一句话确认。")
+
+        XCTAssertFalse(interceptor.didIntercept)
+        XCTAssertTrue(interceptor.didCancel)
+        XCTAssertFalse(state.previewController.isPresented)
+        XCTAssertTrue(reply.contains("已关闭预览材料"))
+    }
+
+    @MainActor
+    func testVisibleQuestionGuidanceRequiresDirectAnswer() async throws {
+        let state = LingShuState()
+        let html = workDir.appendingPathComponent("qa.html")
+        try "<html><body><h1>汇报材料</h1><p>规划、执行、监控、验收闭环。</p></body></html>"
+            .write(to: html, atomically: true, encoding: .utf8)
+        _ = await state.previewController.open(path: html.path)
+
+        let guidance = try XCTUnwrap(state.currentVisibleInteractionGuidance(for: "老师提问:价值是什么?"))
+
+        XCTAssertTrue(guidance.contains("本轮输入更像提问/答疑"))
+        XCTAssertTrue(guidance.contains("最终回复必须直接回答用户的问题"))
+        XCTAssertTrue(guidance.contains("不要只复述当前页摘要"))
     }
 
     func testPageNarrationIncludesStablePageContext() {
@@ -134,10 +192,260 @@ final class PresentationArtifactTests: XCTestCase {
         XCTAssertTrue(text.contains("四周计划"))
     }
 
+    @MainActor
+    func testDisplayedPageNumberFallsBackWhenPDFViewPageBelongsToAnotherDocument() async throws {
+        let controller = LingShuPreviewController()
+        let mainPDF = try makeOnePagePDF(named: "main.pdf")
+        let foreignPDF = try makeOnePagePDF(named: "foreign.pdf")
+
+        _ = await controller.open(path: mainPDF.path)
+        let foreignDocument = try XCTUnwrap(PDFDocument(url: foreignPDF))
+        let pdfView = PDFView()
+        pdfView.document = foreignDocument
+        pdfView.go(to: try XCTUnwrap(foreignDocument.page(at: 0)))
+        controller.pdfView = pdfView
+
+        XCTAssertEqual(controller.displayedPageNumber, 1, "PDFView 临时指向外部文档页时,页码显示应安全回退,不能因 NSNotFound + 1 崩溃")
+    }
+
     func testInteractionStatusWithoutSubstanceIsHollow() {
         XCTAssertTrue(LingShuInteractionFulfillment.isHollowInteractionStatus("已基于汇报内容完成答疑,当前继续停在第1页,等待老师的下一个问题。"))
         XCTAssertTrue(LingShuInteractionFulfillment.isHollowInteractionStatus("已完成答疑。"))
         XCTAssertFalse(LingShuInteractionFulfillment.isHollowInteractionStatus("灵枢的工程管理价值在于把规划、执行、监控、验收和记忆串成一个可复盘的闭环,而不是只完成单点编码。"))
+    }
+
+    func testQuestionLikeVisibleInputIsRecognizedWithoutRouting() {
+        XCTAssertTrue(LingShuInteractionFulfillment.isQuestionLike("老师提问:你的工程管理价值到底是什么?"))
+        XCTAssertTrue(LingShuInteractionFulfillment.isQuestionLike("和其他强客户端相比区别在哪里"))
+        XCTAssertFalse(LingShuInteractionFulfillment.isQuestionLike("继续"))
+        XCTAssertFalse(LingShuInteractionFulfillment.isQuestionLike("下一页"))
+    }
+
+    func testPageNarrationStatusIsNotQuestionAnswer() {
+        XCTAssertTrue(LingShuInteractionFulfillment.isPageNarrationStatus("「A2A_工程管理汇报.pptx」第 1 页主要说明:课题背景;四周计划"))
+        XCTAssertTrue(LingShuInteractionFulfillment.isPageNarrationStatus("当前材料已打开预览,当前停在第 2 页。页面要点:背景;计划。"))
+        XCTAssertFalse(LingShuInteractionFulfillment.isPageNarrationStatus("灵枢的价值在于把目标、流程、执行、验收和记忆统一成工程管理闭环。"))
+    }
+
+    func testPresentationQuestionAnswerRejectsStatusOnlyText() {
+        XCTAssertFalse(LingShuPresentationSkill.presentationAnswerIsSubstantive("好的,回答完毕。我继续留在全屏演示状态,等待各位老师下一个问题。"))
+        XCTAssertFalse(LingShuPresentationSkill.presentationAnswerIsSubstantive("这个问题我先记下,演示后细聊。"))
+        XCTAssertTrue(LingShuPresentationSkill.presentationAnswerIsSubstantive("灵枢的价值在于把目标、任务、能力调度、过程监控、结果验收和记忆复用放进一个统一中枢,让工程管理从零散协作变成可追踪的闭环。"))
+    }
+
+    func testPresentationQuestionOnlyDropsFlowTail() {
+        let q = LingShuPresentationSkill.presentationQuestionOnly("老师提问:灵枢和 Codex、Claude Code 这种强客户端相比,你的工程管理价值到底是什么?请基于刚才汇报内容直接答疑,答完继续等待后续问题。")
+        XCTAssertEqual(q, "灵枢和 Codex、Claude Code 这种强客户端相比,你的工程管理价值到底是什么?")
+    }
+
+    func testInteractionArtifactInventoryStatusIsDetected() {
+        let text = """
+        ## 产出物
+        | 文件 | 路径 |
+        |------|------|
+        | deck.pptx | `/Users/example/Library/Application Support/LingShu/Workspace/deck.pptx` |
+        已进入演示状态。
+        """
+        XCTAssertTrue(LingShuInteractionFulfillment.isArtifactInventoryStatus(text))
+    }
+
+    func testInteractionArtifactInventoryStatusDetectsPathsWithSpaces() {
+        let text = """
+        ## 已完成
+        ### 产出物
+        | 文件 | 路径 |
+        |------|------|
+        | **PPTX 文件** | `/Users/example/Library/Application Support/LingShu/Workspace/A2A_工程管理汇报.pptx` |
+        """
+        XCTAssertTrue(LingShuInteractionFulfillment.isArtifactInventoryStatus(text))
+    }
+
+    func testLikelyDeliveryInventoryStatusCatchesVisibleCompletionSummary() {
+        let text = """
+        ✅ 全部完成！以下是本次模拟的完整交付：
+
+        ### 产出物
+        | 文件 | 路径 |
+        |------|------|
+        | **PPTX 文件** | `/Users/example/Library/Application Support/LingShu/Workspace/A2A_工程管理汇报.pptx` |
+
+        当前状态：我已进入全屏演示模式，等待提问。
+        """
+        XCTAssertTrue(LingShuInteractionFulfillment.isLikelyDeliveryInventoryStatus(text))
+    }
+
+    func testTrimInteractionInventoryTailKeepsVisibleState() {
+        let text = """
+        第一页已讲解完毕。现在进入等待提问状态——
+
+        ---
+
+        ✅ **汇报模拟已完成，当前状态：等待老师提问**
+
+        ### 产出物
+        | 文件 | 路径 |
+        |------|------|
+        | **PPTX 文件** | `/Users/example/Library/Application Support/LingShu/Workspace/A2A_工程管理汇报.pptx` |
+
+        ### 演示进度
+        - ✅ 已打开预览
+        """
+
+        XCTAssertEqual(
+            LingShuInteractionFulfillment.trimInteractionInventoryTail(text),
+            "第一页已讲解完毕。现在进入等待提问状态"
+        )
+    }
+
+    func testTrimInteractionInventoryTailCatchesSeparatorCompletionList() {
+        let text = """
+        第一页已讲解完毕。现在停下来等待老师提问。
+
+        ---
+
+        **已完成：**
+        1. ✅ **PPTX已生成** — `/Users/example/Library/Application Support/LingShu/Workspace/A2A_工程管理汇报.pptx`（5页）
+        2. ✅ **预览已打开**
+        3. ✅ **全屏演示已进入**
+        """
+
+        XCTAssertEqual(
+            LingShuInteractionFulfillment.trimInteractionInventoryTail(text),
+            "第一页已讲解完毕。现在停下来等待老师提问。"
+        )
+    }
+
+    func testStreamSpeechSkipsArtifactInventoryLines() {
+        XCTAssertNil(LingShuInteractionFulfillment.speechSafeStreamText("### 产出物"))
+        XCTAssertNil(LingShuInteractionFulfillment.speechSafeStreamText("| 文件 | 路径 |"))
+        XCTAssertNil(LingShuInteractionFulfillment.speechSafeStreamText("|------|------|"))
+        XCTAssertNil(LingShuInteractionFulfillment.speechSafeStreamText("| **PPTX 文件** | `/Users/example/Library/Application Support/LingShu/Workspace/A2A.pptx` |"))
+        XCTAssertNil(LingShuInteractionFulfillment.speechSafeStreamText("**已完成：**"))
+        XCTAssertNil(LingShuInteractionFulfillment.speechSafeStreamText("好的，以下是本次课题规划汇报的完整交付："))
+        XCTAssertNil(LingShuInteractionFulfillment.speechSafeStreamText("## ✅ 全部完成！已进入演示状态，等待老师提问"))
+        XCTAssertNil(LingShuInteractionFulfillment.speechSafeStreamText("### 页面结构"))
+        XCTAssertEqual(
+            LingShuInteractionFulfillment.speechSafeStreamText("第一页已讲解完毕。现在进入等待提问状态。"),
+            "第一页已讲解完毕。现在进入等待提问状态。"
+        )
+    }
+
+    func testInteractionSummaryUsefulnessRejectsInventoryLeadIn() {
+        XCTAssertFalse(LingShuInteractionFulfillment.isUsefulInteractionSummary("好的，以下是本次课题规划汇报的完整交付："))
+        XCTAssertTrue(LingShuInteractionFulfillment.isUsefulInteractionSummary("第一页已讲解完毕。现在进入等待提问状态。"))
+    }
+
+    @MainActor
+    func testVisibleInventoryReplyIsRepairedToSpokenState() async throws {
+        let state = LingShuState()
+        let html = workDir.appendingPathComponent("visible.html")
+        try "<html><body><h1>演示材料</h1><p>规划、执行、监控、验收闭环。</p></body></html>"
+            .write(to: html, atomically: true, encoding: .utf8)
+        _ = await state.previewController.open(path: html.path)
+        let spoken = "我已经打开材料并开始讲解，当前重点是把目标、执行过程、监控和验收串成可感知的交付闭环。"
+        state.recordSpokenLine(spoken)
+
+        let inventory = """
+        ✅ 全部完成！以下是本次模拟的完整交付：
+        ### 产出物
+        | 文件 | 路径 |
+        |------|------|
+        | **HTML 文件** | `/Users/example/Library/Application Support/LingShu/Workspace/demo.html` |
+        """
+        let repaired = state.reconcileVisibleInteractionReply(
+            .completed(text: inventory),
+            prompt: "打开这个材料预览并给我讲解",
+            spokenBaseline: 0,
+            recordID: nil
+        )
+
+        guard case .completed(let text) = repaired else {
+            return XCTFail("应该得到完成态回复")
+        }
+        XCTAssertEqual(text, spoken)
+    }
+
+    @MainActor
+    func testOpenPreviewToolResultMarksTurnAsInteractiveAndRepairsInventory() async throws {
+        let state = LingShuState()
+        let html = workDir.appendingPathComponent("visible-open.html")
+        try "<html><body><h1>演示材料</h1><p>第一页内容</p></body></html>"
+            .write(to: html, atomically: true, encoding: .utf8)
+        _ = await state.previewController.open(path: html.path)
+
+        var record = LingShuTaskExecutionRecord.create(prompt: "打开这个材料预览并给我讲解")
+        record.append(
+            actor: "交互交付",
+            role: "打开预览",
+            kind: .result,
+            text: "已打开预览",
+            detail: .toolResult(tool: "open_preview", success: true, output: "已打开预览")
+        )
+        state.taskExecutionRecords.append(record)
+
+        let reply = """
+        第一页已讲解完毕。现在进入等待提问状态——
+
+        ### 产出物
+        | 文件 | 路径 |
+        |------|------|
+        | **HTML 文件** | `/Users/example/Library/Application Support/LingShu/Workspace/demo.html` |
+        """
+
+        let repaired = state.reconcileVisibleInteractionReply(
+            .completed(text: reply),
+            prompt: "打开这个材料预览并给我讲解",
+            spokenBaseline: 0,
+            recordID: record.id
+        )
+
+        guard case .completed(let text) = repaired else {
+            return XCTFail("应该得到完成态回复")
+        }
+        XCTAssertEqual(text, "第一页已讲解完毕。现在进入等待提问状态")
+    }
+
+    @MainActor
+    func testFinalVisibleInteractionTextIsNormalizedEvenWhenReconcilePathIsBypassed() async throws {
+        let state = LingShuState()
+        let html = workDir.appendingPathComponent("visible-final.html")
+        try "<html><body><h1>演示材料</h1><p>第一页内容</p></body></html>"
+            .write(to: html, atomically: true, encoding: .utf8)
+        _ = await state.previewController.open(path: html.path)
+
+        var record = LingShuTaskExecutionRecord.create(prompt: "完整模拟一次学校课题规划汇报并进入演示")
+        record.appendArtifact(title: "HTML 文件", location: html.path, producer: "测试")
+        state.taskExecutionRecords.append(record)
+
+        let reply = """
+        好的，以下是本次课题规划汇报的完整交付：
+
+        ---
+
+        ## ✅ 全部完成！已进入演示状态，等待老师提问
+
+        ### 产出物
+        | 文件 | 路径 |
+        |------|------|
+        | **HTML 文件** | `/Users/example/Library/Application Support/LingShu/Workspace/demo.html` |
+        """
+
+        let normalized = state.normalizeFinalVisibleInteractionText(
+            reply,
+            prompt: "完整模拟一次学校课题规划汇报,制作材料并进入演示状态",
+            recordID: record.id
+        )
+
+        XCTAssertTrue(normalized.contains("已打开预览"))
+        XCTAssertTrue(normalized.contains("第 1 页"))
+        XCTAssertFalse(normalized.contains("完整交付"))
+        XCTAssertFalse(normalized.contains("产出物"))
+        XCTAssertFalse(normalized.contains("| 文件 |"))
+    }
+
+    func testInteractionArtifactInventoryStatusDoesNotFlagSubstantiveAnswer() {
+        let text = "灵枢的工程管理价值在于把规划、执行、监控、验收和记忆串成一个闭环,让强客户端成为被调度的执行层。"
+        XCTAssertFalse(LingShuInteractionFulfillment.isArtifactInventoryStatus(text))
     }
 
     func testLatestSubstantiveSpokenLineCanRepairHollowChatReply() {
@@ -160,5 +468,39 @@ final class PresentationArtifactTests: XCTestCase {
         process.waitUntilExit()
         let data = pipe.fileHandleForReading.readDataToEndOfFile()
         return String(data: data, encoding: .utf8) ?? ""
+    }
+
+    private func makeOnePagePDF(named name: String) throws -> URL {
+        let url = workDir.appendingPathComponent(name)
+        let image = NSImage(size: NSSize(width: 200, height: 120))
+        image.lockFocus()
+        NSColor.white.setFill()
+        NSRect(x: 0, y: 0, width: 200, height: 120).fill()
+        NSColor.black.setFill()
+        NSString(string: name).draw(at: NSPoint(x: 20, y: 50), withAttributes: [.foregroundColor: NSColor.black])
+        image.unlockFocus()
+
+        let document = PDFDocument()
+        let page = try XCTUnwrap(PDFPage(image: image))
+        document.insert(page, at: 0)
+        XCTAssertTrue(document.write(to: url))
+        return url
+    }
+}
+
+@MainActor
+private final class InterceptingBuiltinSkillForTest: LingShuBuiltinSkill {
+    var didIntercept = false
+    var didCancel = false
+    func mount(host: LingShuState) {}
+    var id: String { "test-interceptor" }
+    var displayName: String { "测试拦截器" }
+    var isActive: Bool { true }
+    func interceptActiveInput(_ prompt: String) -> Bool {
+        didIntercept = true
+        return true
+    }
+    func onCancel() {
+        didCancel = true
     }
 }

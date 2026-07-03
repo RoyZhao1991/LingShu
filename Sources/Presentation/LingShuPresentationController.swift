@@ -190,9 +190,11 @@ final class LingShuPresentationController: ObservableObject {
     }
 
     /// **同步彻底停止**(供 cancelCurrentCall / abortActiveFlow / 退出演示等同步取消路径调):
-    /// 掐音频 + 置停止位 → play 循环在 speak 返回后随即终止,不再念下一拍。根治"取消后音频还在播"。
+    /// 掐音频 + 立即退出 active 态 + 置停止位 → play 循环在 speak 返回后随即终止,不再念下一拍。
+    /// 这里必须同步置 finished,否则下一条普通输入会在旧 play 任务收尾前继续被演示链路截获。
     func requestStop() {
         stopRequested = true
+        phase = .finished
         hooks?.interruptAudio()
         shownDocumentPath = nil
     }

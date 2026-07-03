@@ -166,6 +166,10 @@ private final class LingShuControlConnection: @unchecked Sendable {
             return
         }
         let body = request.body
+        if let cachedResponse = LingShuControlSnapshotStore.shared.cachedJSONRPCResponse(for: body) {
+            finish(status: "200 OK", body: cachedResponse)
+            return
+        }
         Task { [weak self] in
             let response = await dispatcher(body)
             guard let self else { return }

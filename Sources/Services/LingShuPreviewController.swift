@@ -37,8 +37,13 @@ final class LingShuPreviewController: ObservableObject {
     /// 用于客观核验"语音/回复报的页码 vs 画面真实页"是否对齐(pdfView 没绑定时回退 pageIndex+1)。
     var displayedPageNumber: Int {
         if isHTML { return 1 }   // HTML 是连续滚动页、无页号概念
-        guard let document, let cur = pdfView?.currentPage else { return pageIndex + 1 }
-        return document.index(for: cur) + 1
+        if let document, let cur = pdfView?.currentPage {
+            let actualIndex = document.index(for: cur)
+            if actualIndex >= 0, actualIndex < max(1, document.pageCount) {
+                return actualIndex + 1
+            }
+        }
+        return safeDisplayPageNumber(for: pageIndex)
     }
 
     /// 打开文件预览(office 文件转 PDF)。返回给大脑的说明(含页数 + 怎么翻)。
@@ -96,7 +101,7 @@ final class LingShuPreviewController: ObservableObject {
 
     func goto(_ index: Int) -> String {
         if isHTML { return scrollViewport(down: index >= pageIndex) }   // HTML 无真页号,按方向滚一屏
-        guard let document, pageCount > 0 else { return "还没打开任何预览,先 open_preview。" }
+        guard document != nil, pageCount > 0 else { return "还没打开任何预览,先 open_preview。" }
         let clamped = max(0, min(index, pageCount - 1))
         pageIndex = clamped
         navigateToCurrentPage()
@@ -119,9 +124,17 @@ final class LingShuPreviewController: ObservableObject {
         if let cur = pv.currentPage {
             let curIdx = document.index(for: cur)
             if curIdx != pageIndex {
-                lingShuControlLog("preview: ⚠️页码脱节 期望第\(pageIndex + 1)页 实际第\(curIdx + 1)页(已重发 go(to:))")
+                let expected = safeDisplayPageNumber(for: pageIndex)
+                let actual = (curIdx >= 0 && curIdx < pageCount) ? curIdx + 1 : -1
+                lingShuControlLog("preview: ⚠️页码脱节 期望第\(expected)页 实际第\(actual)页(已重发 go(to:))")
             }
         }
+    }
+
+    private func safeDisplayPageNumber(for rawIndex: Int) -> Int {
+        guard pageCount > 0 else { return 1 }
+        let clamped = min(max(rawIndex, 0), pageCount - 1)
+        return clamped + 1
     }
 
     /// 当前页**真实文字内容**(从 PDF 抽,演示时讲解必须照这个讲,别凭记忆——保证文字稿对得上画面)。

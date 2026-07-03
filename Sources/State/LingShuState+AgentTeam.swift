@@ -78,7 +78,7 @@ extension LingShuState {
         appendTaskRecordMessage(recordID, actor: spec.name, role: "角色·\(spec.role)", kind: .agent,
                                 text: "🧑‍💼 角色「\(spec.name)」(\(spec.role))开始:\(spec.objective)\(context.isEmpty ? "" : "(已接前序产出)")")
         let result = await agentOrchestrator.spawn(id: id, objective: input, session: session)
-        let text = Self.runResultText(result)
+        let text = LingShuStructuredModelOutput.visibleText(from: Self.runResultText(result))
         appendTaskRecordMessage(recordID, actor: spec.name, role: "角色·\(spec.role)·完成", kind: .result,
                                 text: "🧑‍💼 角色「\(spec.name)」产出:\(String(text.prefix(400)))")
         return text

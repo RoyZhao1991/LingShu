@@ -21,9 +21,10 @@ extension LingShuState {
         recordIDProvider: @escaping @MainActor @Sendable () -> String? = { nil }
     ) -> any LingShuAgentSessioning {
         let harness = currentHarnessConfig()   // 统一自适应 harness 配置(classic 与 nested 共用同一份)
+        let systemWithStructuredOutput = (system ?? "") + LingShuStructuredModelOutput.finalAnswerContract
         switch agentLoopVariant {
         case .classic:
-            return harness.makeSession(id: id, system: system, initialMessages: initialMessages, tools: tools,
+            return harness.makeSession(id: id, system: systemWithStructuredOutput, initialMessages: initialMessages, tools: tools,
                                        model: model, maxTurns: maxTurns, maxHistoryMessages: maxHistoryMessages,
                                        blockingToolNames: blockingToolNames)
         case .nested:
@@ -53,7 +54,7 @@ extension LingShuState {
                 self?.nestedRecallBlock(for: prompt) ?? ""
             }
             return LingShuNestedAgentSession(
-                id: id, system: system, initialMessages: initialMessages, tools: tools, model: model,
+                id: id, system: systemWithStructuredOutput, initialMessages: initialMessages, tools: tools, model: model,
                 maxTurns: maxTurns, maxHistoryMessages: maxHistoryMessages, blockingToolNames: blockingToolNames,
                 acceptStage: acceptStage, note: note, setPhase: setPhaseHook,
                 isInterrupted: isInterrupted, consumeInterrupt: consumeInterrupt, recallMemory: recallMemory,

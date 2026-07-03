@@ -149,12 +149,13 @@ extension LingShuState {
                 briefMainThread("子任务「\(objective)」\(head):\(message.prefix(160))")
                 return
             }
-            // 网络/网关中断:**非失败**,标"已暂停",启动主动重试循环(它在主对话框统一展示重试进度,故这里不另发对话气泡)。
+            // 模型通道可恢复中断:**非失败**,标"已暂停",启动主动重试循环(它在主对话框统一展示重试进度,故这里不另发对话气泡)。
             _ = objective
             let recordID = agentSubTaskRecords[id]
+            let message = LingShuModelServiceFailure.suspendedSummary(for: reason)
             if let recordID {
-                appendTaskRecordMessage(recordID, actor: "灵枢", role: "暂停", kind: .warning, text: "网络中断,已暂停:\(reason)")
-                finishTaskRecord(recordID, status: .suspended, summary: "网络中断已暂停,联网后自动续跑。")
+                appendTaskRecordMessage(recordID, actor: "模型通道", role: "暂停", kind: .warning, text: message)
+                finishTaskRecord(recordID, status: .suspended, summary: message)
             }
             startNetworkRetryLoopIfNeeded()
         case .resumed(let id, let objective):
@@ -255,23 +256,24 @@ extension LingShuState {
         monitor.start()
     }
 
-    /// 网络恢复:让编排器逐条从中断处续跑暂停的子任务,并续跑可能挂起的主会话回合。
+    /// 模型通道恢复:让编排器逐条从中断处续跑暂停的子任务,并续跑可能挂起的主会话回合。
     func resumeSuspendedWork() async {
         let ids = await agentOrchestrator.suspendedIDs()
         if !ids.isEmpty {
-            appendTrace(kind: .route, actor: "网络", title: "重连", detail: "网络恢复,自动续跑 \(ids.count) 条暂停任务。")
+            appendTrace(kind: .route, actor: "模型通道", title: "恢复", detail: "模型通道恢复,自动续跑 \(ids.count) 条暂停任务。")
         }
         for id in ids { await agentOrchestrator.resumeInterrupted(id: id) }
         await resumeSuspendedMainTurnIfNeeded()
         await resumeSuspendedAutonomousIfNeeded()
     }
 
-    /// 续跑因断网挂起的**主会话**回合:按记录边界重放当前 prompt + 再过验收,把结果填回原气泡;
-    /// 若续跑又因网络 .interrupted,则保留挂起态等下次重连。
+    /// 续跑因模型通道中断挂起的**主会话**回合:按记录边界重放当前 prompt + 再过验收,把结果填回原气泡;
+    /// 若续跑又因通道 .interrupted,则保留挂起态等下次恢复。
     func resumeSuspendedMainTurnIfNeeded() async {
         guard let pending = suspendedMainTurn else { return }
         suspendedMainTurn = nil
-        appendTrace(kind: .route, actor: "网络", title: "续跑主回合", detail: "网络恢复,接着把上一条跑完。")
+        suspendedMainReason = nil
+        appendTrace(kind: .route, actor: "模型通道", title: "续跑主回合", detail: "模型通道恢复,接着把上一条跑完。")
         // 共享主会话在网络中断时可能已经累积多条未收口输入。恢复时如果直接 continueLoop(),
         // 模型会把多个暂停问答揉到同一个气泡里补答。这里重建主会话,按本记录边界重放当前 prompt:
         // 保留长期记忆 seed,但丢弃断流期间的悬空轮次,确保一问一答不串台。
@@ -281,7 +283,7 @@ extension LingShuState {
             await MainActor.run { self?.appendStreamingBubbleText(delta, to: pending.bubbleID) }
         }
         let recoveryGuidance = """
-        【网络恢复续跑边界】
+        【模型通道恢复续跑边界】
         这次只恢复当前这一条被暂停的请求,不要回答其它历史问题、排队问题或其它暂停记录。
         当前请求如下:
         \(pending.prompt)
@@ -293,8 +295,9 @@ extension LingShuState {
             taskRecordID: pending.recordID,
             trustReplyClaim: false
         )
-        if case .interrupted = result {
+        if case .interrupted(let reason) = result {
             suspendedMainTurn = pending   // 还是连不上,继续挂起等下次重连
+            suspendedMainReason = reason
             return
         }
         finalizeMainTurn(result: result, bubbleID: pending.bubbleID, recordID: pending.recordID, prompt: pending.prompt, startedAt: pending.startedAt)

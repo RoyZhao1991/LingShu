@@ -34,4 +34,21 @@ final class RunCommandArtifactTests: XCTestCase {
         // 原有文档识别不回归;绝对路径原样保留。
         XCTAssertEqual(paths("生成 /Users/x/报告.pptx 完成").first, "/Users/x/报告.pptx")
     }
+
+    func testQuotedPathWithSpacesIsExtracted() {
+        let command = #"python3 "/Users/me/Library/Application Support/LingShu/Skills/slides_to_pptx.py" "/Users/me/Library/Application Support/LingShu/Workspace/A2A_课题汇报_slides.json" "/Users/me/Library/Application Support/LingShu/Workspace/A2A_课题汇报.pptx""#
+        let extracted = LingShuState.extractRunCommandArtifacts(command, workingDirectory: "/proj")
+
+        XCTAssertTrue(
+            extracted.contains("/Users/me/Library/Application Support/LingShu/Workspace/A2A_课题汇报.pptx"),
+            "带空格目录的引用路径也必须被识别为候选产物"
+        )
+    }
+
+    func testReplyPathWithSpacesIsExtractedWhenQuoted() {
+        let reply = #"PPTX 文件：`/Users/me/Library/Application Support/LingShu/Workspace/A2A_课题汇报.pptx`"#
+        let extracted = LingShuState.extractFilePaths(from: reply)
+
+        XCTAssertEqual(extracted, ["/Users/me/Library/Application Support/LingShu/Workspace/A2A_课题汇报.pptx"])
+    }
 }

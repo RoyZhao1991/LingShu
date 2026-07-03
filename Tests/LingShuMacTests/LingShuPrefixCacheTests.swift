@@ -89,7 +89,7 @@ final class LingShuPrefixCacheTests: XCTestCase {
     func testParseCacheUsageAnthropicStyle() {
         let usage: [String: Any] = ["input_tokens": 50, "cache_read_input_tokens": 4096]
         let r = LingShuPrefixCache.parseCacheUsage(usage)
-        XCTAssertEqual(r.promptTokens, 50)
+        XCTAssertEqual(r.promptTokens, 4146)
         XCTAssertEqual(r.cachedTokens, 4096)
     }
 }

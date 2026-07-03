@@ -52,4 +52,16 @@ final class DevFullAccessTests: XCTestCase {
         state.sessionShellAlwaysAllowed = false
         XCTAssertTrue(state.shellPreauthorized, "开发全权应视作 shell 已预授权(后台守候等路径不被卡)")
     }
+
+    func testDevFullAccessAutoGrantsManagedModeWithoutPrompt() async {
+        let state = LingShuState()
+        state.developmentPhaseFullAccess = true
+
+        let approved = await state.requestManagedMode(reason: "全屏演示当前预览文档")
+
+        XCTAssertTrue(approved, "开发全权下可逆的托管演示入口应直接审计放行,不能弹同步确认卡住 MCP/自主执行")
+        XCTAssertTrue(state.managedModePreauthorized)
+        XCTAssertTrue(state.executionTrace.contains { $0.title == "托管模式已预授权" })
+        XCTAssertFalse(state.isStandingPersonOnDuty, "requestManagedMode 只裁决权限,不应自行切换上岗状态")
+    }
 }

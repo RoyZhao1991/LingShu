@@ -96,29 +96,61 @@ extension LingShuState {
 
     /// 从命令/输出抽取交付型文件(绝对或相对路径,相对则相对工作目录解析)。
     nonisolated static func extractRunCommandArtifacts(_ text: String, workingDirectory: String) -> [String] {
-        let pattern = "[\\w\\u4e00-\\u9fff./~_-]+\\.(?:pptx|docx|xlsx|pdf|html?|md|csv|png|jpe?g|java|kt|swift|py|jsx|js|tsx|ts|go|rs|rb|cpp|cc|c|hpp|h|cs|php|scala|vue|sql|xml|yaml|yml|json|toml|ini|properties|gradle|sh|bash|env|conf|cfg|txt|jar)\\b"
-        guard let re = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else { return [] }
-        let range = NSRange(text.startIndex..., in: text)
         var out: [String] = []
-        for m in re.matches(in: text, range: range) {
-            guard let r = Range(m.range, in: text) else { continue }
-            var path = String(text[r])
+        let extPattern = "(?:pptx|docx|xlsx|pdf|html?|md|csv|png|jpe?g|java|kt|swift|py|jsx|js|tsx|ts|go|rs|rb|cpp|cc|c|hpp|h|cs|php|scala|vue|sql|xml|yaml|yml|json|toml|ini|properties|gradle|sh|bash|env|conf|cfg|txt|jar)"
+        func append(_ raw: String) {
+            var path = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            path = path.trimmingCharacters(in: CharacterSet(charactersIn: "`\"'"))
+            guard !path.isEmpty else { return }
+            if path.hasPrefix("~/") { path = (path as NSString).expandingTildeInPath }
             if !path.hasPrefix("/") { path = (workingDirectory as NSString).appendingPathComponent(path) }
+            path = (path as NSString).standardizingPath
+            if out.contains(where: { $0.hasSuffix(path) && $0.count > path.count }) { return }
+            out.removeAll { path.hasSuffix($0) && path.count > $0.count }
             if !out.contains(path) { out.append(path) }
+        }
+
+        // Quoted shell arguments may contain spaces, e.g.
+        // "/Users/me/Library/Application Support/LingShu/Workspace/deck.pptx".
+        for pattern in [
+            "[`\"']([^`\"'\\n]+\\.\(extPattern))[`\"']",
+            "([\\w\\u4e00-\\u9fff./~_-]+\\.\(extPattern))\\b"
+        ] {
+            guard let re = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else { continue }
+            let range = NSRange(text.startIndex..., in: text)
+            for m in re.matches(in: text, range: range) {
+                let targetRange = m.numberOfRanges > 1 ? m.range(at: 1) : m.range
+                guard let r = Range(targetRange, in: text) else { continue }
+                append(String(text[r]))
+            }
         }
         return out
     }
 
     /// 从回复文本抽取提到的绝对文件路径(常见产出物扩展名;允许中文文件名)。供验收门核实"真有这个文件"。
     nonisolated static func extractFilePaths(from text: String) -> [String] {
-        let pattern = "/[^\\s`\"'）)，。、；;】]+?\\.(?:pptx|docx|xlsx|pdf|html?|md|csv|txt|py|json|sh|png|jpe?g)"
-        guard let re = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else { return [] }
-        let range = NSRange(text.startIndex..., in: text)
         var out: [String] = []
-        for m in re.matches(in: text, range: range) {
-            guard let r = Range(m.range, in: text) else { continue }
-            let p = String(text[r])
-            if !out.contains(p) { out.append(p) }
+        let extPattern = "(?:pptx|docx|xlsx|pdf|html?|md|csv|txt|py|json|sh|png|jpe?g)"
+        func append(_ raw: String) {
+            let path = (raw.trimmingCharacters(in: .whitespacesAndNewlines)
+                .trimmingCharacters(in: CharacterSet(charactersIn: "`\"'")) as NSString).standardizingPath
+            guard path.hasPrefix("/"), !out.contains(path) else { return }
+            if out.contains(where: { $0.hasSuffix(path) && $0.count > path.count }) { return }
+            out.removeAll { path.hasSuffix($0) && path.count > $0.count }
+            out.append(path)
+        }
+
+        for pattern in [
+            "[`\"'](/[^`\"'\\n]+\\.\(extPattern))[`\"']",
+            "(/[^\\s`\"'）)，。、；;】]+?\\.\(extPattern))"
+        ] {
+            guard let re = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else { continue }
+            let range = NSRange(text.startIndex..., in: text)
+            for m in re.matches(in: text, range: range) {
+                let targetRange = m.numberOfRanges > 1 ? m.range(at: 1) : m.range
+                guard let r = Range(targetRange, in: text) else { continue }
+                append(String(text[r]))
+            }
         }
         return out
     }

@@ -84,6 +84,7 @@ SUCCESS_TERMINAL = ("已完成", "已直接回答", "已核验")
 WAITING_STATES = ("待用户", "部分完成")
 FAILURE_STATES = ("异常", "未达标", "失败")
 FINISHED = SUCCESS_TERMINAL + WAITING_STATES + FAILURE_STATES
+ANCHOR_MESSAGES = {}
 
 INTERNAL_LEAK_PATTERNS = [
     "__LINGSHU_HUMAN_INPUT__", "LINGSHU_HUMAN_INPUT",
@@ -148,6 +149,14 @@ def chat(limit=40):
     data = load("lingshu_get_chat", {"limit": str(limit)}, 20)
     return data.get("messages", data) if isinstance(data, dict) else data
 
+def message_by_id(message_id, limit=120):
+    if not message_id:
+        return {}
+    for m in chat(limit):
+        if m.get("id") == message_id:
+            return m
+    return {}
+
 def top_record():
     rs = records(1)
     return rs[0] if rs else None
@@ -155,6 +164,15 @@ def top_record():
 def assistant_for_record(record_id, max_wait=0):
     end = time.time() + max_wait
     while True:
+        if (record_id or "").startswith("anchor:"):
+            msg = message_by_id(record_id.split(":", 1)[1])
+            if msg and not msg.get("isLoading"):
+                return msg
+        anchor_id = ANCHOR_MESSAGES.get(record_id)
+        if anchor_id:
+            msg = message_by_id(anchor_id)
+            if msg and not msg.get("isLoading"):
+                return msg
         for m in reversed(chat(60)):
             if not m.get("isUser") and not m.get("isLoading") and m.get("taskRecordID") == record_id:
                 return m
@@ -171,14 +189,16 @@ def reply_text(record_id=None, max_wait=0):
     return ""
 
 def has_choices(record_id, max_wait=0):
-    return bool(assistant_for_record(record_id, max_wait).get("choices") or [])
+    msg = assistant_for_record(record_id, max_wait)
+    return bool((msg.get("choices") or []) or msg.get("form"))
 
-def wait_record(record_id=None, max_sec=180):
+def wait_record(record_id=None, max_sec=180, anchor_message_id=None):
     # AI 任务不按固定总时长切死:只要状态/消息/产出物仍在变化,说明心跳还活着,继续等。
     # max_sec 表示“连续无进展”的超时窗口,不是整条任务上限。
     last_progress = time.time()
     last_signature = None
     last = "?"
+    anchor_seen = False
     while time.time() < DEADLINE:
         if not health():
             return "DEADLOCK"
@@ -191,10 +211,30 @@ def wait_record(record_id=None, max_sec=180):
             r = top_record()
         r = r or {}
         last = r.get("status", "?")
-        signature = (last, r.get("messageCount", 0), r.get("artifactCount", 0))
+        msg = message_by_id(anchor_message_id) if anchor_message_id else {}
+        if msg:
+            anchor_seen = True
+        msg_text = msg.get("text", "") if msg else ""
+        msg_loading = bool(msg.get("isLoading")) if msg else False
+        msg_has_choices = bool((msg.get("choices") or []) or msg.get("form")) if msg else False
+        signature = (last, r.get("messageCount", 0), r.get("artifactCount", 0), msg_loading, len(msg_text), msg_has_choices)
         if signature != last_signature:
             last_signature = signature
             last_progress = time.time()
+        if anchor_message_id and msg_loading:
+            if time.time() - last_progress > max_sec:
+                return f"超时无进展({last})"
+            time.sleep(2)
+            continue
+        if anchor_message_id and anchor_seen and msg and not msg_loading:
+            if msg_has_choices:
+                return "待用户"
+            if (record_id or "").startswith("anchor:") and msg_text.strip():
+                return "已直接回答"
+            if msg_text.strip() and any(k in last for k in FINISHED):
+                return last
+            if msg_text.strip() and not record_id:
+                return "已直接回答"
         if any(k in last for k in FINISHED):
             return last
         if time.time() - last_progress > max_sec:
@@ -210,29 +250,55 @@ def record_matches_prompt(item, prompt):
     return title.startswith(key) or key in title
 
 def await_new_record(prompt, before_ids, timeout=30):
-    fallback = None
     end = time.time() + timeout
     while time.time() < end:
         new_items = [r for r in records(20) if r.get("id") not in before_ids]
         for item in new_items:
             if record_matches_prompt(item, prompt):
                 return item.get("id")
-        if new_items and fallback is None:
-            fallback = new_items[0].get("id")
         time.sleep(1)
-    return fallback or (top_record() or {}).get("id")
+    return ""
+
+def await_record_for_anchor(anchor, prompt, before_ids, timeout=45):
+    rid = (anchor or {}).get("recordId") or ""
+    if rid:
+        return rid
+    assistant_id = (anchor or {}).get("assistantMessageId") or ""
+    end = time.time() + timeout
+    while time.time() < end:
+        msg = message_by_id(assistant_id)
+        rid = msg.get("taskRecordID") or ""
+        if rid:
+            return rid
+        if msg and not msg.get("isLoading") and (msg.get("text") or "").strip():
+            return f"anchor:{assistant_id}"
+        # 有些路由会复用/移除占位气泡,兜底仍按新增记录找,但只在锚点轮询期间使用。
+        candidate = await_new_record(prompt, before_ids, timeout=1)
+        if candidate and candidate not in before_ids:
+            return candidate
+        time.sleep(1)
+    candidate = await_new_record(prompt, before_ids, timeout=5)
+    if candidate:
+        return candidate
+    return f"anchor:{assistant_id}" if assistant_id else ""
 
 def send(prompt, max_sec=180):
     before = {r.get("id") for r in records(20)}
-    rpc("lingshu_send_prompt", {"text": prompt}, 30)
-    rid = await_new_record(prompt, before, 30)
-    return rid, wait_record(rid, max_sec)
+    anchor = load("lingshu_send_prompt", {"text": prompt}, 30)
+    assistant_id = (anchor or {}).get("assistantMessageId") or ""
+    rid = await_record_for_anchor(anchor, prompt, before, 45)
+    if rid and assistant_id:
+        ANCHOR_MESSAGES[rid] = assistant_id
+    return rid, wait_record(rid, max_sec, assistant_id)
 
 def voice_text(prompt, max_sec=160):
     before = {r.get("id") for r in records(20)}
-    rpc("lingshu_voice_text", {"text": prompt}, 30)
-    rid = await_new_record(prompt, before, 30)
-    return rid, wait_record(rid, max_sec)
+    anchor = load("lingshu_voice_text", {"text": prompt}, 30)
+    assistant_id = (anchor or {}).get("assistantMessageId") or ""
+    rid = await_record_for_anchor(anchor, prompt, before, 45)
+    if rid and assistant_id:
+        ANCHOR_MESSAGES[rid] = assistant_id
+    return rid, wait_record(rid, max_sec, assistant_id)
 
 def inv():
     return int(status().get("loopInvariantViolations", 0))
@@ -391,7 +457,7 @@ def permission_probe(cycle):
     txt = reply_text(rid, 30)
     waiting = any(k in st for k in WAITING_STATES) or any(k in txt for k in ["授权", "凭据", "登录", "token", "OAuth"])
     ok = waiting and has_choices(rid, 20) and not leaks(txt) and not any(k in st for k in FAILURE_STATES)
-    return assert_probe(ok, f"#{cycle} 受保护边界授权", f"status={st} choices={has_choices(rid)} reply={txt[:140]}")
+    return assert_probe(ok, f"#{cycle} 受保护边界授权", f"status={st} humanInput={has_choices(rid)} reply={txt[:140]}")
 
 def file_attachment_probe(cycle):
     note = PROBE / f"meeting_note_{cycle}.md"
@@ -432,19 +498,24 @@ def voice_probe(cycle):
     return assert_probe(ok, f"#{cycle} 语音文本入口", f"status={st} reply={txt[:100]}")
 
 def queue_probe(cycle):
+    token = f"快速问答-{int(time.time())}-{cycle}"
     prompts = [
-        "快速问答A:给我一句话解释今天接下来最该先处理什么。",
-        "快速问答B:给我一句话提醒如何避免任务切换混乱。",
-        "快速问答C:给我一句话说明遇到权限阻塞该怎么办。",
-        "快速问答D:给我一句话说明执行记录有什么用。",
+        f"{token}-A:给我一句话解释今天接下来最该先处理什么。",
+        f"{token}-B:给我一句话提醒如何避免任务切换混乱。",
+        f"{token}-C:给我一句话说明遇到权限阻塞该怎么办。",
+        f"{token}-D:给我一句话说明执行记录有什么用。",
     ]
+    before_ids = {r.get("id") for r in records(80)}
     for p in prompts:
         rpc("lingshu_send_prompt", {"text": p}, 30)
         time.sleep(0.35)
     end = time.time() + 240
     relevant = []
     while time.time() < end:
-        relevant = [r for r in records(16) if r.get("title", "").startswith("快速问答")]
+        relevant = [
+            r for r in records(80)
+            if r.get("id") not in before_ids and r.get("title", "").startswith(token)
+        ]
         done = [r for r in relevant if any(k in r.get("status", "") for k in FINISHED)]
         if len(relevant) >= 4 and len(done) >= 4:
             break

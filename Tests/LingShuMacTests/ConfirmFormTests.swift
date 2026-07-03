@@ -64,4 +64,50 @@ final class ConfirmFormTests: XCTestCase {
     func testOtherOptionLabelConstant() {
         XCTAssertEqual(LingShuConfirmForm.otherOptionLabel, "其他(自行输入)")
     }
+
+    @MainActor
+    func testControlChatPayloadExposesPendingForm() {
+        let state = LingShuState()
+        let form = LingShuConfirmForm(title: "同步外部系统前确认", fields: [
+            .init(key: "target", question: "目标系统?", options: ["Notion", "飞书"]),
+            .init(key: "credential", question: "授权方式?", options: [])
+        ])
+        state.chatMessages.append(.init(speaker: "灵枢", text: form.title, isUser: false, form: form))
+        let payload = LingShuControlRouter(state: state).chatPayload(limit: 1)
+        let object = payload[0]
+        XCTAssertEqual((object["choices"] as? [Any])?.count ?? -1, 0, "没有单选卡时仍保持 choices 为空数组")
+        let formPayload = object["form"] as? [String: Any]
+        XCTAssertEqual(formPayload?["title"] as? String, "同步外部系统前确认")
+        let fields = formPayload?["fields"] as? [[String: Any]]
+        XCTAssertEqual(fields?.count, 2)
+        XCTAssertEqual(fields?.first?["key"] as? String, "target")
+        XCTAssertEqual(fields?.first?["options"] as? [String], ["Notion", "飞书"])
+    }
+
+    @MainActor
+    func testControlSendPromptReturnsStableAnchors() async throws {
+        let state = LingShuState()
+        let router = LingShuControlRouter(state: state)
+        let request: [String: Any] = [
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": [
+                "name": "lingshu_send_prompt",
+                "arguments": ["text": "现在是几月几日星期几?只回答当前日期。"]
+            ]
+        ]
+        let data = try JSONSerialization.data(withJSONObject: request)
+        let response = await router.handle(requestBody: data)
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: response) as? [String: Any])
+        let result = try XCTUnwrap(object["result"] as? [String: Any])
+        let content = try XCTUnwrap(result["content"] as? [[String: Any]])
+        let text = try XCTUnwrap(content.first?["text"] as? String)
+        let payload = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any])
+        XCTAssertEqual(payload["submitted"] as? String, "现在是几月几日星期几?只回答当前日期。")
+        XCTAssertFalse((payload["userMessageId"] as? String ?? "").isEmpty)
+        XCTAssertFalse((payload["assistantMessageId"] as? String ?? "").isEmpty)
+        XCTAssertFalse((payload["recordId"] as? String ?? "").isEmpty)
+        XCTAssertFalse((payload["immediateReply"] as? String ?? "").isEmpty)
+    }
 }

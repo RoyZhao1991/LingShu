@@ -36,10 +36,10 @@ struct LingShuDialogueSurface: View {
 }
 
 /// 聊天滚动列表——**只订阅 `state`**(不碰 voice/vision),把高频电平刷新与聊天重渲解耦。
-/// 自动滚到底:仅在最后一条消息真的变化(id/字数/loading)时才动画滚动,避免与内容增高竞争抽搐。
+/// 自动滚到底:只响应“用户发送消息”的一次性请求。任务执行/流式输出/状态变化不得拉动滚动条,
+/// 否则用户向上查历史时会被执行过程反复拽回底部。
 private struct LingShuChatScroll: View {
     @ObservedObject var state: LingShuState
-    @State private var lastChatBottomSignature = ""
     /// 只渲染最近 N 条的**滑动窗口**:VStack 一次性 realize 全部 → 窗口必须有界,否则消息一多就卡。
     /// 既避开 LazyVStack"行没滚进视野不渲染→空白"的坑,又把渲染量压住→滚动顺滑。"加载更早"按需扩窗。
     @State private var windowSize = 40
@@ -78,9 +78,8 @@ private struct LingShuChatScroll: View {
                 .padding(.vertical, 6)
                 .padding(.horizontal, 2)
             }
-            .defaultScrollAnchor(.bottom)
-            .onAppear {
-                lastChatBottomSignature = chatBottomSignature(state.chatMessages)
+            .onChange(of: state.chatScrollToLatestRequest) { _ in
+                // 用户发送后下一轮主线程再定位,让用户气泡/紧随其后的占位气泡先完成布局。
                 DispatchQueue.main.async {
                     if let lastID = state.chatMessages.last?.id {
                         proxy.scrollTo(lastID, anchor: .bottom)
@@ -89,32 +88,7 @@ private struct LingShuChatScroll: View {
                     }
                 }
             }
-            .onReceive(state.$chatMessages) { messages in
-                let signature = chatBottomSignature(messages)
-                guard signature != lastChatBottomSignature else { return }
-                lastChatBottomSignature = signature
-                // **不加动画**:对正在增长的(思考中/流式)最后一条做动画 scrollTo 会过冲再回弹=用户看到的"抽一下";
-                // 直接定位到最后一条真实消息底部,跟随增长平滑、不回弹。
-                DispatchQueue.main.async {
-                    if let lastID = messages.last?.id {
-                        proxy.scrollTo(lastID, anchor: .bottom)
-                    } else {
-                        proxy.scrollTo("lingshu-chat-bottom", anchor: .bottom)
-                    }
-                }
-            }
-            // 思考中:每次执行阶段(missionTitle)变化会让"思考中"气泡变高,但 chatMessages 没变→不会触发上面的
-            // 跟随。这里补一刀:最后一条是 loading 时,阶段一变就把它重新顶到底,保证"灵枢思考中"始终可见。
-            .onChange(of: state.missionTitle) { _ in
-                guard state.chatMessages.last?.isLoading == true, let lastID = state.chatMessages.last?.id else { return }
-                DispatchQueue.main.async { proxy.scrollTo(lastID, anchor: .bottom) }
-            }
         }
-    }
-
-    private func chatBottomSignature(_ messages: [ChatMessage]) -> String {
-        guard let message = messages.last else { return "empty" }
-        return "\(message.id.uuidString):\(message.text.count):\(message.isLoading)"
     }
 }
 

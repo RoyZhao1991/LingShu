@@ -5,6 +5,13 @@ extension LingShuState {
     /// 阻断缺口里需用户提供的项,拼成清单(供降级补尾/编排器收尾文案)。
     func capabilityUserAsk(taskRecordID: String?) -> String {
         let gap = gapAnalysis(for: taskRecordID)
+        if let oauth = gap?.OAuth?.normalized {
+            let detail = [oauth.question, oauth.reason]
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+                .joined(separator: " ")
+            if !detail.isEmpty { return detail }
+        }
         return (gap?.blockingGaps.filter { Self.isActionableUserGap($0) } ?? [])
             .map { Self.humanizeGapAsk($0) }.joined(separator: ";")
     }

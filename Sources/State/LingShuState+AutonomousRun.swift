@@ -120,6 +120,7 @@ extension LingShuState {
 
     func stopAutonomousRun() {
         guard autonomousRun.phase != .idle else { return }
+        autonomousRunGeneration += 1
         // **退出时也彻底停内置技能(演示等)**:否则只关了预览窗、演示 play 循环还在后台念稿/推页,
         // 且仍 isActive → 之后再发「演示」会被确定性路由挡掉、转给大脑追问(2026-06-25 实测)。
         builtinSkills.forEach { $0.onCancel() }
@@ -129,6 +130,10 @@ extension LingShuState {
         autonomousSessionHolder = nil
         autonomousPendingQuestion = nil
         autonomousRunRecordID = nil
+        standingStreamingBubbleID = nil
+        pendingStandingKickoff = nil
+        suspendedAutonomousRecordID = nil
+        suspendedAutonomousReason = nil
         _ = previewController.close()    // **退出必恢复屏幕**:关预览 + 退全屏(防演示黑屏卡死后夺不回)
         Task { @MainActor in await agentOrchestrator.cancelAllRunning() }   // 停掉后台跑飞的演示/任务
         endAutonomousActivity()          // 释放 App Nap 抑制
@@ -173,16 +178,21 @@ extension LingShuState {
 
         let previous = autonomousRunTask
         autonomousRunTask?.cancel()
+        autonomousRunGeneration += 1
+        let generation = autonomousRunGeneration
         autonomousRunTask = Task { @MainActor [weak self] in
             await previous?.value
-            guard let self, !Task.isCancelled else { return }
+            guard let self, !Task.isCancelled, self.autonomousRunGeneration == generation, self.autonomousRun.phase != .idle else { return }
             let session: any LingShuAgentSessioning
             let kickoff: String
+            let hasStandingKickoffTask = objective.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                && !(self.pendingStandingKickoff?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
             if continuing, let held = self.autonomousSessionHolder {
                 session = held
                 kickoff = "继续推进未完成的目标，直到达成或确实卡住。"
             } else {
                 session = await self.makeAutonomousSession(objective: objective, permissionLevel: permissionLevel, runbook: runbook)
+                guard !Task.isCancelled, self.autonomousRunGeneration == generation, self.autonomousRun.phase != .idle else { return }
                 self.autonomousSessionHolder = session
                 kickoff = self.resolveKickoffPrompt(objective: objective, runbook: runbook)
             }
@@ -191,6 +201,7 @@ extension LingShuState {
                !objective.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
                self.goalSpec(for: recordID) == nil || self.gapAnalysis(for: recordID) == nil {
                 await self.bindPreflightCognition(request: objective, recordID: recordID)
+                guard !Task.isCancelled, self.autonomousRunGeneration == generation, self.autonomousRun.phase != .idle else { return }
             }
             let result: LingShuAgentRunResult
             let isStandingKickoff = objective.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !continuing
@@ -204,7 +215,9 @@ extension LingShuState {
                 self.enterCoreState(.standby, resetTimer: false)
                 return
             }
-            if isStandingKickoff {
+            if isStandingKickoff && hasStandingKickoffTask {
+                result = await session.send(kickoff)
+            } else if isStandingKickoff {
                 // 常驻上岗开场白:用**无工具一次性会话**生成一句招呼。主会话带 speak 工具会一边出声(①)
                 // 一边产出回复气泡被自动朗读(②)→ 双份音频(实测日志确认);无工具会话只回一句文本 → 自动朗读念一次。
                 let greeter = LingShuAgentSession(
@@ -220,17 +233,31 @@ extension LingShuState {
             } else {
                 result = await self.driveAgentDelivery(session: session, prompt: kickoff, taskRecordID: recordID)
             }
-            guard !Task.isCancelled else { return }
-            self.finishAutonomousRun(result: result, recordID: recordID, isKickoffGreeting: isStandingKickoff)
+            guard !Task.isCancelled, self.autonomousRunGeneration == generation, self.autonomousRun.phase != .idle else { return }
+            await self.finishAutonomousRun(result: result, recordID: recordID, isKickoffGreeting: isStandingKickoff)
         }
     }
 
     /// 自主运行卡在 ask_user 时，把下一条用户输入当答案回填、续跑执行会话。
     /// 返回非 nil 表示已接管本轮输入（不再走常规 agent 主入口）。
-    func handleAutonomousAnswerIfNeeded(prompt: String, taskRecordID: String?) -> String? {
+    func handleAutonomousAnswerIfNeeded(
+        prompt: String,
+        visiblePrompt: String? = nil,
+        taskRecordID: String?,
+        hasAttachments: Bool = false
+    ) -> String? {
         guard autonomousRun.phase == .paused,
               autonomousPendingQuestion != nil,
               let session = autonomousSessionHolder else { return nil }
+        let routingPrompt = (visiblePrompt ?? prompt).trimmingCharacters(in: .whitespacesAndNewlines)
+        if !Self.inputCanAnswerPendingQuestion(
+                visiblePrompt: routingPrompt,
+                pendingQuestion: autonomousPendingQuestion ?? "",
+                hasAttachments: hasAttachments
+        ) {
+            appendTrace(kind: .route, actor: "独立运行", title: "待答复未接管", detail: "本轮输入不像是在回答当前待答复问题;按新顶层输入处理。")
+            return nil
+        }
         autonomousPendingQuestion = nil
         let recordID = autonomousRunRecordID ?? createTaskExecutionRecord(for: "独立运行：\(autonomousRun.objective)")
         autonomousRunRecordID = recordID
@@ -242,17 +269,25 @@ extension LingShuState {
         let baseline = currentArtifactCount(recordID)
         let previous = autonomousRunTask
         autonomousRunTask?.cancel()
+        autonomousRunGeneration += 1
+        let generation = autonomousRunGeneration
         autonomousRunTask = Task { @MainActor [weak self] in
             await previous?.value
-            guard let self, !Task.isCancelled else { return }
+            guard let self, !Task.isCancelled, self.autonomousRunGeneration == generation, self.autonomousRun.phase != .idle else { return }
             let initial = await session.resume(prompt)
             let result = await self.verifyAndContinue(session: session, result: initial, userRequest: objective, taskRecordID: recordID, artifactBaseline: baseline)
-            guard !Task.isCancelled else { return }
-            self.finishAutonomousRun(result: result, recordID: recordID)
+            guard !Task.isCancelled, self.autonomousRunGeneration == generation, self.autonomousRun.phase != .idle else { return }
+            await self.finishAutonomousRun(result: result, recordID: recordID)
         }
         let ack = "收到，我继续推进独立运行。"
         chatMessages.append(.init(speaker: "灵枢", text: ack, isUser: false, taskRecordID: recordID))
         return ack
+    }
+
+    /// 待用户问题是否明确需要用户用文件/附件/路径来回答。
+    /// 有附件的新输入默认应被视为新的 grounded turn,避免上一条"缺授权/缺信息"把后续附件任务吞掉。
+    nonisolated static func pendingAutonomousQuestionAcceptsAttachment(_ raw: String) -> Bool {
+        waitingQuestionAcceptsAttachment(raw)
     }
 
     /// 构造自主执行会话：复用 agentBuiltinTools 全工具集（含 MCP）+ 通用工具，权限级映射执行策略。
@@ -298,9 +333,32 @@ extension LingShuState {
 
     /// 收尾：按运行结果更新相位、runbook 步态、任务记录与对话。
     /// 注：非 private——常驻灵枢扩展（LingShuState+StandingPerson）的在岗续跑也复用它。
-    func finishAutonomousRun(result: LingShuAgentRunResult, recordID: String, isKickoffGreeting: Bool = false) {
+    func finishAutonomousRun(result: LingShuAgentRunResult, recordID: String, isKickoffGreeting: Bool = false) async {
+        guard autonomousRun.phase != .idle else {
+            autonomousRunTask = nil
+            return
+        }
         autonomousRunTask = nil
-        switch result {
+        var effectiveResult = result
+        if case .completed(let text) = result,
+           !Self.isCancellationSentinel(text) {
+            let decision = await computeCompletionDecision(taskRecordID: recordID, reply: text)
+            bindTaskOutcome(decision, to: recordID)
+            if let block = userAuthorizationBlockIfNeeded(
+                decision: decision,
+                result: result,
+                taskRecordID: recordID
+            ) {
+                effectiveResult = block
+            } else if decision.status != .ok {
+                effectiveResult = .completed(text: honestDeliveryText(
+                    decision: decision,
+                    original: text,
+                    taskRecordID: recordID
+                ))
+            }
+        }
+        switch effectiveResult {
         case .completed(let text):
             if Self.isCancellationSentinel(text) {
                 settleStandingStreamBubble(text: "", recordID: recordID)
@@ -312,6 +370,7 @@ extension LingShuState {
                 enterCoreState(.standby, resetTimer: false)
                 return
             }
+            let displayText = LingShuStructuredModelOutput.visibleText(from: text)
             // 常驻灵枢：一段处理完后**保持在岗**，不收工——会话/记录留存，等下一句对话/语音。
             if autonomousRun.objective.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 updateAutonomousRun(phase: .running, statusLine: "在岗待命。")
@@ -319,10 +378,12 @@ extension LingShuState {
                 missionTitle = "灵枢在岗"
                 // **捎带汇报**:互动中完成的后台子任务攒在待汇报队列,趁这次主线程回复一起报给主人(开场招呼不捎带)。
                 let reports = isKickoffGreeting ? "" : drainPendingSubtaskReports()
-                let fullText = reports.isEmpty ? text : "\(text)\n\n另外,\(reports)"
+                let fullText = reports.isEmpty ? displayText : "\(displayText)\n\n另外,\(reports)"
                 missionStatus = String(fullText.prefix(80))
                 appendTaskRecordMessage(recordID, actor: "灵枢", role: "在岗", kind: .result, text: fullText)
-                if let idx = taskExecutionRecords.firstIndex(where: { $0.id == recordID }) { taskExecutionRecords[idx].status = .answered }
+                if let idx = taskExecutionRecords.firstIndex(where: { $0.id == recordID }) {
+                    taskExecutionRecords[idx].status = Self.finishStatus(for: taskExecutionRecords[idx].taskOutcome, fallback: .answered)
+                }
                 // 在岗答复流式气泡定稿(逐字流式的临时文本→验收后最终回复);无流式气泡(开场招呼)才走原 append。
                 if !settleStandingStreamBubble(text: fullText, recordID: recordID) {
                     // 上岗开场白:先把**尾部残留的旧招呼**去掉(每次上岗只留一句,不让历史里的招呼越堆越多),再追加这句并标记。
@@ -340,13 +401,20 @@ extension LingShuState {
             updateAutonomousRun(phase: .completed, statusLine: "独立运行完成。")
             autonomousPendingQuestion = nil
             missionTitle = "独立运行已完成"
-            missionStatus = String(text.prefix(80))
-            appendTaskRecordMessage(recordID, actor: "独立运行", role: "交付", kind: .result, text: text)
-            finishTaskRecord(recordID, status: .completed, summary: text)
-            chatMessages.append(.init(speaker: "灵枢", text: "✅ 独立运行完成：\(text)", isUser: false, taskRecordID: recordID))
-            rememberMainThreadTurn(prompt: "独立运行：\(autonomousRun.objective)", reply: text)
+            missionStatus = String(displayText.prefix(80))
+            appendTaskRecordMessage(recordID, actor: "独立运行", role: "交付", kind: .result, text: displayText)
+            let finalStatus = Self.finishStatus(
+                for: taskExecutionRecords.first(where: { $0.id == recordID })?.taskOutcome,
+                fallback: .completed
+            )
+            finishTaskRecord(recordID, status: finalStatus, summary: displayText)
+            let prefix = finalStatus == .completed ? "✅ 独立运行完成：" : "⚠️ 独立运行收口："
+            chatMessages.append(.init(speaker: "灵枢", text: "\(prefix)\(displayText)", isUser: false, taskRecordID: recordID))
+            if finalStatus == .completed {
+                rememberMainThreadTurn(prompt: "独立运行：\(autonomousRun.objective)", reply: displayText)
+            }
             enterCoreState(.standby, resetTimer: false)
-            appendTrace(kind: .result, actor: "独立运行", title: "完成", detail: String(text.prefix(80)))
+            appendTrace(kind: .result, actor: "独立运行", title: "完成", detail: String(displayText.prefix(80)))
         case .blocked(let question):
             let cleanQuestion = LingShuHumanInputEnvelope.userFacingText(from: question)
             autonomousPendingQuestion = question
@@ -355,7 +423,19 @@ extension LingShuState {
             missionStatus = cleanQuestion
             appendTaskRecordMessage(recordID, actor: "独立运行", role: "待答复", kind: .warning, text: cleanQuestion)
             settleStandingStreamBubble(text: "", recordID: recordID)   // 移除流式 partial,改用带选项的待答复气泡
-            chatMessages.append(.init(speaker: "灵枢", text: "⏸ 独立运行需要你定一下：\(cleanQuestion)\n（直接在对话里回复，我就继续推进）", isUser: false, taskRecordID: recordID, choices: LingShuChoiceParsing.parse(question) ?? LingShuChoiceParsing.parse(cleanQuestion)))
+            let choices = LingShuChoiceParsing.parse(question) ?? LingShuChoiceParsing.parse(cleanQuestion)
+            let isStanding = autonomousRun.objective.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            let displayPrefix = isStanding ? "⏸ 这一步需要你定一下" : "⏸ 独立运行需要你定一下"
+            let msg = ChatMessage(
+                speaker: "灵枢",
+                text: "\(displayPrefix)：\(cleanQuestion)\n（直接在对话里回复，我就继续推进）",
+                isUser: false,
+                taskRecordID: recordID,
+                choices: choices
+            )
+            chatMessages.append(msg)
+            bindTaskOutcome(.init(status: .waitingForUser, reason: cleanQuestion), to: recordID)
+            finishTaskRecord(recordID, status: .waitingForUser, summary: cleanQuestion)
             enterCoreState(.standby, resetTimer: false)
             appendTrace(kind: .warning, actor: "独立运行", title: "卡住待答复", detail: cleanQuestion)
         case .maxTurnsReached(let text):
@@ -406,16 +486,18 @@ extension LingShuState {
                 appendTrace(kind: .warning, actor: "独立运行", title: "模型服务异常", detail: String(message.prefix(120)))
                 return
             }
-            // 网络中断:**非失败**——独立运行挂起,登记重连后自动续跑;会话上下文保留在 autonomousSessionHolder。
+            // 模型通道可恢复中断:**非失败**——独立运行挂起,登记恢复后自动续跑;会话上下文保留在 autonomousSessionHolder。
             settleStandingStreamBubble(text: "", recordID: recordID)   // 移除流式 partial(续跑时重建),不留 loading 气泡
             suspendedAutonomousRecordID = recordID
-            updateAutonomousRun(phase: .paused, statusLine: "网络中断,已暂停,联网后自动续。")
-            missionTitle = "独立运行已暂停(等网络)"
-            missionStatus = String(reason.prefix(80))
-            appendTaskRecordMessage(recordID, actor: "独立运行", role: "暂停", kind: .warning, text: "网络中断,已暂停:\(reason)")
-            finishTaskRecord(recordID, status: .suspended, summary: "网络中断已暂停,联网后自动续跑。")
+            suspendedAutonomousReason = reason
+            let message = LingShuModelServiceFailure.suspendedSummary(for: reason)
+            updateAutonomousRun(phase: .paused, statusLine: message)
+            missionTitle = "独立运行已暂停(等模型通道)"
+            missionStatus = String(message.prefix(120))
+            appendTaskRecordMessage(recordID, actor: "模型通道", role: "暂停", kind: .warning, text: message)
+            finishTaskRecord(recordID, status: .suspended, summary: message)
             enterCoreState(.standby, resetTimer: false)
-            appendTrace(kind: .warning, actor: "独立运行", title: "网络中断暂停", detail: String(reason.prefix(80)))
+            appendTrace(kind: .warning, actor: "独立运行", title: "模型通道暂停", detail: String(message.prefix(120)))
             startNetworkRetryLoopIfNeeded()   // 启动主动重试(对话框可见进度)
         }
     }
@@ -425,17 +507,22 @@ extension LingShuState {
         return compact.contains("本轮已被取消") || compact.contains("任务已取消")
     }
 
-    /// 重连后续跑被网络中断挂起的独立运行(从中断处 continueLoop + 复用收尾)。
+    /// 模型通道恢复后续跑被挂起的独立运行(从中断处 continueLoop + 复用收尾)。
     func resumeSuspendedAutonomousIfNeeded() async {
         guard let recordID = suspendedAutonomousRecordID, let session = autonomousSessionHolder else { return }
         suspendedAutonomousRecordID = nil
-        updateAutonomousRun(phase: .running, statusLine: "网络恢复,自动续跑中。")
+        suspendedAutonomousReason = nil
+        updateAutonomousRun(phase: .running, statusLine: "模型通道恢复,自动续跑中。")
         if let idx = taskExecutionRecords.firstIndex(where: { $0.id == recordID }) { taskExecutionRecords[idx].status = .running }
         let baseline = currentArtifactCount(recordID)
         var result = await session.continueLoop()
         result = await verifyAndContinue(session: session, result: result, userRequest: autonomousRun.objective, taskRecordID: recordID, artifactBaseline: baseline)
-        if case .interrupted = result { suspendedAutonomousRecordID = recordID; return }  // 还连不上,留挂起
-        finishAutonomousRun(result: result, recordID: recordID)
+        if case .interrupted(let reason) = result {
+            suspendedAutonomousRecordID = recordID
+            suspendedAutonomousReason = reason
+            return
+        }  // 还连不上,留挂起
+        await finishAutonomousRun(result: result, recordID: recordID)
     }
 
     private func updateAutonomousRun(phase: LingShuAutonomousRunPhase, statusLine: String) {

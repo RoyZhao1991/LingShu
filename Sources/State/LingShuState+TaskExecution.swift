@@ -314,6 +314,7 @@ extension LingShuState {
         if archivedTaskExecutionRecords != saved.archived {
             archivedTaskExecutionRecords = saved.archived
         }
+        publishControlSnapshot()
     }
 
     func formatElapsed(_ seconds: Int) -> String {

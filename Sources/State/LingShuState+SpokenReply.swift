@@ -23,14 +23,20 @@ extension LingShuState {
         return out
     }
 
-    /// 网络中断/重连类提示的统一播报兜底(**写死,不调模型**):断网时根本调不动大模型来生成摘要,
-    /// 旧逻辑会走 briefSpokenSummary→模型失败→回退"任务完成"(误报)。所有 🌐 开头的网络状态消息都念这一句。
-    static let networkInterruptSpokenLine = "网络异常中断,我正在重试,网络恢复后会继续执行。"
-    static let networkResumedSpokenLine = "网络已恢复,正在接着把任务跑完。"
+    /// 模型通道暂停/恢复类提示的统一播报兜底(**写死,不调模型**):通道故障时根本调不动大模型来生成摘要,
+    /// 旧逻辑会走 briefSpokenSummary→模型失败→回退"任务完成"(误报)。所有状态消息都念这一句。
+    static let networkInterruptSpokenLine = "模型通道暂不可用,我正在重试,恢复后会继续执行。"
+    static let networkResumedSpokenLine = "模型通道已恢复,正在接着把任务跑完。"
 
     /// 是否网络状态提示(断网暂停 / 重试 / 重连续跑)。这类消息一律走写死播报,不调模型(断网时也调不动)。
     nonisolated static func isNetworkStatusNotice(_ text: String) -> Bool {
-        text.hasPrefix("🌐") || text.hasPrefix("🔄") || text.contains("网络中断") || text.contains("网络异常")
+        text.hasPrefix("🌐")
+        || text.hasPrefix("🔄")
+        || text.hasPrefix("⏸")
+        || text.contains("网络中断")
+        || text.contains("网络异常")
+        || text.contains("模型通道")
+        || text.contains("模型服务")
     }
 
     /// 决定一条回复"该朗读什么":网络状态 → 写死兜底句(不调模型);任务型 → 简短口播摘要;对话/汇报型 → 全文。

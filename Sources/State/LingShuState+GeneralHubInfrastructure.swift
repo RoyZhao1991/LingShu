@@ -236,31 +236,16 @@ extension LingShuState {
     // MARK: - Adaptive Brain
 
     func adaptiveBrainProfiles() -> [LingShuBrainProfile] {
-        let configs = brainTierConfigs()
-        guard !configs.isEmpty else {
-            return [.init(
-                id: "current",
-                displayName: "当前脑",
-                capabilities: [.fastChat, .deepReasoning, .toolCalling, .codeExecution, .longContext, .highReliability],
-                maxContextTokens: Int(contextBudget),
-                latencyScore: 0.6,
-                reliabilityScore: 0.7,
-                costScore: 0.5,
-                available: true
-            )]
-        }
-        return configs.keys.sorted { $0.rank < $1.rank }.map { tier in
-            LingShuBrainProfile(
-                id: "tier:\(tier.rawValue)",
-                displayName: "\(tier.rawValue)档",
-                capabilities: Self.defaultCapabilities(for: tier),
-                maxContextTokens: tier == .strong ? max(Int(contextBudget), 128_000) : (tier == .medium ? 64_000 : 24_000),
-                latencyScore: tier == .weak ? 0.9 : (tier == .medium ? 0.65 : 0.35),
-                reliabilityScore: tier == .strong ? 0.95 : (tier == .medium ? 0.75 : 0.55),
-                costScore: tier == .weak ? 0.9 : (tier == .medium ? 0.55 : 0.25),
-                available: true
-            )
-        }
+        [.init(
+            id: "current",
+            displayName: "当前主脑",
+            capabilities: [.fastChat, .deepReasoning, .toolCalling, .codeExecution, .longContext, .highReliability],
+            maxContextTokens: Int(contextBudget),
+            latencyScore: 0.6,
+            reliabilityScore: 0.7,
+            costScore: 0.5,
+            available: true
+        )]
     }
 
     func adaptiveBrainDemand(taskRecordID: String?, escalationCount: Int = 0) -> LingShuBrainTaskDemand {

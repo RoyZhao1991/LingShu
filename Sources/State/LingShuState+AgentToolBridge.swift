@@ -5,9 +5,10 @@ extension LingShuState {
     /// 通用工具桥:把既有通用原语经 LingShuToolExecutor 带权限门控映射成 agent 工具。
     func agentBuiltinTools(
         recordIDProvider: @escaping @MainActor @Sendable () -> String?,
-        executionPolicy: LingShuAgentExecutionPolicy = .standard
+        executionPolicy: LingShuAgentExecutionPolicy = .standard,
+        workingDirectoryOverride: String? = nil
     ) -> [LingShuAgentTool] {
-        let workingDir = agentWorkingDirectory
+        let defaultWorkingDir = agentWorkingDirectory
         let allowShell: Bool
         switch executionPolicy {
         case .standard:       allowShell = developmentPhaseFullAccess || !requireHumanApproval || sessionShellAlwaysAllowed
@@ -22,6 +23,7 @@ extension LingShuState {
             self.announceLocalCapabilityIfNeeded(tool: tool, recordID: recordID)   // 实际调用的本地能力 → 记进能力探测(去重)
             self.missionTitle = "执行中：\(Self.toolDisplayName(tool))"
             defer { self.missionTitle = self.currentActivityLabel }
+            let workingDir = self.effectiveAgentWorkingDirectory(override: workingDirectoryOverride, fallback: defaultWorkingDir)
             let result = await self.runAgenticTool(
                 tool: tool,
                 arguments: args,
@@ -47,7 +49,12 @@ extension LingShuState {
                 await bridge(def.name, Self.parseArgs(argsJSON))
             }
         }
-        let skillTools = executionPolicy == .readOnly ? [] : [applySkillTool(), applyPatchAgentTool(recordIDProvider: recordIDProvider, workingDirectory: workingDir)]
+        let skillTools = executionPolicy == .readOnly ? [] : [
+            applySkillTool(workingDirectoryOverride: workingDirectoryOverride),
+            applyPatchAgentTool(recordIDProvider: recordIDProvider) { [weak self] in
+                self?.effectiveAgentWorkingDirectory(override: workingDirectoryOverride, fallback: defaultWorkingDir) ?? defaultWorkingDir
+            }
+        ]
         let pluginTools = executionPolicy == .readOnly ? [] : userSkillProvidedTools()
         let recordedLocalKnowledgeTools = localKnowledgeTools().map {
             recordedAgentTool($0, recordIDProvider: recordIDProvider)

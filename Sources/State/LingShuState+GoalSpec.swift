@@ -57,6 +57,35 @@ extension LingShuState {
         return taskExecutionRecords.first(where: { $0.id == recordID })?.goalSpec
     }
 
+    /// 第④站标准挂点:新的 Active Turn 先做 GoalSpec;只有真实执行/交互型目标才继续加重能力核验。
+    nonisolated static func goalKindNeedsCapabilityPreflight(_ kind: LingShuGoalKind?) -> Bool {
+        kind == .task || kind == .interaction
+    }
+
+    /// 第④站 trace 统一格式。后续查问题时不要靠自然语言猜,直接看 flow/stage/route/kind/count。
+    nonisolated static func activeTurnPreflightTrace(
+        stage: String,
+        route: String,
+        recordID: String?,
+        goalKind: LingShuGoalKind?,
+        capabilityPreflight: Bool,
+        requirementsCount: Int,
+        hasGap: Bool,
+        reason: String
+    ) -> String {
+        [
+            "flow=active_turn",
+            "stage=\(stage)",
+            "route=\(route)",
+            "record=\(recordID ?? "-")",
+            "goalKind=\(goalKind?.rawValue ?? "none")",
+            "capabilityPreflight=\(capabilityPreflight ? "on" : "off")",
+            "requirements=\(requirementsCount)",
+            "gap=\(hasGap ? "present" : "none")",
+            "reason=\(reason)"
+        ].joined(separator: "; ")
+    }
+
     /// P1·**记忆消费(结构化经验沉淀)**:目标到终态时,把「目标→成功标准→结果→产出/失败原因」蒸成一条
     /// **可检索经验**入知识图谱(陈述句、过去式,经纪律闸 + 园丁去重)。下次同类目标 `recall_memory`/seed 即接续历史经验。
     /// 只沉淀终态(完成/直答/未达标),blocked/暂停不沉淀(未定论)。无 GoalSpec(开关关或非新目标)则空跑。

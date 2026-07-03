@@ -49,6 +49,8 @@ actor LingShuAgentOrchestrator {
     private var driveTasks: [String: Task<Void, Never>] = [:]
     /// 因网络/网关中断而暂停、等重连自动续跑的子任务 id(会话仍保留在 `sessions`)。
     private var suspendedForReconnect: Set<String> = []
+    /// 暂停原因(模型通道网络/超时/限流/服务端异常等)。过去这里统一当"网络",会把 503/限流误报成断网。
+    private var suspendedReasons: [String: String] = [:]
     /// 各子任务的目标(续跑时 acceptanceHook 要用,且暂停后 entries 仍保有,这里冗余存一份保险)。
     private var objectives: [String: String] = [:]
     /// 各子任务**随首轮目标直发大脑的图片/PDF**(多模态脑看真图;附件直接入脑覆盖派发任务这条路)。
@@ -217,11 +219,12 @@ actor LingShuAgentOrchestrator {
             Task { await self.onEvent?(.failed(id: id, objective: objective, summary: digest(lastText))) }
             admitNext(after: id)
         case .interrupted(let reason):
-            // 网络/网关中断:**非失败**——标"已暂停"、保留会话上下文、登记待重连,释放并发槽位(断网时本就没法跑别的)。
-            // 重连后由 resumeInterrupted 重新接上 continueLoop,从中断处续跑。
-            upsert(id: id, objective: objective, status: .suspended, summary: "网络中断已暂停:\(digest(reason))")
+            // 模型通道可恢复中断(网络/超时/限流/5xx):**非失败**——标"已暂停"、保留会话上下文、登记待恢复。
+            // 恢复后由 resumeInterrupted 重新接上 continueLoop,从中断处续跑。
+            upsert(id: id, objective: objective, status: .suspended, summary: LingShuModelServiceFailure.suspendedSummary(for: reason))
             suspendedForReconnect.insert(id)
-            pushes.append("子任务「\(objective)」因网络中断暂停,联网后自动续跑。")
+            suspendedReasons[id] = reason
+            pushes.append("子任务「\(objective)」因模型通道暂不可用而暂停,通道恢复后自动续跑。")
             Task { await self.onEvent?(.interrupted(id: id, objective: objective, reason: reason)) }
             admitNext(after: id)
         }
@@ -229,8 +232,11 @@ actor LingShuAgentOrchestrator {
 
     // MARK: 断网重连续跑 / 手动续接
 
-    /// 当前因网络中断而暂停、等重连续跑的子任务 id 列表。
+    /// 当前因模型通道中断而暂停、等恢复续跑的子任务 id 列表。
     func suspendedIDs() -> [String] { order.filter { suspendedForReconnect.contains($0) } }
+
+    /// 当前暂停原因(供 UI/重试循环给出准确状态,避免把限流/503/欠费说成断网)。
+    func suspendedReason(id: String) -> String? { suspendedReasons[id] }
 
     /// 重连后自动续跑一条暂停的子任务:申请并发槽位 → continueLoop()(从中断处接着跑,不注入新消息)→ 验收 → 落账本。
     /// 满并发则**留在暂停集合**稍后再试(不入 waiting 队列,避免被 complete 误用 send 重驱动)。
@@ -239,8 +245,9 @@ actor LingShuAgentOrchestrator {
         guard concurrency.hasCapacity || concurrency.isRunning(id) else { return }  // 满 → 留 suspended,下次重连再试
         let objective = objectives[id] ?? entries[id]?.objective ?? ""
         suspendedForReconnect.remove(id)
+        suspendedReasons[id] = nil
         concurrency.requestAdmission(threadID: id, summary: objective)
-        upsert(id: id, objective: objective, status: .running, summary: "网络恢复,自动续跑中")
+        upsert(id: id, objective: objective, status: .running, summary: "模型通道恢复,自动续跑中")
         await onEvent?(.resumed(id: id, objective: objective))
         driveTasks[id] = Task { await self.driveContinue(id: id, objective: objective, session: session) }
     }
@@ -252,6 +259,7 @@ actor LingShuAgentOrchestrator {
         guard let session = sessions[id] else { return nil }
         let objective = objectives[id] ?? entries[id]?.objective ?? ""
         suspendedForReconnect.remove(id)
+        suspendedReasons[id] = nil
         if concurrency.hasCapacity, !concurrency.isRunning(id) { concurrency.requestAdmission(threadID: id, summary: objective) }
         upsert(id: id, objective: objective, status: .running, summary: "收到「继续」,续跑中")
         await onEvent?(.resumed(id: id, objective: objective))

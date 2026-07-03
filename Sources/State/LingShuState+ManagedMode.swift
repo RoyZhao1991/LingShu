@@ -14,6 +14,16 @@ extension LingShuState {
     func requestManagedMode(reason: String) async -> Bool {
         if isStandingPersonOnDuty { return true }
         appendTrace(kind: .route, actor: "灵枢", title: "申请进入托管模式", detail: String(reason.prefix(40)))
+        if managedModePreauthorized {
+            appendTrace(kind: .route, actor: "权限中枢", title: "托管模式已预授权",
+                        detail: String(reason.prefix(60)))
+            return true
+        }
+        guard !clarificationCenter.isNonInteractive() else {
+            appendTrace(kind: .warning, actor: "权限中枢", title: "无人值守不弹托管确认",
+                        detail: String(reason.prefix(60)))
+            return false
+        }
         NSApp.activate(ignoringOtherApps: true)   // 把灵枢拉到最前,确保弹窗可见
         let alert = NSAlert()
         alert.messageText = "进入「托管模式」?"
@@ -24,6 +34,12 @@ extension LingShuState {
         appendTrace(kind: approved ? .route : .warning, actor: "主人",
                     title: approved ? "同意进入托管模式" : "留在普通模式", detail: String(reason.prefix(40)))
         return approved
+    }
+
+    /// 托管模式的预授权边界:开发全权或已经处于完整授权的自主运行中,说明用户已把可逆的本机交互权限交给灵枢。
+    /// 这类场景必须审计后直接放行,不能再弹同步 NSAlert 卡住 MCP / 自主执行；发布普通模式仍走人工确认。
+    var managedModePreauthorized: Bool {
+        developmentPhaseFullAccess || (autonomousRun.isActive && autonomousRun.permissionLevel == .full)
     }
 
     /// 四肢:大脑判断要进入托管模式(占屏实时演示/实时互动/接管屏幕)时调用——弹窗征同意,同意即转入托管会话续做。

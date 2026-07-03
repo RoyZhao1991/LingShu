@@ -47,6 +47,24 @@ final class SerialInputQueueTests: XCTestCase {
         XCTAssertTrue(state.chatMessages.last?.text.contains("已排队") ?? false, "入队要在聊天里显示一条排队气泡")
     }
 
+    func testSerialQueuePreservesVisibleInputAndAttachmentMetadata() {
+        let state = LingShuState()
+        let modelPrompt = "附件正文:继续/记录/演示\n\n用户指令：\n演示附件里的 PPT"
+        state.enqueueSerialInput(
+            prompt: modelPrompt,
+            source: .typed,
+            visiblePrompt: "演示附件里的 PPT",
+            attachmentNames: ["demo.pptx"],
+            attachmentPaths: ["/tmp/demo.pptx"]
+        )
+
+        let item = state.pendingSerialInputs.first
+        XCTAssertEqual(item?.prompt, modelPrompt)
+        XCTAssertEqual(item?.visiblePrompt, "演示附件里的 PPT")
+        XCTAssertEqual(item?.attachmentNames, ["demo.pptx"])
+        XCTAssertEqual(item?.attachmentPaths, ["/tmp/demo.pptx"])
+    }
+
     func testDrainIsNoOpWhileBusy() {
         let state = LingShuState()
         state.executingChatTurnID = UUID()           // 有回合在跑
@@ -59,6 +77,32 @@ final class SerialInputQueueTests: XCTestCase {
         let state = LingShuState()
         state.drainSerialInputsIfIdle()              // 空队列 + 空闲:什么都不做,不崩
         XCTAssertTrue(state.pendingSerialInputs.isEmpty)
+    }
+
+    func testCancelCurrentMainTurnReleasesSerialGateImmediately() {
+        let state = LingShuState()
+        let bubble = ChatMessage(speaker: "灵枢", text: "", isUser: false, isLoading: true)
+        state.chatMessages.append(bubble)
+        state.executingChatTurnID = bubble.id
+        state.pendingChatTurnIDs = [bubble.id]
+        state.pendingMainTurns[bubble.id] = .init(
+            bubbleID: bubble.id,
+            prompt: "一个正在执行的开放问题",
+            taskRecordID: nil,
+            resumeBlocked: false,
+            originalPromptForVerification: nil,
+            startedAt: Date()
+        )
+        state.isModelReplying = true
+
+        XCTAssertTrue(state.currentlyExecutingTurn())
+
+        state.cancelCurrentCall()
+
+        XCTAssertNil(state.executingChatTurnID, "停止后必须同步清掉当前执行标记,不能等远端 worker defer")
+        XCTAssertTrue(state.pendingChatTurnIDs.isEmpty)
+        XCTAssertNil(state.pendingMainTurns[bubble.id])
+        XCTAssertFalse(state.currentlyExecutingTurn(), "停止完成后串行闸门应立即释放,下一条输入不应误入队")
     }
 
     func testRemoveSerialInputDropsItAndMarksBubble() {

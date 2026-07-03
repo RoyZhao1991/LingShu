@@ -182,9 +182,9 @@ extension LingShuState {
         let sentence = String(characters[offset...boundary])
             .trimmingCharacters(in: .whitespacesAndNewlines)
         spokenStreamOffsets[messageID] = boundary + 1
-        if sentence.count >= 2 {
-            lingShuControlLog("流式早读句: 「\(sentence.prefix(12))」 id=\(messageID.uuidString.prefix(8))")
-            speaker(sentence)
+        if let safeSentence = LingShuInteractionFulfillment.speechSafeStreamText(sentence) {
+            lingShuControlLog("流式早读句: 「\(safeSentence.prefix(12))」 id=\(messageID.uuidString.prefix(8))")
+            speaker(safeSentence)
         }
     }
 
@@ -200,7 +200,9 @@ extension LingShuState {
         let characters = Array(streamedText)
         if offset < characters.count, let speaker = streamingSentenceSpeaker {
             let tail = String(characters[offset...]).trimmingCharacters(in: .whitespacesAndNewlines)
-            if tail.count >= 2 { speaker(tail) }
+            if let safeTail = LingShuInteractionFulfillment.speechSafeStreamText(tail) {
+                speaker(safeTail)
+            }
         }
         // 没有更多句子了 → 流式发声收口(drainer 播完剩余即 finishAndDrain)。
         voiceManager?.finishStreamingSpeech()

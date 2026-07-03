@@ -125,7 +125,12 @@ extension LingShuState {
     ///   （`injectCorrection`，回合边界安全采纳）——不打断、不重启:大脑先口头回应,再按需接着从当前进度推进。
     ///   这套机制对任何长回合通用（演示 PPT、开会、跑长任务……),配合麦克风打断 TTS = 随时插入讨论再续。
     /// - 在岗会话**空闲**（上一段已收尾）→ 起一条新回合续跑（resume）。
-    func handleStandingPersonInputIfNeeded(prompt: String, taskRecordID: String?) -> String? {
+    func handleStandingPersonInputIfNeeded(
+        prompt: String,
+        visiblePrompt: String? = nil,
+        taskRecordID: String?,
+        hasAttachments: Bool = false
+    ) -> String? {
         guard isStandingPersonOnDuty else { return nil }
         guard let session = autonomousSessionHolder else {
             let addition = "主人补充/追问:\(prompt)"
@@ -141,6 +146,15 @@ extension LingShuState {
         // **暂停态:任何输入都不起回合(2026-06-20)**:暂停 = 全停下等手动「继续」(`resumeAutonomousRun` 按钮),
         // 语音/唤醒词/文字都不该绕过暂停拉起新处理。给一句提示、消费掉这条输入(返回 "" = 已接管不再下发)。
         if autonomousRun.phase == .paused {
+            if let pending = autonomousPendingQuestion,
+               !Self.inputCanAnswerPendingQuestion(
+                    visiblePrompt: visiblePrompt ?? prompt,
+                    pendingQuestion: pending,
+                    hasAttachments: hasAttachments
+               ) {
+                appendTrace(kind: .route, actor: "灵枢", title: "暂停态新目标·放行", detail: "暂停来自待答复问题,但本轮输入不像是在回答它;不吞掉,交主线程 active turn。")
+                return nil
+            }
             missionStatus = "已暂停,点「继续」我才接着听你说。"
             appendTrace(kind: .system, actor: "灵枢", title: "暂停中·忽略输入", detail: String(prompt.prefix(24)))
             return ""
@@ -234,18 +248,21 @@ extension LingShuState {
         let bubbleID = streamBubble.id
         let previous = autonomousRunTask
         autonomousRunTask?.cancel()
+        autonomousRunGeneration += 1
+        let generation = autonomousRunGeneration
         autonomousRunTask = Task { @MainActor [weak self] in
             await previous?.value   // 单线程:等被取消的上一条回合真停下(在回合边界退出,历史良构),新回合才接手
-            guard let self, !Task.isCancelled else { return }
+            guard let self, !Task.isCancelled, self.autonomousRunGeneration == generation, self.autonomousRun.phase != .idle else { return }
             await session.setTextDeltaSink { [weak self] delta in
                 await MainActor.run { self?.appendStreamingBubbleText(delta, to: bubbleID) }
             }
             let initial = await session.resume(sentText ?? prompt)
+            guard !Task.isCancelled, self.autonomousRunGeneration == generation, self.autonomousRun.phase != .idle else { return }
             // 常驻在岗路径关掉"回复文本声称产文件"的验收触发(trustReplyClaim:false):在岗轻量/对话/演示回合
             // 重活都派发给隔离 session 各自验收、自己几乎不直接产交付物,其回复一提到既有文件就误进验收→空转停滞("讲解完卡处理中")。
             let result = await self.verifyAndContinue(session: session, result: initial, userRequest: prompt, taskRecordID: recordID, artifactBaseline: baseline, trustReplyClaim: false)
-            guard !Task.isCancelled else { return }
-            self.finishAutonomousRun(result: result, recordID: recordID)
+            guard !Task.isCancelled, self.autonomousRunGeneration == generation, self.autonomousRun.phase != .idle else { return }
+            await self.finishAutonomousRun(result: result, recordID: recordID)
         }
     }
 
@@ -273,8 +290,11 @@ extension LingShuState {
         batchInterruptRequested = true
         interruptSpeechOutput?()
         autonomousRunTask?.cancel()
+        autonomousRunGeneration += 1
+        let generation = autonomousRunGeneration
         autonomousRunTask = Task { @MainActor [weak self] in
             guard let self else { return }
+            guard !Task.isCancelled, self.autonomousRunGeneration == generation, self.autonomousRun.phase != .idle else { return }
             self.enterAutonomousRunningState(statusLine: "继续当前演示")
             self.missionTitle = "灵枢在岗"
             self.appendTrace(kind: .runtime, actor: "演示运行器", title: "前台控制", detail: String(prompt.prefix(40)))
@@ -288,7 +308,7 @@ extension LingShuState {
                 await self.continuePreviewPresentationFromCurrentPage(recordID: recordID)
             }
 
-            guard !Task.isCancelled else { return }
+            guard !Task.isCancelled, self.autonomousRunGeneration == generation, self.autonomousRun.phase != .idle else { return }
             self.autonomousRunTask = nil
             self.enterCoreState(.standby, resetTimer: false)
             self.missionStatus = "当前演示段落已完成,仍在岗。"

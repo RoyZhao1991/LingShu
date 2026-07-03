@@ -203,7 +203,7 @@ extension LingShuState {
                 let tools = agentBuiltinTools(recordIDProvider: { rid }, executionPolicy: dispatchedTaskExecutionPolicy)
                 let session = makeAgentSession(id: "role-\(UUID().uuidString.prefix(6))", system: rolePrompt,
                                                tools: tools, model: makeAgentModelAdapter(), maxTurns: 40)
-                output = Self.runResultText(await session.send(objective))
+                output = LingShuStructuredModelOutput.visibleText(from: Self.runResultText(await session.send(objective)))
             }
             return output
         }

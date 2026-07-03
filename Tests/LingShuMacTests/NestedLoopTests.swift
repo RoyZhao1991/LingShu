@@ -83,6 +83,7 @@ final class NestedLoopTests: XCTestCase {
         XCTAssertTrue(LingShuNestedStagePlanner.isExitPresentationCommand("退出演示"))
         XCTAssertTrue(LingShuNestedStagePlanner.isExitPresentationCommand("灵枢,关闭演示"))
         XCTAssertTrue(LingShuNestedStagePlanner.isExitPresentationCommand("结束放映吧"))
+        XCTAssertTrue(LingShuNestedStagePlanner.isExitPresentationCommand("本轮汇报结束,关闭预览材料并收尾"))
         XCTAssertTrue(LingShuNestedStagePlanner.isExitPresentationCommand("不看了"))
         XCTAssertFalse(LingShuNestedStagePlanner.isExitPresentationCommand("下一页"))
         XCTAssertFalse(LingShuNestedStagePlanner.isExitPresentationCommand("这页讲细点"))

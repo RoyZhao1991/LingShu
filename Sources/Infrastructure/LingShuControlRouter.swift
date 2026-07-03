@@ -97,10 +97,26 @@ final class LingShuControlRouter {
         ],
         [
             "name": "lingshu_get_chat",
-            "description": "读取最近若干条对话消息(含说话人、是否用户、是否加载中)。",
+            "description": "读取最近若干条对话消息(含说话人、是否用户、是否加载中、choices/form 等待用户输入结构)。",
             "inputSchema": [
                 "type": "object",
                 "properties": ["limit": ["type": "integer", "description": "返回条数,默认 20"]]
+            ]
+        ],
+        [
+            "name": "lingshu_submit_form",
+            "description": "提交最近一张未完成的确认表单,或按 messageId 指定表单。用于 MCP/自动化环境模拟用户在表单卡上提交答案。args: answers 对象,可选 messageId。",
+            "inputSchema": [
+                "type": "object",
+                "properties": [
+                    "messageId": ["type": "string", "description": "可选,要提交的表单消息 id;不传则提交最近一张未完成表单"],
+                    "answers": [
+                        "type": "object",
+                        "description": "字段 key 到答案文本的映射",
+                        "additionalProperties": ["type": "string"]
+                    ]
+                ],
+                "required": ["answers"]
             ]
         ],
         [
@@ -371,6 +387,78 @@ final class LingShuControlRouter {
         LingShuEmbodimentManifest.filter(state.embodimentCandidateTools())
     }
 
+    private func submitPromptAndDescribe(
+        text: String,
+        source: LingShuDialogueInputSource,
+        submit: () -> String
+    ) async -> [String: Any] {
+        let acceptedAt = Date()
+        let beforeMessageIDs = Set(state.chatMessages.map(\.id))
+        let beforeRecordIDs = Set(state.taskExecutionRecords.map(\.id))
+        let immediateReply = submit()
+        for _ in 0..<60 {
+            let payload = submittedPromptPayload(
+                text: text,
+                source: source,
+                acceptedAt: acceptedAt,
+                immediateReply: immediateReply,
+                beforeMessageIDs: beforeMessageIDs,
+                beforeRecordIDs: beforeRecordIDs
+            )
+            let assistantID = payload["assistantMessageId"] as? String ?? ""
+            let recordID = payload["recordId"] as? String ?? ""
+            if !recordID.isEmpty || assistantID.isEmpty {
+                return payload
+            }
+            if let assistantUUID = UUID(uuidString: assistantID),
+               let assistant = state.chatMessages.first(where: { $0.id == assistantUUID }),
+               !assistant.isLoading {
+                return payload
+            }
+            try? await Task.sleep(nanoseconds: 200_000_000)
+        }
+        return submittedPromptPayload(
+            text: text,
+            source: source,
+            acceptedAt: acceptedAt,
+            immediateReply: immediateReply,
+            beforeMessageIDs: beforeMessageIDs,
+            beforeRecordIDs: beforeRecordIDs
+        )
+    }
+
+    private func submittedPromptPayload(
+        text: String,
+        source: LingShuDialogueInputSource,
+        acceptedAt: Date,
+        immediateReply: String,
+        beforeMessageIDs: Set<UUID>,
+        beforeRecordIDs: Set<String>
+    ) -> [String: Any] {
+        let newMessages = state.chatMessages.filter { !beforeMessageIDs.contains($0.id) }
+        let userMessage = newMessages.last { $0.isUser }
+        let userIndex = userMessage.flatMap { user in state.chatMessages.firstIndex(where: { $0.id == user.id }) }
+        let assistantMessage: ChatMessage? = {
+            if let userIndex {
+                return state.chatMessages[(userIndex + 1)...].first(where: { !$0.isUser })
+            }
+            return newMessages.first(where: { !$0.isUser })
+        }()
+        let newRecord = state.taskExecutionRecords.first { !beforeRecordIDs.contains($0.id) }
+        return [
+            "submitted": text,
+            "source": source.displayName,
+            "acceptedAt": ISO8601DateFormatter().string(from: acceptedAt),
+            "immediateReply": immediateReply,
+            "userMessageId": userMessage?.id.uuidString ?? "",
+            "assistantMessageId": assistantMessage?.id.uuidString ?? "",
+            "recordId": assistantMessage?.taskRecordID ?? newRecord?.id ?? "",
+            "createdRecordIds": state.taskExecutionRecords
+                .filter { !beforeRecordIDs.contains($0.id) }
+                .map(\.id)
+        ]
+    }
+
     private func callTool(name: String, arguments: [String: Any]) async -> (text: String, isError: Bool) {
         switch name {
         case "lingshu_status":
@@ -382,9 +470,11 @@ final class LingShuControlRouter {
                 return ("缺少参数 text", true)
             }
             let source: LingShuDialogueInputSource = (arguments["source"] as? String) == "voice" ? .voice : .typed
-            // 带上待发附件(与 UI sendPrompt 同口径)——修"MCP 发送时附件没一并带出"的 bug。
-            let reply = state.submitTextWithAttachments(text, source: source)
-            return (jsonText(["submitted": text, "immediateReply": reply]), false)
+            let payload = await submitPromptAndDescribe(text: text, source: source) {
+                // 带上待发附件(与 UI sendPrompt 同口径)——修"MCP 发送时附件没一并带出"的 bug。
+                state.submitTextWithAttachments(text, source: source)
+            }
+            return (jsonText(payload), false)
         case "lingshu_voice_text":
             // post-STT 入口:模拟"一句语音指令已转写收口"的完整下游——先掐 TTS(等价 barge-in),再走 submitVoiceTranscript
             // (=submitTextInput(.voice);在岗/演示中会自动当『中途插话』注入正在跑的会话/批量)。供无音频时完整测语音打断/翻页。
@@ -394,8 +484,13 @@ final class LingShuControlRouter {
             let wasSpeaking = state.voiceManager?.isSpeakingOrQueued ?? false
             let wasActive = state.hasActiveModelCall
             if wasSpeaking || wasActive { state.interruptSpeechOutput?() }   // 掐正在播的 TTS,与真实 barge-in 同
-            let vReply = state.submitVoiceTranscript(text)
-            return (jsonText(["voiceSubmitted": text, "bargedInTTS": wasSpeaking, "wasActive": wasActive, "immediateReply": vReply]), false)
+            var payload = await submitPromptAndDescribe(text: text, source: .voice) {
+                state.submitVoiceTranscript(text)
+            }
+            payload["voiceSubmitted"] = text
+            payload["bargedInTTS"] = wasSpeaking
+            payload["wasActive"] = wasActive
+            return (jsonText(payload), false)
         case "lingshu_interject":
             // 流程纠正(干预):把纠正注入正在跑的会话,看到 agent 跑偏时即时纠偏(回合边界采纳)。
             guard let text = (arguments["text"] as? String), !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
@@ -457,6 +552,9 @@ final class LingShuControlRouter {
             // 现调 stopAllDispatchedTasks——它对每条活跃派发气泡走 stopDispatchedTask(含"编排器无活跃 drive 时本地兜底收口"),
             // 能清掉僵死执行中的孤儿任务。
             let dispatched = state.stopAllDispatchedTasks()
+            await state.reapOrphanedDispatchedTasks()
+            state.pruneInactiveDispatchedTaskBubbles()
+            state.drainSerialInputsIfIdle()
             return (jsonText(["stopped": wasActive || dispatched > 0, "mainTurn": wasActive, "dispatchedStopped": dispatched]), false)
         case "lingshu_autonomous":   // 驱动自主模式/常驻灵枢(等价独立运行面板)。args: action
             guard let action = (arguments["action"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) else {
@@ -483,8 +581,11 @@ final class LingShuControlRouter {
             let limit = (arguments["limit"] as? Int) ?? 15
             let records = state.taskExecutionRecordLookup.prefix(max(1, limit)).map { r -> [String: Any] in
                 [
-                    "id": r.id, "title": r.title, "status": r.status.rawValue,
+                    "id": r.id, "title": r.title, "promptExcerpt": String(r.prompt.prefix(280)),
+                    "status": r.status.rawValue, "summary": r.summary,
+                    "updatedAt": ISO8601DateFormatter().string(from: r.updatedAt),
                     "messageCount": r.messages.count, "artifactCount": r.artifacts.count,
+                    "artifacts": r.artifacts.map { ["title": $0.title, "location": $0.location] },
                     "feedback": state.taskRecordFeedback[r.id].map { $0 ? "up" : "down" } ?? "none"
                 ]
             }
@@ -669,6 +770,30 @@ final class LingShuControlRouter {
             let opt = (label.flatMap { l in opts.first { $0.label == l } }) ?? opts[0]
             state.selectRouteChoice(opt, for: msg.id)
             return (jsonText(["selected": true, "label": opt.label]), false)
+        case "lingshu_submit_form":   // 调试:模拟提交最近一张确认表单;args: answers, 可选 messageId。
+            let rawAnswers = arguments["answers"] as? [String: Any] ?? [:]
+            let answers = rawAnswers.reduce(into: [String: String]()) { output, pair in
+                output[pair.key] = String(describing: pair.value)
+            }
+            guard !answers.isEmpty else {
+                return (jsonText(["submitted": false, "reason": "缺少 answers"]), false)
+            }
+            let targetIndex: Int?
+            if let rawID = arguments["messageId"] as? String, let id = UUID(uuidString: rawID) {
+                targetIndex = state.chatMessages.firstIndex { $0.id == id && $0.form != nil && $0.formAnswers == nil }
+            } else {
+                targetIndex = state.chatMessages.lastIndex { $0.form != nil && $0.formAnswers == nil }
+            }
+            guard let index = targetIndex else {
+                return (jsonText(["submitted": false, "reason": "无待提交表单"]), false)
+            }
+            let message = state.chatMessages[index]
+            state.submitFormAnswers(answers, for: message.id)
+            return (jsonText([
+                "submitted": true,
+                "messageId": message.id.uuidString,
+                "fields": message.form?.fields.map(\.key) ?? []
+            ]), false)
         case "lingshu_peripherals_scan":
             // 调试入口:刷新统一外设列表(汇集所有来源 + mDNS + 大脑自动归类),返回分组结果。
             await state.refreshPeripherals(autoClassify: (arguments["classify"] as? Bool) ?? true)

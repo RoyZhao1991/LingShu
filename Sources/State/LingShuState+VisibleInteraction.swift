@@ -65,9 +65,25 @@ extension LingShuState {
 
     func turnDidProvideInteractiveOutput(_ taskRecordID: String?) -> Bool {
         guard let record = taskExecutionRecords.first(where: { $0.id == taskRecordID }) else { return false }
+        let interactiveTools: Set<String> = [
+            "speak",
+            "open_preview",
+            "close_preview",
+            "present_fullscreen",
+            "present_documents",
+            "run_steps",
+            "preview_next",
+            "preview_prev",
+            "preview_goto",
+            "preview_scroll",
+            "enter_managed_mode"
+        ]
         return record.messages.contains { msg in
             if case let .toolCall(tool, _, _) = msg.detail {
-                return tool == "speak" || tool == "present_fullscreen" || tool == "enter_managed_mode"
+                return interactiveTools.contains(tool)
+            }
+            if case let .toolResult(tool, success, _) = msg.detail, success {
+                return interactiveTools.contains(tool)
             }
             return false
         }
@@ -92,15 +108,99 @@ extension LingShuState {
         recordID: String?
     ) -> LingShuAgentRunResult {
         guard case .completed(let text) = result else { return result }
+        let requestedVisible = LingShuInteractionFulfillment.requiresVisibleInteraction(prompt)
+        let didInteractiveOutput = turnDidProvideInteractiveOutput(recordID)
+        let hasPreviewableArtifact = !LingShuInteractionFulfillment
+            .previewableArtifacts(in: taskExecutionRecords.first { $0.id == recordID })
+            .isEmpty
         let inInteraction = previewController.isPresented
+            || presentationController.isActive
+            || didInteractiveOutput
+            || requestedVisible
+            || hasPreviewableArtifact
             || LingShuInteractionFulfillment.requiresLiveInteraction(prompt)
             || LingShuInteractionFulfillment.isLikelyInteractionFollowup(prompt)
+        let questionLike = LingShuInteractionFulfillment.isQuestionLike(prompt)
+        let inventoryStatus = LingShuInteractionFulfillment.isArtifactInventoryStatus(text)
+            || ((requestedVisible || didInteractiveOutput || hasPreviewableArtifact)
+                && LingShuInteractionFulfillment.isLikelyDeliveryInventoryStatus(text))
+        let shouldRepair = LingShuInteractionFulfillment.isHollowInteractionStatus(text)
+            || (inInteraction && inventoryStatus)
+            || (questionLike && LingShuInteractionFulfillment.isPageNarrationStatus(text))
+        let trimmed = questionLike ? nil : LingShuInteractionFulfillment.trimInteractionInventoryTail(text)
+        let usefulTrimmed = trimmed.flatMap {
+            LingShuInteractionFulfillment.isUsefulInteractionSummary($0) ? $0 : nil
+        }
+        let visibleFallback = questionLike ? nil : currentVisibleInteractionReply()
         guard inInteraction,
-              LingShuInteractionFulfillment.isHollowInteractionStatus(text),
-              let spoken = LingShuInteractionFulfillment.latestSubstantiveSpokenLine(after: spokenBaseline, in: recentSpokenLines)
+              shouldRepair,
+              let replacement = LingShuInteractionFulfillment.latestSubstantiveSpokenLine(after: spokenBaseline, in: recentSpokenLines)
+                ?? usefulTrimmed
+                ?? visibleFallback,
+              !(questionLike && LingShuInteractionFulfillment.isPageNarrationStatus(replacement))
         else { return result }
         appendTaskRecordMessage(recordID, actor: "交互交付", role: "答疑正文回填", kind: .result,
-                                text: "模型已通过语音给出实质内容,最终聊天回复已同步为同一正文,避免只显示空状态。")
-        return .completed(text: spoken)
+                                text: "交互型任务的最终气泡已同步为当前可感知状态,路径清单保留在任务记录中。")
+        return .completed(text: replacement)
+    }
+
+    func normalizeFinalVisibleInteractionText(
+        _ text: String,
+        prompt: String,
+        recordID: String?
+    ) -> String {
+        let requestedVisible = LingShuInteractionFulfillment.requiresVisibleInteraction(prompt)
+        let didInteractiveOutput = turnDidProvideInteractiveOutput(recordID)
+        let hasPreviewableArtifact = !LingShuInteractionFulfillment
+            .previewableArtifacts(in: taskExecutionRecords.first { $0.id == recordID })
+            .isEmpty
+        let inInteraction = previewController.isPresented
+            || presentationController.isActive
+            || didInteractiveOutput
+            || requestedVisible
+            || hasPreviewableArtifact
+            || LingShuInteractionFulfillment.requiresLiveInteraction(prompt)
+            || LingShuInteractionFulfillment.isLikelyInteractionFollowup(prompt)
+        guard inInteraction else { return text }
+
+        let inventoryStatus = LingShuInteractionFulfillment.isArtifactInventoryStatus(text)
+            || ((requestedVisible || didInteractiveOutput || hasPreviewableArtifact)
+                && LingShuInteractionFulfillment.isLikelyDeliveryInventoryStatus(text))
+        let hollow = LingShuInteractionFulfillment.isHollowInteractionStatus(text)
+        guard inventoryStatus || hollow else { return text }
+
+        let trimmed = LingShuInteractionFulfillment.trimInteractionInventoryTail(text)
+        let usefulTrimmed = trimmed.flatMap {
+            LingShuInteractionFulfillment.isUsefulInteractionSummary($0) ? $0 : nil
+        }
+        let replacement = usefulTrimmed ?? currentVisibleInteractionReply()
+        guard let replacement, !replacement.isEmpty, replacement != text else { return text }
+        appendTaskRecordMessage(recordID, actor: "交互交付", role: "最终气泡归一", kind: .result,
+                                text: "交互型任务收口时移除了文件库存式主回复;文件路径保留在任务记录和产出物面板。")
+        return replacement
+    }
+
+    func currentVisibleInteractionReply() -> String? {
+        guard previewController.isPresented else { return nil }
+        let title = previewController.title.trimmingCharacters(in: .whitespacesAndNewlines)
+        let page = previewController.displayedPageNumber
+        let pageText: String
+        if previewController.isHTML {
+            pageText = ""
+        } else {
+            pageText = previewController.pageText(max(0, page - 1))
+        }
+        let compact = pageText
+            .components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .prefix(4)
+            .joined(separator: "；")
+        let name = title.isEmpty ? "当前材料" : "「\(title)」"
+        let mode = previewController.slideshow ? "已进入全屏演示状态" : "已打开预览"
+        if compact.isEmpty {
+            return "\(name)\(mode),当前停在第 \(page) 页。我会按屏幕内容继续讲解,你可以随时提问、让我翻页或收尾。"
+        }
+        return "\(name)\(mode),当前停在第 \(page) 页。页面要点:\(String(compact.prefix(180)))。你可以随时提问、让我翻页或收尾。"
     }
 }

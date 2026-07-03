@@ -14,6 +14,9 @@ final class LingShuPresentationSkill: LingShuBuiltinSkill {
     let controller = LingShuPresentationController()
     /// 在飞的演示播放任务(后台照稿念;用户输入经 `interceptActiveInput` 拦成答疑)。
     var playbackTask: Task<Void, Never>?
+    /// 当前由用户前台输入触发的演示交互记录。用于把 controller 的 opening/announce 绑定回这次输入,
+    /// 让 MCP/任务窗口能追踪“演示答疑/控制”这类前台技能交互。
+    private var activeInteractionRecordID: String?
     /// 内核宿主(取内核服务:预览/语音/聊天/控制面模型/口播打断)。弱引用,内核持有本技能。
     weak var host: LingShuState?
 
@@ -119,15 +122,19 @@ final class LingShuPresentationSkill: LingShuBuiltinSkill {
             },
             prefetchNarration: { [weak self] text in self?.host?.voiceManager?.prefetchSpeech(text) },
             announce: { [weak self] text in
-                guard let host = self?.host else { return }
+                guard let self, let host = self.host else { return }
                 // 进聊天气泡,但**抑制气泡自动朗读**:本钩子下面已显式念这句,若再让自动朗读念一遍(同文)= 双声线互掐代次。
-                let bubble = ChatMessage(speaker: "灵枢", text: text, isUser: false)
-                host.chatMessages.append(bubble)
+                let recordID = self.activeInteractionRecordID
+                let bubble = ChatMessage(speaker: "灵枢", text: text, isUser: false, taskRecordID: recordID)
                 host.lastSpokenMessageID = bubble.id
-                guard let voice = host.voiceManager else { return }
-                voice.speakPresentationNarration(text)
-                host.recordSpokenLine(text)
-                await voice.awaitPlaybackDone(maxSeconds: 60)
+                host.chatMessages.append(bubble)
+                if let voice = host.voiceManager {
+                    voice.speakPresentationNarration(text)
+                    host.recordSpokenLine(text)
+                    await voice.awaitPlaybackDone(maxSeconds: 60)
+                }
+                self.finishPresentationInteraction(recordID, summary: text)
+                if self.activeInteractionRecordID == recordID { self.activeInteractionRecordID = nil }
             },
             setFullscreen: { [weak self] on in _ = self?.host?.previewController.setSlideshow(on) },
             note: { [weak self] title, detail in
@@ -206,15 +213,19 @@ final class LingShuPresentationSkill: LingShuBuiltinSkill {
         guard c.isActive else { return false }
         let trimmed = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return false }
-        host?.chatMessages.append(.init(speaker: "你", text: trimmed, isUser: true))   // 交互进聊天流(线性)
+        let recordID = beginPresentationInteraction(trimmed)
         LingShuCueSound.playAcknowledgeChime()   // 收到输入立刻"受令"提示音
         Task { @MainActor [weak self] in
             guard let self else { return }
             switch c.phase {
             case .awaitingNextDoc:
-                if Self.isPresentationStopIntent(trimmed) { await c.stop(); await self.sayPresentationLine("好,演示就到这里。") }
+                if Self.isPresentationStopIntent(trimmed) { await c.stop(); await self.sayPresentationLine("好,演示就到这里。", recordID: recordID) }
                 // 确认句作为 opening 交给 play:先显示下一篇首页 → 串行念这句 → 再念讲稿(不抢通道→不跳页)。
-                else { await c.confirmAndPlayNext(opening: "好,继续下一篇。") }
+                else {
+                    self.activeInteractionRecordID = recordID
+                    await c.confirmAndPlayNext(opening: "好,继续下一篇。")
+                    self.finishPresentationInteraction(recordID, summary: "好,继续下一篇。")
+                }
             case .playing, .pausedForQA:
                 if c.phase == .playing { c.requestPauseForQA(); await self.waitUntilPresentationPaused() }   // 先立刻停念稿
                 let beat = c.queue.currentScript?.currentBeat
@@ -225,27 +236,61 @@ final class LingShuPresentationSkill: LingShuBuiltinSkill {
                 // 绝不能让气泡自动朗读这句——会和续演首页讲稿抢同一发声通道(代次互掐)→ 把讲稿掐掉、play 误判念完而跳页。
                 switch intent {
                 case .resume:
+                    self.activeInteractionRecordID = recordID
                     await c.resume(opening: "好,接着讲。")
                 case .stop:
-                    await c.stop(); await self.sayPresentationLine("好,停下了,需要再演随时叫我。")
+                    await c.stop(); await self.sayPresentationLine("好,停下了,需要再演随时叫我。", recordID: recordID)
                 case .pause:
-                    await self.sayPresentationLine("好,先停在这一页,你说「继续」我接着讲。")   // 停住保持,等「继续」
+                    await self.sayPresentationLine("好,先停在这一页,你说「继续」我接着讲。", recordID: recordID)   // 停住保持,等「继续」
                 case .pace(let p):
+                    self.activeInteractionRecordID = recordID
                     c.setPace(p); await c.resume(opening: "好,后面我\(p.label)讲。")   // 切档→续演,后续页按新深度
                 case .seek(let page):
+                    self.activeInteractionRecordID = recordID
                     await c.resume(seekTo: page - 1, opening: "好,翻到第\(page)页。")   // 先翻到该页→念确认→从该页续演
                 case .question:
-                    await self.speakPresentationAnswer(answer)
+                    await self.speakPresentationAnswer(answer, recordID: recordID)
                     if c.phase == .pausedForQA {
                         let seekPage = Self.parsePresentationResumePage(trimmed)   // "从第N页"→seek;否则当前位置续
                         await c.resume(seekTo: seekPage.map { $0 - 1 })
                     }
                 }
             default:
+                self.finishPresentationInteraction(recordID, summary: "演示当前不可接收这条输入。", status: .blocked)
                 break
             }
         }
         return true
+    }
+
+    private func beginPresentationInteraction(_ text: String) -> String? {
+        guard let host else { return nil }
+        let recordID = host.createTaskExecutionRecord(for: text)
+        host.chatMessages.append(.init(speaker: "你", text: text, isUser: true, taskRecordID: recordID))   // 交互进聊天流(线性)
+        host.requestChatScrollToLatestForUserSend()
+        host.appendTaskRecordMessage(recordID, actor: "你", role: "演示交互", kind: .user, text: text)
+        host.appendTaskRecordMessage(recordID, actor: "演示与答疑", role: "接管输入", kind: .core, text: "当前前台演示正在运行,这条输入进入演示答疑/控制通道。")
+        host.appendTrace(kind: .route, actor: "演示与答疑", title: "前台交互", detail: String(text.prefix(80)))
+        return recordID
+    }
+
+    private func finishPresentationInteraction(
+        _ recordID: String?,
+        summary: String,
+        status: LingShuTaskExecutionStatus = .answered
+    ) {
+        guard let host, let recordID,
+              let record = host.taskExecutionRecords.first(where: { $0.id == recordID }),
+              !record.status.isTerminal
+        else { return }
+        let clean = summary.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !clean.isEmpty {
+            host.appendTaskRecordMessage(recordID, actor: "灵枢", role: "演示回应", kind: .result, text: clean)
+        }
+        host.finishTaskRecord(recordID, status: status, summary: clean.isEmpty ? "演示交互已处理。" : clean)
+        if !clean.isEmpty {
+            host.rememberMainThreadTurn(prompt: record.prompt, reply: clean)
+        }
     }
 
     /// 演示文本交互的"处理中"低忙音脉冲驱动(演示不在自主模式,自带一条每 ~0.9s 驱动 busyTick 的 Task)。
@@ -285,7 +330,9 @@ final class LingShuPresentationSkill: LingShuBuiltinSkill {
         - 想**换讲解节奏/深度**(如「后面快速讲」「简要过一下就行」「概要说说剩下的」「详细讲」「恢复正常速度」)→ {"intent":"pace","pace":"detailed"或"brief"或"overview"}(快速=brief、概要=overview、详细/正常=detailed)
         - 想**跳到/翻到某页 或 从某页开始讲**(如「跳到第5页」「翻到第3页」「我想看第8页」「回到第一页」「从第一页重新开始讲」「**从第2页开始讲解**」「从第三页讲起」「第4页讲」),**或只说一个数字(如「1」「3」「第二页」)**→ {"intent":"seek","page":归一化后的阿拉伯整数页号} （**page 必须归一成阿拉伯数字整数**:「第一页」「回到第一页」「从第一页重新开始讲」→1、「跳到第四页」→4、只说「2」→2;这是你的活,别原样回中文）
         - 对内容提问、或说别的话 → {"intent":"question","answer":"结合当前这页内容、像真人当面口语简洁回答(40-140字),不复述整页、不编造页面没有的事"}
+        **若提问里夹带“答完继续/说完继续/等待后续问题/继续讲下一页”等流程指令,只把它当作后续流程控制,answer 必须回答问题本身;禁止把“已完成答疑/回答完毕/等待后续问题/继续演示”当成答案。**
         **重要:若这份文档讲的就是你灵枢自己(介绍灵枢的定位/架构/能力/课题成果),回答用第一人称('我'/'我的')、结合你真实的自我认知,别把自己当外人。**
+        **重要:若听众问的是“你是谁/你的价值/你和某工具相比/你能解决什么”,先点明“我是灵枢”,再基于当前文档说明你的定位、边界和差异价值;对外部工具只说明协作关系和分工,不要贬低或臆造对方能力。**
         \(context)
         """
         let session = LingShuAgentSession(id: "qa-\(UUID().uuidString.prefix(5))", system: sys, tools: [],
@@ -310,10 +357,120 @@ final class LingShuPresentationSkill: LingShuBuiltinSkill {
             // 正常路径**纯大脑判定**(用户定调:大脑解析输入、判断答疑/翻页、翻页页号由大脑归一化,不在这用字典死匹配)。
             // 大脑收到了系统指令(Anthropic system 丢失已修)就会正确分类;确定性兜底只在大脑**不可用**时兜(见 fallbackPresentationIntent)。
             let a = (LingShuState.jsonField(clean, "answer") ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            return (.question, a.isEmpty ? "这个问题我先记下,演示后细聊。" : a)
+            let answer = await presentationQuestionAnswer(input: input, candidate: a, beat: beat, title: title)
+            return (.question, answer)
         default:
             return Self.fallbackPresentationIntent(input)
         }
+    }
+
+    /// 演示答疑正文闸:分类器可能把“答完继续等待”这类流程尾巴写成 answer。
+    /// 这里不做领域定制,只保证“问题答案”和“后续流程状态”分离:空答案/状态话术 → 用当前演示上下文再让主脑补一版真正答疑。
+    private func presentationQuestionAnswer(
+        input: String,
+        candidate: String,
+        beat: LingShuPresentationBeat?,
+        title: String
+    ) async -> String {
+        let cleanedCandidate = Self.cleanPresentationAnswer(candidate)
+        if Self.presentationAnswerIsSubstantive(cleanedCandidate) { return cleanedCandidate }
+        guard let host else {
+            return cleanedCandidate.isEmpty ? Self.fallbackPresentationQuestionAnswer(input: input, beat: beat, title: title) : cleanedCandidate
+        }
+        let question = Self.presentationQuestionOnly(input)
+        let pageContext = beat.map {
+            "文档《\(title)》第 \($0.pageNumber) 页真实内容:\n\(String($0.verbatim.prefix(1_200)))"
+        } ?? "正在演示《\(title)》,暂无当前页文本。"
+        let sys = """
+        你是演示现场的答疑者,正在基于当前材料回答听众追问。
+        规则:
+        1. 只输出可以直接说给听众听的答案正文,不要 JSON、markdown 表格、前后缀。
+        2. 如果用户原话里夹带“答完继续/等待后续问题/继续演示/下一页”等流程指令,那只是后续状态,不要写进答案正文。
+        3. 禁止只说“回答完毕、已完成答疑、等待后续问题、当前继续停在某页”。
+        4. 结合当前页和材料主题回答,不知道就明确说边界,不要编造材料没有的事实。
+        5. 40-180 字,口语化、清楚、有结论。
+        \(pageContext)
+        """
+        let user = """
+        听众真正的问题:
+        \(question)
+
+        上游候选答案(可能为空,也可能只是流程状态,仅供参考):
+        \(cleanedCandidate)
+        """
+        let session = LingShuAgentSession(
+            id: "qa-answer-\(UUID().uuidString.prefix(5))",
+            system: LingShuPersona.system(sys),
+            tools: [],
+            model: host.controlPlaneModelAdapter(.deliveryComposer, timeoutOverride: 20),
+            maxTurns: 1
+        )
+        let r = await session.send(user)
+        if case .completed(let raw) = r {
+            let answer = Self.cleanPresentationAnswer(LingShuReasoningText.stripThinkTags(raw))
+            if Self.presentationAnswerIsSubstantive(answer) {
+                lingShuControlLog("演示答疑修正 input=「\(input)」→ \(answer.replacingOccurrences(of: "\n", with: " ").prefix(160))")
+                return answer
+            }
+        }
+        if Self.presentationAnswerIsSubstantive(cleanedCandidate) { return cleanedCandidate }
+        return Self.fallbackPresentationQuestionAnswer(input: input, beat: beat, title: title)
+    }
+
+    nonisolated static func presentationAnswerIsSubstantive(_ text: String) -> Bool {
+        let clean = cleanPresentationAnswer(text)
+        guard clean.count >= 24 else { return false }
+        if LingShuInteractionFulfillment.isHollowInteractionStatus(clean) { return false }
+        if LingShuInteractionFulfillment.isPageNarrationStatus(clean) { return false }
+        if LingShuInteractionFulfillment.isArtifactInventoryStatus(clean) { return false }
+        let compact = clean
+            .replacingOccurrences(of: "\\s+", with: "", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let placeholders = ["这个问题我先记下", "演示后细聊", "回答完毕", "等待后续问题", "继续留在全屏演示状态"]
+        if placeholders.contains(where: { compact.contains($0) }) { return false }
+        return true
+    }
+
+    nonisolated static func presentationQuestionOnly(_ raw: String) -> String {
+        var text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        for marker in ["老师提问:", "老师提问：", "提问:", "提问：", "问题:", "问题："] {
+            if let range = text.range(of: marker) {
+                text = String(text[range.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
+                break
+            }
+        }
+        if let q = text.firstIndex(where: { $0 == "?" || $0 == "？" }) {
+            text = String(text[...q]).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        for marker in ["答完", "回答完", "说完", "讲完", "等待后续", "继续等待", "继续演示"] {
+            if let range = text.range(of: marker) {
+                text = String(text[..<range.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+        }
+        return text.isEmpty ? raw.trimmingCharacters(in: .whitespacesAndNewlines) : text
+    }
+
+    nonisolated private static func cleanPresentationAnswer(_ raw: String) -> String {
+        raw
+            .replacingOccurrences(of: "```json", with: "")
+            .replacingOccurrences(of: "```", with: "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    nonisolated private static func fallbackPresentationQuestionAnswer(
+        input: String,
+        beat: LingShuPresentationBeat?,
+        title: String
+    ) -> String {
+        let question = presentationQuestionOnly(input)
+        let context = beat?.verbatim.trimmingCharacters(in: .whitespacesAndNewlines) ?? title
+        let compact = context
+            .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if compact.isEmpty {
+            return "我是灵枢。这个问题我会按当前材料回答:我的价值在于把目标、任务、执行、监控、验收和记忆放进统一中枢,让工作从零散对话变成可追踪、可复盘的交付过程。"
+        }
+        return "我是灵枢。结合当前材料,这个问题的核心是:我不是替代某个单点工具,而是把目标理解、能力调度、执行过程、监控验收和历史记忆串成一个统一中枢。\(question.isEmpty ? "" : "你问的点,可以理解为我负责把复杂任务组织成可交付的工程闭环。")"
     }
 
     /// **仅 LLM 不可用时的关键词兜底**(主路径是上面的语义分类)。
@@ -341,26 +498,28 @@ final class LingShuPresentationSkill: LingShuBuiltinSkill {
     }
 
     /// 念出答疑回答(进聊天流 + TTS 念完):答疑后常接 c.resume(seekTo:),故必须走串行通道。
-    private func speakPresentationAnswer(_ answer: String) async {
-        await sayPresentationLine(answer)
+    private func speakPresentationAnswer(_ answer: String, recordID: String?) async {
+        await sayPresentationLine(answer, recordID: recordID)
     }
 
     /// **演示中串行念一句**(确认句 / 答疑回答 / 篇间播报):进聊天气泡 → **抑制气泡自动朗读** → 显式念 → await 念完。
     /// 演示里任何要出声的话都走这条串行发声通道,绝不靠气泡自动朗读——否则会和续演讲稿抢同一发声通道(代次互掐)→ 跳页。
-    private func sayPresentationLine(_ text: String) async {
-        appendPresentationLine(text)
-        guard let voice = host?.voiceManager else { return }
-        voice.speakPresentationNarration(text)
-        host?.recordSpokenLine(text)
-        await voice.awaitPlaybackDone(maxSeconds: 30)
+    private func sayPresentationLine(_ text: String, recordID: String? = nil) async {
+        appendPresentationLine(text, recordID: recordID)
+        if let voice = host?.voiceManager {
+            voice.speakPresentationNarration(text)
+            host?.recordSpokenLine(text)
+            await voice.awaitPlaybackDone(maxSeconds: 30)
+        }
+        finishPresentationInteraction(recordID, summary: text)
     }
 
     /// 进聊天气泡 + **抑制气泡自动朗读**(标记为已念)。纯 append 不出声。
-    private func appendPresentationLine(_ text: String) {
+    private func appendPresentationLine(_ text: String, recordID: String? = nil) {
         guard let host else { return }
-        let bubble = ChatMessage(speaker: "灵枢", text: text, isUser: false)
-        host.chatMessages.append(bubble)
+        let bubble = ChatMessage(speaker: "灵枢", text: text, isUser: false, taskRecordID: recordID)
         host.lastSpokenMessageID = bubble.id
+        host.chatMessages.append(bubble)
     }
 
     nonisolated static func isPresentationStopIntent(_ s: String) -> Bool {
@@ -380,11 +539,28 @@ final class LingShuPresentationSkill: LingShuBuiltinSkill {
         return ["继续", "接着讲", "接着演", "往下讲", "往下演", "接着说"].contains { t.contains($0) }
     }
 
-    /// 解析"从第N页/回到第N页/第N页"里的页号(1-based);没有则 nil。**轻量兜底**(归一化是大脑的活,不写中文数字解析器)。
-    /// 轻量阿拉伯页号兜底(归一化是大脑的活,不在这写中文数字解析器——用户定调:中文/暗表达都由模型归一)。
+    /// 解析"从第N页/回到第N页/第N页"里的页号(1-based);没有则 nil。
+    /// 这里只做窄域页号归一(阿拉伯数字 + 常见中文数字),属于演示控制安全网,不参与通用分诊。
     nonisolated static func parsePresentationResumePage(_ s: String) -> Int? {
-        guard let r = s.range(of: "[0-9]+", options: .regularExpression), let n = Int(s[r]) else { return nil }
-        return n > 0 ? n : nil
+        if let r = s.range(of: "[0-9]+", options: .regularExpression), let n = Int(s[r]), n > 0 { return n }
+        guard let r = s.range(of: "[零一二三四五六七八九十两〇]+", options: .regularExpression) else { return nil }
+        return chinesePageNumber(String(s[r]))
+    }
+
+    nonisolated private static func chinesePageNumber(_ raw: String) -> Int? {
+        let text = raw.replacingOccurrences(of: "两", with: "二").replacingOccurrences(of: "〇", with: "零")
+        let digits: [Character: Int] = ["零": 0, "一": 1, "二": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9]
+        if text == "十" { return 10 }
+        if text.contains("十") {
+            let parts = text.split(separator: "十", omittingEmptySubsequences: false)
+            guard parts.count == 2 else { return nil }
+            let tens = parts[0].isEmpty ? 1 : (parts[0].compactMap { digits[$0] }.first ?? -1)
+            let ones = parts[1].isEmpty ? 0 : (parts[1].compactMap { digits[$0] }.first ?? -1)
+            let value = tens * 10 + ones
+            return value > 0 ? value : nil
+        }
+        let value = text.reduce(0) { acc, ch in acc * 10 + (digits[ch] ?? -1) }
+        return value > 0 ? value : nil
     }
 
     nonisolated static func parsePresentationPaths(_ json: String) -> [String] {

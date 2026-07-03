@@ -335,12 +335,14 @@ extension LingShuState {
 
         let previous = autonomousRunTask
         autonomousRunTask?.cancel()
+        autonomousRunGeneration += 1
+        let generation = autonomousRunGeneration
         autonomousRunTask = Task { @MainActor [weak self] in
             await previous?.value
-            guard let self, !Task.isCancelled else { self?.autonomousRunTask = nil; return }
+            guard let self, !Task.isCancelled, self.autonomousRunGeneration == generation, self.autonomousRun.phase != .idle else { self?.autonomousRunTask = nil; return }
             // 临时评估器(独立会话,用完即弃,不碰在岗对话上下文)。
             let action = await self.evaluatePerceptionForAction(observation: observation)
-            guard !Task.isCancelled else { self.autonomousRunTask = nil; return }
+            guard !Task.isCancelled, self.autonomousRunGeneration == generation, self.autonomousRun.phase != .idle else { self.autonomousRunTask = nil; return }
             guard let action else {
                 // IDLE:无需主动处理——只留轨迹,绝不进聊天、不污染对话上下文。
                 self.autonomousRunTask = nil
@@ -356,9 +358,10 @@ extension LingShuState {
             self.appendTrace(kind: .runtime, actor: "灵枢", title: "感知触发提醒", detail: String(action.prefix(40)))
             let baseline = self.currentArtifactCount(recordID)
             let initial = await session.resume("[屏幕监测·主动提醒] 你刚留意到一个可能需要主人知道的情况:\(action)\n用一句话(`speak` 出声)简短提醒主人即可,不必动手处理(除非主人接着发指令)。")
+            guard !Task.isCancelled, self.autonomousRunGeneration == generation, self.autonomousRun.phase != .idle else { return }
             let result = await self.verifyAndContinue(session: session, result: initial, userRequest: action, taskRecordID: recordID, artifactBaseline: baseline)
-            guard !Task.isCancelled else { return }
-            self.finishAutonomousRun(result: result, recordID: recordID)
+            guard !Task.isCancelled, self.autonomousRunGeneration == generation, self.autonomousRun.phase != .idle else { return }
+            await self.finishAutonomousRun(result: result, recordID: recordID)
         }
     }
 

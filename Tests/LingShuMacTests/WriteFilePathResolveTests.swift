@@ -31,4 +31,19 @@ final class WriteFilePathResolveTests: XCTestCase {
         XCTAssertNil(r.resolved, "越界路径不该成功")
         XCTAssertTrue(r.error?.contains("工作目录") ?? false)
     }
+
+    func testExplicitWorkingDirectoryHintFromChineseDirectoryPhrase() throws {
+        let temp = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("lingshu-wd-hint-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: temp, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: temp) }
+
+        let prompt = "在目录 \(temp.path) 写 add.py, 再写测试验证"
+        XCTAssertEqual(LingShuState.explicitWorkingDirectoryHint(in: prompt), temp.path)
+    }
+
+    func testExplicitWorkingDirectoryHintUsesParentWhenPathIsFile() {
+        let prompt = "把结果保存到 /tmp/lingshu-output/report.md"
+        XCTAssertEqual(LingShuState.explicitWorkingDirectoryHint(in: prompt), "/tmp/lingshu-output")
+    }
 }

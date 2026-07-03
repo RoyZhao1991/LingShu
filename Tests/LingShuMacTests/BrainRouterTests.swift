@@ -1,7 +1,7 @@
 import XCTest
 @testable import LingShuMac
 
-/// 通用中枢 P5·强/中/弱脑分层:复杂度→理想档(纯)+ 据可用档降级 + State 层配置/路由。
+/// 当前主脑复杂度画像:纯复杂度评分仍可测,运行时不再切换不同模型端点。
 final class BrainRouterTests: XCTestCase {
 
     // MARK: 理想档(复杂度打分,纯)
@@ -51,26 +51,24 @@ final class BrainRouterTests: XCTestCase {
         XCTAssertLessThanOrEqual(LingShuControlPlaneRole.acceptancePlanner.timeoutSeconds, 8)
     }
 
-    // MARK: State 层:配置 + 路由 + 单脑回退
+    // MARK: State 层:旧配置兼容 + 单主脑
 
     @MainActor
-    func testTierConfigStoreAndRoutingFallback() {
+    func testLegacyTierConfigIsIgnoredInSingleMainBrainMode() {
         let key = "lingshu.brain.tiers"
         UserDefaults.standard.removeObject(forKey: key)
         defer { UserDefaults.standard.removeObject(forKey: key) }
         let state = LingShuState()
 
-        // 未配多脑 → 可用档为空,路由照算但落回当前单脑(tierModelAdapter 不崩、返回当前脑)。
         XCTAssertTrue(state.availableBrainTiers().isEmpty)
-        _ = state.tierModelAdapter(.strong)   // 不崩(回退当前脑)
+        _ = state.tierModelAdapter(.strong)
 
-        // 配两档 → 可用档反映出来。
+        // 当前版本不支持多脑协同:旧配置入口只做清理/兼容,不会产生可用档。
         state.setBrainTierModel(.weak, provider: "deepseek", model: "ds", endpoint: "https://w", apiKey: "k")
         state.setBrainTierModel(.strong, provider: "openai", model: "gpt", endpoint: "https://s", apiKey: "k2")
-        XCTAssertEqual(state.availableBrainTiers(), [.weak, .strong])
-        // 清除一档。
+        XCTAssertTrue(state.availableBrainTiers().isEmpty)
         state.setBrainTierModel(.weak, provider: "", model: "", endpoint: "", apiKey: "")
-        XCTAssertEqual(state.availableBrainTiers(), [.strong])
+        XCTAssertTrue(state.availableBrainTiers().isEmpty)
     }
 
     @MainActor
@@ -79,13 +77,11 @@ final class BrainRouterTests: XCTestCase {
         UserDefaults.standard.removeObject(forKey: key)
         defer { UserDefaults.standard.removeObject(forKey: key) }
         let state = LingShuState()
-        state.setBrainTierModel(.weak, provider: "p", model: "m", endpoint: "https://w", apiKey: "k")
-        state.setBrainTierModel(.medium, provider: "p", model: "m", endpoint: "https://m", apiKey: "k")
         let rid = state.createTaskExecutionRecord(for: "复杂任务")
         defer { state.taskExecutionRecords.removeAll { $0.id == rid }; state.persistTaskExecutionRecords(); state.taskExecutionJournal.flush() }
-        // 绑一个复杂 GoalSpec(多约束+多标准)→ 理想强,但只配弱中 → 降级中。
+        // 绑一个复杂 GoalSpec(多约束+多标准)→ 画像为 strong;执行仍由当前主脑处理。
         state.bindGoalSpec(.init(objective: "复杂", kind: .task, constraints: ["a", "b", "c"],
                                  successCriteria: ["x", "y"]), to: rid)
-        XCTAssertEqual(state.routeBrainTier(taskRecordID: rid), .medium, "复杂→想要强,只配弱中→降级中")
+        XCTAssertEqual(state.routeBrainTier(taskRecordID: rid), .strong)
     }
 }

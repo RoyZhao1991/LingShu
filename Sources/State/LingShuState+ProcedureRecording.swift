@@ -27,6 +27,7 @@ extension LingShuState {
         guard procedureRecording != nil else { return false }
         let t = prompt.replacingOccurrences(of: " ", with: "")
         chatMessages.append(.init(speaker: "你", text: prompt, isUser: true))
+        requestChatScrollToLatestForUserSend()
         if ["记录完成", "录完了", "完成录制", "录好了", "就这些", "结束录制"].contains(where: { t.contains($0) }) {
             Task { @MainActor [weak self] in await self?.finishProcedureRecording() }
             return true

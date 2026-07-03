@@ -14,94 +14,266 @@ struct TriageContext {
     let threads: [TriageThread]
 }
 
-/// 主线程分诊(Stage 2 多任务真隔离的第一步):灵枢收到消息后**先判**能否直接对话作答(chat),
-/// 还是需要派发执行(task)。chat 留主线程(连续对话);task 派发独立隔离 session 并行跑。
-/// 旧的「启发式前置门」在 82fc503 被删,这里在现代 agent loop 之上重建一个轻量分诊。
+/// 主线程输入归属解析:只回答"这条输入是在回复哪条等待中的上下文吗?"。
+/// 它不判断 chat/task,也不创建子任务;新顶层目标一律交给当前主脑的 active turn 处理。
 @MainActor
 extension LingShuState {
 
     enum DispatchKind { case chat, task, reply }
     enum DispatchConfidence: Equatable { case high, medium, low }
 
-    /// 分诊决策(图里 B→C 的结构化产出):kind + 目标 + reply 目标 + **置信度** + 关键词信号 + 脑是否失败。
-    /// 置信度是**融合**产物(大脑自报 × 关键词印证 × 一致性),供内核闸门据此扇出执行/追问——不全信模型自评。
+    /// 输入归属决策:只允许 `.reply` 或 `.chat`。`.task` 仅保留给旧派发/队列兼容分支,入口解析不再产出。
     struct DispatchDecision {
         let kind: DispatchKind
         let goal: String?
         let replyRecordID: String?
         var confidence: DispatchConfidence = .high
-        var actionHint: Bool = false     // 关键词门信号:降级后只当置信度外部锚,不再绕过大脑
-        var brainFailed: Bool = false     // 分诊脑调用失败/超时 → 闸门显式追问,不静默吞成闲聊
+        var actionHint: Bool = false     // 兼容旧字段:不再参与入口路由
+        var brainFailed: Bool = false     // 归属解析失败/超时 → 不劫持输入,交主脑处理
     }
 
-    /// **上下文感知**的轻量分诊(用户定调 2026-06-17):每次分诊都带上**完整语义的近上下文(最近逐字)+ 压缩的远上下文
-    /// (对话摘要)+ 当前可续的派发任务线程**,让分诊器能(a)分得更准、(b)**回溯到前面隔了几条才问的问题**。
-    /// 返回 reply 时附 `replyRecordID`。**架构升级(2026-06-26)**:关键词门从「return .task 抄近路」降级为 `actionHint`
-    /// 信号(喂大脑当先验 + 融合进置信度);产出带 Confidence 的结构化决策;脑失败不静默吞 chat,交内核闸门追问。
-    func classifyDispatch(_ prompt: String) async -> DispatchDecision {
-        if isMinimalVoiceMode { return DispatchDecision(kind: .chat, goal: nil, replyRecordID: nil) }   // 极简语音:一律对话
-        if LingShuSelfReferenceIntent.isDirectAssistantSelfIntroduction(prompt) {
+    /// 上下文归属解析:
+    /// - 无候选线程:不调用模型,直接交主脑 active turn。
+    /// - 有候选线程:只判断最新输入是否在回复/补充其中一条;不判断它是不是新任务。
+    /// - 模型使用当前启用的主脑,不走强/中/弱脑分流。
+    func classifyDispatch(_ prompt: String, hasAttachments: Bool = false, visiblePrompt: String? = nil) async -> DispatchDecision {
+        let routingPrompt = (visiblePrompt ?? prompt).trimmingCharacters(in: .whitespacesAndNewlines)
+        if isMinimalVoiceMode {
+            appendTrace(kind: .route, actor: "上下文归属", title: "极简语音 · 交主脑",
+                        detail: "极简语音模式不做上下文劫持,交当前主脑处理。")
             return DispatchDecision(kind: .chat, goal: nil, replyRecordID: nil)
         }
-        // **关键词门降级**:不再 `return .task` 抄近路——只产出 actionHint 信号,既喂大脑当先验、又作为置信度的"外部锚"。
-        // 大脑判 chat 但 actionHint 说像执行 → 冲突 → 压低置信 → 闸门追问(而非原来强判 task 硬覆盖大脑)。
-        let actionHint = Self.isObviousExecutionRequest(prompt)
+        if LingShuSelfReferenceIntent.isDirectAssistantSelfIntroduction(routingPrompt) {
+            appendTrace(kind: .route, actor: "上下文归属", title: "自我介绍 · 交主脑",
+                        detail: "自我介绍类输入不是待回复线程归属问题,交当前主脑处理。")
+            return DispatchDecision(kind: .chat, goal: nil, replyRecordID: nil)
+        }
 
         let ctx = buildTriageContext()
-        var threadBlock = ""
-        if !ctx.threads.isEmpty {
-            let lines = ctx.threads.map { "[\($0.label)] \($0.summary)" }.joined(separator: "\n")
-            threadBlock = "\n【当前可续的任务线程】(用户可能在回答/延续其中某条,哪怕中间隔了几句别的话):\n\(lines)\n"
+        let candidateThreads = ctx.threads.filter {
+            Self.inputCanAnswerPendingQuestion(
+                visiblePrompt: routingPrompt,
+                pendingQuestion: $0.summary,
+                hasAttachments: hasAttachments
+            )
         }
+        if ctx.threads.isEmpty == false && candidateThreads.isEmpty {
+            appendTrace(kind: .route, actor: "上下文归属", title: "待答复不匹配 · 新回合",
+                        detail: "存在待答复线程,但本轮输入不像是在回答那些问题;不劫持为旧线程答复,交当前主脑作为新 active turn 处理。")
+            return DispatchDecision(kind: .chat, goal: nil, replyRecordID: nil)
+        }
+        guard !candidateThreads.isEmpty else {
+            appendTrace(kind: .route, actor: "上下文归属", title: "无待归属线程",
+                        detail: "未发现等待用户回答/可续的线程;不做模型分诊,直接交当前主脑判断并响应。")
+            return DispatchDecision(kind: .chat, goal: nil, replyRecordID: nil)
+        }
+
+        var threadBlock = ""
+        let lines = candidateThreads.map { "[\($0.label)] \($0.summary)" }.joined(separator: "\n")
+        threadBlock = "\n【候选待归属线程】\n\(lines)\n"
         let far = ctx.far.isEmpty ? "" : "【更早对话摘要(压缩)】\n\(ctx.far)\n\n"
-        let hintLine = actionHint ? "【先验线索】这条消息文面含明确动作动词,**很可能是要你执行的动作**(含**现实动作/外部操作**:同步到Notion/飞书、发邮件/发消息、查日历/查邮件、订票、控制设备/开关灯…)——**默认判 task**(没文件产出也算;派发后会去找能力/要授权再做,别因为「我可能没这能力」就判 chat)。**只有**它明显只是闲聊/解释里**提到**了这些词(如「教我怎么写爬虫」「解释下怎么发邮件」「谢谢你帮我发邮件」=解释/闲聊、不是要你现在做)才判 chat。\n" : ""
-        let replyOut = ctx.threads.isEmpty ? "" : "、{\"kind\":\"reply\",\"thread\":\"T1\",\"confidence\":\"high\"}"
         let system = """
-        你是分诊器。下面给你与用户的对话上下文(近期逐字 + 更早摘要)和当前可续的任务线程。
-        判断用户【最新一条】消息属于哪一类,**并自报置信度 confidence(high/medium/low)**,只输出一行 JSON,不要任何解释:
-        - reply:用户在【回答/延续/补充/确认】上面某条可续任务线程(尤其它标了"⏳正等你回答"、或在问主题/要信息/给选项)——**哪怕中间隔了几句闲聊也算**,指出是哪条 thread(如 "T1")。
-        - chat:与任何任务线程无关、灵枢能**当场用语言就答完**的(闲聊/解释概念/问事实/给建议/介绍自己)。
-        - task:与现有线程无关的**全新**执行任务。两类都算 task:① 有产出物的(做PPT/文档/代码/爬虫、要落盘、跑命令、多步);
-          ② **现实动作 / 外部系统操作**(同步到 Notion/飞书/云盘、发邮件/发消息、查日历/查邮件、订票/订会议室、控制设备/开关灯/调温度、
-          连接打印机/音箱、导入数据库…)——这类**没有文件产出**但要**真去做、真去连**,**哪怕你怀疑现在还没接入这个能力,也判 task**
-          (派发后会去找能力/要授权再做),**绝不要因为"我可能做不到"就当 chat 去解释或拒绝**。
-        \(hintLine)
+        你是"上下文归属解析器",只做一件事:判断用户【最新一条】是否是在回复/补充/确认下面某条候选线程。
+        不要判断这条消息是不是新任务,不要规划,不要创建子任务,不要按关键词猜测。
+        只输出一行 JSON:
+        - 归属明确: {"route":"reply","thread":"T1","confidence":"high"}
+        - 不归属/不确定: {"route":"none","confidence":"high"}
+
+        判定规则:
+        - 只有当最新输入明显是在回答候选线程的问题、补充候选线程所需信息、确认候选线程给出的选项,才 route=reply。
+        - "继续"这类无主体短句,只在最近一条待处理上下文就是候选线程且语义明确时归属;否则 route=none,交主脑处理最近聊天上下文。
+        - 如果用户在开启一个新话题、问一个新问题、提出一个新目标,即使文字里有"继续/PPT/演示/文件/代码"等词,也必须 route=none。
+        - 多个候选都可能匹配时 route=none,不要替用户猜。
+
         \(far)【近期对话(逐字)】
         \(ctx.near)
         \(threadBlock)
-        输出:{"kind":"chat","confidence":"high"}、{"kind":"task","goal":"一句话总目标(高度概括)","confidence":"high"}\(replyOut)
         """
+        let payloadChars = system.count + prompt.count + 8
         let classifier = LingShuAgentSession(
-            id: "triage-\(UUID().uuidString.prefix(6))",
-            system: system, tools: [], model: controlPlaneModelAdapter(.triage), maxTurns: 1
+            id: "context-resolver-\(UUID().uuidString.prefix(6))",
+            system: system, tools: [], model: makeAgentModelAdapter(maxAttempts: 1), maxTurns: 1
         )
+        let callStart = Date()
         let result = await classifier.send("用户最新消息:\(prompt)")
+        let elapsedMs = Int(Date().timeIntervalSince(callStart) * 1000)
+        let callDetail = "role=上下文归属, provider=\(modelProvider), model=\(modelName), elapsed=\(elapsedMs)ms, payloadChars=\(payloadChars), brain=当前主脑"
+        appendTrace(kind: .model, actor: "上下文归属", title: "当前主脑归属判断 · \(modelName)", detail: callDetail)
+        LingShuControlPlaneBaseline.baselineLog("输入=「\(prompt.prefix(50))」\n  ├ \(callDetail)")
         guard case .completed(let raw) = result else {
-            // **脑调用失败:不静默吞成 chat**——标记 brainFailed + 低置信,交内核闸门显式追问(而非假装闲聊敷衍)。
-            return DispatchDecision(kind: .chat, goal: nil, replyRecordID: nil,
-                                    confidence: .low, actionHint: actionHint, brainFailed: true)
+            appendTrace(kind: .warning, actor: "上下文归属", title: "归属判断未完成",
+                        detail: "当前主脑未返回归属结果,耗时\(elapsedMs)ms;为避免卡死/误劫持,交主脑按普通输入继续处理。")
+            LingShuControlPlaneBaseline.baselineLog("  └ 归属判断失败,耗时\(elapsedMs)ms → route=none")
+            return DispatchDecision(kind: .chat, goal: nil, replyRecordID: nil, confidence: .medium, brainFailed: true)
         }
         let text = LingShuReasoningText.stripThinkTags(raw)
-        let norm = text.lowercased().replacingOccurrences(of: " ", with: "")
-        let brainConf = Self.parseConfidence(norm)
-        if !ctx.threads.isEmpty, norm.contains("\"kind\":\"reply\"") || norm.contains("kind:reply") {
-            let label = (Self.jsonField(text, "thread") ?? "").trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
-            let rid = ctx.threads.first(where: { $0.label.uppercased() == label })?.recordID ?? ctx.threads.first?.recordID
-            if let rid {
-                return DispatchDecision(kind: .reply, goal: nil, replyRecordID: rid,
-                                        confidence: brainConf, actionHint: actionHint)
-            }
+        let decision = Self.parseContextResolverDecision(text, threads: candidateThreads)
+        // **第③站基线观测·抓手2(structured output 脏率)**:模型是否直接吐纯 JSON,还是靠 stripThinkTags/清洗才解析出结构。
+        let jsonDirty = LingShuControlPlaneBaseline.isDirtyJSON(raw: raw, cleaned: text)
+        let outputDetail = LingShuControlPlaneBaseline.outputDetail(raw: raw, cleaned: text, jsonDirty: jsonDirty, brainConfidence: "\(decision.confidence)")
+        appendTrace(kind: jsonDirty ? .warning : .model, actor: "上下文归属",
+                    title: "归属输出 · JSON\(jsonDirty ? "脏" : "净")", detail: outputDetail)
+        LingShuControlPlaneBaseline.baselineLog("  └ \(outputDetail)")
+        return decision
+    }
+
+    /// 带附件输入默认是新的 grounded turn;只有用户明确说"这是给上一件事的补充/回答"时,
+    /// 才允许跨过附件保护进入候选线程归属判断。这里判断的是会话指代,不是业务关键词。
+    nonisolated static func attachmentInputExplicitlyContinuesPendingThread(_ raw: String) -> Bool {
+        let normalized = LingShuMemoryTextToolkit.normalize(
+            LingShuHumanInputEnvelope.userFacingText(from: raw)
+        )
+        guard !normalized.isEmpty else { return false }
+        if normalized.contains("你要的") || normalized.contains("给你的") { return true }
+        if ["上一条", "上一个", "上个任务", "之前的任务", "前面的任务", "这个任务", "这件事"].contains(where: { normalized.contains($0) }) {
+            return true
         }
-        let isTask = norm.contains("\"kind\":\"task\"") || norm.contains("kind:task")
-        let brainKind: DispatchKind = isTask ? .task : .chat
-        let fused = Self.fuseConfidence(brainKind: brainKind, brainConf: brainConf, actionHint: actionHint)
-        if isTask {
-            let goal = Self.jsonField(text, "goal")?.trimmingCharacters(in: .whitespacesAndNewlines)
-            return DispatchDecision(kind: .task, goal: (goal?.isEmpty == false) ? goal : nil,
-                                    replyRecordID: nil, confidence: fused, actionHint: actionHint)
+        let continuationVerb = ["继续", "补充", "回答", "回复"].contains { normalized.contains($0) }
+        let oldContextRef = ["刚才那", "刚才的任务", "刚才的问题", "上面", "之前", "前面"].contains { normalized.contains($0) }
+        return continuationVerb && oldContextRef
+    }
+
+    /// 本轮输入是否在引入外部证据/本机材料。即使附件托盘没有成功带出,这类输入也不应被上一条
+    /// 无关的"缺授权/缺凭据"待答复线程吞掉。
+    nonisolated static func inputMentionsGroundedEvidence(_ raw: String) -> Bool {
+        let normalized = LingShuMemoryTextToolkit.normalize(
+            LingShuHumanInputEnvelope.userFacingText(from: raw)
+        )
+        guard !normalized.isEmpty else { return false }
+        return [
+            "附件", "文件", "路径", "文档", "材料", "上传", "拖入",
+            "图片", "截图", "表格", "pdf", "ppt", "pptx", "docx", "xlsx"
+        ].contains { normalized.contains($0.lowercased()) }
+    }
+
+    /// 待答复问题是否明确要求用户用文件/附件/路径来回答。
+    /// 用于所有待用户线程(主会话/自主/派发)的附件归属保护,避免"缺授权/缺凭据"把下一条带附件的新任务吞掉。
+    nonisolated static func waitingQuestionAcceptsAttachment(_ raw: String) -> Bool {
+        let visible = LingShuHumanInputEnvelope.userFacingText(from: raw)
+        let normalized = LingShuMemoryTextToolkit.normalize(visible)
+        guard !normalized.isEmpty else { return false }
+        return inputMentionsGroundedEvidence(normalized)
+    }
+
+    /// 带附件/文件证据的输入是否可以被视为"回答上一条待答复问题"。
+    /// 通用规则:
+    /// - 用户显式说这是给上一条/这个任务/你要的材料 → 可以续旧线程。
+    /// - 旧线程明确要求上传文件,且本轮只是纯提交附件(没有新的动作目标) → 可以续旧线程。
+    /// - 用户围绕附件提出了新的动作目标(总结/分析/演示/修改/生成等) → 必须作为新 active turn,避免被无关 pending 问题吞掉。
+    nonisolated static func groundedInputCanAnswerPendingQuestion(
+        visiblePrompt rawVisiblePrompt: String,
+        pendingQuestion rawPendingQuestion: String,
+        hasAttachments: Bool
+    ) -> Bool {
+        guard hasAttachments else { return true }
+        let visible = LingShuMemoryTextToolkit.normalize(
+            LingShuHumanInputEnvelope.userFacingText(from: rawVisiblePrompt)
+        )
+        if attachmentInputExplicitlyContinuesPendingThread(visible) { return true }
+        guard waitingQuestionAcceptsAttachment(rawPendingQuestion) else { return false }
+        return isAttachmentOnlyResponse(visible)
+    }
+
+    /// 最新输入是否可以被视为"回答上一条待答复问题"。
+    /// 这不是任务路由器,只是一道归属保护:旧 pending 只能接管真正像答案的输入;
+    /// 新的完整目标必须回到主线程 active turn,由当前主脑重新理解、规划和调用工具。
+    nonisolated static func inputCanAnswerPendingQuestion(
+        visiblePrompt rawVisiblePrompt: String,
+        pendingQuestion rawPendingQuestion: String,
+        hasAttachments: Bool
+    ) -> Bool {
+        if hasAttachments {
+            return groundedInputCanAnswerPendingQuestion(
+                visiblePrompt: rawVisiblePrompt,
+                pendingQuestion: rawPendingQuestion,
+                hasAttachments: hasAttachments
+            )
         }
-        return DispatchDecision(kind: .chat, goal: nil, replyRecordID: nil,
-                                confidence: fused, actionHint: actionHint)
+        let visible = LingShuMemoryTextToolkit.normalize(
+            LingShuHumanInputEnvelope.userFacingText(from: rawVisiblePrompt)
+        )
+        let pending = LingShuMemoryTextToolkit.normalize(
+            LingShuHumanInputEnvelope.userFacingText(from: rawPendingQuestion)
+        )
+        guard !visible.isEmpty else { return false }
+        if attachmentInputExplicitlyContinuesPendingThread(visible) { return true }
+        if pendingRequestsProtectedUserInput(pending) {
+            return userInputLooksLikeProtectedUserInputAnswer(visible)
+        }
+        if concisePendingAnswer(visible) { return true }
+        if looksLikeStandaloneNewObjective(visible) { return false }
+        return true
+    }
+
+    /// 待答复问题是否在等受保护前提:授权、凭据、登录、权限、付款、高风险确认等。
+    nonisolated static func pendingRequestsProtectedUserInput(_ raw: String) -> Bool {
+        let normalized = LingShuMemoryTextToolkit.normalize(raw)
+        guard !normalized.isEmpty else { return false }
+        let asksUser = ["需要你", "请你", "等你", "提供", "授权", "确认", "选择", "输入", "登录", "凭据"].contains { normalized.contains($0) }
+        return asksUser && LingShuHumanBoundarySemantics.containsConcreteProtectedBoundary(normalized)
+    }
+
+    /// 用户这句话是否像在回答受保护前提,而不是开启一个新目标。
+    nonisolated static func userInputLooksLikeProtectedUserInputAnswer(_ raw: String) -> Bool {
+        let normalized = LingShuMemoryTextToolkit.normalize(raw)
+        guard !normalized.isEmpty else { return false }
+        if looksLikeStandaloneNewObjective(normalized) { return false }
+        let answerSignals = [
+            "同意", "允许", "授权", "确认", "可以", "继续", "已登录", "已授权", "给你", "这是",
+            "token", "api key", "apikey", "凭据", "账号", "密码", "拒绝", "不同意", "不授权",
+            "暂不", "取消", "换方案", "替代方案"
+        ]
+        if answerSignals.contains(where: { normalized.contains($0) }) { return true }
+        return normalized.count <= 16 && !looksLikeStandaloneNewObjective(normalized)
+    }
+
+    /// 短答通常是回答上一条问题。较长的完整目标继续交给独立目标判断。
+    nonisolated static func concisePendingAnswer(_ raw: String) -> Bool {
+        let normalized = LingShuMemoryTextToolkit.normalize(raw)
+        guard !normalized.isEmpty else { return false }
+        if normalized.count <= 18 { return true }
+        let shortOptionPrefixes = ["第一个", "第二个", "第三个", "方案一", "方案二", "方案三", "选一", "选二", "选三"]
+        return normalized.count <= 40 && shortOptionPrefixes.contains { normalized.contains($0) }
+    }
+
+    /// 判断一条输入是否像新的完整目标。这里不把它派给任何固定能力,只用于避免旧 pending 错接。
+    nonisolated static func looksLikeStandaloneNewObjective(_ raw: String) -> Bool {
+        let normalized = LingShuMemoryTextToolkit.normalize(raw)
+        guard !normalized.isEmpty else { return false }
+        if normalized.contains("?") || normalized.contains("？") { return true }
+        let objectiveSignals = [
+            "帮我", "给我", "看看", "查一下", "查找", "搜索", "扫描", "发现", "分类",
+            "总结", "分析", "介绍", "讲解", "解释", "说明", "演示", "预览",
+            "生成", "制作", "创建", "写", "修改", "修复", "运行", "测试",
+            "打开", "关闭", "同步", "读取", "提取", "翻译", "对比", "计算",
+            "回答", "回复", "说"
+        ]
+        let hasObjectiveSignal = objectiveSignals.contains { normalized.contains($0) }
+        let hasConstraint = ["只做", "不要", "必须", "最后", "并且", "然后", "告诉我", "返回"].contains { normalized.contains($0) }
+        return hasObjectiveSignal && (normalized.count > 18 || hasConstraint)
+    }
+
+    /// "只是在交材料"的可见输入。它不是业务关键词路由,只用于判断是否可把附件视为上一条问题的答案。
+    nonisolated static func isAttachmentOnlyResponse(_ raw: String) -> Bool {
+        let normalized = LingShuMemoryTextToolkit.normalize(
+            LingShuHumanInputEnvelope.userFacingText(from: raw)
+        )
+        guard !normalized.isEmpty else { return true }
+        let stripped = normalized
+            .replacingOccurrences(of: "已上传", with: "")
+            .replacingOccurrences(of: "上传了", with: "")
+            .replacingOccurrences(of: "个文件", with: "")
+            .replacingOccurrences(of: "文件", with: "")
+            .replacingOccurrences(of: "附件", with: "")
+            .replacingOccurrences(of: "请按上述落地交付", with: "")
+            .replacingOccurrences(of: "请按上述文件落地交付", with: "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if stripped.isEmpty { return true }
+        let actionVerbs = [
+            "总结", "分析", "介绍", "讲解", "演示", "预览", "修改", "生成", "制作", "创建",
+            "写", "整理", "提取", "翻译", "对比", "检查", "查找", "回答", "说明"
+        ]
+        return !actionVerbs.contains { stripped.contains($0) }
     }
 
     /// 解析大脑自报的置信度(没报 → medium 中性)。
@@ -111,25 +283,26 @@ extension LingShuState {
         return .medium
     }
 
-    /// **融合置信度**(图没说、但 GLM 自评不可靠必须补):大脑自报 × 关键词信号印证 × kind 一致性。
-    /// - 关键词命中 且 大脑判 task → high(双印证)
-    /// - 关键词命中 但 大脑判 chat → low(冲突:像执行却判闲聊 → 闸门追问,不静默放过)
-    /// - 其余 → 信大脑自报(无外部信号可锚,不强行干预、避免误伤真任务)
-    nonisolated static func fuseConfidence(brainKind: DispatchKind, brainConf: DispatchConfidence, actionHint: Bool) -> DispatchConfidence {
-        if actionHint && brainKind == .task { return .high }
-        if actionHint && brainKind == .chat { return .low }
-        return brainConf
+    /// 解析上下文归属模型输出。只接受 high confidence 的合法候选线程;其它全部回到主脑。
+    nonisolated static func parseContextResolverDecision(_ raw: String, threads: [TriageThread]) -> DispatchDecision {
+        let text = LingShuReasoningText.stripThinkTags(raw).trimmingCharacters(in: .whitespacesAndNewlines)
+        let norm = text.lowercased().replacingOccurrences(of: " ", with: "")
+        let confidence = parseConfidence(norm)
+        let isReply = norm.contains("\"route\":\"reply\"") || norm.contains("route:reply") ||
+            norm.contains("\"kind\":\"reply\"") || norm.contains("kind:reply")
+        guard isReply, confidence == .high else {
+            return DispatchDecision(kind: .chat, goal: nil, replyRecordID: nil, confidence: confidence)
+        }
+        let label = (Self.jsonField(text, "thread") ?? "").trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        guard let thread = threads.first(where: { $0.label.uppercased() == label }) else {
+            return DispatchDecision(kind: .chat, goal: nil, replyRecordID: nil, confidence: .low)
+        }
+        return DispatchDecision(kind: .reply, goal: nil, replyRecordID: thread.recordID, confidence: .high)
     }
 
-    /// **内核校验闸门(图里 D)·第一步**:吃分诊决策,低置信/脑失败 → 返回「追问指令」(注入主回合,逼它先与用户确认意图,
-    /// 不再静默吞成闲聊);高置信 → nil(照常按 kind 扇出)。把决策重心从 triage.kind 往统一闸门挪的起点。
+    /// 归属解析只做候选线程匹配,失败时不追问、不劫持;交主脑根据完整对话自然处理。
     func kernelGateClarifyDirective(_ d: DispatchDecision) -> String? {
-        if d.brainFailed {
-            return "(系统提示:刚才对这条消息意图的判定没成功。请先用一句话跟用户确认他是想让你**执行某个任务**还是**只是聊聊**,确认后再行动,别擅自当闲聊敷衍。)"
-        }
-        if d.confidence == .low {
-            return "(系统提示:这条消息意图不明确——可能是要执行的任务,也可能只是闲聊。先简短跟用户确认意图再决定怎么做,别直接当闲聊回应、也别擅自开跑任务。)"
-        }
+        _ = d
         return nil
     }
 
@@ -137,7 +310,6 @@ extension LingShuState {
     enum GateOutcome: Equatable {
         case execute              // 高置信 + 合规 → 照常按 kind 扇出执行
         case clarify(String)      // 低置信 / 脑失败 → 追问指令(先与用户确认意图,别猜)
-        case dispatchAsTask       // 动作信号命中但脑判 chat → 确定性派发去尝试(找能力/授权),不当闲聊
     }
 
     /// **内核校验闸门(图里 D)**:吃〈分诊决策 + 结构化结果〉,统一决定走执行还是追问——
@@ -147,12 +319,6 @@ extension LingShuState {
     /// 后续把危险评估上提到此闸门(goalSpec 预留给那一步用)。
     func kernelGate(_ d: DispatchDecision, goalSpec: LingShuGoalSpec?) -> GateOutcome {
         if d.kind == .reply { return .execute }
-        if d.brainFailed, let directive = kernelGateClarifyDirective(d) { return .clarify(directive) }
-        // **确定性兜底(2026-06-27 压测发现:能力请求靠大脑判 task 不可靠,DeepSeek 时而判 chat)**:
-        // actionHint 命中(imperative 动作词,已排除解释/问答类)但大脑判 chat = 现实动作/外部操作请求大脑却犹豫
-        // (多半因"我可能没这能力")→ **确定性派发去尝试**(找能力/要授权再做),不当闲聊解释/拒绝。通用范式,非特判;
-        // 场景8:缺能力先找能力授权、别直接说不能。误伤(action 词闲聊如「谢谢你帮我发邮件」)罕见,且不做比误问代价更小。
-        if d.kind == .chat, d.actionHint { return .dispatchAsTask }
         if let directive = kernelGateClarifyDirective(d) { return .clarify(directive) }
         // **步骤4·结构化结果回流改路由**:triage 判 task,但派生的 GoalSpec 反而拆成「可直接回答的问答」(非交付型),
         // 且 triage 置信不到 high → 这是 triage 与结构化的冲突。别盲目开跑后台任务,转追问让用户定夺。
@@ -162,94 +328,6 @@ extension LingShuState {
             return .clarify("(系统提示:这条像是要执行的任务,但拆解下来更像一个可以直接回答的问题。先跟用户确认一句:是要你**动手做出交付物**,还是**直接回答**就行?确认后再决定。)")
         }
         return .execute
-    }
-
-    /// 是否是明确的执行请求。这里保持**通用范式**:不识别具体平台,只识别动作结构。
-    /// 目标是拦住"把/请/帮我 + 动作 + 对象"、路径/产出物/外设/外部系统操作等清晰任务,
-    /// 同时放过"什么是/解释/为什么"这类纯问答。
-    nonisolated static func isObviousExecutionRequest(_ prompt: String) -> Bool {
-        let text = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { return false }
-        let compact = text
-            .lowercased()
-            .replacingOccurrences(of: " ", with: "")
-            .replacingOccurrences(of: "\n", with: "")
-            .replacingOccurrences(of: "\t", with: "")
-
-        if isPureExplanationQuestion(compact) { return false }
-        if isContinuationOnly(compact) { return false }
-        if ["提醒我", "明天提醒", "后提醒", "定时提醒"].contains(where: { compact.contains($0) }) {
-            return true
-        }
-
-        let actionVerbs = [
-            "写", "做", "生成", "创建", "新建", "修改", "修复", "删除", "保存", "导出", "转换",
-            "打开", "关闭", "运行", "执行", "构建", "测试", "部署", "安装", "卸载",
-            "同步", "上传", "下载", "发送", "发布", "提交", "连接", "接入", "调用",
-            "扫描", "检索", "索引", "搜索", "查找", "找出", "定位", "读取", "整理",
-            "总结", "概括", "分析", "提炼", "归纳", "改写", "翻译",
-            "控制", "播放", "朗读", "播报", "设置", "设定", "安排",
-            "write", "create", "make", "generate", "update", "modify", "fix", "delete", "save",
-            "export", "convert", "open", "run", "execute", "build", "test", "deploy", "install",
-            "sync", "upload", "download", "send", "post", "submit", "connect", "call", "scan",
-            "search", "find", "index", "read", "control", "play", "schedule"
-        ]
-        let hasActionVerb = actionVerbs.contains { compact.contains($0) }
-        guard hasActionVerb else { return false }
-
-        let imperativeHints = [
-            "把", "将", "给我", "帮我", "替我", "为我", "请", "需要你", "我要你", "让灵枢",
-            "在目录", "保存到", "输出到", "同步到", "上传到", "发送给", "写入", "运行一下",
-            "please", "can you", "could you", "let's"
-        ]
-        let objectHints = [
-            "/", ".py", ".txt", ".md", ".ppt", ".pptx", ".pdf", ".docx", ".xlsx", ".csv", ".html",
-            "文件", "附件", "上传", "目录", "路径", "项目", "代码", "脚本", "文档", "ppt", "pdf", "网页", "浏览器",
-            "本机", "电脑", "网络", "设备", "摄像头", "麦克风", "音箱", "电视", "盒子",
-            "外部", "第三方", "api", "token", "授权", "凭据", "知识库", "notion", "飞书", "钉钉"
-        ]
-        if imperativeHints.contains(where: { compact.contains($0) }) { return true }
-        if objectHints.contains(where: { compact.contains($0) }) { return true }
-
-        // 祈使短句:以动作开头,通常是任务,比如"扫描局域网设备"、"生成三页PPT"。
-        return actionVerbs.contains { compact.hasPrefix($0) }
-    }
-
-    nonisolated static func executionGoalSummary(_ prompt: String) -> String {
-        let trimmed = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard trimmed.count > 96 else { return trimmed }
-        return String(trimmed.prefix(96)) + "..."
-    }
-
-    nonisolated private static func isPureExplanationQuestion(_ compact: String) -> Bool {
-        let prefixes = [
-            "什么是", "啥是", "解释一下", "介绍一下", "讲讲", "说说", "为什么", "为何",
-            "如何理解", "怎么理解", "区别是什么", "是什么意思", "你是谁", "我是谁",
-            "what is", "explain", "why"
-        ]
-        if prefixes.contains(where: { compact.hasPrefix($0) }) { return true }
-        let directAnswerMarkers = [
-            "给我一句话", "用一句话", "一句话说明", "一句话解释", "一句话提醒",
-            "只回答", "直接回答", "简要说明", "简单说", "一句话说"
-        ]
-        if directAnswerMarkers.contains(where: { compact.contains($0) }),
-           !["保存到", "写入", "输出到", "同步到", "发送给", "上传到", "运行", "打开", "扫描",
-             "设置提醒", "设定提醒", "提醒我", "定时", "明天提醒", "后提醒"].contains(where: { compact.contains($0) }) {
-            return true
-        }
-        // "能不能/是否/有没有"本身不是任务;但如果后面带"帮我/替我/把/将/在目录/保存到"等动作结构,
-        // 上面的前缀不拦,交给执行硬门判。
-        let capabilityQuestions = ["能不能", "是否可以", "可不可以", "有没有可能"]
-        if capabilityQuestions.contains(where: { compact.hasPrefix($0) }),
-           !["帮我", "替我", "把", "将", "在目录", "保存到", "同步到", "运行"].contains(where: { compact.contains($0) }) {
-            return true
-        }
-        return false
-    }
-
-    nonisolated private static func isContinuationOnly(_ compact: String) -> Bool {
-        let controls = ["继续", "接着", "下一步", "停", "停止", "暂停", "取消", "重试", "用第一个", "选a", "选b"]
-        return controls.contains(compact)
     }
 
     /// 构造分诊上下文:近上下文(最近逐字,派发线程消息打 [Tk] 标签)+ 远上下文(对话摘要压缩)+ 可续派发线程清单。
@@ -368,9 +446,11 @@ extension LingShuState {
             Task { @MainActor in self?.recordAgentReasoning(aside, recordID: self?.agentSubTaskRecords[subID], updateMissionStatus: false) }
         }
         let recordProvider: @MainActor @Sendable () -> String? = { [weak self] in self?.agentSubTaskRecords[subID] }
+        let dispatchedWorkingDir = effectiveAgentWorkingDirectory(override: Self.explicitWorkingDirectoryHint(in: prompt))
+        try? FileManager.default.createDirectory(at: URL(fileURLWithPath: dispatchedWorkingDir), withIntermediateDirectories: true)
         let tools = withPhaseTracking(   // 相位跟踪:派发任务也驱动本体显示理解/规划/执行/验收(光球随环节变色变脉动)
             // 继承父上下文的 shell 预授权:在岗/自主完整授权时给 autoAllowShell,否则派发任务跑 shell 会卡在审批框(见 dispatchedTaskExecutionPolicy)。
-            agentBuiltinTools(recordIDProvider: recordProvider, executionPolicy: dispatchedTaskExecutionPolicy)
+            agentBuiltinTools(recordIDProvider: recordProvider, executionPolicy: dispatchedTaskExecutionPolicy, workingDirectoryOverride: dispatchedWorkingDir)
             + [Self.timeTool(), Self.locationTool(), webSearchTool(), recallMemoryTool(), Self.askUserTool(),
                findImagesTool(), acquireResourceTool(),
                updateTaskPlanTool(recordIDProvider: recordProvider), reviewDesignTool(recordIDProvider: recordProvider), speakTool(), digitalHumanTool(), enterManagedModeTool()]
@@ -433,7 +513,7 @@ extension LingShuState {
         }
         let sub = makeAgentSession(
             id: subID,
-            system: Self.dispatchedTaskSystemPrompt(workingDir: agentWorkingDirectory),
+            system: Self.dispatchedTaskSystemPrompt(workingDir: dispatchedWorkingDir),
             initialMessages: initialMessages,
             tools: tools,
             model: adapter,
@@ -535,6 +615,7 @@ extension LingShuState {
             if chatMessages[i].resolvedChoice == nil { chatMessages[i].resolvedChoice = visibleAnswer }
         }
         chatMessages.append(.init(speaker: "你", text: visibleAnswer, isUser: true, taskRecordID: recordID))   // 答复显示在气泡处,接上 Q→A
+        requestChatScrollToLatestForUserSend()
         appendTaskRecordMessage(recordID, actor: "你", role: "答复", kind: .user, text: visibleAnswer)
         if recordID == blockedDispatchedRecordID { blockedDispatchedRecordID = nil }
         guard let subID = agentSubTaskRecords.first(where: { $0.value == recordID })?.key else {

@@ -65,14 +65,15 @@ enum LingShuPrefixCache {
         } else if let c = usage["cache_read_input_tokens"] as? Int {
             cached = c
         }
-        // **输入总 token**:OpenAI/DeepSeek 的 prompt_tokens 已是总数(cached 是其子集);
-        // **Anthropic 的 input_tokens 只算"未命中缓存且未写缓存"的新增部分**,不含 cache_read / cache_creation——
-        // 必须把这两块加回来才是真·输入总数(否则命中率 cached/input 会算出 >100% 的天文数,见 2026-06-28 Claude 实测 200万%)。
-        if usage["prompt_tokens"] == nil, let input = usage["input_tokens"] as? Int {
-            let read = (usage["cache_read_input_tokens"] as? Int) ?? 0
-            let creation = (usage["cache_creation_input_tokens"] as? Int) ?? 0
+        if let prompt = usage["prompt_tokens"] as? Int {
+            return (prompt, cached)
+        }
+        if let input = usage["input_tokens"] as? Int {
+            let read = usage["cache_read_input_tokens"] as? Int ?? 0
+            let creation = usage["cache_creation_input_tokens"] as? Int ?? 0
+            // Anthropic 的 input_tokens 不含缓存读/写; UI 命中率要用同一分母,否则会算出 >100%。
             return (input + read + creation, cached)
         }
-        return ((usage["prompt_tokens"] as? Int) ?? (usage["input_tokens"] as? Int), cached)
+        return (nil, cached)
     }
 }

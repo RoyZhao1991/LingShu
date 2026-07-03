@@ -44,6 +44,175 @@ final class TaskCompletionGateTests: XCTestCase {
         XCTAssertEqual(d.status, .waitingForUser, "需用户授权/凭据→明确阻断等用户,不伪完成")
     }
 
+    @MainActor
+    func testPlainReplyPrerequisiteTextDoesNotRenderAuthorizationCardWithoutOAuthField() async {
+        let state = LingShuState()
+        let rid = state.createTaskExecutionRecord(for: "同步到外部知识库")
+        defer {
+            state.taskExecutionRecords.removeAll { $0.id == rid }
+            state.persistTaskExecutionRecords()
+            state.taskExecutionJournal.flush()
+        }
+        state.bindGoalSpec(.init(objective: "把今天待办同步到外部知识库", kind: .task), to: rid)
+
+        let reply = """
+        目前没有找到明确的今天待办清单,也没有任何外部知识库的授权信息。
+        下一步需要你告诉我待办来源,并提供外部知识库的登录授权或凭据。
+        """
+        let decision = await state.computeCompletionDecision(taskRecordID: rid, reply: reply)
+
+        XCTAssertEqual(decision.status, .ok, "普通文本里的缺授权/凭据描述不能驱动流程状态;缺前提必须来自完整 JSON 字段")
+        let block = state.userAuthorizationBlockIfNeeded(
+            decision: decision,
+            result: .completed(text: reply),
+            taskRecordID: rid
+        )
+        XCTAssertNil(block, "授权窗只允许由 GapAnalysis.OAuth 结构字段触发,不能由回复文本关键词触发")
+    }
+
+    @MainActor
+    func testPlainReplyPrerequisiteTextDoesNotRenderAuthorizationCardWithoutGoalSpec() async {
+        let state = LingShuState()
+        let rid = state.createTaskExecutionRecord(for: "灵枢在岗")
+        defer {
+            state.taskExecutionRecords.removeAll { $0.id == rid }
+            state.persistTaskExecutionRecords()
+            state.taskExecutionJournal.flush()
+        }
+
+        let reply = "要继续同步到外部知识库,需要你先提供该平台的登录授权或 API Key 凭据。"
+        let decision = await state.computeCompletionDecision(taskRecordID: rid, reply: reply)
+
+        XCTAssertEqual(decision.status, .ok, "没有结构化任务证据时,回复文本里的授权词不能把普通记录拉进授权等待")
+        XCTAssertNil(state.userAuthorizationBlockIfNeeded(
+            decision: decision,
+            result: .completed(text: reply),
+            taskRecordID: rid
+        ))
+    }
+
+    @MainActor
+    func testStructuredOAuthNullDoesNotRenderAuthorizationCard() async {
+        let state = LingShuState()
+        let rid = state.createTaskExecutionRecord(for: "解释 OAuth 原理")
+        defer {
+            state.taskExecutionRecords.removeAll { $0.id == rid }
+            state.persistTaskExecutionRecords()
+            state.taskExecutionJournal.flush()
+        }
+        state.bindGoalSpec(.init(objective: "一句话解释 OAuth 是什么", kind: .question), to: rid)
+
+        let reply = #"{"reply":"OAuth 是一种授权协议:第三方应用拿到受限访问令牌,不直接接触用户密码。","completion":{"status":"ok","reason":"普通知识问答已回答","needs_user":false},"OAuth":null}"#
+        let decision = await state.computeCompletionDecision(taskRecordID: rid, reply: reply)
+
+        XCTAssertEqual(decision.status, .ok)
+        XCTAssertNil(state.userAuthorizationBlockIfNeeded(
+            decision: decision,
+            result: .completed(text: reply),
+            taskRecordID: rid
+        ), "完整 JSON 里 OAuth=null 时,即使 reply 解释 OAuth/token/授权,也绝不弹授权窗")
+        XCTAssertEqual(LingShuStructuredModelOutput.visibleText(from: reply), "OAuth 是一种授权协议:第三方应用拿到受限访问令牌,不直接接触用户密码。")
+    }
+
+    @MainActor
+    func testStructuredOAuthObjectRendersAuthorizationCard() async {
+        let state = LingShuState()
+        let rid = state.createTaskExecutionRecord(for: "连接外部知识库")
+        defer {
+            state.taskExecutionRecords.removeAll { $0.id == rid }
+            state.persistTaskExecutionRecords()
+            state.taskExecutionJournal.flush()
+        }
+        state.bindGoalSpec(.init(objective: "把待办同步到外部知识库", kind: .task), to: rid)
+
+        let reply = #"{"reply":"这一步需要你授权外部知识库后我才能继续。","completion":{"status":"waiting_for_user","reason":"缺少外部知识库授权","needs_user":true},"OAuth":{"required":true,"target":"外部知识库","action":"写入待办","reason":"需要用户授权外部知识库写入权限","question":"是否授权我连接外部知识库并写入待办?","options":[{"label":"确认授权","detail":"允许本次写入"},{"label":"暂不授权","detail":"停止这一步"}]}}"#
+        let decision = await state.computeCompletionDecision(taskRecordID: rid, reply: reply)
+        let block = state.userAuthorizationBlockIfNeeded(
+            decision: decision,
+            result: .completed(text: reply),
+            taskRecordID: rid
+        )
+
+        guard case .blocked(let prompt) = block,
+              let envelope = LingShuHumanInputEnvelope.decode(from: prompt) else {
+            return XCTFail("OAuth 结构对象应渲染授权卡")
+        }
+        XCTAssertEqual(envelope.tool, "ask_choice")
+        let parsed = LingShuState.parseChoiceArgs(envelope.argumentsJSON)
+        XCTAssertTrue(parsed.0.contains("外部知识库"))
+        XCTAssertTrue(parsed.1.contains(where: { $0.label == "确认授权" }))
+    }
+
+    @MainActor
+    func testPlainReplyRequestingExecutionInputDoesNotBecomeChoiceCard() async {
+        let state = LingShuState()
+        let rid = state.createTaskExecutionRecord(for: "把今天待办同步到外部知识库")
+        defer {
+            state.taskExecutionRecords.removeAll { $0.id == rid }
+            state.persistTaskExecutionRecords()
+            state.taskExecutionJournal.flush()
+        }
+        state.bindGoalSpec(.init(objective: "把今天待办同步到外部知识库", kind: .task), to: rid)
+
+        let reply = """
+        好的,我查了一下现状。要同步到外部知识库,我需要知道两件事:
+        第一,你的今日待办在哪?
+        第二,目标外部知识库是哪个?
+        告诉我之后我继续。
+        """
+        let decision = await state.computeCompletionDecision(taskRecordID: rid, reply: reply)
+
+        XCTAssertEqual(decision.status, .ok, "普通文本缺信息不自动转选择卡;需要等待用户时必须由 ask_user/ask_choice 或结构字段表达")
+        let block = state.userAuthorizationBlockIfNeeded(
+            decision: decision,
+            result: .completed(text: reply),
+            taskRecordID: rid
+        )
+        XCTAssertNil(block)
+    }
+
+    @MainActor
+    func testExecutionInputTextIsNotCaughtWhenRecordWasNotClassifiedAsTask() async {
+        let state = LingShuState()
+        let rid = state.createTaskExecutionRecord(for: "把今天待办同步到一个尚未授权的外部知识库")
+        defer {
+            state.taskExecutionRecords.removeAll { $0.id == rid }
+            state.persistTaskExecutionRecords()
+            state.taskExecutionJournal.flush()
+        }
+
+        let reply = """
+        我查了你的本机日历和知识索引,目前没有找到任何今天的待办事项或日程安排记录。
+        要完成"把待办同步到外部知识库"这件事,我需要你提供两样东西:
+        1. 你的待办事项是什么。
+        2. 你要同步到哪个外部知识库。
+        拿到这两样,我才能真做,而不是假装做完。
+        """
+        let decision = await state.computeCompletionDecision(taskRecordID: rid, reply: reply)
+
+        XCTAssertEqual(decision.status, .ok, "漏分类记录不能再靠回复关键词拉授权/选择卡;分诊和 ask_user 协议负责等待用户")
+        let block = state.userAuthorizationBlockIfNeeded(
+            decision: decision,
+            result: .completed(text: reply),
+            taskRecordID: rid
+        )
+        XCTAssertNil(block)
+    }
+
+    func testPlainCapabilityDescriptionIsNotStructuredPrerequisite() {
+        XCTAssertNil(
+            LingShuStructuredModelOutput.parse("授权后我可以读取屏幕、操作浏览器和控制本机窗口。"),
+            "自然语言描述不再参与授权/前提判定"
+        )
+    }
+
+    func testPlainDeviceDiscoveryResultIsNotStructuredPrerequisite() {
+        XCTAssertNil(
+            LingShuStructuredModelOutput.parse("已扫描当前网络,没有找到支持无线投屏的电视或盒子设备。"),
+            "客观发现文本不再被关键词误判为能力缺口"
+        )
+    }
+
     /// 复合任务:A 成功(成功标准达成)、B 因授权阻断 → partial。
     func testCompoundPartialWhenSomeMetSomeBlocked() {
         let d = LingShuTaskCompletionGate.decide(.init(
@@ -53,21 +222,21 @@ final class TaskCompletionGateTests: XCTestCase {
     }
 
     /// **成功标准全绿推翻投机 gap 的判据(纯函数,2026-06-30,根治"全绿却找用户要授权")**:
-    /// 有 met、无 unmet、不承认无能力 → true(实跑层据此清掉误报 gap);任一不满足 → 不清(真缺口/真失败照拦)。
+    /// 有 met、无 unmet、无结构化未完成声明 → true(实跑层据此清掉误报 gap);任一不满足 → 不清(真缺口/真失败照拦)。
     func testAllCriteriaMetResolvesSpeculativeGap() {
         let f = LingShuTaskCompletionGate.allCriteriaMetResolvesSpeculativeGap
-        XCTAssertTrue(f(true, true, false, false), "有标准+全绿+不承认无能力 → 清误报 gap")
+        XCTAssertTrue(f(true, true, false, false), "有标准+全绿+无结构化未完成声明 → 清误报 gap")
         XCTAssertFalse(f(true, true, true, false), "有未达成标准 → 不清(仍 partial)")
-        XCTAssertFalse(f(true, true, false, true), "承认无能力 → 不清(仍按真失败拦)")
+        XCTAssertFalse(f(true, true, false, true), "结构化未完成声明 → 不清(仍按真失败拦)")
         XCTAssertFalse(f(false, false, false, false), "没成功标准 → 不清(走默认)")
     }
 
-    /// 回复承认「无法接入/未授权」→ 禁止 verified(无任何达成→blocked)。
-    func testAdmitsIncapacityForbidsVerified() {
-        let d = LingShuTaskCompletionGate.decide(.init(replyAdmitsIncapacity: true))
-        XCTAssertEqual(d.status, .blocked, "承认无能力且无达成→blocked,绝不当完成")
-        let d2 = LingShuTaskCompletionGate.decide(.init(replyAdmitsIncapacity: true, someSuccessCriteriaMet: true))
-        XCTAssertEqual(d2.status, .partial, "承认无能力但有部分达成→partial")
+    /// 只有结构化 completion.status 声明 blocked/partial/waiting 时才影响完成闸。
+    func testStructuredCompletionForbidsVerified() {
+        let d = LingShuTaskCompletionGate.decide(.init(modelDeclaredBlocked: true))
+        XCTAssertEqual(d.status, .blocked, "结构化 blocked 且无达成→blocked,绝不当完成")
+        let d2 = LingShuTaskCompletionGate.decide(.init(modelDeclaredBlocked: true, someSuccessCriteriaMet: true))
+        XCTAssertEqual(d2.status, .partial, "结构化 blocked 但有部分达成→partial")
     }
 
     /// 成功标准部分达成、部分未达成 → partial。
@@ -76,7 +245,7 @@ final class TaskCompletionGateTests: XCTestCase {
         XCTAssertEqual(d.status, .partial)
     }
 
-    /// 无缺口、未承认无能力、未见部分缺失 → ok(交既有验收/收尾流程,不越权)。
+    /// 无缺口、无结构化未完成声明、未见部分缺失 → ok(交既有验收/收尾流程,不越权)。
     func testCleanGoesOk() {
         XCTAssertEqual(LingShuTaskCompletionGate.decide(.init()).status, .ok)
         XCTAssertEqual(LingShuTaskCompletionGate.decide(.init(someSuccessCriteriaMet: true)).status, .ok, "全达成无未达成→ok")
@@ -99,17 +268,22 @@ final class TaskCompletionGateTests: XCTestCase {
             acquisition: .acquiredUnverified, someSuccessCriteriaMet: true)).status, .partial)
     }
 
-    // MARK: 通用承认语检测(非领域)
+    // MARK: 结构化模型输出协议
 
-    func testReplyAdmitsIncapacityGeneric() {
-        XCTAssertTrue(LingShuTaskCompletionGate.replyAdmitsIncapacity("结果:无法接入 Notion,我当前没有该 API 接入能力"))
-        XCTAssertTrue(LingShuTaskCompletionGate.replyAdmitsIncapacity("未授权,需要你授权后我才能操作"))
-        XCTAssertTrue(LingShuTaskCompletionGate.replyAdmitsIncapacity("暂时无法完成这一步"))
-        XCTAssertFalse(LingShuTaskCompletionGate.replyAdmitsIncapacity("已完成,文件保存在 /tmp/out.txt"), "正常完成不应误判")
-        XCTAssertFalse(
-            LingShuTaskCompletionGate.replyAdmitsIncapacity("蓝牙设备 16 个,均未连接;USB/雷电口无任何有线外设;AirPlay 投屏设备 2 个。"),
-            "设备发现里的'未连接/无外设'是客观扫描结果,不是灵枢承认无能力"
-        )
+    func testStructuredModelOutputRequiresWholeJSONObject() {
+        let blocked = #"{"reply":"暂时无法完成这一步","completion":{"status":"blocked","reason":"缺少受保护前提"},"OAuth":null}"#
+        let parsedBlocked = LingShuStructuredModelOutput.parse(blocked)
+        XCTAssertEqual(parsedBlocked?.reply, "暂时无法完成这一步")
+        XCTAssertEqual(parsedBlocked?.completion?.status, .blocked)
+        XCTAssertTrue(parsedBlocked?.declaresBlocked == true)
+
+        let oauth = #"{"reply":"需要授权后继续","completion":{"status":"waiting_for_user","needs_user":true},"OAuth":{"required":true,"target":"外部系统","action":"连接并写入","reason":"需要用户授权","question":"是否授权继续?","options":[{"label":"授权继续","detail":"允许本次操作"},{"label":"暂不授权","detail":"停止"}]}}"#
+        let parsedOAuth = LingShuStructuredModelOutput.parse(oauth)
+        XCTAssertTrue(parsedOAuth?.OAuth?.normalized != nil)
+        XCTAssertTrue(parsedOAuth?.declaresUserBlock == true)
+
+        XCTAssertNil(LingShuStructuredModelOutput.parse("结果:无法接入,需要你授权后我才能操作"), "自然语言不再驱动流程状态")
+        XCTAssertNil(LingShuStructuredModelOutput.parse("前面解释\n{\"completion\":{\"status\":\"blocked\"}}"), "夹在文本里的 JSON 片段不被流程层接受")
     }
 
     @MainActor
@@ -127,6 +301,44 @@ final class TaskCompletionGateTests: XCTestCase {
         let decision = await state.computeCompletionDecision(taskRecordID: rid, reply: reply)
 
         XCTAssertEqual(decision.status, .ok, "普通问答不应被防伪完成闸误判成任务失败")
+    }
+
+    /// **反例A回归(2026-07-03 收口)**:纯问答(.question)回复带日常收尾语"请告诉我…继续",
+    /// 自然语言收尾语绝不许把百科式回答拖进 waitingForUser/补充信息卡。
+    @MainActor
+    func testQuestionRecordWithConversationalClosingIsNotHijackedByExecutionInputSignal() async {
+        let state = LingShuState()
+        let rid = state.createTaskExecutionRecord(for: "什么是闭包")
+        defer {
+            state.taskExecutionRecords.removeAll { $0.id == rid }
+            state.persistTaskExecutionRecords()
+            state.taskExecutionJournal.flush()
+        }
+        state.bindGoalSpec(.init(objective: "解释闭包", kind: .question), to: rid)
+
+        let reply = "闭包就是能捕获并携带定义环境变量的函数,常用于回调和状态封装。如果你想深入了解,请告诉我,我可以继续展开。"
+        let decision = await state.computeCompletionDecision(taskRecordID: rid, reply: reply)
+
+        XCTAssertEqual(decision.status, .ok, "纯问答的日常收尾语不是执行输入索取,不应进入待用户/被改写成选择卡")
+    }
+
+    /// **反例B回归(2026-07-03 收口)**:OAuth/token 科普天然含受保护边界词(token/第三方/登录),
+    /// 但纯问答(.question)绝不许被改写成授权卡。
+    @MainActor
+    func testQuestionRecordAboutOAuthIsNotHijackedByPrerequisiteSignal() async {
+        let state = LingShuState()
+        let rid = state.createTaskExecutionRecord(for: "什么是 OAuth")
+        defer {
+            state.taskExecutionRecords.removeAll { $0.id == rid }
+            state.persistTaskExecutionRecords()
+            state.taskExecutionJournal.flush()
+        }
+        state.bindGoalSpec(.init(objective: "解释 OAuth", kind: .question), to: rid)
+
+        let reply = "OAuth 是一种授权框架:你在第三方应用里点登录,它拿到的只是权限受限的 access token,而不是你的密码。"
+        let decision = await state.computeCompletionDecision(taskRecordID: rid, reply: reply)
+
+        XCTAssertEqual(decision.status, .ok, "百科式回答含 token/第三方/登录等词形,不应触发授权等待")
     }
 
     @MainActor
@@ -196,10 +408,16 @@ final class TaskCompletionGateTests: XCTestCase {
                   missing: "device.discover:当前网络里的 AirPlay/Chromecast 设备",
                   fillPath: "需要本地网络/设备发现授权后继续探测。",
                   blocking: true)
-        ], note: ""), to: rid)
+        ], note: "", OAuth: .init(
+            required: true,
+            target: "当前网络里的 AirPlay/Chromecast 设备",
+            action: "扫描本地网络设备发现信息",
+            reason: "需要本地网络/设备发现授权后才能继续探测。",
+            question: "这一步需要你授权本地网络/设备发现权限后才能继续扫描 AirPlay/Chromecast 设备。"
+        )), to: rid)
 
         let block = state.userAuthorizationBlockIfNeeded(
-            decision: .init(status: .blocked, reason: "回复中承认无法完成/无能力"),
+            decision: .init(status: .blocked, reason: "结构化字段声明需要用户授权"),
             result: .completed(text: "这一步需要你授权本地网络/设备发现权限后才能继续扫描 AirPlay/Chromecast 设备。"),
             taskRecordID: rid
         )
@@ -232,7 +450,13 @@ final class TaskCompletionGateTests: XCTestCase {
                   missing: "external_system.write:外部知识库",
                   fillPath: "需要用户完成账号授权或提供凭据。",
                   blocking: true)
-        ], note: ""), to: rid)
+        ], note: "", OAuth: .init(
+            required: true,
+            target: "外部知识库",
+            action: "写入同步内容",
+            reason: "需要用户完成账号授权或提供凭据。",
+            question: "这一步需要你对外部知识库完成授权后才能继续。"
+        )), to: rid)
         if let idx = state.taskExecutionRecords.firstIndex(where: { $0.id == rid }) {
             state.taskExecutionRecords[idx].status = .waitingForUser
             state.taskExecutionRecords[idx].taskOutcome = .waitingForUser
@@ -268,7 +492,13 @@ final class TaskCompletionGateTests: XCTestCase {
                   missing: "external_system.write:外部知识库",
                   fillPath: "需要用户完成账号授权或提供凭据。",
                   blocking: true)
-        ], note: ""), to: rid)
+        ], note: "", OAuth: .init(
+            required: true,
+            target: "外部知识库",
+            action: "写入同步内容",
+            reason: "需要用户完成账号授权或提供凭据。",
+            question: "需要你对外部知识库授权或提供凭据后,我才能继续同步。"
+        )), to: rid)
         let payload = ["question": "需要你对外部知识库授权或提供凭据后,我才能继续同步。"]
         let args = String(data: try JSONSerialization.data(withJSONObject: payload), encoding: .utf8) ?? "{}"
         let envelope = LingShuHumanInputEnvelope(tool: "ask_user", argumentsJSON: args)
@@ -307,7 +537,13 @@ final class TaskCompletionGateTests: XCTestCase {
                   missing: "external_system.write:外部知识库",
                   fillPath: "需要用户完成账号授权或提供凭据。",
                   blocking: true)
-        ], note: ""), to: rid)
+        ], note: "", OAuth: .init(
+            required: true,
+            target: "外部知识库",
+            action: "写入同步内容",
+            reason: "需要用户完成账号授权或提供凭据。",
+            question: "需要你对外部知识库授权或提供凭据后,我才能继续同步。"
+        )), to: rid)
         let pending = ChatMessage(speaker: "灵枢", text: "", isUser: false, isLoading: true, taskRecordID: rid)
         state.chatMessages.append(pending)
         state.dispatchedTaskBubbles[rid] = pending.id
@@ -464,7 +700,13 @@ final class TaskCompletionGateTests: XCTestCase {
                   missing: "external_system.write:外部系统",
                   fillPath: "需要用户授权或提供凭据。",
                   blocking: true)
-        ], note: ""), to: rid)
+        ], note: "", OAuth: .init(
+            required: true,
+            target: "外部系统",
+            action: "写入同步内容",
+            reason: "需要用户授权或提供凭据。",
+            question: "这一步需要你授权外部系统后才能继续。"
+        )), to: rid)
         if let idx = state.taskExecutionRecords.firstIndex(where: { $0.id == rid }) {
             state.taskExecutionRecords[idx].status = .waitingForUser
             state.taskExecutionRecords[idx].taskOutcome = .waitingForUser
@@ -494,5 +736,135 @@ final class TaskCompletionGateTests: XCTestCase {
         XCTAssertTrue(LingShuTaskExecutionStatus.partial.isResumableUnfinished)
         XCTAssertTrue(LingShuTaskExecutionStatus.blocked.isResumableUnfinished)
         XCTAssertFalse(LingShuTaskExecutionStatus.completed.isResumableUnfinished)
+    }
+
+    // MARK: 只读观察/发现任务证据收口
+
+    @MainActor
+    func testReadOnlyObservationWithEvidenceCanFinishWithoutReview() async {
+        let state = LingShuState()
+        let rid = state.createTaskExecutionRecord(for: "看看当前环境有哪些可发现对象,只做发现和分类")
+        defer {
+            state.taskExecutionRecords.removeAll { $0.id == rid }
+            state.persistTaskExecutionRecords()
+            state.taskExecutionJournal.flush()
+        }
+        state.bindGoalSpec(.init(
+            objective: "扫描当前环境可发现对象并分类说明",
+            kind: .task,
+            successCriteria: ["列出发现对象并按类型分类"]
+        ), to: rid)
+        state.appendTaskRecordMessage(
+            rid,
+            actor: "工具",
+            role: "跑命令",
+            kind: .agent,
+            text: "system_profiler SPUSBDataType",
+            detail: .toolCall(tool: "run_command", summary: "system_profiler SPUSBDataType", arguments: "system_profiler SPUSBDataType")
+        )
+        state.appendTaskRecordMessage(
+            rid,
+            actor: "工具",
+            role: "跑命令完成",
+            kind: .result,
+            text: "USB: Keyboard",
+            detail: .toolResult(tool: "run_command", success: true, output: "USB:\n  Keyboard\n  Trackpad")
+        )
+
+        let reply = "已扫描当前环境:USB 输入设备 2 个,网络发现设备 0 个。我按输入设备和网络设备两类列出,未发现投屏设备。"
+        XCTAssertTrue(state.readOnlyObservationDeliveryCanFinish(recordID: rid, userRequest: "看看当前环境有哪些可发现对象,只做发现和分类", reply: reply))
+        let decision = await state.computeCompletionDecision(taskRecordID: rid, reply: reply)
+
+        XCTAssertEqual(decision.status, .ok, "只读观察任务已有证据和结论时,不应被成功标准/缺口拖进返工循环")
+    }
+
+    @MainActor
+    func testObservationWithoutEvidenceCannotFastFinish() {
+        let state = LingShuState()
+        let rid = state.createTaskExecutionRecord(for: "看看当前环境有哪些可发现对象")
+        defer {
+            state.taskExecutionRecords.removeAll { $0.id == rid }
+            state.persistTaskExecutionRecords()
+            state.taskExecutionJournal.flush()
+        }
+        state.bindGoalSpec(.init(objective: "扫描当前环境可发现对象", kind: .task, successCriteria: ["列出发现对象"]), to: rid)
+
+        XCTAssertFalse(state.readOnlyObservationDeliveryCanFinish(
+            recordID: rid,
+            userRequest: "看看当前环境有哪些可发现对象",
+            reply: "当前环境里有一些设备,我已经整理好了。"
+        ), "没有工具/事实证据时不能靠嘴收口")
+    }
+
+    @MainActor
+    func testMutatingTaskCannotUseObservationFastFinish() {
+        let state = LingShuState()
+        let rid = state.createTaskExecutionRecord(for: "生成一个报告文件保存到 /tmp/out.md")
+        defer {
+            state.taskExecutionRecords.removeAll { $0.id == rid }
+            state.persistTaskExecutionRecords()
+            state.taskExecutionJournal.flush()
+        }
+        state.bindGoalSpec(.init(
+            objective: "生成并保存报告文件",
+            kind: .task,
+            successCriteria: ["文件 /tmp/out.md 存在"]
+        ), to: rid)
+        state.appendTaskRecordMessage(
+            rid,
+            actor: "工具",
+            role: "跑命令",
+            kind: .agent,
+            text: "ls /tmp",
+            detail: .toolCall(tool: "run_command", summary: "ls /tmp", arguments: "ls /tmp")
+        )
+        state.appendTaskRecordMessage(
+            rid,
+            actor: "工具",
+            role: "跑命令完成",
+            kind: .result,
+            text: "ok",
+            detail: .toolResult(tool: "run_command", success: true, output: "foo")
+        )
+
+        XCTAssertFalse(state.readOnlyObservationDeliveryCanFinish(
+            recordID: rid,
+            userRequest: "生成一个报告文件保存到 /tmp/out.md",
+            reply: "我看到了 /tmp 目录,准备生成文件。"
+        ), "写文件/生成交付物任务必须走真实产出与验收,不能走观察收口")
+    }
+
+    @MainActor
+    func testObservationStructuredOAuthCannotFastFinish() async {
+        let state = LingShuState()
+        let rid = state.createTaskExecutionRecord(for: "看看现在网络里有没有可投屏设备")
+        defer {
+            state.taskExecutionRecords.removeAll { $0.id == rid }
+            state.persistTaskExecutionRecords()
+            state.taskExecutionJournal.flush()
+        }
+        state.bindGoalSpec(.init(objective: "扫描当前网络里的可投屏设备", kind: .task, successCriteria: ["列出可投屏设备"]), to: rid)
+        state.appendTaskRecordMessage(
+            rid,
+            actor: "工具",
+            role: "跑命令",
+            kind: .agent,
+            text: "dns-sd -B _airplay._tcp",
+            detail: .toolCall(tool: "run_command", summary: "dns-sd -B _airplay._tcp", arguments: "dns-sd -B _airplay._tcp")
+        )
+        state.appendTaskRecordMessage(
+            rid,
+            actor: "工具",
+            role: "跑命令完成",
+            kind: .result,
+            text: "ok",
+            detail: .toolResult(tool: "run_command", success: true, output: "Browsing for _airplay._tcp")
+        )
+
+        let reply = #"{"reply":"这一步需要你授权本地网络/设备发现权限后才能继续扫描 AirPlay 设备。","completion":{"status":"waiting_for_user","reason":"缺少本地网络/设备发现授权","needs_user":true},"OAuth":{"required":true,"target":"本地网络设备发现","action":"扫描 AirPlay 设备","reason":"需要系统授权本地网络/设备发现权限","question":"是否授权我扫描当前网络里的 AirPlay 设备?","options":[{"label":"确认授权","detail":"允许本次扫描"},{"label":"暂不授权","detail":"停止扫描"}]}}"#
+        XCTAssertFalse(state.readOnlyObservationDeliveryCanFinish(recordID: rid, userRequest: "看看现在网络里有没有可投屏设备", reply: reply))
+        let decision = await state.computeCompletionDecision(taskRecordID: rid, reply: reply)
+
+        XCTAssertEqual(decision.status, .waitingForUser, "OAuth 结构字段声明真需要用户授权时仍应进入人机确认,不能被观察收口吞掉")
     }
 }

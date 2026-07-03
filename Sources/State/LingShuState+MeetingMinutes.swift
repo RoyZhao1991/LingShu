@@ -99,9 +99,11 @@ extension LingShuState {
         """
         let previous = autonomousRunTask
         autonomousRunTask?.cancel()
+        autonomousRunGeneration += 1
+        let generation = autonomousRunGeneration
         autonomousRunTask = Task { @MainActor [weak self] in
             await previous?.value
-            guard let self, !Task.isCancelled else { self?.autonomousRunTask = nil; return }
+            guard let self, !Task.isCancelled, self.autonomousRunGeneration == generation, self.autonomousRun.phase != .idle else { self?.autonomousRunTask = nil; return }
             let recordID = self.autonomousRunRecordID ?? self.createTaskExecutionRecord(for: "会议纪要")
             self.autonomousRunRecordID = recordID
             self.enterAutonomousRunningState(statusLine: "会议结束,正在生成纪要并落档…")
@@ -109,9 +111,10 @@ extension LingShuState {
             self.appendTrace(kind: .runtime, actor: "会议", title: "生成纪要", detail: "已把完整转写交给大脑撰写并落档。")
             let baseline = self.currentArtifactCount(recordID)
             let initial = await session.resume(prompt)
+            guard !Task.isCancelled, self.autonomousRunGeneration == generation, self.autonomousRun.phase != .idle else { return }
             let result = await self.verifyAndContinue(session: session, result: initial, userRequest: "生成会议纪要并落档", taskRecordID: recordID, artifactBaseline: baseline)
-            guard !Task.isCancelled else { return }
-            self.finishAutonomousRun(result: result, recordID: recordID)
+            guard !Task.isCancelled, self.autonomousRunGeneration == generation, self.autonomousRun.phase != .idle else { return }
+            await self.finishAutonomousRun(result: result, recordID: recordID)
         }
     }
 }
