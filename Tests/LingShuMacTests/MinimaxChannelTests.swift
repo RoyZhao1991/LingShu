@@ -21,6 +21,11 @@ final class MinimaxChannelTests: XCTestCase {
 
     @MainActor
     func testDefaultMainChannelIsMinimaxOfficial() {
+        let defaults = UserDefaults.standard
+        let keys = ["lingshu.model.provider", "lingshu.model.name", "lingshu.model.endpoint"]
+        keys.forEach { defaults.removeObject(forKey: $0) }
+        defer { keys.forEach { defaults.removeObject(forKey: $0) } }
+
         let state = LingShuState()
         XCTAssertEqual(state.modelProvider, ModelProviderPreset.minimaxOfficial.name)
         XCTAssertEqual(state.modelName, "MiniMax-M3")
