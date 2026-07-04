@@ -173,7 +173,7 @@ struct LingShuRootView: View {
                 perceptionGateway.ingestVideoFrame(packet)
             }
         }
-        .onReceive(state.$chatMessages) { messages in
+        .onReceive(state.chatStore.$messages) { messages in
             speakLatestReplyIfNeeded(messages)
         }
     }

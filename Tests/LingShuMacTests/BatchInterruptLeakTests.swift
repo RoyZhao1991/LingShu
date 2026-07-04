@@ -117,16 +117,22 @@ final class BatchInterruptLeakTests: XCTestCase {
         let guidance = LingShuState.turnBoundaryGuidance(for: "打断后恢复测试:1+1 等于几?一句话回答。", base: "基础策略")
 
         XCTAssertTrue(guidance.contains("只回答或处理下面这条最新输入"))
-        XCTAssertTrue(guidance.contains("不要主动补答旧问题"))
-        XCTAssertTrue(guidance.contains("不要续跑旧任务"))
+        XCTAssertTrue(guidance.contains("不要凭某个词直接续跑旧任务"))
         XCTAssertTrue(guidance.contains("基础策略"))
     }
 
-    func testTurnBoundaryAllowsExplicitHistoryResume() {
+    func testTurnBoundaryDoesNotPromoteHistoryByKeyword() {
         let guidance = LingShuState.turnBoundaryGuidance(for: "继续上次那个爬虫任务", base: nil)
 
-        XCTAssertTrue(guidance.contains("可能在续接历史任务"))
-        XCTAssertTrue(guidance.contains("多个候选"))
-        XCTAssertFalse(guidance.contains("只回答或处理下面这条最新输入"))
+        XCTAssertTrue(guidance.contains("只回答或处理下面这条最新输入"))
+        XCTAssertTrue(guidance.contains("由主脑基于完整上下文作出结构化续接决策"))
+        XCTAssertFalse(guidance.contains("用户这轮可能在续接历史任务"))
+    }
+
+    func testBareContinueCanFollowRecentConversationContext() {
+        let guidance = LingShuState.turnBoundaryGuidance(for: "继续", base: nil)
+
+        XCTAssertTrue(guidance.contains("如果最新输入是在延续刚才的普通对话"))
+        XCTAssertFalse(guidance.contains("用户这轮可能在续接历史任务"))
     }
 }

@@ -11,11 +11,18 @@ struct LingShuDialogueSurface: View {
             // 聊天列表抽成只订阅 state 的子视图：voice 的电平 @Published 在收音/播放时 ~20Hz 刷新,
             // 若聊天列表随父视图(订阅 voice)一起重渲,markdown 气泡每秒重算 20 次→主线程过载→
             // 滚动条上下抽搐 + TTS 卡顿。隔离后 voice 跳动不再触发聊天列表重渲(SwiftUI 见 state 未变即跳过)。
-            LingShuChatScroll(state: state)
+            LingShuChatScroll(chatStore: state.chatStore, state: state)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
 
             // 运行脉搏条已删(它只是「状态」surface 的冗余入口,顶栏「状态」tab 即可进,留着白占空间)。
-            LingShuInputDock(state: state, voice: voice, vision: vision, perceptionGateway: perceptionGateway)
+            LingShuInputDock(
+                state: state,
+                inputStore: state.inputStore,
+                runtimeStore: state.runtimeStore,
+                voice: voice,
+                vision: vision,
+                perceptionGateway: perceptionGateway
+            )
         }
         .frame(maxWidth: 980)
         .frame(maxWidth: .infinity)
@@ -39,15 +46,16 @@ struct LingShuDialogueSurface: View {
 /// 自动滚到底:只响应“用户发送消息”的一次性请求。任务执行/流式输出/状态变化不得拉动滚动条,
 /// 否则用户向上查历史时会被执行过程反复拽回底部。
 private struct LingShuChatScroll: View {
-    @ObservedObject var state: LingShuState
+    @ObservedObject var chatStore: LingShuChatStore
+    let state: LingShuState
     /// 只渲染最近 N 条的**滑动窗口**:VStack 一次性 realize 全部 → 窗口必须有界,否则消息一多就卡。
     /// 既避开 LazyVStack"行没滚进视野不渲染→空白"的坑,又把渲染量压住→滚动顺滑。"加载更早"按需扩窗。
     @State private var windowSize = 40
     private static let windowStep = 40
 
     /// 当前窗口内的消息(最近 windowSize 条)。
-    private var windowed: ArraySlice<ChatMessage> { state.chatMessages.suffix(windowSize) }
-    private var hasOlder: Bool { state.chatMessages.count > windowSize || state.hasMoreColdChatHistory }
+    private var windowed: ArraySlice<ChatMessage> { chatStore.messages.suffix(windowSize) }
+    private var hasOlder: Bool { chatStore.messages.count > windowSize || chatStore.hasMoreColdHistory }
 
     var body: some View {
         ScrollViewReader { proxy in
@@ -56,7 +64,7 @@ private struct LingShuChatScroll: View {
                     if hasOlder {
                         Button {
                             windowSize += Self.windowStep
-                            if windowSize >= state.chatMessages.count { state.loadOlderChatHistoryIfNeeded() }
+                            if windowSize >= chatStore.messages.count { state.loadOlderChatHistoryIfNeeded() }
                         } label: {
                             Text("加载更早的对话")
                                 .font(.system(size: 11, weight: .medium))
@@ -78,10 +86,10 @@ private struct LingShuChatScroll: View {
                 .padding(.vertical, 6)
                 .padding(.horizontal, 2)
             }
-            .onChange(of: state.chatScrollToLatestRequest) { _ in
+            .onChange(of: chatStore.scrollToLatestRequest) { _ in
                 // 用户发送后下一轮主线程再定位,让用户气泡/紧随其后的占位气泡先完成布局。
                 DispatchQueue.main.async {
-                    if let lastID = state.chatMessages.last?.id {
+                    if let lastID = chatStore.messages.last?.id {
                         proxy.scrollTo(lastID, anchor: .bottom)
                     } else {
                         proxy.scrollTo("lingshu-chat-bottom", anchor: .bottom)
@@ -162,12 +170,13 @@ struct LingShuCoreHeader: View {
 /// 待发送附件托盘：每个 chip = 文件名（字面）+ 解析状态（底层服务状态：解析中/就绪/失败）。
 struct LingShuAttachmentTray: View {
     @ObservedObject var state: LingShuState
+    @ObservedObject var inputStore: LingShuInputStore
     /// 滑动窗口起点:附件多于 pageSize 时,一次只显示 pageSize 个,左右箭头滑动。
     @State private var startIndex = 0
     private let pageSize = 3
 
     var body: some View {
-        let items = state.pendingAttachments
+        let items = inputStore.pendingAttachments
         let total = items.count
         let maxStart = max(0, total - pageSize)
         let start = min(max(0, startIndex), maxStart)   // 删附件后不越界
@@ -411,10 +420,10 @@ private struct LingShuPulseDot: View {
 /// 在输入框上方把被 @ 到的 agent/插件**醒目标记成芯片**——让"这是 agent 编排、要派给谁、谁 maker 谁 checker"在聊天框里一眼可见,
 /// 不再混在纯文本里看不出。(macOS 14 的 TextField 不支持原生 inline 富文本 token,故用上方芯片条做醒目标记。)
 struct LingShuInvocationHintBar: View {
-    @ObservedObject var state: LingShuState
+    @ObservedObject var inputStore: LingShuInputStore
 
     var body: some View {
-        let chips = state.detectedInvocationChips
+        let chips = inputStore.detectedInvocationChips
         HStack(spacing: 8) {
             Image(systemName: "bolt.horizontal.circle.fill")
                 .font(.system(size: 12, weight: .bold))
@@ -510,18 +519,70 @@ struct LingShuMentionPopup: View {
     }
 }
 
+/// Stable wrapper around the AppKit-backed rich input field.
+///
+/// The surrounding dock can re-render because of task/runtime UI, but the NSTextView must not be updated
+/// unless input-specific values actually change. Wrapping it in an Equatable host keeps streaming chat
+/// and trace changes from cascading into `updateNSView`.
+struct LingShuStableRichInputHost: View, Equatable {
+    @Binding var text: String
+    let textValue: String
+    let placeholder: String
+    let aliases: [String]
+    let onSubmit: () -> Void
+    let onPasteImage: ((Data) -> Void)?
+    let onMentionChange: (LingShuMentionQuery?) -> Void
+    let onMentionMove: (Bool) -> Void
+    let onMentionCommit: () -> Void
+    let onMentionCancel: () -> Void
+
+    nonisolated static func == (lhs: LingShuStableRichInputHost, rhs: LingShuStableRichInputHost) -> Bool {
+        lhs.textValue == rhs.textValue
+            && lhs.placeholder == rhs.placeholder
+            && lhs.aliases == rhs.aliases
+    }
+
+    var body: some View {
+        let _ = LingShuInputRenderDiagnostics.log(
+            "stable-input-host-body",
+            "textLen=\(textValue.count) aliases=\(aliases.count)",
+            minInterval: 0.25
+        )
+        LingShuRichInputField(
+            text: $text,
+            placeholder: placeholder,
+            aliases: aliases,
+            accent: .lingHolo,
+            onSubmit: onSubmit,
+            onPasteImage: onPasteImage,
+            onMentionChange: onMentionChange,
+            onMentionMove: onMentionMove,
+            onMentionCommit: onMentionCommit,
+            onMentionCancel: onMentionCancel
+        )
+    }
+}
+
 struct LingShuInputDock: View {
     @ObservedObject var state: LingShuState
+    @ObservedObject var inputStore: LingShuInputStore
+    @ObservedObject var runtimeStore: LingShuRuntimeStore
     @ObservedObject var voice: VoiceIOManager
     @ObservedObject var vision: VisionIOManager
     @ObservedObject var perceptionGateway: LingShuRealtimePerceptionGateway
     @State private var showClearConfirm = false
+    @State private var draftPrompt = ""
     @State private var inputAliases: [String] = []   // 已知可 @ 的别名快照(内嵌 token 高亮判定;onAppear 读一次)
     @State private var invocablePluginsCache: [LingShuInvocablePlugin] = []   // 可调插件/agent 快照(@ 补全弹层用)
     @State private var mentionQuery: LingShuMentionQuery? = nil               // 光标处正在打的 @查询(nil=不在 mention)
     @State private var mentionSelected: Int = 0                               // 补全弹层当前高亮项
 
     var body: some View {
+        let _ = LingShuInputRenderDiagnostics.log(
+            "dock-body",
+            "draftLen=\(draftPrompt.count) promptLen=\(inputStore.prompt.count) active=\(state.hasActiveModelCall) trace=\(state.executionTrace.count) runtime=\(runtimeStore.coreState.rawValue) queued=\(state.pendingSerialInputs.count)/\(state.queuedDispatchTasks.count)",
+            minInterval: 0.25
+        )
         VStack(spacing: 10) {
             LingShuRunningTaskBar(state: state)
             if !state.pendingSerialInputs.isEmpty {
@@ -530,19 +591,20 @@ struct LingShuInputDock: View {
             if !state.queuedDispatchTasks.isEmpty {
                 LingShuDispatchQueueTray(state: state)
             }
-            if !state.pendingAttachments.isEmpty {
-                LingShuAttachmentTray(state: state)
+            if !inputStore.pendingAttachments.isEmpty {
+                LingShuAttachmentTray(state: state, inputStore: inputStore)
             }
-            if !state.detectedInvocationChips.isEmpty {
-                LingShuInvocationHintBar(state: state)
+            if !inputStore.detectedInvocationChips.isEmpty {
+                LingShuInvocationHintBar(inputStore: inputStore)
             }
 
-            // **富文本输入框(对齐 codex 内嵌标签)**:`@别名` 实时高亮成 token。文本仍绑定 state.prompt。
-            LingShuRichInputField(
-                text: $state.prompt,
+            // **富文本输入框(对齐 codex 内嵌标签)**:`@别名` 实时高亮成 token。
+            // 输入编辑态留在本地 draft,只在输入动作/提交时同步到 state.prompt;回复气泡刷新不再反向刷新 NSTextView。
+            LingShuStableRichInputHost(
+                text: $draftPrompt,
+                textValue: draftPrompt,
                 placeholder: state.loc("有什么需要我做的？", "What can I do for you?"),
                 aliases: inputAliases,
-                accent: .lingHolo,
                 onSubmit: { submit() },
                 onPasteImage: { png in state.ingestPastedImage(png) },
                 onMentionChange: { mq in handleMentionChange(mq) },
@@ -550,6 +612,7 @@ struct LingShuInputDock: View {
                 onMentionCommit: { commitMention() },
                 onMentionCancel: { mentionQuery = nil }
             )
+            .equatable()
             .frame(height: 96, alignment: .topLeading)   // 固定高度(NSScrollView 内部滚,别再 minHeight 撑满整列)
             .lingShuHUDPanel(
                 accent: voice.isRecording ? .red : .lingHolo,
@@ -578,11 +641,22 @@ struct LingShuInputDock: View {
                 }
             }
             // 拖拽/粘贴文件落成路径文本→转附件芯片;@agent→上方"将编排"提示条 + 触发别名快照刷新(供内嵌高亮)。
-            .onChange(of: state.prompt) { _, _ in
-                state.convertDroppedFilePathsIfNeeded()
-                state.refreshInvocationChips()
+            .onChange(of: draftPrompt) { _, newValue in
+                syncDraftPromptToState(newValue)
+            }
+            .onChange(of: inputStore.prompt) { _, newValue in
+                // 外部清空 / 队列晋级 / 「+」菜单等真正改 prompt 时才回灌输入框。
+                // 回复气泡流式刷新只改 chatMessages，不应碰这里。
+                if draftPrompt != newValue {
+                    LingShuInputRenderDiagnostics.log(
+                        "prompt-backfill",
+                        "inputStore.prompt -> draftPrompt draftLen=\(draftPrompt.count) newLen=\(newValue.count)"
+                    )
+                    draftPrompt = newValue
+                }
             }
             .onAppear {
+                draftPrompt = inputStore.prompt
                 inputAliases = state.invocableAliases()
                 invocablePluginsCache = state.invocablePlugins()
             }
@@ -593,7 +667,7 @@ struct LingShuInputDock: View {
                 invocablePluginsCache = state.invocablePlugins()
             }
             // 选中 agent 编排时(chips 变)顺带刷新别名快照——新注册的 agent 也能即时高亮。
-            .onChange(of: state.detectedInvocationChips) { _, _ in
+            .onChange(of: inputStore.detectedInvocationChips) { _, _ in
                 if inputAliases.isEmpty { inputAliases = state.invocableAliases() }
             }
 
@@ -607,9 +681,9 @@ struct LingShuInputDock: View {
                 } label: {
                     Image(systemName: "paperclip")
                         .font(.system(size: 16, weight: .bold))
-                        .foregroundStyle(state.pendingAttachments.isEmpty ? Color.lingFg.opacity(0.86) : Color.lingVoid)
+                        .foregroundStyle(inputStore.pendingAttachments.isEmpty ? Color.lingFg.opacity(0.86) : Color.lingVoid)
                         .frame(width: 46, height: 42)
-                        .background(state.pendingAttachments.isEmpty ? Color.lingFg.opacity(0.08) : Color.lingHolo, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                        .background(inputStore.pendingAttachments.isEmpty ? Color.lingFg.opacity(0.08) : Color.lingHolo, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
                 }
                 .buttonStyle(.plain)
                 .help("上传图片 / PPT / 文档给灵枢理解或修改")
@@ -820,8 +894,9 @@ struct LingShuInputDock: View {
 
     /// 把 `@名字 ` 插进输入框光标处(「+」菜单选中即插)。空/已带空格则不补前导空格。
     private func insertMention(_ name: String) {
-        let sep = (state.prompt.isEmpty || state.prompt.hasSuffix(" ")) ? "" : " "
-        state.prompt += "\(sep)@\(name) "
+        let sep = (draftPrompt.isEmpty || draftPrompt.hasSuffix(" ")) ? "" : " "
+        draftPrompt += "\(sep)@\(name) "
+        syncDraftPromptToState(draftPrompt)
     }
 
     private func submit() {
@@ -830,7 +905,11 @@ struct LingShuInputDock: View {
             state.isListening = false
         }
 
+        syncDraftPromptToState(draftPrompt)
         _ = state.sendPrompt()
+        if draftPrompt != state.prompt {
+            draftPrompt = state.prompt
+        }
     }
 
     // MARK: - @ 自动补全
@@ -865,10 +944,29 @@ struct LingShuInputDock: View {
         let matches = mentionMatches
         guard let mq = mentionQuery, !matches.isEmpty else { mentionQuery = nil; return }
         let pick = matches[min(index ?? mentionSelected, matches.count - 1)]
-        let ns = state.prompt as NSString
+        let ns = draftPrompt as NSString
         guard mq.range.location + mq.range.length <= ns.length else { mentionQuery = nil; return }
-        state.prompt = ns.replacingCharacters(in: mq.range, with: "@\(pick.displayName) ")
+        draftPrompt = ns.replacingCharacters(in: mq.range, with: "@\(pick.displayName) ")
+        syncDraftPromptToState(draftPrompt)
         mentionQuery = nil
+    }
+
+    private func syncDraftPromptToState(_ text: String) {
+        guard state.prompt != text else { return }
+        LingShuInputRenderDiagnostics.log(
+            "draft-sync",
+            "draftPrompt -> state.prompt oldLen=\(state.prompt.count) newLen=\(text.count)"
+        )
+        state.prompt = text
+        state.convertDroppedFilePathsIfNeeded()
+        state.refreshInvocationChips()
+        if draftPrompt != state.prompt {
+            LingShuInputRenderDiagnostics.log(
+                "draft-normalized",
+                "state normalized prompt draftLen=\(draftPrompt.count) stateLen=\(state.prompt.count)"
+            )
+            draftPrompt = state.prompt
+        }
     }
 
     private func toggleVoiceInput() {

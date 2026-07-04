@@ -95,14 +95,17 @@ extension LingShuState {
     /// 释放槽位让队列自动晋级;**不动问答线**(区别于 cancelCurrentCall 的全停)。
     func stopDispatchedTask(recordID: String) {
         guard let subID = agentSubTaskRecords.first(where: { $0.value == recordID })?.key else {
+            markTaskRecordManuallyStopped(recordID)
             dispatchedTaskBubbles.removeValue(forKey: recordID)
             if blockedDispatchedRecordID == recordID { blockedDispatchedRecordID = nil }
             appendTaskRecordMessage(recordID, actor: "用户", role: "停止", kind: .warning, text: "用户已停止该任务。")
             finishTaskRecord(recordID, status: .failed, summary: "用户已停止该任务。")
+            manuallyStoppedTaskRecords.remove(recordID)
             promoteQueuedDispatchIfPossible()
             return
         }
         appendTrace(kind: .warning, actor: "用户", title: "停止任务", detail: "进行中长条手动停止该派发任务,释放槽位。")
+        markTaskRecordManuallyStopped(recordID)
         let orchestrator = agentOrchestrator
         Task { @MainActor [weak self] in
             let stopped = await orchestrator.cancel(id: subID)
@@ -110,8 +113,10 @@ extension LingShuState {
             // 编排器没有活跃 driveTask,但 UI 记录仍处于执行/待用户等非终态时,本地兜底收口。
             self.dispatchedTaskBubbles.removeValue(forKey: recordID)
             if self.blockedDispatchedRecordID == recordID { self.blockedDispatchedRecordID = nil }
+            self.markTaskRecordManuallyStopped(recordID)
             self.appendTaskRecordMessage(recordID, actor: "用户", role: "停止", kind: .warning, text: "用户已停止该任务。")
             self.finishTaskRecord(recordID, status: .failed, summary: "用户已停止该任务。")
+            self.manuallyStoppedTaskRecords.remove(recordID)
             self.promoteQueuedDispatchIfPossible()
         }
     }

@@ -29,6 +29,11 @@ struct LingShuRichInputField: NSViewRepresentable {
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
     func makeNSView(context: Context) -> NSScrollView {
+        LingShuInputRenderDiagnostics.log(
+            "rich-make",
+            "initialTextLen=\(text.count) aliases=\(aliases.count)"
+        )
+
         let scrollView = NSScrollView()
         scrollView.borderType = .noBorder
         scrollView.hasVerticalScroller = true
@@ -79,8 +84,15 @@ struct LingShuRichInputField: NSViewRepresentable {
         // 快速输入时 SwiftUI 会把**滞后的** binding 值送进来——若 binding 只是视图已打内容的前缀(打字滞后),**绝不覆盖**(以视图为准),
         // 否则会把刚打的几个字吞掉/错位(实测 @Codex 被重复就是这个)。清空(空串)/插入(更长且非前缀)才应用。
         let viewStr = tv.string
-        if viewStr != text {
-            let isTypingLag = !text.isEmpty && viewStr.hasPrefix(text)
+        let differs = viewStr != text
+        let isTypingLag = differs && !text.isEmpty && viewStr.hasPrefix(text)
+        let willApplyExternalText = differs && !isTypingLag
+        LingShuInputRenderDiagnostics.log(
+            "rich-update",
+            "viewLen=\(viewStr.count) bindingLen=\(text.count) differs=\(differs) typingLag=\(isTypingLag) applyExternal=\(willApplyExternalText) aliases=\(aliases.count)",
+            minInterval: 0.10
+        )
+        if differs {
             if !isTypingLag {
                 tv.string = text
                 context.coordinator.applyHighlight()
@@ -102,6 +114,11 @@ struct LingShuRichInputField: NSViewRepresentable {
 
         func textDidChange(_ notification: Notification) {
             guard let tv = textView else { return }
+            LingShuInputRenderDiagnostics.log(
+                "text-did-change",
+                "viewLen=\(tv.string.count)",
+                minInterval: 0.05
+            )
             parent.text = tv.string
             applyHighlight()
             updateMention()

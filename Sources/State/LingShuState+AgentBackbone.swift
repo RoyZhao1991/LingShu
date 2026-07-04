@@ -13,8 +13,29 @@ struct LingShuPendingMainTurn: Sendable {
     let resumeBlocked: Bool
     let originalPromptForVerification: String?
     let startedAt: Date
+    let contextPlan: LingShuContextAssemblyPlan?
     /// 附件直接入脑:本回合随用户消息直发大脑的图片/PDF data URL(开关关/纯文本脑时为空)。
     var imageDataURLs: [String]? = nil
+
+    init(
+        bubbleID: UUID,
+        prompt: String,
+        taskRecordID: String?,
+        resumeBlocked: Bool,
+        originalPromptForVerification: String?,
+        startedAt: Date,
+        contextPlan: LingShuContextAssemblyPlan? = nil,
+        imageDataURLs: [String]? = nil
+    ) {
+        self.bubbleID = bubbleID
+        self.prompt = prompt
+        self.taskRecordID = taskRecordID
+        self.resumeBlocked = resumeBlocked
+        self.originalPromptForVerification = originalPromptForVerification
+        self.startedAt = startedAt
+        self.contextPlan = contextPlan
+        self.imageDataURLs = imageDataURLs
+    }
 }
 
 /// 范式骨干接线:把统一 agent 循环接到真模型、设为常规对话主入口;主会话带 spawn_task 可自主派生真并行隔离子会话(经编排器+账本)。
@@ -199,24 +220,15 @@ extension LingShuState {
     }
 
     /// 新回合边界:主会话是常驻的,历史上下文会自然存在;每一轮仍必须明确"这次只处理最新输入"。
-    /// 只有用户显式要求回到历史任务/继续旧任务时,才允许把历史从背景提升为当前目标。
+    /// 这里不做关键词续接判断;“继续/下一步/回到某事”只能作为主脑结构化判断的输入证据,
+    /// 不能在工具层直接抬升为历史任务或旧目标。
     nonisolated static func turnBoundaryGuidance(for prompt: String, base: String?) -> String {
         let trimmedBase = base?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let wantsHistory = LingShuMemoryTextToolkit.isExplicitResumeRequest(prompt)
-            || LingShuMemoryTextToolkit.isAmbiguousTaskResumeRequest(prompt)
-            || LingShuMemoryTextToolkit.shouldRecallHistory(for: prompt)
-        let boundary: String
-        if wantsHistory {
-            boundary = """
-            【当前回合边界】
-            用户这轮可能在续接历史任务。先识别最相关的未完成/可续目标,只续接那一件;如果有多个候选或意图不清,先给用户可选项确认。不要把无关旧任务混进本轮答复。
-            """
-        } else {
-            boundary = """
-            【当前回合边界】
-            只回答或处理下面这条最新输入。历史对话、旧任务、队列残留和自动召回内容只作背景参考;不要主动补答旧问题,不要续跑旧任务,不要把上一条/上一批未完成的内容混进本轮。只有用户明确说继续、补答、接着上次或点名历史任务时,才回到历史。
-            """
-        }
+        _ = prompt
+        let boundary = """
+        【当前回合边界】
+        只回答或处理下面这条最新输入。主会话上下文会自然存在:如果最新输入是在延续刚才的普通对话,就沿着最近上下文继续;如果最新输入是在要求续接某个旧任务、旧材料或未完成目标,必须由主脑基于完整上下文作出结构化续接决策。历史对话、旧任务、队列残留和自动召回内容只作背景参考;不要凭某个词直接续跑旧任务,不要把无关旧任务混进本轮答复。
+        """
         return [trimmedBase, boundary]
             .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
             .joined(separator: "\n\n")
@@ -283,7 +295,15 @@ extension LingShuState {
 
     /// 主入口:常规输入交给主 agent 会话(异步跑循环,结果回填气泡)。
     @discardableResult
-    func runMainAgentTurn(prompt: String, taskRecordID: String?, resumeBlocked: Bool = false, originalPromptForVerification: String? = nil, existingBubbleID: UUID? = nil, imageDataURLs: [String]? = nil) -> String {
+    func runMainAgentTurn(
+        prompt: String,
+        taskRecordID: String?,
+        resumeBlocked: Bool = false,
+        originalPromptForVerification: String? = nil,
+        existingBubbleID: UUID? = nil,
+        imageDataURLs: [String]? = nil,
+        contextPlan: LingShuContextAssemblyPlan? = nil
+    ) -> String {
         // 新一轮开始:先掐掉上一条回复还在放的 TTS,避免旧音频盖到新轮(音频/文字 desync)。
         interruptSpeechOutput?()
         let directImages = imageDataURLs ?? consumePendingDirectBrainImages()   // 附件直接入脑:一次性消费暂存图片
@@ -308,6 +328,7 @@ extension LingShuState {
             resumeBlocked: resumeBlocked,
             originalPromptForVerification: originalPromptForVerification,
             startedAt: turnStartedAt,
+            contextPlan: contextPlan,
             imageDataURLs: directImages
         )
         pendingMainTurns[pendingID] = turn
@@ -366,6 +387,9 @@ extension LingShuState {
         missionTitle = "理解需求"
         missionStatus = "正在推进这件事(按需读写文件、跑命令、联网查证)。"
         enterCoreState(.thinking)
+        if let contextPlan = turn.contextPlan {
+            appendTrace(kind: .system, actor: "第⑤站", title: "上下文装配计划", detail: contextPlan.traceLine)
+        }
         defer {
             isModelReplying = false
             missionTitle = "待机中"
@@ -528,6 +552,7 @@ extension LingShuState {
         if let index = chatMessages.firstIndex(where: { $0.id == bubbleID }) {
             // 流式收尾:早读过则补念尾句 + 打去重标记(防根视图把整段再念一遍=双声线);没早读过则 no-op。
             concludeStreamedSpeech(for: bubbleID, streamedText: chatMessages[index].text)
+            structuredStreamVisibilityFilters.removeValue(forKey: bubbleID)
             chatMessages[index].text = displayText
             chatMessages[index].isLoading = false
             chatMessages[index].taskRecordID = recordID

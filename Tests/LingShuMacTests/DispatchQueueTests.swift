@@ -31,166 +31,31 @@ final class DispatchQueueTests: XCTestCase {
         XCTAssertEqual(missing.kind, .chat, "模型引用不存在的候选线程时不能兜到第一条,避免错接")
     }
 
-    func testAttachmentInputContinuationGuard() {
-        XCTAssertFalse(
-            LingShuState.waitingQuestionAcceptsAttachment("需要你提供外部服务授权或 API Key 后才能继续。"),
-            "授权/凭据类待答复不应默认吞掉下一条带附件的新任务"
+    func testContextResolverRejectsDirtyOrLooseText() {
+        let threads = [TriageThread(label: "T1", recordID: "record-1", summary: "⏳正等你回答")]
+
+        let dirty = LingShuState.parseContextResolverDecision(
+            #"我认为应该续接 {"route":"reply","thread":"T1","confidence":"high"}"#,
+            threads: threads
         )
-        XCTAssertTrue(
-            LingShuState.waitingQuestionAcceptsAttachment("请上传要分析的文件或给我本机路径。")
+        XCTAssertEqual(dirty.kind, .chat, "归属输出必须是完整 JSON 对象,不能从普通文本里捞字段")
+
+        let loose = LingShuState.parseContextResolverDecision(
+            #"route:reply thread:T1 confidence:high"#,
+            threads: threads
         )
-        XCTAssertTrue(
-            LingShuState.attachmentInputExplicitlyContinuesPendingThread("这是你要的文件,继续刚才那件事。")
-        )
-        XCTAssertFalse(
-            LingShuState.attachmentInputExplicitlyContinuesPendingThread("总结我刚才附件里的三条待办。"),
-            "附件本身是新证据,没有明确指代旧任务时不应被待答复线程劫持"
-        )
-        XCTAssertTrue(
-            LingShuState.inputMentionsGroundedEvidence("总结我刚才附件里的三条待办。"),
-            "即使附件托盘状态没带出,证据型输入也要受归属保护"
-        )
-        XCTAssertFalse(
-            LingShuState.groundedInputCanAnswerPendingQuestion(
-                visiblePrompt: "总结我刚才附件里的三条待办。",
-                pendingQuestion: "请上传要分析的文件或给我本机路径。",
-                hasAttachments: true
-            ),
-            "围绕附件提出新目标时,不能仅因旧问题接受文件就续回旧线程"
-        )
-        XCTAssertTrue(
-            LingShuState.groundedInputCanAnswerPendingQuestion(
-                visiblePrompt: "已上传 1 个文件",
-                pendingQuestion: "请上传要分析的文件或给我本机路径。",
-                hasAttachments: true
-            ),
-            "旧问题明确要文件,而用户只是交附件时,可以续回旧线程"
-        )
+        XCTAssertEqual(loose.kind, .chat, "非 JSON 的宽松格式不能触发续接")
     }
 
-    func testPendingQuestionGuardDoesNotConsumeStandaloneObjective() {
-        let pending = "需要你提供外部知识库授权或 API Key 后才能继续。"
-
-        XCTAssertFalse(
-            LingShuState.inputCanAnswerPendingQuestion(
-                visiblePrompt: "看看现在这台电脑周围有哪些可发现的外设和投屏设备,只做发现和分类,不要要求我提供账号。",
-                pendingQuestion: pending,
-                hasAttachments: false
-            ),
-            "受保护前提等待中,新的完整目标不能被当成旧问题答案"
-        )
-        XCTAssertFalse(
-            LingShuState.inputCanAnswerPendingQuestion(
-                visiblePrompt: "灵枢,这是一条语音入口压测。听到后用一句话说:语音入口可用。",
-                pendingQuestion: pending,
-                hasAttachments: false
-            ),
-            "让灵枢说一句话/回答一句话也是新的完整目标,不能被旧授权问题吞掉"
-        )
-        XCTAssertTrue(
-            LingShuState.inputCanAnswerPendingQuestion(
-                visiblePrompt: "确认授权,继续。",
-                pendingQuestion: pending,
-                hasAttachments: false
-            ),
-            "真正回答授权/凭据前提时仍应续回旧线程"
-        )
-    }
-
-    @MainActor
-    func testStandaloneObjectiveDoesNotRouteToUnrelatedPendingMainQuestion() async throws {
-        let state = LingShuState()
-        let rid = state.createTaskExecutionRecord(for: "同步到外部知识库")
-        defer {
-            state.pendingMainQuestionRecordID = nil
-            state.taskExecutionRecords.removeAll { $0.id == rid }
-            state.persistTaskExecutionRecords()
-            state.taskExecutionJournal.flush()
-        }
-        state.pendingMainQuestionRecordID = rid
-        state.appendTaskRecordMessage(
-            rid,
-            actor: "灵枢",
-            role: "待用户",
-            kind: .warning,
-            text: "需要你提供外部知识库授权或 API Key 后才能继续。"
-        )
-
-        let decision = await state.classifyDispatch(
-            "看看现在这台电脑周围有哪些可发现的外设和投屏设备,只做发现和分类,不要要求我提供账号。",
-            hasAttachments: false
+    func testContextResolverRouteNoneAlwaysFallsBackToMainBrain() {
+        let threads = [TriageThread(label: "T1", recordID: "record-1", summary: "⏳正等你回答")]
+        let decision = LingShuState.parseContextResolverDecision(
+            #"{"route":"none","confidence":"high"}"#,
+            threads: threads
         )
 
         XCTAssertEqual(decision.kind, .chat)
-        XCTAssertNil(decision.replyRecordID, "无附件的新完整目标也不能续回无关的授权等待线程")
-    }
-
-    @MainActor
-    func testAttachmentInputDoesNotRouteToUnrelatedPendingMainQuestion() async throws {
-        let state = LingShuState()
-        let rid = state.createTaskExecutionRecord(for: "同步到外部知识库")
-        defer {
-            state.pendingMainQuestionRecordID = nil
-            state.taskExecutionRecords.removeAll { $0.id == rid }
-            state.persistTaskExecutionRecords()
-            state.taskExecutionJournal.flush()
-        }
-        state.pendingMainQuestionRecordID = rid
-        state.appendTaskRecordMessage(
-            rid,
-            actor: "灵枢",
-            role: "待用户",
-            kind: .warning,
-            text: "需要你提供外部知识库授权或 API Key 后才能继续。"
-        )
-
-        let decision = await state.classifyDispatch(
-            """
-            总结我刚才附件里的三条待办,用三点列表回答。
-
-            【附件元信息】
-            - meeting_note.md @ /tmp/meeting_note.md
-            """,
-            hasAttachments: true
-        )
-
-        XCTAssertEqual(decision.kind, .chat)
-        XCTAssertNil(decision.replyRecordID, "带附件的新 grounded turn 不应续回无关的授权等待线程")
-    }
-
-    @MainActor
-    func testAttachmentRoutingUsesVisiblePromptInsteadOfExpandedModelPrompt() async throws {
-        let state = LingShuState()
-        let rid = state.createTaskExecutionRecord(for: "等待外部系统授权")
-        defer {
-            state.pendingMainQuestionRecordID = nil
-            state.taskExecutionRecords.removeAll { $0.id == rid }
-            state.persistTaskExecutionRecords()
-            state.taskExecutionJournal.flush()
-        }
-        state.pendingMainQuestionRecordID = rid
-        state.appendTaskRecordMessage(
-            rid,
-            actor: "灵枢",
-            role: "待用户",
-            kind: .warning,
-            text: "需要你提供外部系统授权或 API Key 后才能继续。"
-        )
-
-        let visible = "总结我刚才附件里的三条待办,用三点列表回答。"
-        let expanded = """
-        \(visible)
-
-        【附件元信息】
-        - meeting_note.md @ /tmp/meeting_note.md
-
-        【附件使用规则】
-        如果用户要求读取、预览、演示、修改或基于附件继续工作,优先使用本轮附件。
-        """
-        let decision = await state.classifyDispatch(expanded, hasAttachments: true, visiblePrompt: visible)
-
-        XCTAssertEqual(decision.kind, .chat)
-        XCTAssertNil(decision.replyRecordID, "路由归属只能看用户原话;附件规则里的“继续”不能把输入错接到无关待答复线程")
+        XCTAssertNil(decision.replyRecordID, "route=none 表示交主脑 active turn,壳层不能再靠关键词改判")
     }
 
     @MainActor

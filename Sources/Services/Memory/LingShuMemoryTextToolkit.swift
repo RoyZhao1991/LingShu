@@ -81,26 +81,12 @@ enum LingShuMemoryTextToolkit {
         return hasVerb && hasReference
     }
 
-    /// 模糊续接：用户只说"继续/下一步/接着"，没有明确对象。
-    /// 这类话不能直接当成普通澄清；上层应先查未完成/可继续任务。
+    /// 已废弃:模糊续接不能在文本工具层凭词判定。
+    /// 裸"继续/下一步/接着"必须交给主脑结合最近上下文做结构化决策,
+    /// 否则会把普通聊天续接误判成历史任务续接。
     static func isAmbiguousTaskResumeRequest(_ prompt: String) -> Bool {
-        let normalized = normalize(prompt)
-        let excludedTalkSignals = ["继续说", "继续讲", "继续解释", "继续介绍", "展开说", "接着说", "接着讲"]
-        if excludedTalkSignals.contains(where: { normalized.contains($0) }) {
-            return false
-        }
-
-        let exactSignals = [
-            "继续", "接着", "下一步", "往下", "继续这个", "接着来",
-            "继续处理", "继续执行", "继续推进", "接着做", "接着弄",
-            "往下推进", "那继续", "好继续", "可以继续"
-        ]
-        if exactSignals.contains(normalized) {
-            return true
-        }
-
-        return normalized.count <= 12
-            && ["继续", "接着", "下一步", "往下"].contains { normalized.contains($0) }
+        _ = prompt
+        return false
     }
 
     static func isEphemeralLocalPrompt(_ prompt: String) -> Bool {

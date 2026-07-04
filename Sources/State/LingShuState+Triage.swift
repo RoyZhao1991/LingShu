@@ -43,25 +43,9 @@ extension LingShuState {
                         detail: "极简语音模式不做上下文劫持,交当前主脑处理。")
             return DispatchDecision(kind: .chat, goal: nil, replyRecordID: nil)
         }
-        if LingShuSelfReferenceIntent.isDirectAssistantSelfIntroduction(routingPrompt) {
-            appendTrace(kind: .route, actor: "上下文归属", title: "自我介绍 · 交主脑",
-                        detail: "自我介绍类输入不是待回复线程归属问题,交当前主脑处理。")
-            return DispatchDecision(kind: .chat, goal: nil, replyRecordID: nil)
-        }
 
         let ctx = buildTriageContext()
-        let candidateThreads = ctx.threads.filter {
-            Self.inputCanAnswerPendingQuestion(
-                visiblePrompt: routingPrompt,
-                pendingQuestion: $0.summary,
-                hasAttachments: hasAttachments
-            )
-        }
-        if ctx.threads.isEmpty == false && candidateThreads.isEmpty {
-            appendTrace(kind: .route, actor: "上下文归属", title: "待答复不匹配 · 新回合",
-                        detail: "存在待答复线程,但本轮输入不像是在回答那些问题;不劫持为旧线程答复,交当前主脑作为新 active turn 处理。")
-            return DispatchDecision(kind: .chat, goal: nil, replyRecordID: nil)
-        }
+        let candidateThreads = ctx.threads
         guard !candidateThreads.isEmpty else {
             appendTrace(kind: .route, actor: "上下文归属", title: "无待归属线程",
                         detail: "未发现等待用户回答/可续的线程;不做模型分诊,直接交当前主脑判断并响应。")
@@ -89,13 +73,20 @@ extension LingShuState {
         \(ctx.near)
         \(threadBlock)
         """
-        let payloadChars = system.count + prompt.count + 8
+        let latestInput = """
+        用户可见输入:
+        \(routingPrompt)
+
+        模型扩展输入:
+        \(prompt)
+        """
+        let payloadChars = system.count + latestInput.count + 8
         let classifier = LingShuAgentSession(
             id: "context-resolver-\(UUID().uuidString.prefix(6))",
             system: system, tools: [], model: makeAgentModelAdapter(maxAttempts: 1), maxTurns: 1
         )
         let callStart = Date()
-        let result = await classifier.send("用户最新消息:\(prompt)")
+        let result = await classifier.send(latestInput)
         let elapsedMs = Int(Date().timeIntervalSince(callStart) * 1000)
         let callDetail = "role=上下文归属, provider=\(modelProvider), model=\(modelName), elapsed=\(elapsedMs)ms, payloadChars=\(payloadChars), brain=当前主脑"
         appendTrace(kind: .model, actor: "上下文归属", title: "当前主脑归属判断 · \(modelName)", detail: callDetail)
@@ -276,24 +267,49 @@ extension LingShuState {
         return !actionVerbs.contains { stripped.contains($0) }
     }
 
-    /// 解析大脑自报的置信度(没报 → medium 中性)。
-    nonisolated static func parseConfidence(_ norm: String) -> DispatchConfidence {
-        if norm.contains("\"confidence\":\"high\"") || norm.contains("confidence:high") { return .high }
-        if norm.contains("\"confidence\":\"low\"") || norm.contains("confidence:low") { return .low }
-        return .medium
+    private struct ContextResolverRoutePayload: Decodable {
+        let route: String
+        let thread: String?
+        let confidence: String?
     }
 
-    /// 解析上下文归属模型输出。只接受 high confidence 的合法候选线程;其它全部回到主脑。
-    nonisolated static func parseContextResolverDecision(_ raw: String, threads: [TriageThread]) -> DispatchDecision {
+    /// 解析大脑自报的置信度(没报/未知 → medium 中性)。
+    nonisolated static func parseConfidence(_ raw: String?) -> DispatchConfidence {
+        switch raw?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "high": return .high
+        case "low": return .low
+        default: return .medium
+        }
+    }
+
+    /// 兼容旧测试入口:只接受完整 JSON 对象,禁止从普通文本里"捞字段"。
+    nonisolated static func parseConfidence(_ norm: String) -> DispatchConfidence {
+        guard let data = norm.data(using: .utf8),
+              let payload = try? JSONDecoder().decode(ContextResolverRoutePayload.self, from: data) else {
+            return .medium
+        }
+        return parseConfidence(payload.confidence)
+    }
+
+    private nonisolated static func decodeContextResolverPayload(_ raw: String) -> ContextResolverRoutePayload? {
         let text = LingShuReasoningText.stripThinkTags(raw).trimmingCharacters(in: .whitespacesAndNewlines)
-        let norm = text.lowercased().replacingOccurrences(of: " ", with: "")
-        let confidence = parseConfidence(norm)
-        let isReply = norm.contains("\"route\":\"reply\"") || norm.contains("route:reply") ||
-            norm.contains("\"kind\":\"reply\"") || norm.contains("kind:reply")
-        guard isReply, confidence == .high else {
+        guard text.hasPrefix("{"), text.hasSuffix("}"), let data = text.data(using: .utf8) else {
+            return nil
+        }
+        return try? JSONDecoder().decode(ContextResolverRoutePayload.self, from: data)
+    }
+
+    /// 解析上下文归属模型输出。只接受完整 JSON + high confidence + 合法候选线程;其它全部回到主脑。
+    nonisolated static func parseContextResolverDecision(_ raw: String, threads: [TriageThread]) -> DispatchDecision {
+        guard let payload = decodeContextResolverPayload(raw) else {
+            return DispatchDecision(kind: .chat, goal: nil, replyRecordID: nil, confidence: .medium)
+        }
+        let confidence = parseConfidence(payload.confidence)
+        guard payload.route.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "reply",
+              confidence == .high else {
             return DispatchDecision(kind: .chat, goal: nil, replyRecordID: nil, confidence: confidence)
         }
-        let label = (Self.jsonField(text, "thread") ?? "").trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        let label = (payload.thread ?? "").trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
         guard let thread = threads.first(where: { $0.label.uppercased() == label }) else {
             return DispatchDecision(kind: .chat, goal: nil, replyRecordID: nil, confidence: .low)
         }
@@ -546,6 +562,16 @@ extension LingShuState {
     func continueDispatchedThread(prompt: String, recordID: String) {
         if recordID == blockedDispatchedRecordID { blockedDispatchedRecordID = nil }   // 已回答,解除"正等回答"标记
         appendTrace(kind: .route, actor: "主线程分诊", title: "续答派发任务", detail: "判为对该派发任务的回复,续跑那条隔离会话(带真上下文,不另起)。")
+        appendTrace(
+            kind: .system,
+            actor: "第⑤站",
+            title: "上下文装配计划",
+            detail: LingShuContextAssemblyPlan.continueExistingTask(
+                recordID: recordID,
+                source: "structured_route_reply",
+                reason: "resume_dispatched_thread"
+            ).traceLine
+        )
         let pending = ChatMessage(speaker: "灵枢", text: dialogueAcknowledgement.intake(for: prompt), isUser: false, isLoading: true, taskRecordID: recordID)
         chatMessages.append(pending)
         dispatchedTaskBubbles[recordID] = pending.id   // 完成由编排器事件回填这条气泡

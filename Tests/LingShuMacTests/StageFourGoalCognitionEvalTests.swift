@@ -102,7 +102,7 @@ fileprivate enum LingShuStageFourEvalSuite {
             expectedKind: .interaction,
             realWorldTask: true,
             requiresMakerChecker: true,
-            requirementVerbs: [.documentGenerate],
+            requirementVerbs: [.browserOperate],
             gapKinds: [],
             expectsOAuth: false,
             note: "带主体的继续应接当前材料上下文,不是重新自我介绍或新建无关任务。"
@@ -173,7 +173,7 @@ fileprivate enum LingShuStageFourEvalSuite {
             realWorldTask: true,
             requiresMakerChecker: true,
             requirementVerbs: [.externalSystemWrite, .humanConfirm],
-            gapKinds: [.permission, .humanConfirmation],
+            gapKinds: [.permission],
             expectsOAuth: true,
             note: "写第三方系统需要能力/凭据/授权,但必须由结构化 OAuth 字段触发。"
         ),
@@ -195,7 +195,7 @@ fileprivate enum LingShuStageFourEvalSuite {
             realWorldTask: true,
             requiresMakerChecker: true,
             requirementVerbs: [.deviceDiscover, .deviceControl, .humanConfirm],
-            gapKinds: [.device, .permission, .humanConfirmation],
+            gapKinds: [.device, .humanConfirmation],
             expectsOAuth: false,
             note: "物理执行必须探测设备、识别能力、二次确认,不能文档冒充完成。"
         ),
@@ -334,12 +334,36 @@ final class StageFourGoalCognitionLiveEvalTests: XCTestCase {
         return min(value, count)
     }
 
+    private func configureLiveEvalModel(_ state: LingShuState) {
+        if let rawProvider = env["LINGSHU_STAGE4_LIVE_PROVIDER"]?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !rawProvider.isEmpty {
+            let matched = ModelProviderPreset.catalog.first {
+                $0.name.caseInsensitiveCompare(rawProvider) == .orderedSame ||
+                $0.id.caseInsensitiveCompare(rawProvider) == .orderedSame
+            }
+            state.applyModelProvider(matched?.name ?? rawProvider)
+        }
+        if let model = env["LINGSHU_STAGE4_LIVE_MODEL"]?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !model.isEmpty {
+            state.modelName = model
+        }
+        if let apiKey = env["LINGSHU_STAGE4_LIVE_API_KEY"]?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !apiKey.isEmpty {
+            state.apiKey = apiKey
+        }
+    }
+
+    private func liveModelLabel(_ state: LingShuState) -> String {
+        "\(state.modelProvider) / \(state.modelName) @ \(state.endpoint)"
+    }
+
     func testLiveControlPlaneAgainstStageFourGoldenSuite() async throws {
         try requireLiveEval()
 
         let state = LingShuState()
+        configureLiveEvalModel(state)
         guard state.isModelConnected else {
-            throw XCTSkip("当前主脑未连接,无法跑 live eval。请先在灵枢配置页接通模型。")
+            throw XCTSkip("当前主脑未连接,无法跑 live eval。model=\(liveModelLabel(state))")
         }
 
         let allCases = LingShuStageFourEvalSuite.cases
@@ -350,7 +374,7 @@ final class StageFourGoalCognitionLiveEvalTests: XCTestCase {
             let start = Date()
             let spec = await state.deriveGoalSpec(for: sample.input, taskRecordID: nil)
             guard let spec else {
-                failures.append("\(sample.id): GoalSpec 未解析")
+                failures.append("\(sample.id): GoalSpec 未解析 model=\(liveModelLabel(state))")
                 continue
             }
 

@@ -78,7 +78,13 @@ enum LingShuCapabilityRequirementPlanner {
     - verb 取值之一:external_system.read / external_system.write / local_file.scan / document.generate / browser.operate / device.discover / device.control / api.call / human.confirm / compute
     - target:作用对象(人读即可,如「用户的 Notion 工作区」「/tmp 目录」「床头灯」)
     - detail:一句话说明这条需求
-    铁律:用通用动词描述「需要什么能力」,不要判断有没有、也不要写补齐方案。同步到第三方服务=external_system.write;读第三方=external_system.read;扫本机文件=local_file.scan;生成文档/PPT=document.generate;需要账号授权/凭据=human.confirm。
+    铁律:用通用动词描述「需要什么能力」,不要判断有没有、也不要写补齐方案。同步到第三方服务=external_system.write;读第三方=external_system.read;扫本机文件=local_file.scan;生成文档/PPT=document.generate;需要账号授权/凭据/付款/物理动作确认/不可逆高风险确认=human.confirm。
+    边界也要结构化输出,不能藏在 detail 文本里:
+    - 目标需要读/写第三方账号、外部工作区、云端服务且用户尚未明确授权/凭据时,除 external_system.read/write 外,必须额外输出 human.confirm。
+    - 写代码、跑测试、执行脚本、做本地计算/数据处理属于 compute;除非目标明确要求访问外部 HTTP/API 服务,不要输出 api.call。
+    - 目标需要控制真实设备/外设/机器人时,通常需要 device.discover + device.control;控制真实设备前必须额外输出 human.confirm。
+    - 目标包含不可逆、破坏性、对外发送、资金/付款、生产环境变更等高风险动作时,除对应能力外,必须额外输出 human.confirm。
+    - 仅“把结果告诉用户/询问是否满意/交付路径”不是能力边界,不要输出 human.confirm。
     """
 
     /// 容错解析:剥围栏 + 取首个 [...] + 逐项;无效 → []。

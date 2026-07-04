@@ -4,8 +4,8 @@ import Foundation
 /// 从 LingShuMemoryService 主文件拆出，保持单文件聚焦一类记忆职责。
 extension LingShuMemoryService {
 
-    /// 用户只说"继续/下一步"时，先找未完成或明确还有下一步的任务。
-    /// 单个候选高置信续接；多个候选交给上层渲染选择卡。
+    /// 已废弃:裸"继续/下一步"不再由记忆层凭文本匹配任务。
+    /// 调用方应让主脑结合最近上下文输出结构化续接决策。
     func ambiguousTaskResumeLookup(for prompt: String) -> LingShuTaskMemoryLookup? {
         guard LingShuMemoryTextToolkit.isAmbiguousTaskResumeRequest(prompt) else { return nil }
 

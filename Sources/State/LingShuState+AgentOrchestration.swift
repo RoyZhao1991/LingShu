@@ -120,6 +120,13 @@ extension LingShuState {
             guard !isRoleAgentEventID(id) else { return }
             let recordID = agentSubTaskRecords[id]
             if recordID == blockedDispatchedRecordID { blockedDispatchedRecordID = nil }
+            if let recordID, manuallyStoppedTaskRecords.remove(recordID) != nil {
+                let stopped = "用户已手动中止该任务。"
+                appendTaskRecordMessage(recordID, actor: "用户", role: "停止", kind: .warning, text: stopped)
+                finishTaskRecord(recordID, status: .failed, summary: stopped)
+                briefMainThread("子任务「\(objective)」已由用户手动中止。")
+                return
+            }
             // P2 真闭环:即便模型撞顶/停滞被判 failed,若完成闸早已判 waitingForUser/partial(如缺凭据需用户),
             // 以完成闸为准——给出「需要你…」的诚实收尾,而不是笼统「异常」,并指向它便于续接。
             let outcome = recordID.flatMap { rid in taskExecutionRecords.first { $0.id == rid }?.taskOutcome }

@@ -105,6 +105,50 @@ final class SerialInputQueueTests: XCTestCase {
         XCTAssertFalse(state.currentlyExecutingTurn(), "停止完成后串行闸门应立即释放,下一条输入不应误入队")
     }
 
+    func testCancelCurrentMainTurnPreservesProgressAndAddsStopMarker() {
+        let state = LingShuState()
+        let progress = "已完成第一步,正在继续处理。"
+        let bubble = ChatMessage(speaker: "灵枢", text: progress, isUser: false, isLoading: true)
+        state.chatMessages.append(bubble)
+        state.executingChatTurnID = bubble.id
+        state.pendingChatTurnIDs = [bubble.id]
+        state.pendingMainTurns[bubble.id] = .init(
+            bubbleID: bubble.id,
+            prompt: "一个正在执行的任务",
+            taskRecordID: nil,
+            resumeBlocked: false,
+            originalPromptForVerification: nil,
+            startedAt: Date()
+        )
+        state.isModelReplying = true
+
+        state.cancelCurrentCall()
+
+        let text = state.chatMessages.first(where: { $0.id == bubble.id })?.text ?? ""
+        XCTAssertTrue(text.contains(progress), "手动停止不能覆盖已有进展")
+        XCTAssertTrue(text.contains("手动中止"), "手动停止应追加中止标识")
+        XCTAssertFalse(state.chatMessages.first(where: { $0.id == bubble.id })?.isLoading ?? true)
+    }
+
+    func testManualStopMarkerUsesStandaloneTextForEmptyBubble() {
+        XCTAssertEqual(LingShuState.textWithManualStopMarker(""), "⏹ 本轮调用已手动中止。")
+    }
+
+    func testManualStopOnTaskRecordPreservesLoadingBubbleProgress() {
+        let state = LingShuState()
+        let recordID = "task-stop-record"
+        let progress = "子任务已经完成资料读取。"
+        let bubble = ChatMessage(speaker: "灵枢", text: progress, isUser: false, isLoading: true, taskRecordID: recordID)
+        state.chatMessages = [bubble]
+
+        state.markTaskRecordManuallyStopped(recordID)
+
+        XCTAssertTrue(state.manuallyStoppedTaskRecords.contains(recordID))
+        XCTAssertEqual(state.chatMessages.first?.isLoading, false)
+        XCTAssertTrue(state.chatMessages.first?.text.contains(progress) ?? false)
+        XCTAssertTrue(state.chatMessages.first?.text.contains("手动中止") ?? false)
+    }
+
     func testRemoveSerialInputDropsItAndMarksBubble() {
         let state = LingShuState()
         state.enqueueSerialInput(prompt: "要删的", source: .typed)

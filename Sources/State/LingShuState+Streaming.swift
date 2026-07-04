@@ -136,6 +136,16 @@ extension LingShuState {
     /// 思考增量累积出气泡上的滚动预览：只展示最近一段，避免气泡无限增高。
     func advanceThinkingPreview(_ delta: String, for messageID: UUID) {
         thinkingPreviewBuffers[messageID, default: ""] += delta
+        guard thinkingPreviewFlushTasks[messageID] == nil else { return }
+        thinkingPreviewFlushTasks[messageID] = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 180_000_000)
+            guard let self, !Task.isCancelled else { return }
+            self.flushThinkingPreview(for: messageID)
+        }
+    }
+
+    func flushThinkingPreview(for messageID: UUID) {
+        thinkingPreviewFlushTasks.removeValue(forKey: messageID)
         guard let index = chatMessages.firstIndex(where: { $0.id == messageID }),
               chatMessages[index].isLoading else { return }
         let buffer = thinkingPreviewBuffers[messageID] ?? ""
@@ -148,6 +158,8 @@ extension LingShuState {
 
     /// 定稿一条消息时清掉思考预览；推理过程只留在调用链里，不进聊天历史。
     func clearThinkingPreview(for messageID: UUID) {
+        thinkingPreviewFlushTasks[messageID]?.cancel()
+        thinkingPreviewFlushTasks.removeValue(forKey: messageID)
         thinkingPreviewBuffers.removeValue(forKey: messageID)
         if let index = chatMessages.firstIndex(where: { $0.id == messageID }),
            chatMessages[index].thinkingPreview != nil {
@@ -158,6 +170,40 @@ extension LingShuState {
     /// 执行阶段的流式气泡：正文增量边到边追加上屏；语音输出开启时整句即到即读。
     func appendStreamingBubbleText(_ delta: String, to messageID: UUID?) {
         guard let messageID,
+              let index = chatMessages.firstIndex(where: { $0.id == messageID }),
+              chatMessages[index].isLoading else { return }
+        var filter = structuredStreamVisibilityFilters[messageID] ?? LingShuStructuredStreamVisibilityFilter()
+        let visibleDelta = filter.consume(delta)
+        structuredStreamVisibilityFilters[messageID] = filter
+        guard !visibleDelta.isEmpty else { return }
+        streamingBubblePendingDeltas[messageID, default: ""] += visibleDelta
+        let pending = streamingBubblePendingDeltas[messageID] ?? ""
+
+        if Self.shouldFlushStreamingBubbleDelta(visibleDelta, pending: pending) {
+            flushStreamingBubbleText(for: messageID)
+        } else {
+            scheduleStreamingBubbleFlush(for: messageID)
+        }
+    }
+
+    nonisolated static func shouldFlushStreamingBubbleDelta(_ delta: String, pending: String) -> Bool {
+        pending.count >= 120
+    }
+
+    func scheduleStreamingBubbleFlush(for messageID: UUID) {
+        guard streamingBubbleFlushTasks[messageID] == nil else { return }
+        streamingBubbleFlushTasks[messageID] = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 120_000_000)
+            guard !Task.isCancelled else { return }
+            self?.flushStreamingBubbleText(for: messageID, cancelScheduled: false)
+        }
+    }
+
+    func flushStreamingBubbleText(for messageID: UUID, cancelScheduled: Bool = true) {
+        if cancelScheduled { streamingBubbleFlushTasks[messageID]?.cancel() }
+        streamingBubbleFlushTasks.removeValue(forKey: messageID)
+        guard let delta = streamingBubblePendingDeltas.removeValue(forKey: messageID),
+              !delta.isEmpty,
               let index = chatMessages.firstIndex(where: { $0.id == messageID }),
               chatMessages[index].isLoading else { return }
         chatMessages[index].text += delta
@@ -212,9 +258,12 @@ extension LingShuState {
     /// （非流式模式）时退回旧行为——直接追加一条新消息。
     func finalizeStreamingBubble(_ messageID: UUID?, text: String, taskRecordID: String?) {
         if let messageID {
+            flushStreamingBubbleText(for: messageID)
             clearThinkingPreview(for: messageID)
             if let index = chatMessages.firstIndex(where: { $0.id == messageID }) {
                 concludeStreamedSpeech(for: messageID, streamedText: chatMessages[index].text)
+                structuredStreamVisibilityFilters.removeValue(forKey: messageID)
+                streamingBubblePendingDeltas.removeValue(forKey: messageID)
                 if text.isEmpty {
                     chatMessages.remove(at: index)
                 } else {

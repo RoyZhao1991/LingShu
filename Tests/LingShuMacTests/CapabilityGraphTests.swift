@@ -244,6 +244,37 @@ final class CapabilityGraphTests: XCTestCase {
         XCTAssertNil(state.gapAnalysis(for: rid), "交付型用户确认不应反写为缺口")
     }
 
+    @MainActor
+    func testProtectedHumanConfirmRequirementBecomesBlockingGap() {
+        let state = LingShuState()
+        let rid = state.createTaskExecutionRecord(for: "删除生产数据前确认")
+        defer {
+            state.taskExecutionRecords.removeAll { $0.id == rid }
+            state.persistTaskExecutionRecords()
+            state.taskExecutionJournal.flush()
+        }
+
+        state.bindCapabilityRequirements([
+            .init(verb: .humanConfirm, target: "生产数据删除", detail: "删除前必须用户确认")
+        ], to: rid)
+
+        let gap = state.gapAnalysis(for: rid)
+        XCTAssertTrue(gap?.gaps.contains(where: {
+            $0.kind == .humanConfirmation && $0.blocking && $0.missing.contains("human.confirm")
+        }) == true, "结构化 human.confirm 指向受保护边界时必须成为阻断确认")
+        XCTAssertTrue(gap?.needsUserToUnblock == true)
+    }
+
+    @MainActor
+    func testGenericHumanConfirmRequirementRemainsAdvisory() {
+        let gap = LingShuState.gapFromMissingRequirement(
+            .init(verb: .humanConfirm, target: "Python 脚本运行结果", detail: "最终告诉用户结果")
+        )
+
+        XCTAssertEqual(gap.kind, .humanConfirmation)
+        XCTAssertFalse(gap.blocking, "泛化/交付型 human.confirm 不能卡住自包含任务")
+    }
+
     // MARK: 续接优先恢复(spec 第14条末)
 
     func testPickResumeTargetPrefersRecentUnfinished() {

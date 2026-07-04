@@ -2,6 +2,22 @@ import Foundation
 
 @MainActor
 extension LingShuState {
+    /// 高频聊天流式刷新会连续触发 chatStore.onMessagesChanged。
+    /// 控制面快照是给 MCP/运维看的观测副本，不需要跟每个 token 同步；用短节流把它降为采样，
+    /// 避免在 MainActor 上反复序列化聊天、任务和轨迹，影响输入框打字响应。
+    func scheduleControlSnapshotPublish(after delay: TimeInterval = 0.30) {
+        controlSnapshotPublishTask?.cancel()
+        controlSnapshotPublishTask = Task { @MainActor [weak self] in
+            let nanoseconds = UInt64(max(0, delay) * 1_000_000_000)
+            if nanoseconds > 0 {
+                try? await Task.sleep(nanoseconds: nanoseconds)
+            }
+            guard let self, !Task.isCancelled else { return }
+            self.controlSnapshotPublishTask = nil
+            self.publishControlSnapshot()
+        }
+    }
+
     /// 发布 MCP 只读控制面快照。
     ///
     /// 这是观测层的通用降耦:写操作和真实任务仍走 MainActor；外部测试/运维读取任务、聊天、
@@ -69,4 +85,3 @@ extension LingShuState {
         )
     }
 }
-

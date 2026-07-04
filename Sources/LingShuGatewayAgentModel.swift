@@ -89,6 +89,16 @@ final class LingShuGatewayAgentModel: LingShuAgentModel, @unchecked Sendable {
         var lastError: Error?
         for attempt in 1...maxAttempts {
             if Task.isCancelled { return .text("（本轮已被取消）") }
+            let trace = LingShuContextAssemblyMeter.shared.begin(.make(
+                provider: provider,
+                model: model,
+                protocolName: protocolName,
+                stream: false,
+                hasContinuationToken: plan.token != nil,
+                messages: messages,
+                tools: tools
+            ))
+            let traceStartedAt = Date()
             do {
                 let reply = try await client.send(request)
                 onActualCall?(provider, model)   // 地面真相:这颗脑真接了一次请求
@@ -99,6 +109,14 @@ final class LingShuGatewayAgentModel: LingShuAgentModel, @unchecked Sendable {
                     lingShuControlLog("prefix-cache: 本轮 hit=\(reply.cachedTokens ?? 0)/\(prompt) | 累计命中率 \(snap.ratePercent)% (\(snap.totalCached)/\(snap.totalPrompt), \(snap.calls)次) | \(provider) \(model)")
                 }
                 if !reply.toolCalls.isEmpty {
+                    _ = LingShuContextAssemblyMeter.shared.finish(
+                        id: trace.id,
+                        promptTokens: reply.promptTokens,
+                        cachedTokens: reply.cachedTokens,
+                        totalTokens: reply.totalTokens,
+                        startedAt: traceStartedAt,
+                        responseKind: "tool_calls"
+                    )
                     // 边做边想:把模型发起动作时的旁白上报(供执行流像 codex 一样显示「分析→动作」)。
                     let aside = LingShuReasoningText.stripThinkTags(reply.text).trimmingCharacters(in: .whitespacesAndNewlines)
                     if !aside.isEmpty { onReasoning?(aside) }
@@ -107,12 +125,38 @@ final class LingShuGatewayAgentModel: LingShuAgentModel, @unchecked Sendable {
                     })
                 }
                 // 剥掉 <think>…</think> 等推理标签,只留对用户的正文。
+                _ = LingShuContextAssemblyMeter.shared.finish(
+                    id: trace.id,
+                    promptTokens: reply.promptTokens,
+                    cachedTokens: reply.cachedTokens,
+                    totalTokens: reply.totalTokens,
+                    startedAt: traceStartedAt,
+                    responseKind: "text"
+                )
                 return .text(LingShuReasoningText.stripThinkTags(reply.text))
             } catch is CancellationError {
+                _ = LingShuContextAssemblyMeter.shared.finish(
+                    id: trace.id,
+                    promptTokens: nil,
+                    cachedTokens: nil,
+                    totalTokens: nil,
+                    startedAt: traceStartedAt,
+                    responseKind: "cancelled",
+                    errorKind: "cancelled"
+                )
                 return .text("（本轮已被取消）")
             } catch {
                 lastError = error
                 let failure = LingShuModelServiceFailure.classify(error)
+                _ = LingShuContextAssemblyMeter.shared.finish(
+                    id: trace.id,
+                    promptTokens: nil,
+                    cachedTokens: nil,
+                    totalTokens: nil,
+                    startedAt: traceStartedAt,
+                    responseKind: "failed",
+                    errorKind: failure.kind.rawValue
+                )
                 lingShuControlLog("agent model error(尝试 \(attempt)/\(maxAttempts), kind=\(failure.kind.rawValue)): \(failure.userFacingMessage) | endpoint=\(endpoint) provider=\(provider) model=\(model) keyLen=\(apiKey.count) msgs=\(messages.count) tools=\(tools.count)")
                 if !failure.shouldRetryRequest {
                     return .failed(reason: failure.encodedReason)
@@ -142,6 +186,16 @@ final class LingShuGatewayAgentModel: LingShuAgentModel, @unchecked Sendable {
             stream: true, timeout: timeout, continuationToken: plan.token,
             conversationMessages: Self.sanitizeToolCallSequence(messages.map(Self.toModelMessage)), tools: tools.map(Self.toToolDefinition)
         )
+        let trace = LingShuContextAssemblyMeter.shared.begin(.make(
+            provider: provider,
+            model: model,
+            protocolName: protocolName,
+            stream: true,
+            hasContinuationToken: plan.token != nil,
+            messages: messages,
+            tools: tools
+        ))
+        let traceStartedAt = Date()
         do {
             let reply = try await client.streamAgent(request, onContentDelta: onTextDelta)
             onActualCall?(provider, model)   // 地面真相:这颗脑真接了一次请求
@@ -151,17 +205,51 @@ final class LingShuGatewayAgentModel: LingShuAgentModel, @unchecked Sendable {
                 lingShuControlLog("prefix-cache: 本轮 hit=\(reply.cachedTokens ?? 0)/\(prompt) (stream) | 累计命中率 \(snap.ratePercent)% (\(snap.totalCached)/\(snap.totalPrompt), \(snap.calls)次) | \(provider) \(model)")
             }
             if !reply.toolCalls.isEmpty {
+                _ = LingShuContextAssemblyMeter.shared.finish(
+                    id: trace.id,
+                    promptTokens: reply.promptTokens,
+                    cachedTokens: reply.cachedTokens,
+                    totalTokens: reply.totalTokens,
+                    startedAt: traceStartedAt,
+                    responseKind: "tool_calls_stream"
+                )
                 let aside = LingShuReasoningText.stripThinkTags(reply.text).trimmingCharacters(in: .whitespacesAndNewlines)
                 if !aside.isEmpty { onReasoning?(aside) }
                 return .toolCalls(reply.toolCalls.map {
                     LingShuAgentToolCall(id: $0.id, name: $0.name, argumentsJSON: $0.arguments)
                 })
             }
+            _ = LingShuContextAssemblyMeter.shared.finish(
+                id: trace.id,
+                promptTokens: reply.promptTokens,
+                cachedTokens: reply.cachedTokens,
+                totalTokens: reply.totalTokens,
+                startedAt: traceStartedAt,
+                responseKind: "text_stream"
+            )
             return .text(LingShuReasoningText.stripThinkTags(reply.text))
         } catch is CancellationError {
+            _ = LingShuContextAssemblyMeter.shared.finish(
+                id: trace.id,
+                promptTokens: nil,
+                cachedTokens: nil,
+                totalTokens: nil,
+                startedAt: traceStartedAt,
+                responseKind: "cancelled_stream",
+                errorKind: "cancelled"
+            )
             return .text("（本轮已被取消）")
         } catch {
             let failure = LingShuModelServiceFailure.classify(error)
+            _ = LingShuContextAssemblyMeter.shared.finish(
+                id: trace.id,
+                promptTokens: nil,
+                cachedTokens: nil,
+                totalTokens: nil,
+                startedAt: traceStartedAt,
+                responseKind: "failed_stream",
+                errorKind: failure.kind.rawValue
+            )
             lingShuControlLog("agent stream error(kind=\(failure.kind.rawValue)): \(failure.userFacingMessage) | endpoint=\(endpoint) provider=\(provider) model=\(model)")
             return .failed(reason: failure.encodedReason)
         }

@@ -20,7 +20,7 @@ struct TaskWindowFooter: View {
             }
             // 待发送附件托盘(与主输入框同一套 ingest 管线 + 同一缓冲)。
             if !state.pendingAttachments.isEmpty {
-                LingShuAttachmentTray(state: state)
+                LingShuAttachmentTray(state: state, inputStore: state.inputStore)
             }
             followupInput
         }

@@ -224,12 +224,18 @@ enum LingShuGapAnalyzer {
         - gaps: 数组,每项 {kind, missing, fill_path, blocking}。kind 八选一:model/tool/device/permission/knowledge/resource/funding/human_confirmation。
           missing=缺什么;fill_path=怎么补(**优先用上面的自我扩展手段**,真补不了才写需用户提供什么);blocking=没它就做不成(true)/可降级或绕过(false)。无缺口给 []。
         - note: 一句话结论(能做就说思路;不能立即做就说补齐策略)
-        - OAuth: 授权弹窗协议字段。只有当前目标**真正需要用户授权/凭据/付费/物理确认后才能继续执行**时才输出对象:
+        - OAuth: 授权弹窗协议字段。只有当前目标**真正需要用户授权第三方账号/外部服务/云端工作区/API 凭据后才能继续执行**时才输出对象:
           {"required":true,"target":"受保护对象","action":"要执行的动作","reason":"为什么需要授权","question":"给用户看的授权问题","options":[{"label":"确认授权,继续","detail":"..."},{"label":"暂不授权","detail":"..."},{"label":"改用替代方案","detail":"..."}]}
           否则必须输出 null。普通知识问答、解释 OAuth/token/登录原理、普通文本回复、已能直接完成的任务,都必须是 "OAuth": null。
+          注意:物理设备确认、删除/生产变更/付款确认等不是 OAuth;它们应进入 gaps 的 human_confirmation/permission/funding/device 字段,不要用 OAuth 承载。
 
         铁律:能自己补的(写工具/找技能/下素材/接设备)**别当缺口拒绝**——标成 gap 但 fill_path 写明自我扩展手段、blocking 按是否真卡住判;**只有真需要外部(钱 / 凭据 / 物理设备 / 人授权)才标 blocking=true 且 kind=funding/human_confirmation/device/permission**。
         铁律:授权窗口只由 OAuth 字段控制;不要因为文本里出现"授权/token/OAuth/登录/权限"就设置 OAuth,除非当前操作真的需要用户给授权才能继续。
+        铁律:前置边界必须结构化列出,不要只写在 note 中:
+        - 第三方/外部系统读写且尚未授权:至少包含 permission 或 human_confirmation 阻断缺口,并设置 OAuth.required=true。
+        - 真实设备/外设/机器人控制:至少包含 device 阻断缺口;如果需要实际动作,还要包含 human_confirmation 阻断缺口。OAuth 必须为 null,除非还涉及第三方账号授权。
+        - 删除、生产环境变更、付款/扣款、不可逆或高风险动作:至少包含 human_confirmation 阻断缺口;必要时再加 permission/funding。OAuth 必须为 null,除非还涉及第三方账号授权。
+        - 本机文件读取/本地生成/纯计算/普通问答:没有真实外部边界时不要制造 permission/human_confirmation。
         """
     }
 

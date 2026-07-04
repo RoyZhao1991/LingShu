@@ -79,7 +79,7 @@ final class TaskSemanticMatchTests: XCTestCase {
         XCTAssertTrue(lookup.explicitResume, "明确回溯标记应透传给上层")
     }
 
-    func testAmbiguousResumePrefersSingleContinuableTask() {
+    func testBareContinueDoesNotDirectlyMatchContinuableTask() {
         let service = makeService()
         service.rememberTask(
             prompt: "写一个 web 爬虫",
@@ -96,12 +96,11 @@ final class TaskSemanticMatchTests: XCTestCase {
 
         let lookup = service.ambiguousTaskResumeLookup(for: "继续")
 
-        XCTAssertEqual(lookup?.confidence, .high)
-        XCTAssertTrue(lookup?.restored == true)
-        XCTAssertEqual(lookup?.taskID, "task-crawler")
+        XCTAssertNil(lookup, "裸继续不能由记忆工具层凭词直接续接任务,应交给主脑结合最近上下文结构化判断")
+        XCTAssertFalse(LingShuMemoryTextToolkit.isAmbiguousTaskResumeRequest("继续"))
     }
 
-    func testAmbiguousResumeOffersChoicesForParallelContinuableTasks() {
+    func testBareNextStepDoesNotOfferTaskChoicesByKeyword() {
         let service = makeService()
         service.rememberTask(
             prompt: "修复登录 bug",
@@ -118,9 +117,8 @@ final class TaskSemanticMatchTests: XCTestCase {
 
         let lookup = service.ambiguousTaskResumeLookup(for: "下一步")
 
-        XCTAssertEqual(lookup?.confidence, .medium)
-        XCTAssertFalse(lookup?.restored ?? true)
-        XCTAssertEqual(Set(lookup?.candidates.compactMap(\.taskID) ?? []), ["task-login", "task-voice"])
+        XCTAssertNil(lookup, "多个候选任务的选择卡应来自主脑结构化续接决策,不是裸词匹配")
+        XCTAssertFalse(LingShuMemoryTextToolkit.isAmbiguousTaskResumeRequest("下一步"))
     }
 
     func testAmbiguousResumeIgnoresCompletedTaskWithoutNextStep() {

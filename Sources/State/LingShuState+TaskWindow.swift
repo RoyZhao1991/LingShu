@@ -211,12 +211,15 @@ extension LingShuState {
             return
         }
         if currentAgentTurnRecordID == recordID || autonomousRunRecordID == recordID {
+            markTaskRecordManuallyStopped(recordID)
             stopActiveRun()
             return
         }
+        markTaskRecordManuallyStopped(recordID)
         appendTaskRecordMessage(recordID, actor: "用户", role: "停止", kind: .warning, text: "用户已停止该任务。")
         if blockedDispatchedRecordID == recordID { blockedDispatchedRecordID = nil }
         finishTaskRecord(recordID, status: .failed, summary: "用户已停止该任务。")
+        manuallyStoppedTaskRecords.remove(recordID)
         promoteQueuedDispatchIfPossible()
     }
 

@@ -62,4 +62,67 @@ final class StreamingAgentLoopTests: XCTestCase {
         guard case .text(let text) = response else { return XCTFail("默认实现应回退 respond 返回 .text") }
         XCTAssertEqual(text, "非流式答复")
     }
+
+    func testStructuredJSONStreamIsHiddenFromVisibleBubble() {
+        var filter = LingShuStructuredStreamVisibilityFilter()
+
+        XCTAssertEqual(filter.consume("{"), "")
+        XCTAssertEqual(filter.consume("\"reply\":\"你好\""), "")
+        XCTAssertEqual(filter.consume(",\"OAuth\":null}"), "")
+    }
+
+    func testFencedStructuredJSONStreamIsHiddenFromVisibleBubble() {
+        var filter = LingShuStructuredStreamVisibilityFilter()
+
+        XCTAssertEqual(filter.consume("```"), "")
+        XCTAssertEqual(filter.consume("json\n{\"reply\":\"你好\"}"), "")
+        XCTAssertEqual(filter.consume("\n```"), "")
+    }
+
+    func testPlainTextStreamStillPassesThrough() {
+        var filter = LingShuStructuredStreamVisibilityFilter()
+
+        XCTAssertEqual(filter.consume("你好"), "你好")
+        XCTAssertEqual(filter.consume("，灵枢在。"), "，灵枢在。")
+    }
+
+    @MainActor
+    func testStateStreamingBubbleHidesStructuredJSONDeltas() {
+        let state = LingShuState()
+        let bubble = ChatMessage(speaker: "灵枢", text: "", isUser: false, isLoading: true)
+        state.chatMessages = [bubble]
+
+        state.appendStreamingBubbleText("{\"reply\":\"你好\"", to: bubble.id)
+        state.appendStreamingBubbleText(",\"OAuth\":null}", to: bubble.id)
+
+        XCTAssertEqual(state.chatMessages.first?.text, "")
+    }
+
+    @MainActor
+    func testStateStreamingBubbleStillShowsPlainTextDeltas() {
+        let state = LingShuState()
+        let bubble = ChatMessage(speaker: "灵枢", text: "", isUser: false, isLoading: true)
+        state.chatMessages = [bubble]
+
+        state.appendStreamingBubbleText("你好", to: bubble.id)
+        state.appendStreamingBubbleText("，我在。", to: bubble.id)
+        state.flushStreamingBubbleText(for: bubble.id)
+
+        XCTAssertEqual(state.chatMessages.first?.text, "你好，我在。")
+    }
+
+    @MainActor
+    func testShortStreamingDeltaIsBufferedUntilFlush() {
+        let state = LingShuState()
+        let bubble = ChatMessage(speaker: "灵枢", text: "", isUser: false, isLoading: true)
+        state.chatMessages = [bubble]
+
+        state.appendStreamingBubbleText("短句未完", to: bubble.id)
+        XCTAssertEqual(state.chatMessages.first?.text, "", "短小未收口 delta 不应每 token 刷新 UI")
+        XCTAssertEqual(state.streamingBubblePendingDeltas[bubble.id], "短句未完")
+
+        state.flushStreamingBubbleText(for: bubble.id)
+        XCTAssertEqual(state.chatMessages.first?.text, "短句未完")
+        XCTAssertNil(state.streamingBubblePendingDeltas[bubble.id])
+    }
 }
