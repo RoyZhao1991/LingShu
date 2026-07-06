@@ -41,12 +41,20 @@ struct LingShuAgentTool: Sendable {
     let name: String
     let description: String
     let parametersJSON: String
+    let metadata: LingShuToolMetadata
     let handler: @Sendable (String) async -> String
 
-    init(name: String, description: String, parametersJSON: String = "{\"type\":\"object\",\"properties\":{}}", handler: @escaping @Sendable (String) async -> String) {
+    init(
+        name: String,
+        description: String,
+        parametersJSON: String = "{\"type\":\"object\",\"properties\":{}}",
+        metadata: LingShuToolMetadata? = nil,
+        handler: @escaping @Sendable (String) async -> String
+    ) {
         self.name = name
         self.description = description
         self.parametersJSON = parametersJSON
+        self.metadata = metadata ?? .inferred(name: name, parametersJSON: parametersJSON)
         self.handler = handler
     }
 }
@@ -143,6 +151,8 @@ actor LingShuAgentSession: LingShuAgentSessioning {
     private let historyCompactor: (any LingShuHistoryCompacting)?
     /// 压缩抽出的关键事实回灌口(差距4·超越):把丢弃段事实 remember 进知识图谱实现近无损。nil=不记(核心循环不依赖 Memory)。
     private let factSink: (@Sendable ([String]) async -> Void)?
+    /// 第 6 站 trace:只记录 Loop 关键决策(模型回合、工具调度、策略纠偏、退出),不刷 token 流。
+    private let loopTraceSink: (@Sendable (LingShuAgentLoopTraceEvent) async -> Void)?
     /// 当前向模型暴露的工具名集(差距7-B·延迟加载):nil=暴露全部(经典零变更);非 nil=只把集内工具的 schema 喂模型,
     /// 全部 handler 仍注册可执行,search_tools 激活后下一回合即见(动态扩张)。
     private let exposedToolNames: LingShuExposedToolSet?
@@ -209,6 +219,7 @@ actor LingShuAgentSession: LingShuAgentSessioning {
         toolDispatcher: any LingShuToolDispatching = LingShuSerialToolDispatcher(),
         historyCompactor: (any LingShuHistoryCompacting)? = nil,
         factSink: (@Sendable ([String]) async -> Void)? = nil,
+        loopTraceSink: (@Sendable (LingShuAgentLoopTraceEvent) async -> Void)? = nil,
         exposedToolNames: LingShuExposedToolSet? = nil
     ) {
         self.id = id
@@ -220,6 +231,7 @@ actor LingShuAgentSession: LingShuAgentSessioning {
         self.toolDispatcher = toolDispatcher
         self.historyCompactor = historyCompactor
         self.factSink = factSink
+        self.loopTraceSink = loopTraceSink
         self.exposedToolNames = exposedToolNames
         var seeded: [LingShuAgentMessage] = []
         if let system { seeded.append(.init(role: .system, content: system)) }
@@ -234,6 +246,12 @@ actor LingShuAgentSession: LingShuAgentSessioning {
         textDeltaSink = sink
     }
 
+    private func emitLoopTrace(_ kind: LingShuAgentLoopTraceKind, actor: String, title: String, detail: String) async {
+        guard let loopTraceSink else { return }
+        let event = LingShuAgentLoopTraceEvent(kind: kind, actor: actor, title: title, detail: detail)
+        await loopTraceSink(event)
+    }
+
     /// 投入一条用户输入,跑完整循环直到模型收尾、卡住或到轮次上限。
     func send(_ userText: String) async -> LingShuAgentRunResult {
         await send(userText, imageDataURLs: nil)
@@ -244,8 +262,8 @@ actor LingShuAgentSession: LingShuAgentSessioning {
         repairOrphanToolCalls()   // 续接前修齐上一回合飞行中被取消留下的孤儿 tool_call(打断恢复泄漏修复)→ 下面的不变量检查见到的是良构 history
         pendingCorrection = nil   // 新回合不带上一回合可能残留的纠正
         consumePendingBriefings() // 子任务简报先入上下文(在用户新输入之前)——主线程信息同步
-        await compactHistoryIfNeeded()   // 回合边界:超窗口的早段**语义压缩成前情提要**(对标 CC auto-compaction),失败回退硬裁剪
         messages.append(.init(role: .user, content: userText, imageDataURLs: imageDataURLs))
+        await compactHistoryIfNeeded()   // 当前输入入列后再压缩:保留本轮目标,避免"新消息刚好越界"带着过量上下文进模型
         checkInvariants(at: .afterCompaction)   // 不变量:压缩后历史在预算内且良构(I6+I1+I2)
         return recordTerminal(await runLoop())
     }
@@ -338,11 +356,22 @@ actor LingShuAgentSession: LingShuAgentSessioning {
     /// 长会话不丢早先的决策/产物路径/已确认信息(对标 Claude Code 的 auto-compaction,补"硬丢中段"短板)。
     /// 提要作为 body 首条流转,下次溢出会被连同新内容再压缩=**滚动摘要**。蒸馏失败/为空 → 回退硬裁剪,绝不卡住。
     private func compactHistoryIfNeeded() async {
+        let beforeMessageCount = messages.count
+        let beforeTokens = LingShuTokenEstimator.estimate(messages)
         // 差距4·可替换模块:注入了压缩器(生产侧=token 分层 + 知识图谱无损召回)→ 走它;
         // 抽出的关键事实经 factSink remember 进图谱(核心循环不直接依赖 Memory,保持模块解耦)。
         if let compactor = historyCompactor {
             if let result = await compactor.compact(messages: messages, model: model) {
                 messages = result.messages
+                await emitCompactionTrace(
+                    strategy: "injected",
+                    budget: compactionBudgetDescription(compactor.budget),
+                    beforeMessageCount: beforeMessageCount,
+                    beforeTokens: beforeTokens,
+                    afterMessageCount: messages.count,
+                    afterTokens: LingShuTokenEstimator.estimate(messages),
+                    extractedFacts: result.extractedFacts.count
+                )
                 if !result.extractedFacts.isEmpty, let sink = factSink {
                     await sink(result.extractedFacts)
                 }
@@ -364,11 +393,64 @@ actor LingShuAgentSession: LingShuAgentSessioning {
         let resp = await model.respond(messages: [sys, usr], tools: [])
         var summary = ""
         if case .text(let s) = resp { summary = s.trimmingCharacters(in: .whitespacesAndNewlines) }
-        guard !summary.isEmpty else { trimHistoryIfNeeded(); return }   // 蒸馏失败 → 回退硬裁剪
+        guard !summary.isEmpty else {
+            trimHistoryIfNeeded()
+            await emitCompactionTrace(
+                strategy: "classic_hard_trim",
+                budget: "messages:\(maxHistoryMessages)",
+                beforeMessageCount: beforeMessageCount,
+                beforeTokens: beforeTokens,
+                afterMessageCount: messages.count,
+                afterTokens: LingShuTokenEstimator.estimate(messages),
+                extractedFacts: 0
+            )
+            return
+        }   // 蒸馏失败 → 回退硬裁剪
         var kept = Array(body.suffix(keepRecent))
         while let first = kept.first, first.role == .tool { kept.removeFirst() }
         let summaryMsg = LingShuAgentMessage(role: .user, content: "【前情提要(早前对话已压缩,供你延续)】\n\(summary)")
         messages = Array(messages[..<systemCount]) + [summaryMsg] + kept
+        await emitCompactionTrace(
+            strategy: "classic_distill",
+            budget: "messages:\(maxHistoryMessages)",
+            beforeMessageCount: beforeMessageCount,
+            beforeTokens: beforeTokens,
+            afterMessageCount: messages.count,
+            afterTokens: LingShuTokenEstimator.estimate(messages),
+            extractedFacts: 0
+        )
+    }
+
+    private func compactionBudgetDescription(_ budget: LingShuCompactionBudget) -> String {
+        switch budget {
+        case .messageCount(let count):
+            return "messages:\(count)"
+        case .tokens(let count):
+            return "tokens:\(count)"
+        }
+    }
+
+    private func emitCompactionTrace(
+        strategy: String,
+        budget: String,
+        beforeMessageCount: Int,
+        beforeTokens: Int,
+        afterMessageCount: Int,
+        afterTokens: Int,
+        extractedFacts: Int
+    ) async {
+        await emitLoopTrace(
+            .runtime,
+            actor: "上下文压缩",
+            title: "第7站压缩",
+            detail: [
+                "strategy=\(strategy)",
+                "budget=\(budget)",
+                "messages=\(beforeMessageCount)->\(afterMessageCount)",
+                "tokens=\(beforeTokens)->\(afterTokens)",
+                "facts=\(extractedFacts)"
+            ].joined(separator: " ")
+        )
     }
 
     /// 续接:把外部给的答案回填到卡住的阻塞工具调用上,继续跑循环。
@@ -398,11 +480,6 @@ actor LingShuAgentSession: LingShuAgentSessioning {
     /// 设 2:两次就识别并给确定性分块指导,把原来模型要 20+ 轮才自悟的弯路压到 2-3 轮。
     static let bigArgEmptyChunkSteerThreshold = 2
 
-    /// **可选脚手架工具**(非任务目标本身):卡在它们上绝不交还,改为纠偏让模型跳过、直接做任务。
-    static let optionalScaffoldTools: Set<String> = ["update_plan"]
-
-    /// 会改动交付物的工具(产出"进展"的标志)。其余(read_file/run_command 跑测试/list_directory…)算"验证/查看"。
-    static let mutatingToolNames: Set<String> = ["write_file", "edit_file"]
     /// **过度自测收敛**(根治"游戏早做好了却反复跑测试 35 分钟不宣布完成"):已产出过文件后,连续这么多步
     /// **不再改动任何文件**(只在反复测试/查看)→ 工作其实已完成。`overValidationNudgeAt` 先提示收尾;
     /// 再不收尾到 `overValidationForceAt` 就**强制收尾**(返回 .completed),交**独立验收(checker)**判定,
@@ -449,6 +526,12 @@ actor LingShuAgentSession: LingShuAgentSessioning {
             } else {
                 activeTools = tools
             }
+            await emitLoopTrace(
+                .model,
+                actor: "Agent循环",
+                title: "模型回合",
+                detail: "session=\(id) step=\(step) activeTools=\(activeTools.count) messages=\(messages.count)"
+            )
             // 设了 delta 接收口(仅主会话)→ 走流式,最终答复逐字回调进气泡;否则非流式(子会话/自主/测试,零变更)。
             let response: LingShuAgentModelResponse
             if let sink = textDeltaSink {
@@ -462,12 +545,14 @@ actor LingShuAgentSession: LingShuAgentSessioning {
                 // 让 messages 原样停在中断前的良构状态(上一步若是工具循环,tool 结果已补齐)。
                 // 返回 .interrupted:上层据此把任务标"已暂停"并保留本会话,重连后 continueLoop() 重发这步模型调用即续上。
                 lastExitReason = .infraInterrupted
+                await emitLoopTrace(.warning, actor: "Agent循环", title: "模型通道中断", detail: String(reason.prefix(160)))
                 return .interrupted(reason: reason)
             case .text(let text):
                 messages.append(.init(role: .assistant, content: text))
                 // 模型自认收尾,但用户刚下了纠正 → 不收尾,带着纠正继续(纠正跑偏的"假收尾")。
                 if pendingCorrection != nil { continue }
                 lastExitReason = .normalCompletion
+                await emitLoopTrace(.result, actor: "Agent循环", title: "模型收尾", detail: String(text.prefix(120)))
                 return .completed(text: text)
             case .toolCalls(let calls):
                 guard !calls.isEmpty else {
@@ -484,6 +569,12 @@ actor LingShuAgentSession: LingShuAgentSessioning {
                     // ask_form/ask_choice 的 handler,否则 handler 自身等待用户会把本轮重新卡死。
                     let executable = calls.filter { $0.id != blocking.id && !blockingToolNames.contains($0.name) }
                     let skippedBlocking = calls.filter { $0.id != blocking.id && blockingToolNames.contains($0.name) }
+                    await emitLoopTrace(
+                        .tool,
+                        actor: "Agent循环",
+                        title: "阻塞前工具调度",
+                        detail: "mode=\(LingShuToolDispatchPlanner.modeDescription(executable, tools: tools)) blocking=\(blocking.name), executable=\(executable.map(\.name).joined(separator: ","))"
+                    )
                     let outcomes = await toolDispatcher.dispatch(executable, tools: tools)
                     var answeredIDs = Set<String>()
                     for outcome in outcomes {
@@ -506,29 +597,46 @@ actor LingShuAgentSession: LingShuAgentSessioning {
                     toolInvocations.append(blocking.name)
                     pendingBlockToolCallID = blocking.id
                     lastExitReason = .blockedAwaitingInput
+                    await emitLoopTrace(.warning, actor: "Agent循环", title: "等待用户输入", detail: blocking.name)
                     return .blocked(question: Self.blockedPrompt(for: blocking))
                 }
                 // 停滞检测:连续 N 次发起完全相同的工具调用 = 原地打转。**空/漏必需参数的畸形调用归一为 #MALFORMED**——
                 // 用每个工具**自己声明的 required**(parametersJSON)判,通用非特判:既抓"全空调用",也抓"带了部分参数却漏了
                 // 必需字段"(实测某脑 edit_file 带 old/new 漏 path、run_command 空命令各反复多次;参数JSON每次还不同、精确签名漏判)。
-                let signature = calls.map {
-                    Self.normalizedToolSignature(name: $0.name, argsJSON: $0.argumentsJSON,
-                                                 required: Self.requiredParams(for: $0.name, in: tools))
-                }.joined(separator: "|")
+                let signature = calls.map { LingShuAgentLoopPolicy.normalizedToolSignature(for: $0, tools: tools) }
+                    .joined(separator: "|")
                 recentToolSignatures.append(signature)
                 var pendingSteer: String? = nil
+                let invalidArgumentErrors = calls.compactMap { call -> (tool: String, reason: String)? in
+                    if LingShuAgentLoopPolicy.missingRequiredParam(for: call, tools: tools) != nil {
+                        return nil
+                    }
+                    guard let reason = LingShuAgentLoopPolicy.argumentValidationError(for: call, tools: tools) else { return nil }
+                    return (call.name, reason)
+                }
+                if !invalidArgumentErrors.isEmpty {
+                    recentToolSignatures.removeAll()
+                    pendingSteer = LingShuAgentLoopPolicy.invalidArgumentsSteer(invalidArgumentErrors)
+                    await emitLoopTrace(
+                        .warning,
+                        actor: "LoopPolicy",
+                        title: "工具参数契约纠偏",
+                        detail: invalidArgumentErrors.map { "\($0.tool):\($0.reason)" }.joined(separator: " | ")
+                    )
+                }
                 // **大参数"空着到达" → 早 steer 到分块写(2026-06-28,30min 报告任务挖出)**:write_file 的 content / run_command 的
                 // command 反复空着到达,不是模型漏填,是**单次传的内容太大、被模型/网关截断丢了**。通用「带齐参数」纠偏对它无效
                 // (模型自认已带齐),只有**分块写小段**能过(实测正是模型自己绕了 20+ 轮才悟出的 heredoc 追加)。这里 2 次就识别、
                 // 给确定性分块指导,把 ~28min 的空转弯路压到 2-3 轮。只对单工具的高置信场景出手,不误伤多工具/良构调用。
-                let bigArgEmptyTools: Set<String> = ["write_file", "run_command"]
-                if let only = calls.first, calls.count == 1, bigArgEmptyTools.contains(only.name) {
+                if let only = calls.first, calls.count == 1,
+                   LingShuAgentLoopPolicy.isLargePayloadSensitive(only, tools: tools) {
                     let bigTail = recentToolSignatures.suffix(Self.bigArgEmptyChunkSteerThreshold)
                     if bigTail.count == Self.bigArgEmptyChunkSteerThreshold, Set(bigTail).count == 1,
                        bigTail.first == "\(only.name)#MALFORMED" {
                         recentToolSignatures.removeAll()   // 给它带着分块指导从头来的机会
-                        let missing = only.name == "write_file" ? "content" : "command"
-                        pendingSteer = "【系统纠偏】你调用「\(only.name)」时 `\(missing)` 一直空着到达——**不是你漏填,是这次要传的内容太大、被通道截断丢了**。再「带齐参数」也没用。唯一出路是**分块写小段**:先 `run_command` 执行 `cat > 目标文件 << 'EOF' … EOF` 写第一小段(几十行),再多次 `cat >> 目标文件 << 'EOF' … EOF` 追加后续小段,每条命令只带一小块文本;全部写完后再 `run_command` 执行/校验。别再把整块大内容塞进一次调用了。"
+                        let missing = LingShuAgentLoopPolicy.firstRequiredPayloadField(for: only, tools: tools)
+                        pendingSteer = LingShuAgentLoopPolicy.largePayloadSteer(toolName: only.name, field: missing)
+                        await emitLoopTrace(.warning, actor: "LoopPolicy", title: "大参数分块纠偏", detail: "\(only.name).\(missing)")
                     }
                 }
                 let tail = recentToolSignatures.suffix(Self.stuckRepeatThreshold)
@@ -538,39 +646,50 @@ actor LingShuAgentSession: LingShuAgentSessioning {
                         // **空/漏必需参数反复调用同一工具(任何弱脑通病,非特判)**:它只是没填对参数、不是任务做不动 →
                         // 纠偏让它带齐参数重调,别交还。清签名史给它重来的机会。
                         recentToolSignatures.removeAll()
-                        pendingSteer = "【系统纠偏】你连续多次调用「\(name)」都漏了必需参数(如 path / command / content),所以一直没成。请**先看清这个工具需要哪些必需参数,带齐完整参数重新调用一次**;edit_file 老改不中就改用 write_file 把整个文件内容**一次性完整写入**(别再逐处 edit),或换个方式把事做出来——别再发缺参的调用了。"
-                    } else if Self.optionalScaffoldTools.contains(name) {
+                        pendingSteer = LingShuAgentLoopPolicy.malformedRequiredParamsSteer(toolName: name)
+                        await emitLoopTrace(.warning, actor: "LoopPolicy", title: "缺参纠偏", detail: name)
+                    } else if LingShuAgentLoopPolicy.isOptionalScaffold(name, tools: tools) {
                         // 卡在**可选脚手架工具**(如 update_plan)上:计划不是目标——绝不为它交还。
                         // 清掉签名史 + 执行完这次后注入纠偏,让模型跳过计划、直接用通用工具把任务做出来。
                         recentToolSignatures.removeAll()
-                        pendingSteer = "【系统纠偏】update_plan 这步反复失败,但它只是**可选的计划工具、不是任务本身**。别再调用它了——直接用 write_file / run_command / web_search 等把用户真正要的事做出来,完成后给出结果。"
+                        pendingSteer = LingShuAgentLoopPolicy.optionalScaffoldSteer(toolName: name)
+                        await emitLoopTrace(.warning, actor: "LoopPolicy", title: "跳过可选脚手架", detail: name)
                     } else {
                         // 卡在**真任务动作**上才诚实交还,且给结果+原因+下一步,不是空喊"走不通"。
                         // 这一步的 assistant tool_calls **不执行**直接交还——必须给它们补上合成 tool 结果(I2),
                         // 否则留下悬空的未应答调用,之后 send/resume 续接时网关 400。
                         appendSyntheticToolResults(for: calls, note: "（已停止:反复尝试未推进,转交。）")
                         lastExitReason = .stuckHandback
+                        await emitLoopTrace(.warning, actor: "LoopPolicy", title: "停滞交还", detail: name)
                         return .maxTurnsReached(lastText: "（我反复尝试「\(name)」\(Self.stuckRepeatThreshold) 次都没推进。最近结果:\(lastText.prefix(200))。我先停下,需要你确认一个关键点或给我缺的信息,我换条路继续。）")
                     }
                 }
                 // 过度自测收敛:已产出文件后,连续多步不再改任何文件 = 在反复验证/查看空转。
-                if calls.contains(where: { Self.mutatingToolNames.contains($0.name) }) {
+                if calls.contains(where: { LingShuAgentLoopPolicy.isMutatingProgress($0, tools: tools) }) {
                     sawMutation = true; turnsSinceMutation = 0
                 } else {
                     turnsSinceMutation += 1
                 }
                 if sawMutation, turnsSinceMutation == Self.overValidationNudgeAt, !nudgedOverValidation, pendingSteer == nil {
                     nudgedOverValidation = true
-                    pendingSteer = "【系统纠偏】你已经连续很多步只在测试/查看、没有再改动任何文件——说明要做的东西已经做完了。**别再重复验证空转**,下一步请直接给出最终交付文本(做了什么 + 产出物绝对路径 + 怎么运行/打开),不要再调用工具。"
+                    pendingSteer = LingShuAgentLoopPolicy.overValidationSteer()
+                    await emitLoopTrace(.warning, actor: "LoopPolicy", title: "过度验证纠偏", detail: "turnsSinceMutation=\(turnsSinceMutation)")
                 }
                 // **只读空转催动手**:还没产出过任何改动,就连续多步只读/查看(反复 read_file/cat 同一份)→ 催它立刻动手。
                 // 不强求 mutate(纯问答可直接答),所以措辞兼顾"改"与"答",不误伤只读任务;对各种模型都通用。
                 if !sawMutation, turnsSinceMutation >= Self.readOnlyStallNudgeAt, !nudgedReadOnlyStall, pendingSteer == nil {
                     nudgedReadOnlyStall = true
-                    pendingSteer = "【系统提醒】你已经连续 \(turnsSinceMutation) 步只在读取/查看、还没产出任何东西。掌握足够信息就**立刻动手产出**——要改/建文件就用 edit_file/write_file 真的改(别只 read_file/cat 反复看),纯问答就直接给最终答复。别再反复读同一份内容空转。"
+                    pendingSteer = LingShuAgentLoopPolicy.readOnlyStallSteer(turns: turnsSinceMutation)
+                    await emitLoopTrace(.warning, actor: "LoopPolicy", title: "只读空转纠偏", detail: "turns=\(turnsSinceMutation)")
                 }
                 // 差距7-A:同回合无依赖工具经调度器执行(生产侧=并行降延迟);结果**与发起同序**返回,
                 // 据此补 tool 结果保持 OpenAI 协议良构(每个 tool_call 必有同 id 的 tool 响应)。
+                await emitLoopTrace(
+                    .tool,
+                    actor: "Agent循环",
+                    title: "工具调度",
+                    detail: "mode=\(LingShuToolDispatchPlanner.modeDescription(calls, tools: tools)) calls=\(calls.map(\.name).joined(separator: ","))"
+                )
                 let outcomes = await toolDispatcher.dispatch(calls, tools: tools)
                 var answeredIDs = Set<String>()
                 for outcome in outcomes {
@@ -594,17 +713,20 @@ actor LingShuAgentSession: LingShuAgentSessioning {
                 // 停止 maker 无限自测,**返回 .completed 交独立验收(checker)** 判定,而非无界空转或被撞顶误判异常。
                 if sawMutation, turnsSinceMutation >= Self.overValidationForceAt {
                     lastExitReason = .overValidationForced
+                    await emitLoopTrace(.result, actor: "LoopPolicy", title: "过度验证强制收尾", detail: "turnsSinceMutation=\(turnsSinceMutation)")
                     return .completed(text: lastText.isEmpty ? "（工作已完成,产出物已落盘,停止重复验证,交付独立验收。）" : lastText)
                 }
                 // 只读空转到顶仍没动手 → 诚实交还(不假装完成,因为确实没产出),换路或等用户给方向(兼容犹豫的弱模型)。
                 if !sawMutation, turnsSinceMutation >= Self.readOnlyStallForceAt {
                     lastExitReason = .readOnlyStallHandback
+                    await emitLoopTrace(.warning, actor: "LoopPolicy", title: "只读空转交还", detail: "turns=\(turnsSinceMutation)")
                     return .maxTurnsReached(lastText: "（我连续 \(turnsSinceMutation) 步只在读取查看、没能动手产出——这步我判断不清,先停下。最近看到:\(lastText.prefix(160))。给我个方向或缺的信息,我换条路继续。）")
                 }
             }
         }
         // 撞到安全天花板(极少):同样诚实交还,不假装收尾。
         lastExitReason = .maxTurnsCeiling
+        await emitLoopTrace(.warning, actor: "Agent循环", title: "安全天花板", detail: "maxTurns=\(maxTurns)")
         return .maxTurnsReached(lastText: lastText.isEmpty ? "（已推进很多步仍未收敛，先停下交还以免空耗。）" : lastText)
     }
 

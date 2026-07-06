@@ -55,12 +55,16 @@ extension LingShuState {
                 self?.effectiveAgentWorkingDirectory(override: workingDirectoryOverride, fallback: defaultWorkingDir) ?? defaultWorkingDir
             }
         ]
-        let pluginTools = executionPolicy == .readOnly ? [] : userSkillProvidedTools()
         let recordedLocalKnowledgeTools = localKnowledgeTools().map {
             recordedAgentTool($0, recordIDProvider: recordIDProvider)
         }
-        return builtinTools + externalTools + skillTools + pluginTools + recordedLocalKnowledgeTools + [listCapabilitiesTool(), selfInspectTool()]
-            + (executionPolicy == .readOnly ? [] : agentPluginTools(recordIDProvider: recordIDProvider))   // 通用 register_agent/run_agent:任何 CLI agent 当插件接入,零硬编码;委托的 agent 作为任务时间线独立命名参与方
+        let longTools = executionPolicy == .readOnly ? [] : longCommandTools(
+            recordIDProvider: recordIDProvider,
+            baseAllowShell: allowShell,
+            defaultWorkingDirectory: defaultWorkingDir,
+            workingDirectoryOverride: workingDirectoryOverride
+        )
+        return builtinTools + externalTools + skillTools + longTools + recordedLocalKnowledgeTools + [listCapabilitiesTool(), selfInspectTool()]
     }
 
     /// 给非原语 Agent 工具补一层结构化执行记录。
@@ -68,7 +72,7 @@ extension LingShuState {
         _ tool: LingShuAgentTool,
         recordIDProvider: @escaping @MainActor @Sendable () -> String?
     ) -> LingShuAgentTool {
-        LingShuAgentTool(name: tool.name, description: tool.description, parametersJSON: tool.parametersJSON) { [weak self] argsJSON in
+        LingShuAgentTool(name: tool.name, description: tool.description, parametersJSON: tool.parametersJSON, metadata: tool.metadata) { [weak self] argsJSON in
             guard let self else { return await tool.handler(argsJSON) }
             let args = Self.parseArgs(argsJSON)
             let recordID = await MainActor.run { recordIDProvider() }
@@ -110,7 +114,8 @@ extension LingShuState {
         switch tool {
         case "write_file", "edit_file", "apply_patch": return "本地文件系统(读写)"
         case "read_file", "list_directory":            return "本地文件系统(读取)"
-        case "run_command":                            return "本地命令执行 / shell"
+        case "run_command", "start_long_command", "check_long_command", "cancel_long_command", "list_long_commands":
+            return "本地命令执行 / shell"
         case "recall_local", "index_local_knowledge":  return "本机知识检索"
         case "fetch_url", "web_search":                return "联网访问"
         default:                                       return nil

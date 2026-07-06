@@ -213,6 +213,12 @@ final class LingShuPresentationSkill: LingShuBuiltinSkill {
         guard c.isActive else { return false }
         let trimmed = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return false }
+        if let host,
+           host.previewController.isPresented,
+           LingShuNestedStagePlanner.isExitPresentationCommand(trimmed) {
+            // 关闭/收起前台预览是宿主级控制动作,让回 LingShuState 统一关闭窗口、取消技能和收尾记录。
+            return false
+        }
         let recordID = beginPresentationInteraction(trimmed)
         LingShuCueSound.playAcknowledgeChime()   // 收到输入立刻"受令"提示音
         Task { @MainActor [weak self] in

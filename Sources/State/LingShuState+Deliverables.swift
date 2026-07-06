@@ -40,7 +40,8 @@ extension LingShuState {
 
     /// 登记一条完成的产出物(有真实落盘文件才记;纯对话/无产出物不记)。同步进内存镜像 + 增量落盘。
     func recordDeliverable(recordID: String?, title: String, summary: String) {
-        guard let recordID, let rec = taskExecutionRecords.first(where: { $0.id == recordID }) else { return }
+        guard let recordID, let index = taskExecutionRecords.firstIndex(where: { $0.id == recordID }) else { return }
+        let rec = taskExecutionRecords[index]
         let files = rec.artifacts.map(\.location).filter { FileManager.default.fileExists(atPath: $0) }
         guard !files.isEmpty else { return }
         let entry = LingShuDeliverable(
@@ -53,6 +54,8 @@ extension LingShuState {
         recentDeliverables.removeAll { $0.id == recordID }
         recentDeliverables.append(entry)
         if recentDeliverables.count > 8 { recentDeliverables.removeFirst(recentDeliverables.count - 8) }
+        upgradeAnsweredRecordToCompletedWhenArtifactExists(recordID: recordID)
+        persistTaskExecutionRecords()
         Task { await deliverableStore.upsert(entry) }   // 增量写盘(WAL 追加)
     }
 

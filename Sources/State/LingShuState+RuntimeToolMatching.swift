@@ -28,7 +28,6 @@ extension LingShuState {
             + computerControlTools()
             + backgroundWatchTools()
             + scheduledTaskTools()
-            + userSkillProvidedTools()
             + [listCapabilitiesTool()]
 
         descriptors.append(contentsOf: directTools.map {

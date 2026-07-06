@@ -46,4 +46,17 @@ final class WriteFilePathResolveTests: XCTestCase {
         let prompt = "把结果保存到 /tmp/lingshu-output/report.md"
         XCTAssertEqual(LingShuState.explicitWorkingDirectoryHint(in: prompt), "/tmp/lingshu-output")
     }
+
+    func testExplicitWorkingDirectoryHintIgnoresInternalPlaceholderFragments() {
+        let temp = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("lingshu-wd-internal-\(UUID().uuidString)", isDirectory: true)
+        try? FileManager.default.createDirectory(at: temp, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: temp) }
+
+        let prompt = """
+        原始任务请求(务必沿用其中的**目录/路径/文件名/约束**,别改交付位置):
+        在 \(temp.path) 生成 brief.md
+        """
+        XCTAssertEqual(LingShuState.explicitWorkingDirectoryHint(in: prompt), temp.path)
+    }
 }

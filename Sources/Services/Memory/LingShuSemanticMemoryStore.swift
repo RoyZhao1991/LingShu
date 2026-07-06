@@ -133,6 +133,12 @@ final class LingShuSemanticMemoryStore: @unchecked Sendable {
         }
     }
 
+    func count(kind: String) -> Int {
+        queue.sync {
+            scalarInt("SELECT COUNT(*) FROM memories WHERE kind = ?", bindings: [.text(kind)]) ?? 0
+        }
+    }
+
     /// 写入或更新一条语义记忆。同 kind + title 视为同一条目（更新内容并保鲜），
     /// 内容向量与全文索引同步更新。
     @discardableResult
@@ -245,6 +251,13 @@ final class LingShuSemanticMemoryStore: @unchecked Sendable {
                 }
             }
             return entries
+        }
+    }
+
+    func clearAll() {
+        queue.sync {
+            execute("DELETE FROM memories_fts")
+            execute("DELETE FROM memories")
         }
     }
 
@@ -451,6 +464,15 @@ final class LingShuSemanticMemoryStore: @unchecked Sendable {
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK else { return nil }
         defer { sqlite3_finalize(statement) }
+        guard sqlite3_step(statement) == SQLITE_ROW else { return nil }
+        return Int(sqlite3_column_int64(statement, 0))
+    }
+
+    private func scalarInt(_ sql: String, bindings: [Binding]) -> Int? {
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK else { return nil }
+        defer { sqlite3_finalize(statement) }
+        bind(bindings, to: statement)
         guard sqlite3_step(statement) == SQLITE_ROW else { return nil }
         return Int(sqlite3_column_int64(statement, 0))
     }

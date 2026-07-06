@@ -9,6 +9,7 @@ extension LingShuState {
         recordID: String?,
         prompt: String
     ) async -> LingShuAgentRunResult {
+        if goalSpec(for: recordID)?.isReplyOnlyOutput == true { return result }
         guard case .completed(let text) = result,
               LingShuInteractionFulfillment.requiresVisibleInteraction(prompt),
               !turnDidProvideInteractiveOutput(recordID) else { return result }
@@ -107,6 +108,7 @@ extension LingShuState {
         spokenBaseline: Int,
         recordID: String?
     ) -> LingShuAgentRunResult {
+        if goalSpec(for: recordID)?.isReplyOnlyOutput == true { return result }
         guard case .completed(let text) = result else { return result }
         let requestedVisible = LingShuInteractionFulfillment.requiresVisibleInteraction(prompt)
         let didInteractiveOutput = turnDidProvideInteractiveOutput(recordID)
@@ -149,6 +151,7 @@ extension LingShuState {
         prompt: String,
         recordID: String?
     ) -> String {
+        if goalSpec(for: recordID)?.isReplyOnlyOutput == true { return text }
         let requestedVisible = LingShuInteractionFulfillment.requiresVisibleInteraction(prompt)
         let didInteractiveOutput = turnDidProvideInteractiveOutput(recordID)
         let hasPreviewableArtifact = !LingShuInteractionFulfillment

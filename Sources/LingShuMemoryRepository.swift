@@ -34,6 +34,12 @@ final class LingShuMemoryRepository {
         save(records, forKey: coldMemoryKey)
     }
 
+    func clearAll() {
+        [mainThreadMemoryKey, taskMemoryKey, coldMemoryKey].forEach {
+            defaults.removeObject(forKey: $0)
+        }
+    }
+
     private func loadArray<T: Decodable>(_ type: T.Type, forKey key: String) -> [T] {
         guard let data = defaults.data(forKey: key),
               let decoded = try? JSONDecoder().decode([T].self, from: data) else {

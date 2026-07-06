@@ -7,7 +7,7 @@ enum LingShuSpokenText {
 
     /// 把一条回复压成适合朗读的话:格式内容只给概要。
     static func concise(_ text: String) -> String {
-        let noCode = stripCodeFences(text)
+        let noCode = LingShuSpeechDisplayMetadata.stripping(stripCodeFences(text))
         var lead: [String] = []
         var hasStructure = false
         for raw in noCode.components(separatedBy: "\n") {
@@ -48,7 +48,7 @@ enum LingShuSpokenText {
 
     /// 剥行内 markdown + 链接 + 状态 emoji(留正文)。
     static func stripInlineMarkdown(_ s: String) -> String {
-        var t = s
+        var t = LingShuSpeechDisplayMetadata.stripping(s)
         // 链接 [文字](url) → 文字
         t = t.replacingOccurrences(of: "\\[([^\\]]+)\\]\\([^)]*\\)", with: "$1", options: .regularExpression)
         // 去强调/代码标记 ** * _ ` ~

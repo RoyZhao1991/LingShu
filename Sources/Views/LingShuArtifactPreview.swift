@@ -14,6 +14,7 @@ struct LingShuArtifactPreviewSheet: View {
     var onClose: (() -> Void)? = nil
 
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.colorScheme) private var colorScheme
 
     private var previewKind: LingShuArtifactPreviewKind {
         LingShuArtifactPreviewKind(fileExtension: fileURL.pathExtension)
@@ -54,14 +55,20 @@ struct LingShuArtifactPreviewSheet: View {
                     Label("关闭", systemImage: "xmark")
                         .font(.system(size: 11.5, weight: .bold))
                         .padding(.horizontal, 10).padding(.vertical, 5)
-                        .background(Color.lingFg.opacity(0.12), in: Capsule())
+                        .background(toolbarButtonSurface, in: Capsule())
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(Color.lingFg)
                 .keyboardShortcut(.cancelAction)
             }
             .padding(12)
-            .background(Color.black.opacity(0.6))
+            .background(toolbarSurface)
+            .overlay(alignment: .bottom) {
+                Rectangle()
+                    .fill(toolbarStroke)
+                    .frame(height: 1)
+            }
+            .shadow(color: toolbarShadow, radius: colorScheme == .dark ? 0 : 10, y: colorScheme == .dark ? 0 : 1)
 
             switch previewKind {
             case .web:
@@ -85,14 +92,34 @@ struct LingShuArtifactPreviewSheet: View {
                     .font(.system(size: 14, weight: .heavy))
                     .foregroundStyle(Color.lingFg)
                     .frame(width: 32, height: 32)
-                    .background(Circle().fill(Color.black.opacity(0.7)))
-                    .overlay(Circle().stroke(Color.lingFg.opacity(0.35), lineWidth: 1))
+                    .background(Circle().fill(closeButtonSurface))
+                    .overlay(Circle().stroke(toolbarStroke, lineWidth: 1))
             }
             .buttonStyle(.plain)
             .keyboardShortcut(.cancelAction)
             .padding(14)
             .help("关闭预览（Esc）")
         }
+    }
+
+    private var toolbarSurface: Color {
+        colorScheme == .dark ? Color.black.opacity(0.62) : Color.white.opacity(0.96)
+    }
+
+    private var toolbarButtonSurface: Color {
+        colorScheme == .dark ? Color.lingFg.opacity(0.12) : Color.lingFg.opacity(0.075)
+    }
+
+    private var closeButtonSurface: Color {
+        colorScheme == .dark ? Color.black.opacity(0.72) : Color.white.opacity(0.95)
+    }
+
+    private var toolbarStroke: Color {
+        colorScheme == .dark ? Color.lingFg.opacity(0.14) : Color.lingFg.opacity(0.10)
+    }
+
+    private var toolbarShadow: Color {
+        colorScheme == .dark ? .clear : Color.black.opacity(0.10)
     }
 }
 

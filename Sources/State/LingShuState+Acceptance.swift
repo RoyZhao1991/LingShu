@@ -99,6 +99,7 @@ extension LingShuState {
     /// 闲聊/问答不因 GoalSpec 误判而加重模型调用;但 task 即便没产物也要跑,让缺文件/缺命令能被硬门发现。
     func shouldRunGoalAcceptance(taskRecordID: String?) -> Bool {
         guard goalSpecEnabled, let spec = goalSpec(for: taskRecordID) else { return false }
+        if spec.isReplyOnlyOutput { return false }
         return spec.kind == .task && !spec.successCriteria.isEmpty
     }
 

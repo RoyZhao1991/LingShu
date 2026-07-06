@@ -29,6 +29,14 @@ struct LingShuGoalExperience: Codable, Sendable, Equatable, Identifiable {
 }
 
 enum LingShuGoalExperienceMatch {
+    struct Ranked: Equatable {
+        var experience: LingShuGoalExperience
+        var relevance: Double
+        var freshness: Double
+        var outcomeWeight: Double
+        var score: Double
+    }
+
     /// 字符二元组 Jaccard 相似度(中文友好,纯启发式)。0…1。
     static func relevance(_ a: String, _ b: String) -> Double {
         let ga = bigrams(a), gb = bigrams(b)
@@ -46,19 +54,58 @@ enum LingShuGoalExperienceMatch {
         return g
     }
 
-    /// 取与目标最相关的经验:过阈值 + 按相关性降序 + 限量。仅按 sourceRecordID 排除当前任务自身,不误伤完全相同的历史目标。
-    static func mostRelevant(_ experiences: [LingShuGoalExperience], to objective: String,
-                             limit: Int = 2, threshold: Double = 0.2, excludingSourceRecordID: String? = nil) -> [LingShuGoalExperience] {
+    /// 经验综合分:相关度 × 新鲜度 × 结果权重。
+    /// 失败/部分完成仍有价值,但会自然衰减;普通直答的经验权重最低,避免把一次问答永久推到前台。
+    static func ranked(
+        _ experiences: [LingShuGoalExperience],
+        to objective: String,
+        now: Date = Date(),
+        threshold: Double = 0.2,
+        scoreThreshold: Double = 0.04,
+        excludingSourceRecordID: String? = nil
+    ) -> [Ranked] {
         experiences
             .filter { exp in
                 guard let excludingSourceRecordID else { return true }
                 return exp.sourceRecordID != excludingSourceRecordID
             }
-            .map { ($0, relevance($0.objective, objective)) }
-            .filter { $0.1 >= threshold }
-            .sorted { $0.1 > $1.1 }
+            .compactMap { exp -> Ranked? in
+                let r = relevance(exp.objective, objective)
+                guard r >= threshold else { return nil }
+                let f = freshnessWeight(exp, now: now)
+                let w = outcomeWeight(exp)
+                let s = r * f * w
+                guard s >= scoreThreshold else { return nil }
+                return .init(experience: exp, relevance: r, freshness: f, outcomeWeight: w, score: s)
+            }
+            .sorted {
+                if abs($0.score - $1.score) > 0.000001 { return $0.score > $1.score }
+                if abs($0.relevance - $1.relevance) > 0.000001 { return $0.relevance > $1.relevance }
+                return $0.experience.at > $1.experience.at
+            }
+    }
+
+    /// 取与目标最相关的经验:过阈值 + 按综合分降序 + 限量。仅按 sourceRecordID 排除当前任务自身,不误伤完全相同的历史目标。
+    static func mostRelevant(_ experiences: [LingShuGoalExperience], to objective: String,
+                             limit: Int = 2,
+                             threshold: Double = 0.2,
+                             scoreThreshold: Double = 0.04,
+                             now: Date = Date(),
+                             excludingSourceRecordID: String? = nil) -> [LingShuGoalExperience] {
+        ranked(experiences, to: objective, now: now, threshold: threshold, scoreThreshold: scoreThreshold,
+               excludingSourceRecordID: excludingSourceRecordID)
             .prefix(limit)
-            .map { $0.0 }
+            .map(\.experience)
+    }
+
+    /// 持久库保留策略:可复用任务经验保留更久;普通直答只短期保留。
+    static func retained(_ experiences: [LingShuGoalExperience], now: Date = Date()) -> [LingShuGoalExperience] {
+        experiences.filter { exp in
+            let days = max(0, now.timeIntervalSince(exp.at) / 86_400)
+            if exp.outcome == "已直接回答" { return days <= 14 }
+            if exp.outcome == "失败" || exp.outcome == "未达标" || exp.outcome == "部分完成" { return days <= 120 }
+            return days <= 180
+        }
     }
 
     /// 注入执行引导的「相关历史经验」块(无相关经验 → 返回 base 原样,不加压)。
@@ -71,5 +118,21 @@ enum LingShuGoalExperienceMatch {
         let block = lines.joined(separator: "\n")
         guard let b = base?.trimmingCharacters(in: .whitespacesAndNewlines), !b.isEmpty else { return block }
         return b + "\n\n" + block
+    }
+
+    private static func freshnessWeight(_ experience: LingShuGoalExperience, now: Date, halfLifeDays: Double = 45) -> Double {
+        let days = max(0, now.timeIntervalSince(experience.at) / 86_400)
+        return max(0.05, pow(0.5, days / halfLifeDays))
+    }
+
+    private static func outcomeWeight(_ experience: LingShuGoalExperience) -> Double {
+        switch experience.outcome {
+        case "已核验完成": return 1.0
+        case "已完成": return 0.92
+        case "部分完成": return 0.86
+        case "未达标", "失败": return 0.82
+        case "已直接回答": return 0.55
+        default: return 0.70
+        }
     }
 }

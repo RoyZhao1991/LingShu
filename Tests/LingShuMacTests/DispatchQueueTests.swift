@@ -103,6 +103,24 @@ final class DispatchQueueTests: XCTestCase {
         XCTAssertTrue(trace.contains("reason=goal_kind_requires_capability_check"))
     }
 
+    @MainActor
+    func testVisibleContextDowngradesAfterNewOrdinaryAssistantTurn() async throws {
+        let state = LingShuState()
+        let url = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("lingshu-visible-context-\(UUID().uuidString).html")
+        try "<html><body><h1>演示材料</h1></body></html>".write(to: url, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        _ = await state.previewController.open(path: url.path)
+        XCTAssertTrue(state.currentVisibleInteractionIsStillForeground())
+
+        state.chatMessages.append(.init(speaker: "你", text: "你是谁,介绍一下你自己", isUser: true, createdAt: Date()))
+        state.chatMessages.append(.init(speaker: "灵枢", text: "我是灵枢,一个通用智能中枢。", isUser: false, taskRecordID: "ordinary-reply", createdAt: Date()))
+
+        XCTAssertFalse(state.currentVisibleInteractionIsStillForeground(), "预览打开后出现新的普通答复,可视材料只能作为背景,不能压过最近聊天")
+        XCTAssertNil(state.currentVisibleInteractionGuidance(for: "继续"), "过期可视材料不进入当前 turn,避免裸续接被旧材料诱导")
+    }
+
     func testShouldQueueWhenAtOrOverCapacity() {
         XCTAssertFalse(LingShuState.shouldQueueDispatch(running: 0, capacity: 3))
         XCTAssertFalse(LingShuState.shouldQueueDispatch(running: 2, capacity: 3))

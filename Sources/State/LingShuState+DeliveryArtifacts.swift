@@ -38,7 +38,10 @@ extension LingShuState {
             )
             let texts = Self.matchAll(raw, pattern: "<a:t>(.*?)</a:t>") + Self.matchAll(raw, pattern: "<t[^>]*>(.*?)</t>")
             return String(texts.joined(separator: " ").prefix(maxChars))
-        case "md", "txt", "html", "htm", "csv", "json", "py", "sh", "swift":
+        case "md", "txt", "html", "htm", "csv", "json",
+             "py", "sh", "swift", "js", "jsx", "ts", "tsx", "go", "rs",
+             "java", "kt", "c", "cc", "cpp", "cxx", "m", "mm", "rb", "php",
+             "scala", "cs":
             return String(((try? String(contentsOfFile: path, encoding: .utf8)) ?? "").prefix(maxChars))
         default:
             return ""

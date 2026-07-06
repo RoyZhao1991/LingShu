@@ -62,6 +62,7 @@ extension LingShuState {
             _ = LingShuAgentPluginStore.register(toRegister)
             // 配了子技能发现 → 立刻强制刷新能力面(否则要等 TTL/重启才在「外部 agent 技能」里露出)。
             if capabilities != nil { await MainActor.run { self?.refreshAgentCapabilities(force: true) } }
+            else { await MainActor.run { self?.invalidateInvocablePluginCatalog() } }
             let discText = capabilities != nil ? "(已配子技能发现,正在扫描其技能库,稍后即在「外部 agent 技能」单列)" : ""
             let okText = probe.ok ? "探活通过·可用\(discText)" : "探活发现不可用:\(probe.reason)"
             await MainActor.run { self?.appendTrace(kind: probe.ok ? .system : .warning, actor: "agent插件",
@@ -88,6 +89,11 @@ extension LingShuState {
             guard let plugin = all.first(where: { $0.id == want || $0.allAliases.contains(where: { $0.caseInsensitiveCompare(want) == .orderedSame }) }) else {
                 let names = all.map(\.displayName).joined(separator: "、")
                 return "没有叫「\(want)」的已注册 agent。当前已注册:\(names.isEmpty ? "(无,先 register_agent)" : names)。"
+            }
+            guard plugin.isCallableNow else {
+                let reason = plugin.unavailableReason?.trimmingCharacters(in: .whitespacesAndNewlines)
+                await MainActor.run { self.markAgentPluginCatalogChanged(agentID: plugin.id) }
+                return "\(plugin.displayName) 当前不可用\(reason?.isEmpty == false ? ":\(reason!)" : ""),我已从可调用目录隐藏它。请先恢复后在自检里重新探活。"
             }
             // **架构合规(ARCHITECTURE.md §Task Journal「被调用 agent 的发言式进度」+ §Review「只展示真实参与者」)**:
             // 被委托的 agent 必须作为**任务时间线里的独立命名参与方**(maker 一条线、checker 另一条线),不再藏在灵枢名下当工具返回串。
@@ -118,6 +124,9 @@ extension LingShuState {
                 return "【\(plugin.displayName) 已完成】\n\(t)"
             case .failure(let r):
                 await MainActor.run {
+                    if LingShuAgentPluginStore.plugin(id: plugin.id)?.isCallableNow != true {
+                        self.markAgentPluginCatalogChanged(agentID: plugin.id)
+                    }
                     self.appendTaskRecordMessage(rid, actor: plugin.displayName, role: "\(roleLabel)·未完成", kind: .warning, text: r)
                     self.appendTrace(kind: .warning, actor: "agent·\(plugin.displayName)", title: "\(roleLabel) 未完成", detail: r)
                 }

@@ -76,7 +76,8 @@ extension LingShuState {
         let objective = goalSpec(for: taskRecordID)?.objective ?? ""
         let goalRef = objective.isEmpty ? "这件事" : "「\(objective)」"
         let dump = Self.looksLikeInternalDump(original)
-        let clean = dump ? "" : original.trimmingCharacters(in: .whitespacesAndNewlines)
+        let visibleOriginal = LingShuStructuredModelOutput.visibleText(from: original)
+        let clean = dump ? "" : visibleOriginal.trimmingCharacters(in: .whitespacesAndNewlines)
         switch decision.status {
         case .waitingForUser:
             let need = ask.isEmpty ? "完成它所需的授权/凭据" : ask
@@ -106,6 +107,31 @@ extension LingShuState {
         case .waitingForUser: return .waitingForUser
         case .blocked, .needsAcquisition: return .blocked
         case .ok, .none: return fallback
+        }
+    }
+
+    /// 成功终态的默认语义：纯问答才是「已直接回答」；只要记录已经出现任务型结构证据,
+    /// 成功收尾就应归入「已完成」。这里不看用户文本关键词,只看 GoalSpec、产物、验收和工具事实。
+    nonisolated static func defaultSuccessStatus(for record: LingShuTaskExecutionRecord?) -> LingShuTaskExecutionStatus {
+        guard let record else { return .answered }
+        if record.goalSpec?.isReplyOnlyOutput == true { return .answered }
+        if record.goalSpec?.kind == .task { return .completed }
+        if !record.artifacts.isEmpty { return .completed }
+        if !(record.acceptanceChecks?.isEmpty ?? true) { return .completed }
+        if let report = record.acceptanceReport, !report.isEmpty { return .completed }
+        if record.messages.contains(where: hasSuccessfulStructuredActionEvidence) { return .completed }
+        return .answered
+    }
+
+    private nonisolated static func hasSuccessfulStructuredActionEvidence(_ message: LingShuTaskExecutionMessage) -> Bool {
+        guard let detail = message.detail else { return false }
+        switch detail {
+        case .toolResult(_, let success, _):
+            return success
+        case .fileEdit:
+            return true
+        case .toolCall:
+            return false
         }
     }
 

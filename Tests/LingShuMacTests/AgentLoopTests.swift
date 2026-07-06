@@ -143,6 +143,121 @@ final class AgentLoopTests: XCTestCase {
         XCTAssertTrue(model.sawBriefing, "子任务简报应在下一回合以 system 提示同步进主线程上下文")
     }
 
+    func testCompactionRunsAfterCurrentInputAndEmitsTrace() async {
+        // 第7站:当前输入应先入上下文再压缩。否则历史刚好越界时,本轮目标可能带着过量上下文进模型,
+        // 且压缩不可追溯。这里验证:旧段被压成提要、当前用户目标仍在、trace 记录压缩账单。
+        final class CompressionAwareModel: LingShuAgentModel, @unchecked Sendable {
+            private(set) var capturedRuntimeMessages: [LingShuAgentMessage] = []
+            func respond(messages: [LingShuAgentMessage], tools: [LingShuAgentTool]) async -> LingShuAgentModelResponse {
+                if messages.contains(where: { $0.role == .system && $0.content.contains("对话压缩器") }) {
+                    return .text("@@SUMMARY@@\n早段已经折叠\n@@FACTS@@\n旧事实A")
+                }
+                capturedRuntimeMessages = messages
+                return .text("已收到当前目标")
+            }
+        }
+        final class TraceBox: @unchecked Sendable {
+            private let lock = NSLock()
+            private var values: [LingShuAgentLoopTraceEvent] = []
+            func append(_ event: LingShuAgentLoopTraceEvent) {
+                lock.lock()
+                values.append(event)
+                lock.unlock()
+            }
+            func all() -> [LingShuAgentLoopTraceEvent] {
+                lock.lock()
+                defer { lock.unlock() }
+                return values
+            }
+        }
+
+        let model = CompressionAwareModel()
+        let oldText = String(repeating: "旧上下文需要折叠", count: 80)
+        var initial: [LingShuAgentMessage] = []
+        for i in 0..<20 {
+            initial.append(.init(role: i % 2 == 0 ? .user : .assistant, content: "\(oldText)#\(i)"))
+        }
+        let traces = TraceBox()
+        let session = LingShuAgentSession(
+            id: "compact-trace",
+            system: "系统身份",
+            initialMessages: initial,
+            tools: [],
+            model: model,
+            maxHistoryMessages: 80,
+            historyCompactor: LingShuLayeredCompactor(tokenBudget: 1_000, keepRecentTokens: 500),
+            loopTraceSink: { event in traces.append(event) }
+        )
+
+        let current = "这是本轮当前目标,压缩后必须保留"
+        let result = await session.send(current)
+
+        XCTAssertEqual(result, .completed(text: "已收到当前目标"))
+        XCTAssertTrue(model.capturedRuntimeMessages.contains { $0.role == .user && $0.content == current },
+                      "当前输入应参与压缩后的模型上下文,不能被旧历史挤掉")
+        XCTAssertTrue(model.capturedRuntimeMessages.contains { $0.content.contains("前情提要") },
+                      "超预算旧历史应折叠为前情提要")
+        let compactionTrace = traces.all().first { $0.title == "第7站压缩" }
+        XCTAssertNotNil(compactionTrace, "压缩发生时必须留下可追溯 trace")
+        XCTAssertTrue(compactionTrace?.detail.contains("tokens=") ?? false)
+        XCTAssertTrue(compactionTrace?.detail.contains("messages=") ?? false)
+        XCTAssertTrue(compactionTrace?.detail.contains("facts=1") ?? false)
+    }
+
+    func testCompactionKeepsCacheFriendlyStablePrefixAcrossShortFollowups() async {
+        // 第7站成本守卫:一次压缩后应显著降低上下文体积,并给后续短 turn 留出余量。
+        // 如果每轮都重新摘要,模型侧 prefix cache 会被打碎,账单和延迟都会上升。
+        final class CacheAwareModel: LingShuAgentModel, @unchecked Sendable {
+            private(set) var compressionCalls = 0
+            private(set) var runtimeTokenSnapshots: [Int] = []
+            func respond(messages: [LingShuAgentMessage], tools: [LingShuAgentTool]) async -> LingShuAgentModelResponse {
+                if messages.contains(where: { $0.role == .system && $0.content.contains("对话压缩器") }) {
+                    compressionCalls += 1
+                    return .text("@@SUMMARY@@\n稳定摘要:早段目标、约束和产出物路径已经折叠。\n@@FACTS@@\n旧事实A")
+                }
+                runtimeTokenSnapshots.append(LingShuTokenEstimator.estimate(messages))
+                return .text("已处理")
+            }
+        }
+
+        let model = CacheAwareModel()
+        let oldText = String(repeating: "这是一段需要被压缩的早期上下文,包含目标约束和中间过程。", count: 70)
+        var initial: [LingShuAgentMessage] = []
+        for i in 0..<18 {
+            initial.append(.init(role: i % 2 == 0 ? .user : .assistant, content: "\(oldText)#\(i)"))
+        }
+        let rawInitialTokens = LingShuTokenEstimator.estimate(initial)
+        let compactor = LingShuLayeredCompactor(tokenBudget: 1_200, keepRecentTokens: 400)
+        let session = LingShuAgentSession(
+            id: "cache-friendly-compaction",
+            system: "系统身份",
+            initialMessages: initial,
+            tools: [],
+            model: model,
+            maxHistoryMessages: 80,
+            historyCompactor: compactor
+        )
+
+        _ = await session.send("当前目标必须保留")
+        let afterFirstMessages = await session.messages
+        let afterFirstTokens = LingShuTokenEstimator.estimate(afterFirstMessages.filter { $0.role != .system })
+        XCTAssertEqual(model.compressionCalls, 1, "首次越界只应压缩一次")
+        XCTAssertLessThan(afterFirstTokens, rawInitialTokens / 2, "压缩后上下文 token 应显著下降,否则成本没有被实质降低")
+        XCTAssertLessThanOrEqual(afterFirstTokens, 1_200, "压缩后应落回预算内,给后续 turn 留出 cache-friendly 余量")
+        XCTAssertTrue(afterFirstMessages.contains { $0.content.contains("稳定摘要") })
+        XCTAssertTrue(afterFirstMessages.contains { $0.content == "当前目标必须保留" })
+
+        _ = await session.send("短追问一")
+        _ = await session.send("短追问二")
+        _ = await session.send("短追问三")
+
+        XCTAssertEqual(model.compressionCalls, 1, "压缩后的短追问不应重新蒸馏摘要,否则会破坏热缓存前缀")
+        let finalMessages = await session.messages
+        XCTAssertEqual(finalMessages.filter { $0.content.contains("稳定摘要") }.count, 1, "稳定摘要应作为单一前缀延续")
+        XCTAssertTrue(model.runtimeTokenSnapshots.dropFirst().allSatisfy { $0 < 1_200 },
+                      "后续短 turn 的模型上下文应继续处在预算内")
+    }
+
     func testTaskDeliveryReplyClassification() {
         // 任务交付报告(声称产出文件/含代码/含路径)→ 念摘要;干净对话/汇报正文 → 念全文。
         XCTAssertTrue(LingShuState.replyLooksLikeTaskDelivery("已生成 /Users/x/a.pptx,共 10 页。"))
@@ -215,6 +330,44 @@ final class AgentLoopTests: XCTestCase {
                       "纠偏应明确告知是体积截断、并给出 heredoc 分块的确定性做法")
     }
 
+    func testInvalidRunCommandArgumentIsRejectedAndSteeredBeforeHandler() async {
+        // 真实战收口 C03:模型把「约束**」这类说明/Markdown 片段塞进 run_command.command。
+        // 通用修复应在工具契约层拦截,不让它进入真实 shell,再把结构化错误回灌给模型自行改路。
+        final class BadCommandModel: LingShuAgentModel, @unchecked Sendable {
+            private(set) var sawContractSteer = false
+            func respond(messages: [LingShuAgentMessage], tools: [LingShuAgentTool]) async -> LingShuAgentModelResponse {
+                if messages.contains(where: { $0.role == .user && $0.content.contains("工具调用参数没有满足工具契约") }) ||
+                    messages.contains(where: { $0.role == .tool && $0.content.contains("run_command.command 看起来不是可执行 shell 命令") }) {
+                    sawContractSteer = true
+                    return .text("已改用正确工具续接完成")
+                }
+                return .toolCalls([.init(id: "bad-cmd", name: "run_command", argumentsJSON: #"{"command":"约束**"}"#)])
+            }
+        }
+
+        let model = BadCommandModel()
+        let invoked = BoolBox()
+        let run = LingShuAgentTool(
+            name: "run_command",
+            description: "执行 shell 命令",
+            parametersJSON: #"{"type":"object","properties":{"command":{"type":"string"}},"required":["command"]}"#
+        ) { _ in
+            await invoked.set(true)
+            return "SHOULD_NOT_RUN"
+        }
+        let session = LingShuAgentSession(id: "bad-run-command", tools: [run], model: model, maxTurns: 8)
+
+        let result = await session.send("续接任务")
+
+        XCTAssertEqual(result, .completed(text: "已改用正确工具续接完成"))
+        XCTAssertTrue(model.sawContractSteer)
+        let wasInvoked = await invoked.get()
+        XCTAssertFalse(wasInvoked, "无效 command 必须在 dispatcher 前被拦截,不能真的进入 shell handler")
+        let messages = await session.messages
+        XCTAssertTrue(messages.contains { $0.role == .tool && $0.content.contains("参数无效") })
+        XCTAssertTrue(messages.contains { $0.role == .user && $0.content.contains("不要把说明文字") })
+    }
+
     func testReadOnlyStallHandsBackWhenNeverMutating() async {
         // 弱模型只反复读/查看、从不动手改:停滞检测抓不到(每次参数不同),但「只读空转门」应在阈值处诚实交还,
         // 而非跑满天花板。证明对各种模型的犹豫空转有兜底。
@@ -250,4 +403,10 @@ final class AgentLoopTests: XCTestCase {
 private actor ArgsBox {
     private(set) var value: String = ""
     func set(_ v: String) { value = v }
+}
+
+private actor BoolBox {
+    private(set) var value = false
+    func set(_ v: Bool) { value = v }
+    func get() -> Bool { value }
 }

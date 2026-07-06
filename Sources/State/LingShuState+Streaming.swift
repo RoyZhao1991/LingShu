@@ -173,8 +173,15 @@ extension LingShuState {
               let index = chatMessages.firstIndex(where: { $0.id == messageID }),
               chatMessages[index].isLoading else { return }
         var filter = structuredStreamVisibilityFilters[messageID] ?? LingShuStructuredStreamVisibilityFilter()
-        let visibleDelta = filter.consume(delta)
+        let visibility = filter.consumeWithMetadata(delta)
         structuredStreamVisibilityFilters[messageID] = filter
+        if visibility.shouldClearVisibleText {
+            clearVisibleStreamingTextForStructuredProtocol(messageID)
+        }
+        if !visibility.hiddenDelta.isEmpty {
+            showStructuredParsingPreview(for: messageID)
+        }
+        let visibleDelta = visibility.visibleDelta
         guard !visibleDelta.isEmpty else { return }
         streamingBubblePendingDeltas[messageID, default: ""] += visibleDelta
         let pending = streamingBubblePendingDeltas[messageID] ?? ""
@@ -183,6 +190,30 @@ extension LingShuState {
             flushStreamingBubbleText(for: messageID)
         } else {
             scheduleStreamingBubbleFlush(for: messageID)
+        }
+    }
+
+    private func clearVisibleStreamingTextForStructuredProtocol(_ messageID: UUID) {
+        streamingBubbleFlushTasks[messageID]?.cancel()
+        streamingBubbleFlushTasks.removeValue(forKey: messageID)
+        streamingBubblePendingDeltas.removeValue(forKey: messageID)
+        spokenStreamOffsets.removeValue(forKey: messageID)
+        if let index = chatMessages.firstIndex(where: { $0.id == messageID }),
+           chatMessages[index].isLoading,
+           !chatMessages[index].text.isEmpty {
+            chatMessages[index].text = ""
+        }
+    }
+
+    private func showStructuredParsingPreview(for messageID: UUID) {
+        let preview = "正在解析结构化回复，确认最终可见内容…"
+        thinkingPreviewFlushTasks[messageID]?.cancel()
+        thinkingPreviewFlushTasks.removeValue(forKey: messageID)
+        thinkingPreviewBuffers[messageID] = preview
+        if let index = chatMessages.firstIndex(where: { $0.id == messageID }),
+           chatMessages[index].isLoading,
+           chatMessages[index].thinkingPreview != preview {
+            chatMessages[index].thinkingPreview = preview
         }
     }
 

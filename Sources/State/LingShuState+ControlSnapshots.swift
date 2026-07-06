@@ -66,6 +66,7 @@ extension LingShuState {
             "queuedDispatchCount": queuedDispatchTasks.count,
             "activeDispatchedCount": dispatchedTaskBubbles.count,
             "pendingChatTurnCount": pendingChatTurnIDs.count,
+            "globalTaskThreadLedger": globalTaskThreadLedgerPayload(limit: 10),
             "recentTaskRecords": taskExecutionRecords.prefix(8).map { record in
                 [
                     "title": record.title,

@@ -104,9 +104,15 @@ extension LingShuState {
                 appendTaskRecordMessage(recordID, actor: "灵枢", role: "卡住", kind: .warning, text: cleanQuestion)
                 blockedDispatchedRecordID = recordID   // 等用户回答→下条主输入直接续这条隔离会话(不重新分诊)
                 // P2 真闭环:ask_user 阻塞=在等用户 → 状态显示「待用户」而非笼统「执行中」(修"状态很怪");不 finishTaskRecord(保留续接语义)。
-                taskExecutionRecords[idx].status = .waitingForUser
                 if taskExecutionRecords[idx].taskOutcome == nil { taskExecutionRecords[idx].taskOutcome = .waitingForUser }
-                persistTaskExecutionRecords()
+                commitTaskThreadState(
+                    recordID: recordID,
+                    status: .waitingForUser,
+                    phase: .waiting,
+                    summary: cleanQuestion,
+                    blockingReason: cleanQuestion,
+                    requiredUserAction: cleanQuestion
+                )
             }
             // **气泡内待输入(2026-06-23,监工"卡住的任务被聊天淹没、回复对不上"修)**:把这条任务的气泡标成「待你输入」,
             // 渲染气泡内回复控件(选项/追加信息),答复直达该隔离会话——不再靠分诊在历史里找回它。
@@ -169,12 +175,16 @@ extension LingShuState {
             guard !isRoleAgentEventID(id) else { return }
             // 重连/手动续接:从"已暂停"翻回"执行中",执行流继续追加进该记录窗口。
             let recordID = agentSubTaskRecords[id]
-            if let recordID, let idx = taskExecutionRecords.firstIndex(where: { $0.id == recordID }) {
-                taskExecutionRecords[idx].status = .running
+            if let recordID {
                 // **不写死"网络恢复"(2026-06-30)**:`.resumed` 既用于断网重连、也用于手动「继续」续接——
                 // 手动续接说"网络恢复"是误导(用户实测点继续却显示网络恢复)。改中性;断网那条另有"网络恢复"trace(见下方 resumeAfterReconnect)。
                 appendTaskRecordMessage(recordID, actor: "灵枢", role: "续跑", kind: .router, text: "接着上次进度续跑。")
-                persistTaskExecutionRecords()
+                commitTaskThreadState(
+                    recordID: recordID,
+                    status: .running,
+                    phase: .executing,
+                    summary: "接着上次进度续跑。"
+                )
             }
             _ = objective
         }

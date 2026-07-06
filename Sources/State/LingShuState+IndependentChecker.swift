@@ -38,7 +38,7 @@ extension LingShuState {
             let artPaths = (taskExecutionRecords.first { $0.id == rid }?.artifacts ?? []).map(\.location)
             let artHint = artPaths.isEmpty ? "产物应在工作目录 \(agentWorkingDirectory)。"
                 : "产出物绝对路径(直接核验这些具体文件):\n" + artPaths.map { "- \($0)" }.joined(separator: "\n")
-            let reviewObj = "你是独立验收方(checker)。maker 针对目标完成了开发。\n目标:\(objective)\n工作目录:\(agentWorkingDirectory)\n\(artHint)\n请独立核验:真实读文件 / 跑测试 / 运行起来,判断是否达成目标。**只验收,别替它重写。**\n结论格式:第一行只写「通过」或「不通过」,其后逐条列问题。\nmaker 自述产出:\n\(makerText.prefix(1500))"
+            let reviewObj = "你是独立验收方(checker)。maker 针对目标完成了开发。\n目标:\(objective)\n工作目录:\(agentWorkingDirectory)\n\(artHint)\n请独立核验:真实读文件 / 跑测试 / 运行起来,判断是否达成目标。**只验收,别替它重写。**\n\(LingShuCheckerVerdict.outputContract)\nmaker 自述产出:\n\(makerText.prefix(1500))"
             let c: String
             // **流式**:边跑边把 checker 的复核进展更新进同一条参与方气泡(不再干等)。
             switch await runAgentStreamingToRecord(plugin, objective: reviewObj, recordID: rid,
@@ -152,7 +152,8 @@ extension LingShuState {
         let system = """
         你是**独立验收官(checker)**,与开发方(maker)是**两条完全独立的会话**。你看不到 maker 的内部过程,只面对它落盘的产出。
         职责:独立核验产出**是否真达成目标**——主动 `read_file` 看代码、`run_command` 跑测试 / 把程序运行起来,逐条对成功标准核对。
-        **铁律:只验收,绝不替它改 / 写任何代码或文件。** 结论:**第一行只写「通过」或「不通过」**,其后列依据(你跑了什么、看到什么)。
+        **铁律:只验收,绝不替它改 / 写任何代码或文件。** 结论必须遵守标准 JSON verdict 协议。
+        \(LingShuCheckerVerdict.outputContract)
         """
         appendTaskRecordMessage(rid, actor: "审查员", role: "验收(checker)·独立会话上岗", kind: .agent,
             text: "🧑‍⚖️ 独立 checker 会话上岗(与 maker 不同会话/上下文),开始独立核验产出——读代码、跑测试、运行起来。")
@@ -179,15 +180,8 @@ extension LingShuState {
         return (Self.checkerVerdictPassed(verdict), verdict)
     }
 
-    /// checker 文本结论是否判过(纯函数可测):第一行「通过」/pass 算过;「不通过」/not pass/fail 一律不过。
+    /// checker JSON verdict 是否判过(纯函数可测):只接受标准 JSON 对象,拒绝旧式“通过/不通过”文本。
     nonisolated static func checkerVerdictPassed(_ text: String) -> Bool {
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        let head = String(trimmed.prefix(40))
-        let lowerHead = head.lowercased()
-        if head.contains("不通过") || head.contains("未通过") || lowerHead.contains("not pass") || lowerHead.contains("fail") { return false }
-        if head.contains("通过") || lowerHead.contains("pass") || head.contains("✅") { return true }
-        // 兜底:整体含明确通过信号且无失败信号。
-        return (trimmed.contains("验收通过") || text.lowercased().contains("all tests pass"))
-            && !trimmed.contains("未通过") && !trimmed.contains("不通过")
+        LingShuCheckerVerdict.parse(text)?.passed == true
     }
 }

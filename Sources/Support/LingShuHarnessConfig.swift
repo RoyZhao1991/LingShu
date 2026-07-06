@@ -14,6 +14,7 @@ struct LingShuHarnessConfig: Sendable {
     var tokenBudget: Int = 24_000           // token 分层压缩的预算
     var deferredCatalog: Bool = false       // 工具目录延迟加载(强脑/lean 档开;按脑力自适应)
     var factSink: (@Sendable ([String]) async -> Void)? = nil   // 压缩抽出的事实回灌知识图谱
+    var loopTraceSink: (@Sendable (LingShuAgentLoopTraceEvent) async -> Void)? = nil
 
     func dispatcher() -> any LingShuToolDispatching {
         serialDispatch ? LingShuSerialToolDispatcher() : LingShuParallelToolDispatcher()
@@ -44,6 +45,7 @@ struct LingShuHarnessConfig: Sendable {
             toolDispatcher: dispatcher(),
             historyCompactor: compactor(maxHistoryMessages: maxHistoryMessages),
             factSink: factSink,
+            loopTraceSink: loopTraceSink,
             exposedToolNames: catalog.exposed
         )
     }

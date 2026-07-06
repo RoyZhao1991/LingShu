@@ -19,12 +19,21 @@ extension LingShuState {
 
     /// 当前正在"给人看/讲/答疑"时,把可见材料上下文显式放回本轮。
     /// 这是通用交互态,不绑定 PPT:任何预览中的文档、网页、表格、图片都应能支撑追问/翻页/继续。
-    func currentVisibleInteractionGuidance(for prompt: String) -> String? {
+    func currentVisibleInteractionGuidance(for prompt: String, taskRecordID: String? = nil) -> String? {
         guard previewController.isPresented else { return nil }
+        if let spec = goalSpec(for: taskRecordID),
+           !spec.allowsVisibleInteractionOutput,
+           spec.referenceScope != .visibleContext {
+            return nil
+        }
         let title = previewController.title.isEmpty ? "当前材料" : previewController.title
         let page = previewController.displayedPageNumber
         let total = previewController.pageCount > 0 ? "\(previewController.pageCount)" : "连续页面"
         let mode = previewController.slideshow ? "全屏演示中" : "普通预览中"
+        let isStrongContext = currentVisibleInteractionIsStillForeground()
+        if !isStrongContext {
+            return nil
+        }
         let isQuestion = LingShuInteractionFulfillment.isQuestionLike(prompt)
         let currentPageText: String
         if previewController.isHTML {
@@ -50,6 +59,21 @@ extension LingShuState {
         - 继续演示/汇报时,保持同一上下文:preview_document_text 读实际内容,用 speak 讲,用 preview_next/preview_scroll 推进;需要占屏连续演示就进入/保持自主模式。
         - 收尾/退出时明确关闭预览或退出全屏,并用一句话确认。
         """
+    }
+
+    /// 可视材料是否仍是本轮强上下文。
+    /// 结构规则:预览打开后,如果又出现了新的普通聊天答复,说明用户已经切到新的对话主题;
+    /// 此时预览只能作为背景,不能压过最近聊天上下文。若最新答复属于可视交互记录,仍保持强上下文。
+    func currentVisibleInteractionIsStillForeground() -> Bool {
+        guard previewController.isPresented else { return false }
+        guard let openedAt = previewController.openedAt else { return true }
+        guard let latestAssistant = chatMessages.last(where: { !$0.isUser && !$0.isLoading && $0.createdAt > openedAt }) else {
+            return true
+        }
+        if let recordID = latestAssistant.taskRecordID, turnDidProvideInteractiveOutput(recordID) {
+            return true
+        }
+        return false
     }
 
     /// 给可视材料追问使用的轻量正文摘录。只提供事实上下文,不决定答案、不绑定文件类型或题材。

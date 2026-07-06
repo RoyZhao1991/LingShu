@@ -576,6 +576,7 @@ struct LingShuInputDock: View {
     @State private var invocablePluginsCache: [LingShuInvocablePlugin] = []   // 可调插件/agent 快照(@ 补全弹层用)
     @State private var mentionQuery: LingShuMentionQuery? = nil               // 光标处正在打的 @查询(nil=不在 mention)
     @State private var mentionSelected: Int = 0                               // 补全弹层当前高亮项
+    @State private var showHistorySearch = false
 
     var body: some View {
         let _ = LingShuInputRenderDiagnostics.log(
@@ -666,6 +667,10 @@ struct LingShuInputDock: View {
                 inputAliases = state.invocableAliases()
                 invocablePluginsCache = state.invocablePlugins()
             }
+            .onChange(of: state.invocablePluginCatalogRevision) { _, _ in
+                inputAliases = state.invocableAliases()
+                invocablePluginsCache = state.invocablePlugins()
+            }
             // 选中 agent 编排时(chips 变)顺带刷新别名快照——新注册的 agent 也能即时高亮。
             .onChange(of: inputStore.detectedInvocationChips) { _, _ in
                 if inputAliases.isEmpty { inputAliases = state.invocableAliases() }
@@ -728,36 +733,6 @@ struct LingShuInputDock: View {
                     .transition(.opacity)
                 }
 
-                Button {
-                    showClearConfirm = true
-                } label: {
-                    Image(systemName: "square.and.pencil")
-                        .font(.system(size: 15, weight: .bold))
-                        .foregroundStyle(Color.lingFg.opacity(0.86))
-                        .frame(width: 46, height: 42)
-                        .background(Color.lingFg.opacity(0.08), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-                }
-                .buttonStyle(.plain)
-                .help("清空上下文 / 新会话")
-                .confirmationDialog("清空当前对话上下文?", isPresented: $showClearConfirm, titleVisibility: .visible) {
-                    Button("清空(新会话)", role: .destructive) { state.clearMainContext() }
-                    Button("取消", role: .cancel) {}
-                } message: {
-                    Text("清掉当前聊天与执行轨迹、重置会话。任务线程与长期记忆保留。")
-                }
-
-                Button {
-                    toggleVision()
-                } label: {
-                    Image(systemName: vision.isCameraRunning ? "eye.fill" : "eye")
-                        .font(.system(size: 16, weight: .bold))
-                        .foregroundStyle(vision.isCameraRunning ? Color.lingVoid : Color.lingFg.opacity(0.86))
-                        .frame(width: 46, height: 42)
-                        .background(vision.isCameraRunning ? Color.cyan.opacity(0.92) : Color.lingFg.opacity(0.08), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-                }
-                .buttonStyle(.plain)
-                .help(vision.isCameraRunning ? "关闭视觉解析" : "打开视觉解析")
-
                 if state.hasActiveModelCall {
                     Button {
                         state.cancelCurrentCall()
@@ -772,20 +747,64 @@ struct LingShuInputDock: View {
                     .help("停止本轮调用")
                 }
 
+                Spacer(minLength: 12)
+
+                HStack(spacing: 8) {
+                    Button {
+                        showHistorySearch = true
+                    } label: {
+                        Image(systemName: "magnifyingglass")
+                            .font(.system(size: 16, weight: .bold))
+                            .foregroundStyle(Color.lingFg.opacity(0.78))
+                            .frame(width: 42, height: 42)
+                            .background(Color.lingFg.opacity(0.07), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    }
+                    .buttonStyle(.plain)
+                    .help("检索历史对话和任务冷备")
+
+                    Button {
+                        showClearConfirm = true
+                    } label: {
+                        Image(systemName: "square.and.pencil")
+                            .font(.system(size: 15, weight: .bold))
+                            .foregroundStyle(Color.lingFg.opacity(0.78))
+                            .frame(width: 42, height: 42)
+                            .background(Color.lingFg.opacity(0.07), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    }
+                    .buttonStyle(.plain)
+                    .help("清空上下文 / 新会话")
+                    .confirmationDialog("清空当前对话上下文?", isPresented: $showClearConfirm, titleVisibility: .visible) {
+                        Button("清空(新会话)", role: .destructive) { state.clearMainContext() }
+                        Button("取消", role: .cancel) {}
+                    } message: {
+                        Text("清掉当前聊天与执行轨迹、重置会话。任务线程与长期记忆保留。")
+                    }
+
+                    Button {
+                        toggleVision()
+                    } label: {
+                        Image(systemName: vision.isCameraRunning ? "eye.fill" : "eye")
+                            .font(.system(size: 16, weight: .bold))
+                            .foregroundStyle(vision.isCameraRunning ? Color.lingVoid : Color.lingFg.opacity(0.78))
+                            .frame(width: 42, height: 42)
+                            .background(vision.isCameraRunning ? Color.cyan.opacity(0.92) : Color.lingFg.opacity(0.07), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    }
+                    .buttonStyle(.plain)
+                    .help(vision.isCameraRunning ? "关闭视觉解析" : "打开视觉解析")
+                }
+                .padding(.leading, 2)
+
                 Button {
                     submit()
                 } label: {
-                    HStack(spacing: 8) {
-                        Image(systemName: "paperplane.fill")
-                        Text(state.loc("交给灵枢", "Send to \(state.appName)"))
-                    }
-                    .font(.system(size: 14.5, weight: .semibold))
-                    .foregroundStyle(Color.lingVoid)
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 44)
-                    .background(Color.lingHolo, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    Image(systemName: "paperplane.fill")
+                        .font(.system(size: 16, weight: .bold))
+                        .foregroundStyle(Color.lingVoid)
+                        .frame(width: 46, height: 42)
+                        .background(Color.lingHolo, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
                 }
                 .buttonStyle(.plain)
+                .help("发送")
             }
             .animation(.easeInOut(duration: 0.2), value: voice.isSpeaking)
 
@@ -796,11 +815,13 @@ struct LingShuInputDock: View {
                     LingShuAlertTicker(alerts: activeAlerts)
                     Spacer(minLength: 8)
                 }
-                Text(state.modelConnectionState)
-                    .foregroundStyle(state.isModelConnected ? Color.lingHolo : Color.orange.opacity(0.86))
+                LingShuModelConnectionBadge(
+                    text: state.modelConnectionState,
+                    isConnected: state.isModelConnected
+                )
             }
-            .font(.system(size: 11.5, weight: .semibold, design: .monospaced))
-            .foregroundStyle(Color.lingFg.opacity(0.48))
+            .font(.system(size: 11.5, weight: .medium))
+            .foregroundStyle(Color.lingFg.opacity(0.46))
         }
         // 输入坞=上浮的白色 compose 卡(浅色:白底+柔阴影浮于灰画布,与顶栏 chrome 呼应撑出层次;深色:透明=零回归)。
         .padding(14)
@@ -808,6 +829,9 @@ struct LingShuInputDock: View {
             Color.lingDockSurface.shadow(.drop(color: .black.opacity(0.07), radius: 14, y: 3)),
             in: RoundedRectangle(cornerRadius: 18, style: .continuous)
         )
+        .sheet(isPresented: $showHistorySearch) {
+            LingShuHistorySearchSheet(state: state)
+        }
     }
 
     /// 底部告警栏的数据源：把分散在各处、用户容易忽略的"降级/不可用"状态收集起来集中提示。
@@ -979,6 +1003,32 @@ struct LingShuInputDock: View {
 
     private func toggleVision() {
         LingShuPerceptionActions.toggleVision(state: state, vision: vision)
+    }
+}
+
+private struct LingShuModelConnectionBadge: View {
+    let text: String
+    let isConnected: Bool
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Circle()
+                .fill(isConnected ? Color.lingHolo.opacity(0.7) : Color.orange.opacity(0.76))
+                .frame(width: 5.5, height: 5.5)
+
+            Text(text)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(Color.lingFg.opacity(isConnected ? 0.50 : 0.68))
+                .lineLimit(1)
+        }
+        .padding(.horizontal, 7)
+        .padding(.vertical, 3)
+        .background(Color.lingFg.opacity(0.035), in: Capsule())
+        .overlay {
+            Capsule()
+                .stroke(Color.lingFg.opacity(0.055), lineWidth: 0.6)
+        }
+        .accessibilityLabel(text)
     }
 }
 

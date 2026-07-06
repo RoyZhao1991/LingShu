@@ -64,9 +64,10 @@ enum LingShuToolCatalog {
     /// 注:`recall_local` = 本机知识检索,用户定调为**基础能力、对话里永远可用**,故必须在核心集——
     /// 即便强脑走延迟加载也绝不藏到 search_tools 后(否则"涉及本机资料先 recall_local"的对话引导会落空)。
     static let coreToolNames: Set<String> = [
-        "read_file", "write_file", "edit_file", "apply_patch", "run_command", "web_search",
+        "read_file", "write_file", "edit_file", "apply_patch", "run_command",
+        "start_long_command", "check_long_command", "cancel_long_command", "list_long_commands",
+        "web_search",
         "ask_user", "ask_form", "speak", "recall_memory", "recall_local", "update_plan", "spawn_task",
-        "register_agent", "run_agent",   // agent 即插件(通用):被告知本机有某 CLI agent→注册;把活外包给已注册 agent
         "present_documents",   // 「演示与答疑」插件:恒可见,做正式文档演示时大脑直接用
         "self_inspect"   // 自检:随时拉自己的整体架构+实时能力(答自指/规划/自进化用真实自我认知)
     ]

@@ -126,6 +126,32 @@ final class MemoryGraphTests: XCTestCase {
         XCTAssertEqual(n.source, .userExplicit)
     }
 
+    func testAdmissionAcceptsStableUserPreference() {
+        let action = LingShuMemoryGardener.integrate(
+            .init(kind: .preference, title: "回复语言", body: "用户明确要求默认使用中文回复。", source: .userExplicit, confidence: 0.9),
+            into: [], now: t0)
+        guard case .create(let n) = action else { return XCTFail("用户明说的稳定偏好应进入知识图谱") }
+        XCTAssertEqual(n.kind, .preference)
+    }
+
+    func testAdmissionRejectsLowConfidenceInferenceFact() {
+        let action = LingShuMemoryGardener.integrate(
+            .init(kind: .fact, title: "用两句话介绍自己", body: "经验:目标「用两句话介绍自己」(interaction)结果=已直接回答。", source: .inference, confidence: 0.55),
+            into: [], now: t0)
+        guard case .skip(let reason) = action else { return XCTFail("低证据推断/普通问答流水账不应进入知识图谱") }
+        XCTAssertTrue(reason.contains("置信度不足") || reason.contains("流水账") || reason.contains("推断"))
+    }
+
+    func testAdmissionAcceptsToolObservedDurableFact() {
+        let action = LingShuMemoryGardener.integrate(
+            .init(kind: .fact, title: "语义记忆数据库路径",
+                  body: "语义记忆数据库位于本机应用支持目录的 LingShu/Memory/semantic-memory.sqlite3。",
+                  source: .tool, confidence: 0.82),
+            into: [], now: t0)
+        guard case .create(let n) = action else { return XCTFail("工具确认的稳定事实应进入知识图谱") }
+        XCTAssertEqual(n.source, .tool)
+    }
+
     func testIntegrateMergesByAliasNotDuplicate() {
         let existing = [note("roy", kind: .person, title: "Roy Zhao", aliases: ["灵枢"], body: "主人")]
         // 误识别的"林叔"作为候选 → 应归并到 roy(update),不新建第二个 person。

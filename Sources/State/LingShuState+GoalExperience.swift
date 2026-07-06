@@ -1,5 +1,17 @@
 import Foundation
 
+struct LingShuMemoryDashboardStats: Equatable {
+    var graphNodes: Int
+    var goalExperiences: Int
+    var experienceRules: Int
+    var pendingExperienceBackfill: Int
+    var hotTaskRecords: Int
+    var coldTaskRecords: Int
+
+    var retainedTaskRecords: Int { hotTaskRecords + coldTaskRecords }
+    var experienceAssets: Int { goalExperiences + experienceRules }
+}
+
 /// 通用中枢 P4·**经验闭环**接线(见 [[LingShuGoalExperience]])。
 /// 目标终态 → 蒸一条**结构化可复用经验**入持久库(与 P1 知识图谱事实并存:图谱供广义 recall_memory,这条供**确定性主动注入**)。
 /// 新目标执行前 → 据相似度召回最相关历史经验,**注入执行引导**(driveAgentDelivery),让大脑复用成功打法/避开旧坑。
@@ -16,7 +28,8 @@ extension LingShuState {
     }
 
     private func persistGoalExperiences(_ list: [LingShuGoalExperience]) {
-        let capped = Array(list.suffix(200))
+        let retained = LingShuGoalExperienceMatch.retained(list)
+        let capped = Array(retained.suffix(200))
         if let data = try? JSONEncoder().encode(capped) {
             UserDefaults.standard.set(data, forKey: Self.goalExperiencesKey)
         }
@@ -24,8 +37,93 @@ extension LingShuState {
 
     func recordGoalExperience(_ exp: LingShuGoalExperience) {
         var list = goalExperiences()
+        if let existing = list.firstIndex(where: {
+            $0.objective == exp.objective &&
+            $0.kind == exp.kind &&
+            $0.outcome == exp.outcome &&
+            $0.lesson == exp.lesson &&
+            $0.sourceRecordID == exp.sourceRecordID
+        }) {
+            list.remove(at: existing)
+        }
         list.append(exp)
         persistGoalExperiences(list)
+    }
+
+    func clearGoalExperiences() {
+        UserDefaults.standard.removeObject(forKey: Self.goalExperiencesKey)
+    }
+
+    func memoryDashboardStats() -> LingShuMemoryDashboardStats {
+        .init(
+            graphNodes: knowledgeGraph.count,
+            goalExperiences: goalExperiences().count,
+            experienceRules: memoryService.experienceRuleCount,
+            pendingExperienceBackfill: pendingExperienceBackfillCount(),
+            hotTaskRecords: taskExecutionRecords.count,
+            coldTaskRecords: archivedTaskExecutionRecords.count
+        )
+    }
+
+    func pendingExperienceBackfillCount() -> Int {
+        let existingSources = Set(goalExperiences().compactMap(\.sourceRecordID))
+        return experienceBackfillCandidates().filter { !existingSources.contains($0.id) }.count
+    }
+
+    /// 历史回填：把已有任务记录中带 GoalSpec 的交付终态补成结构化经验。
+    /// 只看 typed status / GoalSpec，不看关键词；排除普通直答，避免聊天内容把经验库冲脏。
+    @discardableResult
+    func reconcileExperienceArtifactsFromRecords(maxGoalExperiences: Int = 200, maxRules: Int = 80) -> (goalExperiencesAdded: Int, rulesAdded: Int) {
+        let candidates = experienceBackfillCandidates()
+        guard !candidates.isEmpty else { return (0, 0) }
+
+        var existingSources = Set(goalExperiences().compactMap(\.sourceRecordID))
+        var addedExperiences = 0
+        let selected = Array(candidates.prefix(maxGoalExperiences)).sorted { $0.updatedAt < $1.updatedAt }
+        for record in selected where !existingSources.contains(record.id) {
+            guard let spec = record.goalSpec,
+                  let outcome = Self.experienceOutcome(for: record.status)
+            else { continue }
+            recordGoalExperience(.init(
+                objective: spec.objective,
+                kind: spec.kind.rawValue,
+                outcome: outcome,
+                lesson: distilledGoalLesson(outcome: outcome, spec: spec, record: record),
+                at: record.updatedAt,
+                sourceRecordID: record.id
+            ))
+            existingSources.insert(record.id)
+            addedExperiences += 1
+        }
+
+        let ruleCountBefore = memoryService.experienceRuleCount
+        let ruleCandidates = candidates
+            .filter { record in
+                guard let outcome = Self.experienceOutcome(for: record.status) else { return false }
+                return Self.shouldPersistExperienceRule(outcome: outcome)
+            }
+            .prefix(maxRules)
+        for record in ruleCandidates {
+            guard let spec = record.goalSpec,
+                  let outcome = Self.experienceOutcome(for: record.status)
+            else { continue }
+            let lesson = distilledGoalLesson(outcome: outcome, spec: spec, record: record)
+            memoryService.rememberExperienceRule(domain: spec.kind.rawValue, rule: lesson, source: record.id)
+        }
+        let addedRules = max(0, memoryService.experienceRuleCount - ruleCountBefore)
+        return (addedExperiences, addedRules)
+    }
+
+    private func experienceBackfillCandidates() -> [LingShuTaskExecutionRecord] {
+        taskExecutionRecordLookup
+            .filter { record in
+                guard record.goalSpec != nil,
+                      let outcome = Self.experienceOutcome(for: record.status),
+                      outcome != "已直接回答"
+                else { return false }
+                return true
+            }
+            .sorted { $0.updatedAt > $1.updatedAt }
     }
 
     /// 召回与目标最相关的历史经验(供执行引导注入 / 测试)。
@@ -81,5 +179,21 @@ extension LingShuState {
             if !reusable.isEmpty { parts.append("已补齐可复用:\(reusable.prefix(2).joined(separator: "、"))") }
         }
         return parts.joined(separator: ";")
+    }
+
+    nonisolated static func experienceOutcome(for status: LingShuTaskExecutionStatus) -> String? {
+        switch status {
+        case .completed: return "已完成"
+        case .verified: return "已核验完成"
+        case .answered: return "已直接回答"
+        case .needsRevision: return "未达标"
+        case .partial: return "部分完成"
+        case .failed: return "失败"
+        default: return nil
+        }
+    }
+
+    nonisolated static func shouldPersistExperienceRule(outcome: String) -> Bool {
+        outcome == "未达标" || outcome == "部分完成" || outcome == "失败"
     }
 }

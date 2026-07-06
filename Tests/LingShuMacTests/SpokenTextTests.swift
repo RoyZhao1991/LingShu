@@ -39,4 +39,12 @@ final class SpokenTextTests: XCTestCase {
         XCTAssertFalse(s.contains("1."))
         XCTAssertTrue(s.contains("详情看屏幕") || s.contains("第一项"))
     }
+
+    func testConciseDoesNotReadElapsedTimeFooter() {
+        let s = LingShuSpokenText.concise("HTTP 是客户端和服务器之间的通信协议。\n\n⏱ 总用时 7秒")
+        XCTAssertTrue(s.contains("HTTP 是客户端和服务器之间的通信协议"))
+        XCTAssertFalse(s.contains("总用时"))
+        XCTAssertFalse(s.contains("7秒"))
+        XCTAssertFalse(s.contains("⏱"))
+    }
 }

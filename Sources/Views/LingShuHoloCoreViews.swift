@@ -286,14 +286,14 @@ struct LingShuDualLayerCell: View {
 struct LingShuHUDReadout: View {
     let label: String
     let value: String
-    var color: Color = .white
+    var color: Color = .lingFg
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
             Text(label)
                 .font(.system(size: 9, weight: .bold, design: .monospaced))
                 .tracking(1.5)
-                .foregroundStyle(Color.lingFg.opacity(0.4))
+                .foregroundStyle(Color.lingFg.opacity(0.58))
             Text(value)
                 .font(.system(size: 12.5, weight: .semibold, design: .monospaced))
                 .foregroundStyle(color.opacity(0.94))

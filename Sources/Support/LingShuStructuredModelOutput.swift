@@ -133,12 +133,25 @@ OAuth 是唯一能触发授权/确认窗口的字段。只有确实需要用户�
     }
 
     static func visibleText(from raw: String) -> String {
-        guard let parsed = parse(raw), !parsed.visibleText.isEmpty else { return raw }
-        return parsed.visibleText
+        displayOnlyVisibleText(from: raw)
     }
 
     static func parse(_ raw: String) -> LingShuStructuredModelOutput? {
         guard let obj = strictJSONObject(raw) else { return nil }
+        return parseObject(obj)
+    }
+
+    /// 展示层宽容解析：只用于把违规混合输出里的 `reply` 取出来展示，
+    /// 绝不用于 OAuth/user_input/completion 等流程控制。
+    static func displayOnlyVisibleText(from raw: String) -> String {
+        if let parsed = parse(raw), !parsed.visibleText.isEmpty { return parsed.visibleText }
+        guard let obj = firstStructuredJSONObject(in: raw),
+              let parsed = parseObject(obj),
+              !parsed.visibleText.isEmpty else { return raw }
+        return parsed.visibleText
+    }
+
+    private static func parseObject(_ obj: [String: Any]) -> LingShuStructuredModelOutput? {
         let hasKnownKey = obj.keys.contains("reply")
             || obj.keys.contains("message")
             || obj.keys.contains("completion")
@@ -216,5 +229,53 @@ OAuth 是唯一能触发授权/确认窗口的字段。只有确实需要用户�
         guard let data = text.data(using: .utf8),
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
         return obj
+    }
+
+    private static func firstStructuredJSONObject(in raw: String) -> [String: Any]? {
+        let text = LingShuReasoningText.stripThinkTags(raw)
+        let chars = Array(text)
+        guard !chars.isEmpty else { return nil }
+        var startIndex: Int?
+        var depth = 0
+        var inString = false
+        var escaping = false
+
+        for (idx, ch) in chars.enumerated() {
+            if inString {
+                if escaping {
+                    escaping = false
+                } else if ch == "\\" {
+                    escaping = true
+                } else if ch == "\"" {
+                    inString = false
+                }
+                continue
+            }
+
+            if ch == "\"" {
+                inString = true
+                continue
+            }
+
+            if ch == "{" {
+                if depth == 0 { startIndex = idx }
+                depth += 1
+                continue
+            }
+
+            if ch == "}", depth > 0 {
+                depth -= 1
+                if depth == 0, let start = startIndex {
+                    let candidate = String(chars[start...idx])
+                    if let data = candidate.data(using: .utf8),
+                       let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                       parseObject(obj) != nil {
+                        return obj
+                    }
+                    startIndex = nil
+                }
+            }
+        }
+        return nil
     }
 }

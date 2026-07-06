@@ -386,13 +386,13 @@ struct LingShuStableTopBar: View {
 struct LingShuCompactStatus: View {
     let title: String
     let value: String
-    var color: Color = .white
+    var color: Color = .lingFg
 
     var body: some View {
         VStack(alignment: .leading, spacing: 1) {
             Text(title)
                 .font(.system(size: 9.5, weight: .bold))
-                .foregroundStyle(Color.lingFg.opacity(0.42))
+                .foregroundStyle(Color.lingFg.opacity(0.58))
             Text(value)
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(color.opacity(0.92))

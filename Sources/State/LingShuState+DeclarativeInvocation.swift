@@ -17,37 +17,51 @@ struct LingShuInvocationChip: Identifiable, Equatable {
 @MainActor
 extension LingShuState {
 
-    /// 当前**可被声明式调用**的插件/能力清单(给「+」菜单展示 + 文本前缀匹配)。
-    /// 按可用性实时过滤(如录制要计算机控制授权;演示总在)。
+    /// 当前**可被声明式调用**的插件/能力清单(给「+」菜单展示 + `@` 前缀匹配)。
+    /// 目录由实时 agent 健康状态派生:只有探活通过的 agent 与其已启用/已安装能力会暴露。
     func invocablePlugins() -> [LingShuInvocablePlugin] {
-        var list: [LingShuInvocablePlugin] = []
-        // **已注册的 agent 插件**(被告知可用→注册进插件库,零硬编码;不再写死 codex/claude)。可执行文件在才出现。
-        for a in LingShuAgentPluginStore.load() where a.isAvailableNow {
-            list.append(.init(id: "agent:\(a.id)", displayName: a.displayName, aliases: a.aliases,
-                              subtitle: a.subtitle.isEmpty ? "已注册 agent(\(a.role.rawValue))" : a.subtitle,
-                              icon: a.icon, kind: .agent))
-            // **P2b 子能力曝光(2026-06-29)**:把该 agent **已启用**的子能力 pin 进 @/+ 菜单(`@Codex·picsart` 这种限定别名,
-            // 不用裸名避免误命中正文"pdf/github"等)。只 pin 已启用的(用户定调:菜单别铺 191 项噪声);未装的走按需安装。
-            for cap in agentCapabilities(for: a.id) where cap.enabled && cap.installed {
-                let qualified = "\(a.displayName)·\(cap.name)"
-                list.append(.init(id: "agentcap:\(a.id):\(cap.id)", displayName: qualified, aliases: [qualified],
-                                  subtitle: "\(a.displayName) 自带能力 · 让它用这个做\(cap.summary.isEmpty ? "" : ":\(cap.summary.prefix(28))")",
-                                  icon: "puzzlepiece.extension", kind: .agentCapability))
+        invocablePlugins(agents: LingShuAgentPluginStore.load(), capabilities: discoveredAgentCapabilities)
+    }
+
+    /// 纯派生函数:给定 agent 状态 + 子能力快照 → 生成可调用目录。
+    /// 不写死任何 agent 名;Codex/Claude/未来 agent 都只由健康状态和能力声明决定是否出现。
+    func invocablePlugins(agents: [LingShuAgentPlugin], capabilities: [LingShuAgentCapability]) -> [LingShuInvocablePlugin] {
+        let callableAgents = agents.filter(\.isCallableNow)
+        let agentEntries = callableAgents.map { agent in
+            LingShuInvocablePlugin(
+                id: "agent:\(agent.id)",
+                displayName: agent.displayName,
+                aliases: agent.allAliases,
+                subtitle: agent.subtitle.isEmpty ? "外部 agent · \(agent.role.rawValue)" : agent.subtitle,
+                icon: agent.icon,
+                kind: .agent
+            )
+        }
+        let callableAgentByID = Dictionary(uniqueKeysWithValues: callableAgents.map { ($0.id, $0) })
+        let capabilityEntries = capabilities
+            .filter { $0.enabled && $0.installed && callableAgentByID[$0.agentID] != nil }
+            .sorted { ($0.agentID, $0.name) < ($1.agentID, $1.name) }
+            .compactMap { cap -> LingShuInvocablePlugin? in
+                guard let agent = callableAgentByID[cap.agentID] else { return nil }
+                let display = "\(agent.displayName)·\(cap.name)"
+                let aliases = [
+                    cap.invocationAlias,
+                    "\(agent.displayName)·\(cap.name)",
+                    "\(agent.id)·\(cap.name)",
+                ]
+                return LingShuInvocablePlugin(
+                    id: "agentcap:\(agent.id):\(cap.id)",
+                    displayName: display,
+                    aliases: aliases,
+                    subtitle: cap.summary.isEmpty ? cap.category : cap.summary,
+                    icon: "puzzlepiece.extension",
+                    kind: .agentCapability
+                )
             }
-        }
-        // **内置技能的 @ 菜单项**(演示与答疑等):通用并入,内核不点名具体技能(各技能自报 invocationEntry)。
-        list.append(contentsOf: builtinSkills.compactMap { $0.invocationEntry })
-        // 录制技能(尚未迁入内置技能协议,暂留)。
-        list.append(.init(id: "record", displayName: "录制技能",
-                          aliases: ["录制", "记录技能", "学技能", "record"],
-                          subtitle: "看你做一遍→学成可复用技能,以后一句话带新参数 replay", icon: "record.circle"))
-        // 已学会的过程技能,每个也可通过 `@技能名` 直接声明调用。
-        for s in LingShuProcedureSkillRouter.loadProcedures().prefix(8) {
-            list.append(.init(id: "proc:\(s.id)", displayName: s.title,
-                              aliases: s.triggers, subtitle: "已学会的技能" + (s.parameters.isEmpty ? "" : "(参数:\(s.parameters.map(\.name).joined(separator: "、")))"),
-                              icon: "wand.and.stars"))
-        }
-        return list
+        let builtinEntries = builtinSkills
+            .compactMap { $0.invocationEntry }
+            .filter { $0.id == "present" || $0.displayName == "演示与答疑" }
+        return agentEntries + capabilityEntries + builtinEntries
     }
 
     /// 当前所有**可 @ 触发**的别名(displayName + aliases 去重)——供输入框内嵌 token 高亮判定。
@@ -119,7 +133,7 @@ extension LingShuState {
         func resolve(_ step: (id: String, segment: String)) -> (agentID: String, name: String)? {
             guard let inv = plugins.first(where: { $0.id == step.id }) else { return nil }
             let agentID = inv.id.hasPrefix("agent:") ? String(inv.id.dropFirst("agent:".count)) : inv.id
-            guard LingShuAgentPluginStore.plugin(id: agentID) != nil else { return nil }
+            guard let agent = LingShuAgentPluginStore.plugin(id: agentID), agent.isCallableNow else { return nil }
             return (agentID, inv.displayName)
         }
         // **角色装配:让大脑语义判断(用户定调 2026-06-26:不用关键词,大脑读懂"谁开发/谁验收/几个验收")**。
@@ -246,34 +260,12 @@ extension LingShuState {
         if chips != detectedInvocationChips { detectedInvocationChips = chips }
     }
 
-    /// 把(已确认的)输入路由给指定**插件**(内置技能 / record / proc)。
+    /// 把(已确认的)输入路由给指定**插件**。当前运行态只暴露内置「演示与答疑」。
     private func routePlugin(pluginID: String, rest: String, fullPrompt: String = "") {
-        // **内置技能优先**(演示与答疑等):通用遍历,内核不点名;命中即由技能自行路由。
+        // **内置技能优先**(演示与答疑):命中即由技能自行路由。
         // 传 fullPrompt:路径类技能(演示)在 rest 没写路径时从整条消息兜底抽(含附件折进来的「本机路径:…」)。
         for skill in builtinSkills where skill.routeDeclarative(id: pluginID, rest: rest, fullPrompt: fullPrompt) { return }
-        switch pluginID {
-        case "record":
-            startProcedureRecording(name: rest.isEmpty ? nil : rest)
-        default:
-            // proc:<id> —— 直接 replay 这个已学会的技能(rest 里带参数)。
-            if pluginID.hasPrefix("proc:") {
-                let sid = String(pluginID.dropFirst("proc:".count))
-                let skills = LingShuProcedureSkillRouter.loadProcedures()
-                if let skill = skills.first(where: { $0.id == sid }) {
-                    if let gate = computerControlGate(requiresAccessibility: true) { speakAndChat("要跑这个技能我得能操作界面。\(gate)"); return }
-                    let params = LingShuProcedureSkillRouter.extractParams(rest, for: skill)
-                    let missing = skill.missingParameters(given: params)
-                    if !missing.isEmpty {
-                        let hints = skill.parameters.filter { missing.contains($0.name) }.map { $0.example.isEmpty ? $0.name : "\($0.name)(如\($0.example))" }.joined(separator: "、")
-                        speakAndChat("用「\(skill.title)」还差参数:\(hints)。一次说全我就跑。")
-                    } else {
-                        replayProcedure(skill: skill, params: params)
-                    }
-                    return
-                }
-            }
-            speakAndChat("我不认识这个插件:\(pluginID)。")
-        }
+        speakAndChat("我不认识这个插件:\(pluginID)。")
     }
 
     /// 从文本里抽**真实存在的**文件路径(声明式已表意图,不再要求意图词)。

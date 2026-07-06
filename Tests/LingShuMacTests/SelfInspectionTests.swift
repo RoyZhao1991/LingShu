@@ -53,4 +53,33 @@ final class SelfInspectionTests: XCTestCase {
         XCTAssertNil(state.selfInspectionGuidance(for: "帮我写个快速排序"))
         XCTAssertNil(state.selfInspectionGuidance(for: "今天天气怎么样"))
     }
+
+    @MainActor
+    func testAgentInspectionLineShowsAvailabilitySeparately() {
+        let state = LingShuState()
+
+        var available = LingShuAgentPlugin(
+            id: "ok", displayName: "OKAgent", executable: "/bin/echo",
+            argsTemplate: ["{{objective}}"], available: true, lastCheckedAt: Date(timeIntervalSince1970: 0)
+        )
+        XCTAssertTrue(state.agentInspectionLine(available).contains("可用"))
+
+        available.available = false
+        available.unavailableReason = "令牌过期"
+        let unavailableLine = state.agentInspectionLine(available)
+        XCTAssertTrue(unavailableLine.contains("不可用:令牌过期"))
+        XCTAssertTrue(unavailableLine.contains("@OKAgent"))
+
+        let unverified = LingShuAgentPlugin(
+            id: "unknown", displayName: "UnknownAgent", executable: "/bin/echo",
+            argsTemplate: ["{{objective}}"], available: nil
+        )
+        XCTAssertTrue(state.agentInspectionLine(unverified).contains("未探活"))
+
+        let missing = LingShuAgentPlugin(
+            id: "missing", displayName: "MissingAgent", executable: "/no/such/agent",
+            argsTemplate: ["{{objective}}"], available: true
+        )
+        XCTAssertTrue(state.agentInspectionLine(missing).contains("找不到可执行文件"))
+    }
 }

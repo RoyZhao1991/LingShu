@@ -97,6 +97,15 @@ final class LingShuChatHistoryStore: @unchecked Sendable {
         }
     }
 
+    /// 检索用冷备读取：不改变当前聊天窗口的分页状态，也不把冷备消息回灌到热列表。
+    func loadAllColdHistory() -> [ChatMessage] {
+        ioQueue.sync {
+            loadColdMessagesCached()
+                .filter { !$0.isLoading && !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+                .sorted { $0.createdAt > $1.createdAt }
+        }
+    }
+
     /// 异步保存：仅在调用线程做一次数组快照拷贝，合并、编码与写盘全部在后台串行队列完成。
     func save(_ messages: [ChatMessage], now: Date = Date()) {
         ioQueue.async {
@@ -107,6 +116,15 @@ final class LingShuChatHistoryStore: @unchecked Sendable {
     /// 同步落盘队列中所有待写任务。退出前调用，确保不丢最后一段对话。
     func flush() {
         ioQueue.sync {}
+    }
+
+    func clearAll() {
+        ioQueue.sync {
+            [hotHistoryFileURL, coldHistoryFileURL, contextDigestFileURL].forEach {
+                try? FileManager.default.removeItem(at: $0)
+            }
+            cachedColdMessages = []
+        }
     }
 
     private func performSave(_ messages: [ChatMessage], now: Date) {

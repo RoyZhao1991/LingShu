@@ -77,7 +77,6 @@ extension LingShuState {
         let modelDeclaredBlocked = structured?.declaresBlocked ?? false
         let modelDeclaredNeedsAcquisition = structured?.declaresNeedsAcquisition ?? false
         let modelDeclaredIncomplete = structured?.declaresIncomplete ?? false
-        let taskLikeBase = Self.recordNeedsCompletionGate(record) || record.goalSpec?.kind == .task || record.goalSpec?.kind == .interaction
         // 授权/补前提不再从回复文本里扫关键词推断。
         // 这些状态只能来自 typed gap / OAuth 结构字段 / ask_user 工具协议,避免 OAuth 科普、token 解释等普通问答误弹授权窗。
         // **根治"部分完成"反复出现(2026-06-27)**:gap 分析常误报"本地文件系统 requiresAuth"这类 .permission gap;
@@ -90,11 +89,16 @@ extension LingShuState {
             return !gap.requiresUser || Self.isActionableUserGap(gap)
         }
         let hasStructuredOAuthRequest = gap?.OAuth?.normalized != nil || structured?.OAuth?.normalized != nil
+        let replyOnlyOutput = record.goalSpec?.isReplyOnlyOutput == true
+        let taskLikeBase = replyOnlyOutput
+            ? false
+            : (Self.recordNeedsCompletionGate(record) || record.goalSpec?.kind == .task || record.goalSpec?.kind == .interaction)
         let hasBlocking = hasStructuredOAuthRequest || modelDeclaredNeedsUser || modelDeclaredNeedsAcquisition || !actionableBlockingGaps.isEmpty
         let blockingNeedsUser = hasStructuredOAuthRequest || modelDeclaredNeedsUser || actionableBlockingGaps.contains { $0.requiresUser }
         let blockingSelfAcquirable = modelDeclaredNeedsAcquisition || actionableBlockingGaps.contains { $0.selfAcquirable }
         let hasCriteria = !(record.goalSpec?.successCriteria.isEmpty ?? true)
-        let taskLike = taskLikeBase || modelDeclaredIncomplete
+        let taskLike = taskLikeBase || modelDeclaredIncomplete || hasStructuredOAuthRequest || modelDeclaredNeedsUser
+            || modelDeclaredNeedsAcquisition || modelDeclaredPartial || modelDeclaredBlocked
         guard taskLike else { return .init(status: .ok, reason: "") }
         if answerOnlyDeliveryCanFinish(recordID: recordID, userRequest: record.prompt, reply: reply) {
             return .init(status: .ok, reason: "答复型回合已给出实质回答,且无外部动作/产物/变更证据,不进入任务验收。")
@@ -282,6 +286,7 @@ extension LingShuState {
     /// 防伪完成门的文本兜底会扫描「无法/不具备/需要你提供」等承认语;这些词在知识问答里也很常见
     /// (如"HTTP 无状态,无法直接记住用户状态")。因此只有明确 task 目标、带缺口/验收/产出证据的记录才进入闸。
     nonisolated static func recordNeedsCompletionGate(_ record: LingShuTaskExecutionRecord) -> Bool {
+        if record.goalSpec?.isReplyOnlyOutput == true { return false }
         if record.goalSpec?.kind == .task { return true }
         if record.gapAnalysis != nil { return true }
         if !(record.acceptanceChecks?.isEmpty ?? true) { return true }

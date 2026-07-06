@@ -73,15 +73,24 @@ enum LingShuAgentPluginStore {
     nonisolated static func outputIndicatesUnavailable(_ text: String) -> String? {
         let lower = text.lowercased()
         let en: [(String, String)] = [
+            ("failed to authenticate", "认证失败"), ("api error: 401", "认证失败(401)"),
+            ("status code 401", "认证失败(401)"), ("http 401", "认证失败(401)"),
+            ("token expired", "令牌过期"), ("expired token", "令牌过期"),
             ("not logged in", "未登录"), ("please run /login", "需登录(/login)"), ("run /login", "需登录(/login)"),
             ("please login", "需登录"), ("login required", "需登录"), ("not authenticated", "未认证"),
             ("no api key", "缺 API Key"), ("missing api key", "缺 API Key"), ("invalid api key", "API Key 无效"),
             ("api key required", "缺 API Key"), ("credit balance is too low", "额度不足"), ("quota exceeded", "额度用尽"),
+            ("account on hold", "账号被暂停"), ("account is on hold", "账号被暂停"), ("account suspended", "账号被暂停"),
+            ("organization has been disabled", "组织/账号被禁用"), ("organisation has been disabled", "组织/账号被禁用"),
+            ("organization disabled", "组织/账号被禁用"), ("org disabled", "组织/账号被禁用"),
+            ("payment required", "额度/账单不可用"), ("insufficient quota", "额度用尽"),
         ]
         for (needle, reason) in en where lower.contains(needle) { return reason }
         let zh: [(String, String)] = [
             ("未登录", "未登录"), ("请先登录", "需登录"), ("登录已过期", "登录过期"), ("登录失效", "登录失效"),
-            ("认证失败", "认证失败"), ("授权已过期", "授权过期"), ("额度不足", "额度不足"), ("余额不足", "余额不足"),
+            ("认证失败", "认证失败"), ("授权已过期", "授权过期"), ("令牌已过期", "令牌过期"), ("令牌过期", "令牌过期"),
+            ("额度不足", "额度不足"), ("余额不足", "余额不足"), ("账户被暂停", "账号被暂停"), ("账号被暂停", "账号被暂停"),
+            ("组织已被禁用", "组织/账号被禁用"), ("组织被禁用", "组织/账号被禁用"),
         ]
         for (needle, reason) in zh where text.contains(needle) { return reason }
         return nil

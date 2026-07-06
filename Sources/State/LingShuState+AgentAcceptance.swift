@@ -112,6 +112,7 @@ extension LingShuState {
     /// 只有「maker 一轮无新进展(产出物没增、意见与上轮实质相同)」=停滞才诚实交还。`verifyCeiling` 只是高位安全天花板。
     private func runVerificationLoop(session: any LingShuAgentSessioning, result initial: LingShuAgentRunResult, userRequest: String, taskRecordID: String?, artifactBaseline: Int = 0, trustReplyClaim: Bool = true, useCheckerSession: Bool = false) async -> LingShuAgentRunResult {
         var result = initial
+        if goalSpec(for: taskRecordID)?.isReplyOnlyOutput == true { return result }
         // 触发验收门的可靠信号:**本回合真有【新】产出物落盘**(write_file 自动登记)——比抠回复动词稳得多
         // (旧的只认"已生成/已写入"会漏掉"已交付"这类措辞,导致验收形同虚设);
         // 用 artifactBaseline 只看**本回合相对开始时的增量**,避免常驻会话残留旧产出物把"演示/答疑"等纯动作回合误拖进验收。

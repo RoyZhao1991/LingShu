@@ -1,13 +1,13 @@
 import XCTest
 @testable import LingShuMac
 
-/// 差距2·薄基线:按交付物类型 gate 贵 LLM 评审的纯逻辑守卫。
-/// 核心断言:**代码且确定性门绿 → 跳过 LLM**;主观交付物 → 跑 LLM;确定性门**永不跳过**(本测只 gate LLM)。
+/// 按交付物类型 gate LLM 评审的纯逻辑守卫。
+/// 核心断言:**代码且确定性门红 → 直接返工**;代码确定性门绿仍要跑 LLM 质量评审。
 final class VerifierGateTests: XCTestCase {
 
-    func testPureCodeGateGreenSkipsLLM() {
+    func testPureCodeGateGreenStillRunsLLMForQuality() {
         let d = LingShuVerifierGate.decide(codeFileCount: 2, hasSubjectiveArtifact: false, codeGatePassed: true)
-        XCTAssertEqual(d, .skipPassedByDeterministicGate, "纯代码 + 确定性门绿 → 应跳过 LLM 直接通过")
+        XCTAssertEqual(d, .runLLMReview, "纯代码 + 确定性门绿 → 仍需 LLM 评审代码质量")
     }
 
     func testPureCodeGateRedSkipsLLMButFails() {
@@ -62,7 +62,7 @@ final class VerifierGateTests: XCTestCase {
                        "确定性未达成不能短路")
     }
 
-    // MARK: 代码确定性门校准(能力加固:测试绿 或 真构建/运行通过,二者择一)
+    // MARK: 代码确定性门校准(测试绿 + 真运行有结果 + 不崩溃)
 
     func testFullChainPasses() {
         // 测试全绿 + 跑出可见结果 + 没崩 → 通过。

@@ -57,11 +57,29 @@ enum LingShuWorkingDirectoryHint {
         var path = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         path = path.trimmingCharacters(in: CharacterSet(charactersIn: "`\"'，,。；;：:）)]】"))
         guard !path.isEmpty else { return nil }
+        guard isConcretePathToken(path) else { return nil }
         if path.hasPrefix("~") {
             path = NSString(string: path).expandingTildeInPath
         }
         guard path.hasPrefix("/") else { return nil }
-        return (path as NSString).standardizingPath
+        let normalized = (path as NSString).standardizingPath
+        guard hasExistingTopLevelDirectory(normalized) else { return nil }
+        return normalized
+    }
+
+    private static func isConcretePathToken(_ path: String) -> Bool {
+        let controlCharacters = CharacterSet(charactersIn: "*{}<>|")
+        return path.rangeOfCharacter(from: controlCharacters) == nil
+    }
+
+    private static func hasExistingTopLevelDirectory(_ path: String) -> Bool {
+        let normalized = (path as NSString).standardizingPath
+        guard normalized.hasPrefix("/") else { return false }
+        let parts = normalized.split(separator: "/")
+        guard let first = parts.first else { return false }
+        let topLevel = "/" + String(first)
+        var isDir: ObjCBool = false
+        return FileManager.default.fileExists(atPath: topLevel, isDirectory: &isDir) && isDir.boolValue
     }
 
     private static func containsDirectoryIntent(_ text: String) -> Bool {

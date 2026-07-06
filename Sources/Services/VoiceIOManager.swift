@@ -692,6 +692,8 @@ final class VoiceIOManager: ObservableObject {
 
     /// 立即停止 TTS 播报（用户打断时调用）；同时清空分句早读队列。
     func stopSpeaking() {
+        // 作废所有在飞发声。云端 TTS 可能在 stop 后才返回音频；代次递增后，旧任务即使回流也不会再起播。
+        speechGeneration &+= 1
         cancelStreamingSpeech()   // 同时停掉增量流式发声(打断/新回合)
         cancelPrefetchedSpeech()  // 清演示翻页预合成槽(打断/新回合后那段已不该再播)
         speechQueue.removeAll()

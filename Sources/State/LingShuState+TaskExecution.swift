@@ -11,6 +11,7 @@ extension LingShuState {
     func createTaskExecutionRecord(for prompt: String) -> String {
         let record = LingShuTaskExecutionRecord.create(prompt: prompt)
         taskExecutionJournal.upsert(record, into: &taskExecutionRecords)
+        commitTaskThreadState(recordID: record.id, status: .running, phase: .planning, summary: record.summary, persist: false, trace: false)
         persistTaskExecutionRecords()
         recordWorldTask(.init(id: record.id, title: record.title, phase: .planning, ownerAgentID: "agent:lingshu", updatedAt: record.updatedAt))
         recordWorldEvent(kind: .task, source: "任务记录", summary: "创建任务:\(record.title)", relatedEntityIDs: ["agent:lingshu"], payload: ["recordID": record.id])
@@ -32,7 +33,16 @@ extension LingShuState {
         // **只净化输出,不净化输入(用户定调)**:净化是防大脑/模型输出暴露底层模型真身——用户自己打的字(.user)
         // 一个字都不改(否则像「@Claude 被改成 @灵枢」那样篡改用户原话)。
         let cleanText = kind == .user ? text : LingShuTaskMessageFormatting.sanitize(text)
+        let heartbeat = taskThreadHeartbeatUpdate(
+            currentStatus: taskExecutionRecords[index].status,
+            kind: kind,
+            text: cleanText,
+            detail: detail
+        )
         taskExecutionRecords[index].append(actor: actor, role: role, kind: kind, text: cleanText, detail: detail)
+        if let heartbeat {
+            refreshTaskThreadHeartbeat(recordID: recordID, phase: heartbeat.phase, summary: heartbeat.summary)
+        }
         persistTaskExecutionRecords()
         recordWorldEvent(kind: .task, source: actor, summary: "\(role):\(text)", payload: [
             "recordID": recordID,
@@ -51,7 +61,30 @@ extension LingShuState {
               let index = taskExecutionRecords.firstIndex(where: { $0.id == recordID }) else { return }
 
         taskExecutionRecords[index].appendArtifact(title: title, location: location, producer: producer, operation: operation)
+        refreshTaskThreadHeartbeat(
+            recordID: recordID,
+            phase: .executing,
+            summary: "登记产出物:\(title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? location : title)"
+        )
+        upgradeAnsweredRecordToCompletedWhenArtifactExists(recordID: recordID)
         persistTaskExecutionRecords()
+    }
+
+    /// 纯问答可以是 answered；但一条记录只要已经登记真实产出物,就不应继续显示为「已直接回答」。
+    /// 这是 artifact 结构事实驱动,不是文本关键词判断。
+    func upgradeAnsweredRecordToCompletedWhenArtifactExists(recordID: String) {
+        guard let index = taskExecutionRecords.firstIndex(where: { $0.id == recordID }),
+              taskExecutionRecords[index].status == .answered,
+              !taskExecutionRecords[index].artifacts.isEmpty else { return }
+        taskExecutionRecords[index].status = .completed
+        commitTaskThreadState(
+            recordID: recordID,
+            status: .completed,
+            phase: .delivering,
+            summary: taskExecutionRecords[index].summary,
+            persist: false,
+            trace: true
+        )
     }
 
     @discardableResult
@@ -66,6 +99,14 @@ extension LingShuState {
             agents: agentNames,
             summary: summary
         )
+        commitTaskThreadState(
+            recordID: recordID,
+            status: taskExecutionRecords[index].status,
+            phase: route.needsAgents ? .planning : .delivering,
+            summary: taskExecutionRecords[index].summary,
+            persist: false,
+            trace: false
+        )
         persistTaskExecutionRecords()
     }
 
@@ -77,11 +118,23 @@ extension LingShuState {
         guard let recordID,
               let index = taskExecutionRecords.firstIndex(where: { $0.id == recordID }) else { return }
 
-        taskExecutionRecords[index].finish(status: status, summary: summary)
+        let visibleSummary = LingShuStructuredModelOutput.visibleText(from: summary)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let finalSummary = visibleSummary.isEmpty ? summary : visibleSummary
+
+        taskExecutionRecords[index].finish(status: status, summary: finalSummary)
+        commitTaskThreadState(
+            recordID: recordID,
+            status: status,
+            phase: LingShuTaskThreadCommit.phase(for: status),
+            summary: finalSummary,
+            persist: false,
+            trace: true
+        )
         // **停止留残影根治(2026-06-29)**:记录进终态 → 把还在转圈、指向这条记录的聊天气泡一并收口。
         // 原来 finishTaskRecord 只改记录、不碰气泡,声明式@agent / 角色管线 / 派发这类**非主回合**路径
         // 停止或出错后会留下永久"进行中/推进中"转圈气泡 + 点开报"任务记录不存在"。这里统一收口(各路径通用,非特判)。
-        syncLoadingBubblesToFinishedRecord(recordID, status: status, summary: summary)
+        syncLoadingBubblesToFinishedRecord(recordID, status: status, summary: finalSummary)
         persistTaskExecutionRecords()
         recordWorldTask(.init(
             id: recordID,
@@ -90,7 +143,7 @@ extension LingShuState {
             ownerAgentID: "agent:lingshu",
             updatedAt: taskExecutionRecords[index].updatedAt
         ))
-        recordWorldEvent(kind: .task, source: "任务记录", summary: "任务收尾:\(status.rawValue) \(summary)", payload: ["recordID": recordID])
+        recordWorldEvent(kind: .task, source: "任务记录", summary: "任务收尾:\(status.rawValue) \(finalSummary)", payload: ["recordID": recordID])
         rememberGoalExperienceIfNeeded(recordID: recordID, status: status)   // P1 记忆消费:目标终态→结构化经验沉淀进知识图谱(可检索)
         if status == .completed || status == .verified { recordBrainTaskCompleted() }   // 大脑评分:自主完成一个任务 +1(verified=核验通过同样算)
         // 收尾(终态或可续停):结束当前线程段、抓代码改动、起队列下一段、触发离线固化。
@@ -370,5 +423,35 @@ extension LingShuState {
             if inside == "false" { return nil }
         }
         return nil
+    }
+
+    private func taskThreadHeartbeatUpdate(
+        currentStatus: LingShuTaskExecutionStatus,
+        kind: LingShuTaskExecutionMessageKind,
+        text: String,
+        detail: LingShuTaskExecutionDetail?
+    ) -> (phase: LingShuTaskThreadCommit.Phase, summary: String)? {
+        let cleanText = text.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        // 用户输入是线程的新材料,不是任务自身进展;避免"继续/追问"覆盖主线程账本摘要。
+        if kind == .user { return nil }
+
+        if let detail {
+            switch detail {
+            case .toolCall(let tool, let summary, _):
+                if currentStatus.isTerminal { return nil }
+                let cleanSummary = summary.trimmingCharacters(in: .whitespacesAndNewlines)
+                return (.executing, cleanSummary.isEmpty ? "正在调用 \(tool)" : "正在调用 \(tool):\(cleanSummary)")
+            case .toolResult(let tool, let success, _):
+                if currentStatus.isTerminal { return nil }
+                return (.executing, success ? "\(tool) 完成" : "\(tool) 失败")
+            case .fileEdit:
+                if currentStatus.isTerminal { return nil }
+                return (.executing, cleanText)
+            }
+        }
+
+        guard !cleanText.isEmpty else { return nil }
+        return (kind == .review ? .checking : .executing, cleanText)
     }
 }

@@ -8,17 +8,18 @@ extension LingShuMemoryService {
     static let experienceRuleKind = "经验规则"
 
     /// 写入一条经验规则。同领域+规则去重靠语义库 upsert（title 即规则要点）。
-    func rememberExperienceRule(domain: String, rule: String, source: String) {
+    @discardableResult
+    func rememberExperienceRule(domain: String, rule: String, source: String) -> Bool {
         let trimmedRule = rule.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard trimmedRule.count >= 6 else { return }
+        guard trimmedRule.count >= 6 else { return false }
         let title = String(trimmedRule.prefix(40))
-        semanticStore.remember(
+        return semanticStore.remember(
             kind: Self.experienceRuleKind,
             title: title,
             content: "【领域：\(domain)】\(trimmedRule)（来源：\(source)）",
             tags: LingShuMemoryTextToolkit.taskTags(from: "\(domain) \(trimmedRule)") + ["rule"],
             importance: 0.85
-        )
+        ) != nil
     }
 
     /// 召回与当前任务相关的经验规则（按语义近似），供规划阶段纳入考虑。
@@ -32,6 +33,6 @@ extension LingShuMemoryService {
 
     /// 经验规则总数（供设置页展示记忆成长度）。
     var experienceRuleCount: Int {
-        semanticStore.recentEntries(limit: 500).filter { $0.kind == Self.experienceRuleKind }.count
+        semanticStore.count(kind: Self.experienceRuleKind)
     }
 }

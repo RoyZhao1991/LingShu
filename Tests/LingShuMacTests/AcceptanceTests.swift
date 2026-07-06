@@ -311,6 +311,27 @@ final class AcceptanceTests: XCTestCase {
         XCTAssertFalse(state.shouldRunGoalAcceptance(taskRecordID: noCriteriaID))
     }
 
+    @MainActor
+    func testReplyOnlyTaskCriteriaDoesNotTriggerGoalAcceptance() {
+        let state = LingShuState()
+        let rid = state.createTaskExecutionRecord(for: "检查后只回复指定语句")
+        state.bindGoalSpec(
+            LingShuGoalSpec(
+                objective: "检查运行态插件入口并只回复验收语句",
+                kind: .task,
+                boundaries: ["不要创建文件", "不要打开预览", "不要进入交付流程"],
+                successCriteria: ["输出内容为指定语句"],
+                outputMode: .chatReply
+            ),
+            to: rid
+        )
+
+        XCTAssertFalse(
+            state.shouldRunGoalAcceptance(taskRecordID: rid),
+            "reply-only task 的成功标准只约束回复内容,不应触发 maker/checker 产物验收"
+        )
+    }
+
     func testVerifierBlockAndFailureReason() {
         let report = LingShuAcceptanceReport.make(
             checks: [

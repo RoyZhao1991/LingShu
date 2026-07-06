@@ -134,7 +134,7 @@ struct LingShuModelGateway {
             endpoint: endpoint,
             connectionKind: .apiKey,
             isConnected: hasAPIKey || canUseWithoutAPIKey,
-            statusText: hasAPIKey ? "API Key 已配置，可发起真实请求" : (canUseWithoutAPIKey ? "本地/自托管通道可用" : "未连接")
+            statusText: hasAPIKey ? "模型通道已连接" : (canUseWithoutAPIKey ? "本地通道可用" : "模型通道未连接")
         )
     }
 

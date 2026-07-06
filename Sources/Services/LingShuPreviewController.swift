@@ -9,6 +9,7 @@ import WebKit
 @MainActor
 final class LingShuPreviewController: ObservableObject {
     @Published var isPresented = false
+    @Published private(set) var openedAt: Date?
     /// 全屏演示模式(WPS 演示式:单页满屏 + 翻页,隐藏 chrome)。
     @Published var slideshow = false
     @Published private(set) var title = ""
@@ -65,6 +66,7 @@ final class LingShuPreviewController: ObservableObject {
             pageIndex = 0
             revision += 1
             isPresented = true
+            openedAt = Date()
             return "已在 app 内打开网页「\(title)」(WKWebView 原样渲染,CSS/JS 都在)。**演示讲解流程**:present_fullscreen(true) 进全屏 → 用 `preview_scroll` 往下滚(正数下滚/负数上滚,我会平滑滚动)逐屏讲、`preview_document_text` 可一次取整页正文照着讲 → 讲完 present_fullscreen(false) 退出。**别去浏览器、别用计算机控制滚**——就在这个预览窗里滚最稳。"
         }
         let pdfPath: String
@@ -86,6 +88,7 @@ final class LingShuPreviewController: ObservableObject {
         pageIndex = 0
         revision += 1
         isPresented = true
+        openedAt = Date()
         return "已打开预览「\(title)」,共 \(pageCount) 页,当前第 1 页。正式演讲请先 present_fullscreen 进全屏演示模式,再逐页 speak 讲、preview_next 翻;长文档用 preview_scroll。\n\(pageContentBlock(0))"
     }
 
@@ -227,6 +230,7 @@ final class LingShuPreviewController: ObservableObject {
         title = ""
         pageCount = 0
         pageIndex = 0
+        openedAt = nil
         isHTML = false
         htmlURL = nil
         return "已关闭预览。"

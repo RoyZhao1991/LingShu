@@ -80,7 +80,7 @@ final class LingShuControlSnapshotStore: @unchecked Sendable {
     }
 
     private func recordSummaryPayload(_ record: LingShuTaskExecutionRecord, feedback: Bool?) -> [String: Any] {
-        [
+        var object: [String: Any] = [
             "id": record.id,
             "title": record.title,
             "promptExcerpt": String(record.prompt.prefix(280)),
@@ -92,10 +92,14 @@ final class LingShuControlSnapshotStore: @unchecked Sendable {
             "artifacts": record.artifacts.map { ["title": $0.title, "location": $0.location] },
             "feedback": feedback.map { $0 ? "up" : "down" } ?? "none"
         ]
+        if let commit = record.threadCommit {
+            object["threadCommit"] = Self.threadCommitPayload(commit)
+        }
+        return object
     }
 
     private func taskDetailPayload(_ record: LingShuTaskExecutionRecord, feedback: Bool?) -> [String: Any] {
-        [
+        var object: [String: Any] = [
             "id": record.id,
             "title": record.title,
             "prompt": record.prompt,
@@ -117,6 +121,14 @@ final class LingShuControlSnapshotStore: @unchecked Sendable {
             },
             "messages": record.messages.map(Self.taskMessagePayload)
         ]
+        if let commit = record.threadCommit {
+            object["threadCommit"] = Self.threadCommitPayload(commit)
+        }
+        return object
+    }
+
+    private static func threadCommitPayload(_ commit: LingShuTaskThreadCommit) -> [String: Any] {
+        LingShuState.taskThreadCommitPayload(commit)
     }
 
     private static func taskMessagePayload(_ message: LingShuTaskExecutionMessage) -> [String: Any] {

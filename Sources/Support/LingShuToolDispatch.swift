@@ -4,8 +4,8 @@ import Foundation
 ///
 /// 设计取向(与 `LingShuAgentSessioning` 同一套路:协议 + 多实现 + 单一切换点 `makeAgentSession`):
 /// 把"执行一组 tool_call"抽成协议,默认串行(经典行为、零变更),并行实现用 `TaskGroup` 同时跑。
-/// **同一回合的多个 tool_call 是模型一次性发出的 → 天然互不依赖 → 并行安全**(这正是 Codex/CC 的通用契约,
-/// 不做 per-case 依赖分析,保持通用零定制)。结果**与输入同序**返回,由实现保证,调用方据此补 tool 结果保持
+/// 并行不靠业务判断,只看工具契约:全部 tool_call 均声明 `parallelSafe` 才并发,否则自动回退串行。
+/// 结果**与输入同序**返回,由实现保证,调用方据此补 tool 结果保持
 /// OpenAI 协议良构(每个 tool_call 必有同 id 的 tool 响应)。将来有更好的调度(如带依赖图/优先级)直接换实现。
 ///
 /// 纯逻辑、无 actor 状态、可单测(注入带可控延迟的工具断言"并行确实并发 + 结果恒同序")。
@@ -27,7 +27,11 @@ extension LingShuToolDispatching {
     func execute(_ call: LingShuAgentToolCall, tools: [LingShuAgentTool]) async -> LingShuToolCallOutcome {
         let output: String
         if let tool = tools.first(where: { $0.name == call.name }) {
-            output = await tool.handler(call.argumentsJSON)
+            if let validationError = LingShuAgentLoopPolicy.argumentValidationError(for: call, tools: tools) {
+                output = "参数无效:\(validationError)\n本次未执行真实动作。请按工具 schema 重新发起调用。"
+            } else {
+                output = await tool.handler(call.argumentsJSON)
+            }
         } else {
             output = "错误:未知工具 \(call.name)"
         }
@@ -47,6 +51,18 @@ struct LingShuSerialToolDispatcher: LingShuToolDispatching {
     }
 }
 
+enum LingShuToolDispatchPlanner {
+    static func canRunInParallel(_ calls: [LingShuAgentToolCall], tools: [LingShuAgentTool]) -> Bool {
+        calls.allSatisfy {
+            LingShuAgentLoopPolicy.metadata(for: $0.name, in: tools).parallelPolicy == .parallelSafe
+        }
+    }
+
+    static func modeDescription(_ calls: [LingShuAgentToolCall], tools: [LingShuAgentTool]) -> String {
+        canRunInParallel(calls, tools: tools) ? "parallel" : "serial"
+    }
+}
+
 /// 超越实现:**并行**(差距7 降延迟)。同回合无依赖 tool_call 用 `TaskGroup` 并发跑,
 /// 按原始下标收集后**复原输入顺序**返回(并发只影响时序,不影响结果顺序=确定性)。
 /// 单个调用直接串行(免 TaskGroup 开销),0 个返回空。
@@ -55,6 +71,9 @@ struct LingShuParallelToolDispatcher: LingShuToolDispatching {
         guard calls.count > 1 else {
             if let only = calls.first { return [await execute(only, tools: tools)] }
             return []
+        }
+        guard LingShuToolDispatchPlanner.canRunInParallel(calls, tools: tools) else {
+            return await LingShuSerialToolDispatcher().dispatch(calls, tools: tools)
         }
         let indexed: [(Int, LingShuToolCallOutcome)] = await withTaskGroup(
             of: (Int, LingShuToolCallOutcome).self

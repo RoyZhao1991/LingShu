@@ -44,6 +44,9 @@ extension LingShuState {
         case .completed(let t): finalText = startText + "\n\n✓ 完成:\n" + String(t.suffix(900))
         case .failure(let f):   finalText = startText + "\n\n✗ 未完成:" + String(f.prefix(300))
         }
+        if case .failure = result, LingShuAgentPluginStore.plugin(id: plugin.id)?.isCallableNow != true {
+            markAgentPluginCatalogChanged(agentID: plugin.id)
+        }
         updateTaskRecordMessageText(rid, messageID: msgID, text: finalText)
         // **跑后量影子 git delta 登记产出物**——归属的唯一真相源,替换原来三条易串台的旧路径(扫盘mtime/agent自报/抽输出路径)。
         if let shadowBaseline {

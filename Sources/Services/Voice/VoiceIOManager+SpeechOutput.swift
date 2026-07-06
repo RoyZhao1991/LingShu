@@ -29,7 +29,7 @@ extension VoiceIOManager {
     static func strippedForSpeech(_ text: String) -> String {
         var lines: [String] = []
         var inCode = false
-        for raw in text.components(separatedBy: "\n") {
+        for raw in LingShuSpeechDisplayMetadata.stripping(text).components(separatedBy: "\n") {
             let t = raw.trimmingCharacters(in: .whitespaces)
             if t.hasPrefix("```") { inCode.toggle(); continue }
             if inCode || t.hasPrefix("|") { continue }   // 代码块、表格行不念

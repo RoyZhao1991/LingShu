@@ -347,8 +347,7 @@ private final class CommandRunner: @unchecked Sendable {
             self.sync.lock(); let done = self.finished; self.sync.unlock()
             guard !done else { return }
             if self.process.isRunning {
-                self.process.terminate()
-                kill(self.process.processIdentifier, SIGKILL)
+                self.terminateProcessTree(rootPID: self.process.processIdentifier)
             }
             self.conclude(timedOut: true, handle: handle)
         }
@@ -378,5 +377,44 @@ private final class CommandRunner: @unchecked Sendable {
         continuation = nil
         sync.unlock()
         pending?.resume(returning: result)
+    }
+
+    private func terminateProcessTree(rootPID: Int32) {
+        let descendants = Self.descendantPIDs(of: rootPID)
+        for pid in descendants.reversed() {
+            kill(pid, SIGTERM)
+        }
+        process.terminate()
+        kill(rootPID, SIGTERM)
+        DispatchQueue.global().asyncAfter(deadline: .now() + 1.0) {
+            for pid in descendants.reversed() {
+                kill(pid, SIGKILL)
+            }
+            kill(rootPID, SIGKILL)
+        }
+    }
+
+    private static func descendantPIDs(of pid: Int32) -> [Int32] {
+        let children = childPIDs(of: pid)
+        return children + children.flatMap { descendantPIDs(of: $0) }
+    }
+
+    private static func childPIDs(of pid: Int32) -> [Int32] {
+        let process = Process()
+        let pipe = Pipe()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/pgrep")
+        process.arguments = ["-P", String(pid)]
+        process.standardOutput = pipe
+        process.standardError = FileHandle.nullDevice
+        do {
+            try process.run()
+            process.waitUntilExit()
+        } catch {
+            return []
+        }
+        let text = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        return text
+            .split(whereSeparator: \.isNewline)
+            .compactMap { Int32($0.trimmingCharacters(in: .whitespacesAndNewlines)) }
     }
 }

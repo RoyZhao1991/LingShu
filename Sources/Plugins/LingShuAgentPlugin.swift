@@ -67,6 +67,12 @@ struct LingShuAgentPlugin: Codable, Identifiable, Sendable, Equatable {
             || LingShuAgentPlugin.resolveInPath(executable) != nil
     }
 
+    /// 是否允许进入「可调用目录」。这里比 `isAvailableNow` 更严格:
+    /// 只有自检/注册探活明确通过(`available == true`)才对用户暴露为可调用能力。
+    var isCallableNow: Bool {
+        available == true && isAvailableNow
+    }
+
     /// 可执行文件是否在(不看登录状态)——探活/恢复可用时用(文件在才值得重新探活)。
     var executableExists: Bool {
         FileManager.default.isExecutableFile(atPath: executable)

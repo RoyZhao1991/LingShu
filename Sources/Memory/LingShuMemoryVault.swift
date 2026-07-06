@@ -55,4 +55,9 @@ struct LingShuMemoryVault {
     func delete(_ note: LingShuMemoryNote) {
         try? fm.removeItem(at: fileURL(note))
     }
+
+    func clearAll() {
+        try? fm.removeItem(at: root)
+        ensureDirectories()
+    }
 }

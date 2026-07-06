@@ -19,8 +19,13 @@ final class ToolDispatchTests: XCTestCase {
     }
 
     /// 一个会"占用一小段时间"的工具(给并发留出重叠窗口),返回固定文本。
-    private func probedTool(_ name: String, probe: ConcurrencyProbe, output: String) -> LingShuAgentTool {
-        LingShuAgentTool(name: name, description: "") { _ in
+    private func probedTool(
+        _ name: String,
+        probe: ConcurrencyProbe,
+        output: String,
+        metadata: LingShuToolMetadata? = nil
+    ) -> LingShuAgentTool {
+        LingShuAgentTool(name: name, description: "", metadata: metadata) { _ in
             await probe.enter()
             try? await Task.sleep(nanoseconds: 40_000_000)   // 40ms 重叠窗口
             await probe.leave()
@@ -69,6 +74,21 @@ final class ToolDispatchTests: XCTestCase {
         _ = await LingShuParallelToolDispatcher().dispatch(calls, tools: tools)
         let peak = await probe.peak
         XCTAssertGreaterThan(peak, 1, "并行调度应有 >1 个工具同时在跑(实测峰值=\(peak))")
+    }
+
+    func testParallelDispatcherFallsBackToSerialForSideEffectTools() async {
+        let probe = ConcurrencyProbe()
+        let writeMetadata = LingShuToolMetadata(effect: .write, parallelPolicy: .serial)
+        let tools = [
+            probedTool("write_a", probe: probe, output: "A", metadata: writeMetadata),
+            probedTool("write_b", probe: probe, output: "B", metadata: writeMetadata),
+            probedTool("write_c", probe: probe, output: "C", metadata: writeMetadata),
+        ]
+        let calls = [call("1", "write_a"), call("2", "write_b"), call("3", "write_c")]
+        let out = await LingShuParallelToolDispatcher().dispatch(calls, tools: tools)
+        let peak = await probe.peak
+        XCTAssertEqual(out.map(\.output), ["A", "B", "C"])
+        XCTAssertEqual(peak, 1, "副作用工具声明 serial 后,并行调度器也必须回退串行")
     }
 
     func testSerialNeverRunsConcurrently() async {

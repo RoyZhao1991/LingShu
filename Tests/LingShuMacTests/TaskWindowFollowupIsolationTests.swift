@@ -101,6 +101,24 @@ final class TaskWindowFollowupIsolationTests: XCTestCase {
         XCTAssertTrue(ctx.contains("接着上面的进度继续写完"), "续接指令要在")
     }
 
+    /// 已有产出物是任务续接最可靠的落点:模型不应重新扫目录猜文件。
+    func testResumeContextCarriesRegisteredArtifacts() {
+        let artifact = LingShuTaskExecutionArtifact(
+            title: "ledger.txt",
+            location: "/tmp/lingshu-stage9-close/ledger.txt",
+            producer: "测试"
+        )
+        let ctx = LingShuState.resumeContextPrompt(
+            originalRequest: "创建一个账本文件。",
+            summary: "账本文件已创建并验证。",
+            goal: "维护账本文件",
+            artifacts: [artifact],
+            resumeInput: "追加一行 followup")
+        XCTAssertTrue(ctx.contains("已登记产出物"), "续接上下文应显式列出已有产出物")
+        XCTAssertTrue(ctx.contains("/tmp/lingshu-stage9-close/ledger.txt"), "续接应保留真实文件路径")
+        XCTAssertTrue(ctx.contains("追加一行 followup"), "用户新的续接指令不能丢")
+    }
+
     /// 原始请求为空(老记录无 prompt)→ 退回纯续接指令,不崩、不加空壳。
     func testResumeContextEmptyOriginalFallsBack() {
         XCTAssertEqual(LingShuState.resumeContextPrompt(originalRequest: nil, summary: nil, goal: nil, resumeInput: "继续"), "继续")

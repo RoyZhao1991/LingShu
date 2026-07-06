@@ -10,6 +10,11 @@ final class AgentAvailabilityTests: XCTestCase {
         XCTAssertNotNil(LingShuAgentPluginStore.outputIndicatesUnavailable("Your credit balance is too low"))
         XCTAssertNotNil(LingShuAgentPluginStore.outputIndicatesUnavailable("请先登录后再使用"))
         XCTAssertNotNil(LingShuAgentPluginStore.outputIndicatesUnavailable("认证失败,token 已过期"))
+        XCTAssertEqual(LingShuAgentPluginStore.outputIndicatesUnavailable("Failed to authenticate. API Error: 401"), "认证失败")
+        XCTAssertEqual(LingShuAgentPluginStore.outputIndicatesUnavailable("API Error: 401 {\"error\":{\"message\":\"该令牌已过期\"}}"), "认证失败(401)")
+        XCTAssertEqual(LingShuAgentPluginStore.outputIndicatesUnavailable("该令牌已过期"), "令牌过期")
+        XCTAssertEqual(LingShuAgentPluginStore.outputIndicatesUnavailable("Your account is on hold"), "账号被暂停")
+        XCTAssertEqual(LingShuAgentPluginStore.outputIndicatesUnavailable("API Error: 400 This organization has been disabled."), "组织/账号被禁用")
     }
 
     func testNoFalsePositiveOnNormalOutput() {
@@ -17,6 +22,7 @@ final class AgentAvailabilityTests: XCTestCase {
         XCTAssertNil(LingShuAgentPluginStore.outputIndicatesUnavailable("已完成,文件写入 /tmp/a.py,24 passed"))
         XCTAssertNil(LingShuAgentPluginStore.outputIndicatesUnavailable("test_foo: module not found"))
         XCTAssertNil(LingShuAgentPluginStore.outputIndicatesUnavailable("Unauthorized access to /admin route (示例代码注释)"))
+        XCTAssertNil(LingShuAgentPluginStore.outputIndicatesUnavailable("示例:服务可能返回 401 Unauthorized,需要业务侧处理"))
     }
 
     func testMarkedUnavailableOverridesFilePresence() {

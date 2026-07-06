@@ -24,18 +24,24 @@ extension LingShuState {
             "按需激活(search_tools):浏览器自动化、屏幕截屏点按、演示放映、会议纪要、定时调度、外设/家电控制、author_component 自造工具 等",
         ]))
 
-        // 已注册的 agent 插件(被告知本机有→注册)。
+        // 已注册的 agent 插件(被告知本机有→注册)。自检展示的是**运行时状态**:
+        // 可用 / 不可用 / 未探活分清楚,避免把"登记过"误读成"当前可调度"。
         let agents = LingShuAgentPluginStore.load()
         if agents.isEmpty {
-            capabilities.append(.init(title: "🤝 已接入 agent 插件", items: ["(暂无;跟我说『本机有 X,可执行…,调用…』即注册)"]))
+            capabilities.append(.init(title: "🤝 agent 插件状态", items: ["(暂无;跟我说『本机有 X,可执行…,调用…』即注册)"]))
         } else {
             // 每个 agent 后挂上它**自带的已启用子能力**(适配器发现的,如 codex 的 picsart/film-visual-pipeline 出图)——
             // 让大脑自检/路由时知道"该 agent 能干这些专长事",而不是自己硬扛(如出图)。
-            capabilities.append(.init(title: "🤝 已接入 agent 插件(\(agents.count))",
+            let availableCount = agents.filter { $0.available == true && $0.isAvailableNow }.count
+            let unavailableCount = agents.filter { !$0.isAvailableNow }.count
+            let unverifiedCount = agents.filter { $0.available == nil && $0.executableExists }.count
+            capabilities.append(.init(title: "🤝 agent 插件状态(\(availableCount) 可用 / \(unverifiedCount) 未探活 / \(unavailableCount) 不可用)",
                 items: agents.map { agent in
-                    let caps = agentCapabilities(for: agent.id).filter { $0.enabled && $0.installed }.map(\.name)
+                    let caps = agent.isCallableNow
+                        ? agentCapabilities(for: agent.id).filter { $0.enabled && $0.installed }.map(\.name)
+                        : []
                     let suffix = caps.isEmpty ? "" : " · 自带能力:\(caps.prefix(8).joined(separator: "、"))" + (caps.count > 8 ? "…" : "")
-                    return "@\(agent.displayName)(\(agent.role.rawValue))\(agent.isAvailableNow ? "" : " · 当前不可用")\(suffix)"
+                    return agentInspectionLine(agent, suffix: suffix)
                 }))
         }
 
@@ -102,4 +108,60 @@ extension LingShuState {
             return await MainActor.run { self.assembleSelfInspection().markdown() }
         }
     }
+
+    /// 自检面板/工具展示用的 agent 状态文案。这里不发起子进程,只读持久健康状态与可执行文件事实。
+    func agentInspectionLine(_ agent: LingShuAgentPlugin, suffix: String = "") -> String {
+        let role = agent.role.rawValue
+        let checked = agent.lastCheckedAt.map { " · 上次探活:\(Self.agentHealthDateFormatter.string(from: $0))" } ?? ""
+        if !agent.executableExists {
+            return "❌ @\(agent.displayName)(\(role)) · 不可用:找不到可执行文件 \(agent.executable)\(checked)\(suffix)"
+        }
+        if agent.available == false {
+            let reason = (agent.unavailableReason?.trimmingCharacters(in: .whitespacesAndNewlines)).flatMap { $0.isEmpty ? nil : $0 } ?? "探活/运行失败"
+            return "❌ @\(agent.displayName)(\(role)) · 不可用:\(reason)\(checked)\(suffix)"
+        }
+        if agent.available == true {
+            return "✅ @\(agent.displayName)(\(role)) · 可用\(checked)\(suffix)"
+        }
+        return "⚪️ @\(agent.displayName)(\(role)) · 未探活:可执行文件存在,尚未完成运行验证\(suffix)"
+    }
+
+    /// 自检 live 刷新:对已注册 agent 做一次短探活,把认证/额度/令牌/文件缺失等通用故障回写到插件库。
+    func refreshAgentPluginAvailabilityForSelfInspection() async {
+        let agents = LingShuAgentPluginStore.load()
+        guard !agents.isEmpty else { return }
+        let wd = agentWorkingDirectory.isEmpty ? FileManager.default.homeDirectoryForCurrentUser.path : agentWorkingDirectory
+        await withTaskGroup(of: Void.self) { group in
+            for agent in agents {
+                group.addTask {
+                    let probe = await LingShuAgentPluginStore.probeAvailability(agent, workingDirectory: wd)
+                    if probe.ok {
+                        _ = LingShuAgentPluginStore.markAvailable(id: agent.id)
+                    } else {
+                        _ = LingShuAgentPluginStore.markUnavailable(id: agent.id, reason: probe.reason)
+                    }
+                }
+            }
+            await group.waitForAll()
+        }
+        refreshAgentCapabilities(force: true)
+        invalidateInvocablePluginCatalog()
+    }
+
+    /// 避免每次打开自检都打扰外部 agent;只有没探过或状态过旧时才自动刷新。
+    func agentPluginSelfInspectionNeedsRefresh(maxAge: TimeInterval = 30 * 60) -> Bool {
+        let now = Date()
+        return LingShuAgentPluginStore.load().contains { agent in
+            guard agent.executableExists else { return true }
+            guard let last = agent.lastCheckedAt else { return true }
+            return now.timeIntervalSince(last) > maxAge
+        }
+    }
+
+    private static let agentHealthDateFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "zh_CN")
+        formatter.dateFormat = "MM-dd HH:mm"
+        return formatter
+    }()
 }

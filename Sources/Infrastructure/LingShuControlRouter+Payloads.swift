@@ -78,6 +78,7 @@ extension LingShuControlRouter {
             "queuedDispatchCount": state.queuedDispatchTasks.count,   // 信息池(可见任务队列)等待条数——任务线串行的可见溢出
             "activeDispatchedCount": state.dispatchedTaskBubbles.count,   // 当前在跑/在途的派发任务气泡数
             "pendingChatTurnCount": state.pendingChatTurnIDs.count,   // 问答线已排队的问答数(等待中可删)
+            "globalTaskThreadLedger": state.globalTaskThreadLedgerPayload(limit: 10),
             "recentTaskRecords": state.taskExecutionRecords.prefix(8).map { record in
                 [
                     "title": record.title,
@@ -92,7 +93,7 @@ extension LingShuControlRouter {
     /// 一条任务的 codex 式执行时间线 + 产出物 + 反馈(供 MCP inspect,免点开窗口看卡片)。
     func taskDetailPayload(recordID: String) -> [String: Any]? {
         guard let record = state.taskExecutionRecordLookup.first(where: { $0.id == recordID }) else { return nil }
-        return [
+        var object: [String: Any] = [
             "id": record.id,
             "title": record.title,
             "status": record.status.rawValue,
@@ -112,6 +113,10 @@ extension LingShuControlRouter {
                 return object
             }
         ]
+        if let commit = record.threadCommit {
+            object["threadCommit"] = LingShuState.taskThreadCommitPayload(commit)
+        }
+        return object
     }
 
     /// 结构化消息载荷序列化(toolCall/toolResult/fileEdit)——让 MCP 端能拿到命令/输出/diff 原文。

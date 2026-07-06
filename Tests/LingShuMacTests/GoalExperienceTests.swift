@@ -40,6 +40,27 @@ final class GoalExperienceTests: XCTestCase {
         XCTAssertEqual(hits.map(\.lesson), ["历史记录"], "只排除同一任务记录自身,不排除相同目标的历史记录")
     }
 
+    func testFreshExperienceOutranksStaleExperience() {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let stale = LingShuGoalExperience(objective: "生成灵枢汇报 PPT", kind: "task", outcome: "已核验完成",
+                                          lesson: "很久以前的打法", at: now.addingTimeInterval(-120 * 86_400))
+        let fresh = LingShuGoalExperience(objective: "生成灵枢汇报 PPT", kind: "task", outcome: "已完成",
+                                          lesson: "最近的打法", at: now.addingTimeInterval(-2 * 86_400))
+        let hits = LingShuGoalExperienceMatch.mostRelevant([stale, fresh], to: "生成灵枢汇报 PPT", now: now)
+        XCTAssertEqual(hits.first?.lesson, "最近的打法", "同等相关时新经验应优先")
+    }
+
+    func testDirectAnswerExperienceExpiresSooner() {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let oldDirect = LingShuGoalExperience(objective: "介绍一下灵枢", kind: "interaction", outcome: "已直接回答",
+                                              lesson: "一次普通问答", at: now.addingTimeInterval(-20 * 86_400))
+        let oldTask = LingShuGoalExperience(objective: "生成灵枢汇报 PPT", kind: "task", outcome: "未达标",
+                                            lesson: "缺演示稿", at: now.addingTimeInterval(-20 * 86_400))
+        let retained = LingShuGoalExperienceMatch.retained([oldDirect, oldTask], now: now)
+        XCTAssertFalse(retained.contains(oldDirect), "普通直答经验只短期保留")
+        XCTAssertTrue(retained.contains(oldTask), "任务失败/部分完成经验保留更久,用于避坑")
+    }
+
     func testGuidanceBlockFormatAndPassthrough() {
         XCTAssertEqual(LingShuGoalExperienceMatch.guidanceBlock(from: [], base: "技能提示"), "技能提示", "无经验→原样返回 base")
         let exps = [LingShuGoalExperience(objective: "同步 Notion", kind: "task", outcome: "未达标", lesson: "缺 token,先问用户")]
@@ -109,5 +130,92 @@ final class GoalExperienceTests: XCTestCase {
         let guidance = state.goalExperienceGuidance(base: "基础提示", taskRecordID: rid)
         XCTAssertTrue(guidance.contains("相关历史经验"), "同类新目标执行前注入历史经验")
         XCTAssertTrue(guidance.contains("缺 token,先问用户"))
+    }
+
+    @MainActor
+    func testFailedTerminalTaskSinksReusableExperienceRule() {
+        let key = "lingshu.goal.experiences"
+        UserDefaults.standard.removeObject(forKey: key)
+        defer { UserDefaults.standard.removeObject(forKey: key) }
+
+        let state = LingShuState()
+        let marker = "rule-\(UUID().uuidString)"
+        let ruleCountBefore = state.memoryService.experienceRuleCount
+        var record = LingShuTaskExecutionRecord(
+            id: "record-\(marker)",
+            title: "失败经验沉淀",
+            prompt: "生成报告并验收",
+            status: .running,
+            summary: "验收打回 \(marker)",
+            participants: [],
+            createdAt: Date(),
+            updatedAt: Date(),
+            messages: []
+        )
+        record.goalSpec = LingShuGoalSpec(
+            objective: "生成报告并通过验收 \(marker)",
+            kind: .task,
+            successCriteria: ["报告存在", "验收通过"]
+        )
+        state.taskExecutionRecords = [record]
+
+        state.rememberGoalExperienceIfNeeded(recordID: record.id, status: .failed)
+
+        XCTAssertEqual(state.goalExperiences().last?.sourceRecordID, record.id, "失败终态必须进入结构化经验库")
+        XCTAssertGreaterThanOrEqual(state.memoryService.experienceRuleCount, ruleCountBefore + 1, "失败/打回类终态必须同步沉淀为经验规则")
+    }
+
+    @MainActor
+    func testMemoryDashboardStatsBackfillsTerminalHotAndColdRecords() {
+        let key = "lingshu.goal.experiences"
+        UserDefaults.standard.removeObject(forKey: key)
+        defer { UserDefaults.standard.removeObject(forKey: key) }
+
+        let state = LingShuState()
+        let marker = "backfill-\(UUID().uuidString)"
+        var completed = LingShuTaskExecutionRecord(
+            id: "hot-\(marker)",
+            title: "已完成任务",
+            prompt: "生成材料",
+            status: .completed,
+            summary: "已完成 \(marker)",
+            participants: [],
+            createdAt: Date().addingTimeInterval(-60),
+            updatedAt: Date().addingTimeInterval(-50),
+            messages: []
+        )
+        completed.goalSpec = LingShuGoalSpec(
+            objective: "生成材料 \(marker)",
+            kind: .task,
+            successCriteria: ["材料已生成"]
+        )
+        var failed = LingShuTaskExecutionRecord(
+            id: "cold-\(marker)",
+            title: "未达标任务",
+            prompt: "同步外部系统",
+            status: .needsRevision,
+            summary: "被验收打回 \(marker)",
+            participants: [],
+            createdAt: Date().addingTimeInterval(-30),
+            updatedAt: Date().addingTimeInterval(-20),
+            messages: []
+        )
+        failed.goalSpec = LingShuGoalSpec(
+            objective: "同步外部系统 \(marker)",
+            kind: .task,
+            successCriteria: ["外部系统状态已更新"]
+        )
+        state.taskExecutionRecords = [completed]
+        state.archivedTaskExecutionRecords = [failed]
+
+        let result = state.reconcileExperienceArtifactsFromRecords(maxGoalExperiences: 10, maxRules: 10)
+        let stats = state.memoryDashboardStats()
+
+        XCTAssertEqual(result.goalExperiencesAdded, 2, "热记录和冷备终态记录都应能回填结构化经验")
+        XCTAssertGreaterThanOrEqual(result.rulesAdded, 1, "未达标/失败类记录应回填经验规则")
+        XCTAssertEqual(stats.hotTaskRecords, 1)
+        XCTAssertEqual(stats.coldTaskRecords, 1)
+        XCTAssertGreaterThanOrEqual(stats.goalExperiences, 2)
+        XCTAssertGreaterThanOrEqual(stats.experienceAssets, 2)
     }
 }

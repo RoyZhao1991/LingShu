@@ -190,7 +190,11 @@ extension LingShuState {
         // P1 目标认知消费:记录里有 typed GoalSpec(含重启后从盘加载的)则注入执行引导(据目标/约束/边界/风险/成功标准推进,别跑偏)。
         // P2 能力缺口消费:有缺口分析则在目标引导之上再叠加"缺口与补齐计划"(先按补齐路径取得能力再推进,真补不了如实告知)。
         let turnGuidance = Self.turnBoundaryGuidance(for: prompt, base: guidance)
-        let contextualGuidance = [turnGuidance, currentWorkingDirectoryGuidance(), currentVisibleInteractionGuidance(for: prompt)]
+        let contextualGuidance = [
+            turnGuidance,
+            currentWorkingDirectoryGuidance(),
+            currentVisibleInteractionGuidance(for: prompt, taskRecordID: taskRecordID)
+        ]
             .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
             .joined(separator: "\n\n")
@@ -444,25 +448,6 @@ extension LingShuState {
         }
     }
 
-    /// 问答线:删除一条**等待中(未执行)**的问答(连同它的问题与答复占位)。**执行中的那条不可删**(线性,删了会断流)。
-    func deletePendingChatTurn(bubbleID: UUID) {
-        guard pendingChatTurnIDs.contains(bubbleID), bubbleID != executingChatTurnID else { return }
-        cancelledChatTurnIDs.insert(bubbleID)              // 轮到执行点会跳过(见 runMainAgentTurn)
-        pendingChatTurnIDs.removeAll { $0 == bubbleID }
-        // 删答复占位 + 它前面那条用户消息(整条问答删掉)。
-        if let idx = chatMessages.firstIndex(where: { $0.id == bubbleID }) {
-            let userIdx = (idx > 0 && chatMessages[idx - 1].isUser) ? idx - 1 : nil
-            chatMessages.remove(at: idx)
-            if let userIdx { chatMessages.remove(at: userIdx) }   // userIdx < idx,移除 idx 后仍有效
-        }
-        appendTrace(kind: .route, actor: "问答队列", title: "删除等待问答", detail: "用户删除一条尚未执行的问答。")
-    }
-
-    /// UI:这条答复气泡是否「等待中可删」(已排队问答 且 非执行中)。
-    func canDeletePendingChatTurn(_ bubbleID: UUID) -> Bool {
-        pendingChatTurnIDs.contains(bubbleID) && bubbleID != executingChatTurnID
-    }
-
     /// 主会话回合收尾(正常完成 / 重连续跑后完成共用):填回气泡 + 落记录 + 记忆。
     func finalizeMainTurn(result: LingShuAgentRunResult, bubbleID: UUID, recordID: String?, prompt: String, startedAt: Date) {
         if renderHumanInputBlockIfNeeded(result: result, bubbleID: bubbleID, recordID: recordID, prompt: prompt, startedAt: startedAt) {
@@ -488,8 +473,9 @@ extension LingShuState {
         appendTaskRecordMessage(recordID, actor: "灵枢", role: "答复", kind: .result, text: text)
         appendTrace(kind: .result, actor: "Agent循环", title: "主会话答复", detail: String(text.prefix(60)))
         // P2 真闭环:终态由完成闸定(防伪完成)——partial/waitingForUser/blocked 不再硬当 answered。
-        let outcome = taskExecutionRecords.first { $0.id == recordID }?.taskOutcome
-        finishTaskRecord(recordID, status: Self.finishStatus(for: outcome, fallback: .answered), summary: text)
+        let record = taskExecutionRecords.first { $0.id == recordID }
+        let outcome = record?.taskOutcome
+        finishTaskRecord(recordID, status: Self.finishStatus(for: outcome, fallback: Self.defaultSuccessStatus(for: record)), summary: text)
         // 主会话用 ask_user/ask_form 提了问、在等回答 → 记下这条记录:下条用户消息续到它(把答复接回主会话),
         // 不被重新分诊成新任务(根治"答复被当新请求丢了原目标")。非 .blocked 则清掉。
         if case .blocked = result { pendingMainQuestionRecordID = recordID } else { pendingMainQuestionRecordID = nil }

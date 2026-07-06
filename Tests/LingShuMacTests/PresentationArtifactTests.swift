@@ -146,10 +146,14 @@ final class PresentationArtifactTests: XCTestCase {
     }
 
     @MainActor
-    func testExplicitPreviewCloseCommandPreemptsActiveBuiltinSkill() async throws {
+    func testActiveBuiltinSkillPreemptsHostPreviewCloseAndGlobalInterrupt() async throws {
         let state = LingShuState()
         let interceptor = InterceptingBuiltinSkillForTest()
         state.builtinSkills = [interceptor]
+        var interruptCount = 0
+        state.interruptSpeechOutput = {
+            interruptCount += 1
+        }
         let html = workDir.appendingPathComponent("demo-active.html")
         try "<html><body><h1>演示材料</h1><p>第一页内容</p></body></html>"
             .write(to: html, atomically: true, encoding: .utf8)
@@ -159,10 +163,28 @@ final class PresentationArtifactTests: XCTestCase {
 
         let reply = state.submitTextInput("本轮汇报结束,关闭预览材料并收尾,一句话确认。")
 
-        XCTAssertFalse(interceptor.didIntercept)
-        XCTAssertTrue(interceptor.didCancel)
-        XCTAssertFalse(state.previewController.isPresented)
-        XCTAssertTrue(reply.contains("已关闭预览材料"))
+        XCTAssertEqual(reply, "")
+        XCTAssertTrue(interceptor.didIntercept)
+        XCTAssertFalse(interceptor.didCancel)
+        XCTAssertTrue(state.previewController.isPresented)
+        XCTAssertEqual(interruptCount, 0, "活动任务接管时,宿主不能抢先关闭预览或触发通用音频打断。")
+    }
+
+    @MainActor
+    func testActiveBuiltinSkillInterceptsBeforeGlobalSpeechInterrupt() async throws {
+        let state = LingShuState()
+        let interceptor = InterceptingBuiltinSkillForTest()
+        state.builtinSkills = [interceptor]
+        var interruptCount = 0
+        state.interruptSpeechOutput = {
+            interruptCount += 1
+        }
+
+        let reply = state.submitTextInput("暂停")
+
+        XCTAssertEqual(reply, "")
+        XCTAssertTrue(interceptor.didIntercept)
+        XCTAssertEqual(interruptCount, 0, "活动内置技能应先接管输入,避免通用音频打断抢在演示暂停标记之前执行。")
     }
 
     @MainActor
@@ -178,6 +200,48 @@ final class PresentationArtifactTests: XCTestCase {
         XCTAssertTrue(guidance.contains("本轮输入更像提问/答疑"))
         XCTAssertTrue(guidance.contains("最终回复必须直接回答用户的问题"))
         XCTAssertTrue(guidance.contains("不要只复述当前页摘要"))
+    }
+
+    @MainActor
+    func testVisibleGuidanceRequiresStructuredGoalPermission() async throws {
+        let state = LingShuState()
+        let html = workDir.appendingPathComponent("gated-visible.html")
+        try "<html><body><h1>旧演示材料</h1><p>第四页内容</p></body></html>"
+            .write(to: html, atomically: true, encoding: .utf8)
+        _ = await state.previewController.open(path: html.path)
+
+        let replyID = state.createTaskExecutionRecord(for: "继续")
+        state.bindGoalSpec(
+            .init(
+                objective: "继续最近普通对话",
+                kind: .question,
+                outputMode: .chatReply,
+                referenceScope: .defaultAnchor,
+                referenceExplicit: false
+            ),
+            to: replyID
+        )
+        XCTAssertNil(
+            state.currentVisibleInteractionGuidance(for: "继续", taskRecordID: replyID),
+            "结构化目标不是可视交互时,旧预览不能进入本轮执行提示"
+        )
+
+        let visibleID = state.createTaskExecutionRecord(for: "继续演示当前材料")
+        state.bindGoalSpec(
+            .init(
+                objective: "继续当前可视材料演示",
+                kind: .interaction,
+                outputMode: .visibleInteraction,
+                referenceScope: .visibleContext,
+                referenceEvidence: ["当前可视材料"],
+                referenceExplicit: true
+            ),
+            to: visibleID
+        )
+        XCTAssertNotNil(
+            state.currentVisibleInteractionGuidance(for: "继续演示当前材料", taskRecordID: visibleID),
+            "结构化目标明确指向可视上下文时,可视材料应进入执行提示"
+        )
     }
 
     func testPageNarrationIncludesStablePageContext() {
@@ -363,6 +427,37 @@ final class PresentationArtifactTests: XCTestCase {
             return XCTFail("应该得到完成态回复")
         }
         XCTAssertEqual(text, spoken)
+    }
+
+    @MainActor
+    func testReplyOnlyGoalDoesNotOpenPreviewEvenWhenPromptLooksVisible() async throws {
+        let state = LingShuState()
+        let html = workDir.appendingPathComponent("reply-only-visible.html")
+        try "<html><body><h1>不应打开</h1></body></html>"
+            .write(to: html, atomically: true, encoding: .utf8)
+
+        var record = LingShuTaskExecutionRecord.create(prompt: "检查材料后只回复一句,不要打开预览")
+        record.goalSpec = .init(
+            objective: "检查材料并只回复一句",
+            kind: .task,
+            boundaries: ["不要打开预览"],
+            successCriteria: ["只输出指定回复"],
+            outputMode: .chatReply
+        )
+        record.appendArtifact(title: "HTML 文件", location: html.path, producer: "测试")
+        state.taskExecutionRecords.append(record)
+
+        let result = await state.fulfillVisibleInteractionIfNeeded(
+            result: .completed(text: "验收通过。"),
+            recordID: record.id,
+            prompt: "检查材料后只回复一句,不要打开预览"
+        )
+
+        guard case .completed(let text) = result else {
+            return XCTFail("应该保持完成态")
+        }
+        XCTAssertEqual(text, "验收通过。")
+        XCTAssertFalse(state.previewController.isPresented, "chat_reply 目标不能被交互交付兜底打开预览")
     }
 
     @MainActor

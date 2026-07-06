@@ -63,6 +63,18 @@ final class SemanticMemoryTests: XCTestCase {
         XCTAssertEqual(hits.first?.entry.title, "SwiftUI 渲染优化")
     }
 
+    func testClearAllRemovesEntriesAndStoreCanBeReused() {
+        store.remember(kind: "任务执行", title: "旧记忆", content: "需要被清空")
+        XCTAssertEqual(store.count, 1)
+
+        store.clearAll()
+        XCTAssertEqual(store.count, 0)
+        XCTAssertTrue(store.recall(query: "旧记忆").isEmpty, "清空后不应召回旧语义记忆")
+
+        store.remember(kind: "任务执行", title: "新记忆", content: "清空后可继续写入")
+        XCTAssertEqual(store.recall(query: "新记忆").first?.entry.title, "新记忆", "清空后 store 仍应可复用")
+    }
+
     func testSearchTokensBigramsChineseAndKeepsLatinWords() {
         XCTAssertEqual(
             LingShuMemoryTextToolkit.searchTokens("灵枢项目 SwiftUI"),

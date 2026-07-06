@@ -5,6 +5,7 @@ import SwiftUI
 struct LingShuSelfCheckPanel: View {
     @ObservedObject var state: LingShuState
     @State private var snapshot: LingShuSelfInspection?
+    @State private var isRefreshingAgents = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -16,10 +17,14 @@ struct LingShuSelfCheckPanel: View {
                         .font(.system(size: 11)).foregroundStyle(Color.lingFg.opacity(0.45))
                 }
                 Spacer(minLength: 0)
-                Button { snapshot = state.assembleSelfInspection() } label: {
-                    Image(systemName: "arrow.clockwise").font(.system(size: 12, weight: .bold))
+                Button { refreshSnapshot(forceProbe: true) } label: {
+                    HStack(spacing: 5) {
+                        if isRefreshingAgents { ProgressView().controlSize(.mini) }
+                        Image(systemName: "arrow.clockwise").font(.system(size: 12, weight: .bold))
+                    }
                 }
-                .buttonStyle(.plain).foregroundStyle(Color.lingFg.opacity(0.5)).help("刷新自检")
+                .buttonStyle(.plain).foregroundStyle(Color.lingFg.opacity(0.5)).help("刷新自检并重新探活 agent 插件")
+                .disabled(isRefreshingAgents)
             }
 
             if let snap = snapshot {
@@ -35,7 +40,18 @@ struct LingShuSelfCheckPanel: View {
                 ForEach(Array(snap.capabilities.enumerated()), id: \.offset) { _, s in sectionCard(s, accent: .green) }
             }
         }
-        .onAppear { snapshot = state.assembleSelfInspection() }
+        .onAppear { refreshSnapshot(forceProbe: state.agentPluginSelfInspectionNeedsRefresh()) }
+    }
+
+    private func refreshSnapshot(forceProbe: Bool) {
+        snapshot = state.assembleSelfInspection()
+        guard forceProbe, !isRefreshingAgents else { return }
+        isRefreshingAgents = true
+        Task { @MainActor in
+            await state.refreshAgentPluginAvailabilityForSelfInspection()
+            snapshot = state.assembleSelfInspection()
+            isRefreshingAgents = false
+        }
     }
 
     @ViewBuilder private func groupHeader(_ t: String, _ sub: String) -> some View {

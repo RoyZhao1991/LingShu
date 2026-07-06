@@ -236,7 +236,7 @@ extension LingShuState {
             var fails: [String] = []
             for rev in reviewers {
                 setRolePipelinePlanStatus(rev, status: .inProgress, recordID: rid)   // 右侧分步计划:评审进行中
-                let v = await runRole(rev, tag: "验收(第\(round)轮)", extra: "你是把关方,独立核验前序产出是否达成目标(读代码/跑测试/运行)。**结论第一行只写「通过」或「不通过」**,其后列问题。")
+                let v = await runRole(rev, tag: "验收(第\(round)轮)", extra: "你是把关方,独立核验前序产出是否达成目标(读代码/跑测试/运行)。\(LingShuCheckerVerdict.outputContract)")
                 // 验收遇模型通道故障(超时/网络)≠ 验收驳回:产物已落地,暂停待重验,别误判需修正去返工。
                 if let f = LingShuModelServiceFailure.decodeReason(v), f.shouldAutoResume {
                     appendTaskRecordMessage(rid, actor: rev.agentName ?? "灵枢", role: "\(rev.roleTitle)·验收暂停(模型通道故障)", kind: .warning,

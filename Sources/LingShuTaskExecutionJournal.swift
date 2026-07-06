@@ -227,6 +227,10 @@ struct LingShuTaskExecutionRecord: Identifiable, Codable, Equatable, Sendable {
     /// 通用中枢·真实效果验收报告(typed,持久化)。P3 成功标准裁决后,进一步沉淀成可展示/可追溯的现实效果证据链。
     var effectVerificationReport: LingShuEffectVerificationReport?
 
+    /// 主线程全局任务账本提交。子线程/任务线程每次进入关键状态时写入这份薄状态,
+    /// 主线程据此判断运行、阻塞、收尾、产出与续接;长期记忆蒸馏不能替代它。
+    var threadCommit: LingShuTaskThreadCommit?
+
     /// 一句话**总目标**(模型经 `update_plan` 蒸馏的高度概括,如"构建一个清分结算系统";**不是复述需求**)。
     /// 三级信息架构第 1 级(右侧规划):总目标 → 分步计划(`plan`,抽象里程碑)→ 具体实现(左侧执行对话)。
     /// 空=模型未给(回退用 title)。
@@ -279,6 +283,7 @@ struct LingShuTaskExecutionRecord: Identifiable, Codable, Equatable, Sendable {
         case capabilityProbeObservations
         case taskOutcome
         case effectVerificationReport
+        case threadCommit
     }
 
     init(
@@ -306,7 +311,8 @@ struct LingShuTaskExecutionRecord: Identifiable, Codable, Equatable, Sendable {
         acquisitionAttempts: [LingShuAcquisitionAttempt]? = nil,
         capabilityProbeObservations: [LingShuCapabilityProbeObservation]? = nil,
         taskOutcome: LingShuCompletionStatus? = nil,
-        effectVerificationReport: LingShuEffectVerificationReport? = nil
+        effectVerificationReport: LingShuEffectVerificationReport? = nil,
+        threadCommit: LingShuTaskThreadCommit? = nil
     ) {
         self.id = id
         self.goal = goal
@@ -319,6 +325,7 @@ struct LingShuTaskExecutionRecord: Identifiable, Codable, Equatable, Sendable {
         self.capabilityProbeObservations = capabilityProbeObservations
         self.taskOutcome = taskOutcome
         self.effectVerificationReport = effectVerificationReport
+        self.threadCommit = threadCommit
         self.title = title
         self.prompt = prompt
         self.status = status
@@ -362,11 +369,12 @@ struct LingShuTaskExecutionRecord: Identifiable, Codable, Equatable, Sendable {
         capabilityProbeObservations = try container.decodeIfPresent([LingShuCapabilityProbeObservation].self, forKey: .capabilityProbeObservations)
         taskOutcome = try container.decodeIfPresent(LingShuCompletionStatus.self, forKey: .taskOutcome)
         effectVerificationReport = try container.decodeIfPresent(LingShuEffectVerificationReport.self, forKey: .effectVerificationReport)
+        threadCommit = try container.decodeIfPresent(LingShuTaskThreadCommit.self, forKey: .threadCommit)
     }
 
     static func create(prompt: String, now: Date = Date()) -> LingShuTaskExecutionRecord {
         let title = Self.shortTitle(from: prompt)
-        return .init(
+        var record = LingShuTaskExecutionRecord(
             id: "task-record-\(Int(now.timeIntervalSince1970))-\(UUID().uuidString.prefix(8))",
             title: title,
             prompt: prompt,
@@ -381,6 +389,8 @@ struct LingShuTaskExecutionRecord: Identifiable, Codable, Equatable, Sendable {
                 .init(timestamp: now, actor: "灵枢", role: "中枢", kind: .core, text: "收到。我先判断这件事由我直接回答，还是需要调度能力节点。")
             ]
         )
+        record.refreshThreadCommit(status: .running, phase: .planning, summary: record.summary, now: now)
+        return record
     }
 
     mutating func append(

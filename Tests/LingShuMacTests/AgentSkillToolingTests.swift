@@ -10,7 +10,10 @@ final class AgentSkillToolingTests: XCTestCase {
         let state = LingShuState()
         let names = Set(state.agentBuiltinTools(recordIDProvider: { nil }).map(\.name))
         XCTAssertTrue(names.isSuperset(of: ["read_file", "write_file", "list_directory", "fetch_url", "run_command"]))
+        XCTAssertTrue(names.isSuperset(of: ["start_long_command", "check_long_command", "cancel_long_command", "list_long_commands"]), "标准策略应暴露宿主托管长命令原语")
         XCTAssertTrue(names.contains("apply_skill"), "标准策略应暴露本地固化技能入口 apply_skill")
+        XCTAssertFalse(names.contains("register_agent"), "当前产品态不应暴露外部 agent 插件注册工具")
+        XCTAssertFalse(names.contains("run_agent"), "当前产品态不应暴露外部 agent 插件委托工具")
     }
 
     @MainActor
@@ -32,6 +35,7 @@ final class AgentSkillToolingTests: XCTestCase {
         XCTAssertTrue(names.isSuperset(of: ["read_file", "list_directory", "fetch_url"]))
         XCTAssertFalse(names.contains("write_file"), "只读策略不应暴露写盘原语")
         XCTAssertFalse(names.contains("run_command"), "只读策略不应暴露执行原语")
+        XCTAssertFalse(names.contains("start_long_command"), "只读策略不应暴露长命令执行原语")
         XCTAssertFalse(names.contains("apply_skill"), "只读策略不物化生成器,不挂 apply_skill")
     }
 

@@ -9,6 +9,38 @@ final class DeclarativeInvocationTests: XCTestCase {
         .init(id: "record", displayName: "录制技能", aliases: ["录制", "记录技能"], subtitle: "", icon: ""),
     ]
 
+    @MainActor
+    func testRuntimeInvocablePluginsAlwaysExposePresentationQA() {
+        let state = LingShuState()
+        let plugins = state.invocablePlugins()
+        XCTAssertTrue(plugins.contains { $0.id == "present" && $0.displayName == "演示与答疑" })
+        XCTAssertFalse(plugins.contains { $0.id == "record" }, "录制等未正式开放插件不应暴露到运行态入口")
+    }
+
+    @MainActor
+    func testInvocableCatalogFollowsAgentAvailabilityAndCapabilities() {
+        let state = LingShuState()
+        let codex = LingShuAgentPlugin(
+            id: "codex", displayName: "Codex", aliases: ["codex"], executable: "/bin/echo",
+            argsTemplate: ["{{objective}}"], role: .maker, available: true,
+            capabilities: .init(discover: .init(args: nil, skillsDir: nil, registryFile: nil, format: "skill-md"), enable: nil, install: nil)
+        )
+        let claude = LingShuAgentPlugin(
+            id: "claude", displayName: "Claude", aliases: ["claude"], executable: "/bin/echo",
+            argsTemplate: ["{{objective}}"], role: .checker, available: false, unavailableReason: "账号被暂停",
+            capabilities: .init(discover: .init(args: nil, skillsDir: nil, registryFile: nil, format: "skill-md"), enable: nil, install: nil)
+        )
+        let caps = [
+            LingShuAgentCapability(agentID: "codex", id: "openai-docs", name: "OpenAI Docs", summary: "查官方文档", category: "system", enabled: true, installed: true),
+            LingShuAgentCapability(agentID: "claude", id: "context7", name: "context7", summary: "不可用 agent 的能力", category: "market", enabled: true, installed: true),
+        ]
+        let plugins = state.invocablePlugins(agents: [codex, claude], capabilities: caps)
+        XCTAssertTrue(plugins.contains { $0.id == "agent:codex" })
+        XCTAssertTrue(plugins.contains { $0.id == "agentcap:codex:openai-docs" })
+        XCTAssertFalse(plugins.contains { $0.id == "agent:claude" })
+        XCTAssertFalse(plugins.contains { $0.id == "agentcap:claude:context7" })
+    }
+
     func testAtPrefix() {
         let r = LingShuDeclarativeInvocation.detect("@演示 /tmp/a.pdf", plugins: plugins)
         XCTAssertEqual(r?.id, "present")

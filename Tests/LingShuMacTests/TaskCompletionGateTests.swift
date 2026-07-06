@@ -342,6 +342,31 @@ final class TaskCompletionGateTests: XCTestCase {
     }
 
     @MainActor
+    func testReplyOnlyTaskWithCriteriaBypassesCompletionDeliveryGate() async {
+        let state = LingShuState()
+        let rid = state.createTaskExecutionRecord(for: "检查当前插件入口,如果确认只回复指定语句")
+        defer {
+            state.taskExecutionRecords.removeAll { $0.id == rid }
+            state.persistTaskExecutionRecords()
+            state.taskExecutionJournal.flush()
+        }
+        state.bindGoalSpec(
+            .init(
+                objective: "确认当前运行态插件入口仅保留演示与答疑并只回复指定语句",
+                kind: .task,
+                boundaries: ["不要创建文件", "不要打开预览", "不要进入交付流程"],
+                successCriteria: ["输出内容为指定验收语句"],
+                outputMode: .chatReply
+            ),
+            to: rid
+        )
+
+        let decision = await state.computeCompletionDecision(taskRecordID: rid, reply: "插件验收通过：仅演示与答疑。")
+
+        XCTAssertEqual(decision.status, .ok, "reply-only task 即使带成功标准,也应按聊天回复收口,不进入交付完成闸")
+    }
+
+    @MainActor
     func testLegacyChatRecordWithoutTaskEvidenceBypassesCompletionGate() async {
         let state = LingShuState()
         let rid = state.createTaskExecutionRecord(for: "解释 HTTP")
@@ -366,6 +391,47 @@ final class TaskCompletionGateTests: XCTestCase {
         XCTAssertEqual(LingShuState.finishStatus(for: .needsAcquisition, fallback: .completed), .blocked, "驱动到顶仍没补→blocked")
         XCTAssertEqual(LingShuState.finishStatus(for: .ok, fallback: .answered), .answered, "ok→用 fallback")
         XCTAssertEqual(LingShuState.finishStatus(for: nil, fallback: .completed), .completed)
+    }
+
+    @MainActor
+    func testDefaultSuccessStatusUsesStructuredTaskEvidenceNotTextKeywords() {
+        let state = LingShuState()
+        var recordIDs: [String] = []
+        defer {
+            state.taskExecutionRecords.removeAll { recordIDs.contains($0.id) }
+            state.persistTaskExecutionRecords()
+            state.taskExecutionJournal.flush()
+        }
+
+        let replyID = state.createTaskExecutionRecord(for: "解释 active turn")
+        recordIDs.append(replyID)
+        let replyRecord = state.taskExecutionRecords.first { $0.id == replyID }
+        XCTAssertEqual(LingShuState.defaultSuccessStatus(for: replyRecord), .answered)
+
+        let artifactID = state.createTaskExecutionRecord(for: "写入一个文件")
+        recordIDs.append(artifactID)
+        state.appendTaskRecordArtifact(artifactID, title: "结果文件", location: "/tmp/lingshu-status-evidence.txt", producer: "测试")
+        let artifactRecord = state.taskExecutionRecords.first { $0.id == artifactID }
+        XCTAssertEqual(LingShuState.defaultSuccessStatus(for: artifactRecord), .completed)
+
+        let toolID = state.createTaskExecutionRecord(for: "运行验证命令")
+        recordIDs.append(toolID)
+        state.appendTaskRecordMessage(
+            toolID,
+            actor: "工具",
+            role: "run_command 完成",
+            kind: .agent,
+            text: "exit 0",
+            detail: .toolResult(tool: "run_command", success: true, output: "ok")
+        )
+        let toolRecord = state.taskExecutionRecords.first { $0.id == toolID }
+        XCTAssertEqual(LingShuState.defaultSuccessStatus(for: toolRecord), .completed)
+
+        let taskID = state.createTaskExecutionRecord(for: "做一个任务")
+        recordIDs.append(taskID)
+        state.bindGoalSpec(.init(objective: "做一个任务", kind: .task), to: taskID)
+        let taskRecord = state.taskExecutionRecords.first { $0.id == taskID }
+        XCTAssertEqual(LingShuState.defaultSuccessStatus(for: taskRecord), .completed)
     }
 
     // MARK: 不泄漏内部停滞文本(修"返回值很怪")

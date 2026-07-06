@@ -42,6 +42,20 @@ final class ContextAssemblyTraceTests: XCTestCase {
         XCTAssertTrue(continuation.traceLine.contains("strategy=continue_existing_task"))
         XCTAssertTrue(continuation.traceLine.contains("record=record-1"))
         XCTAssertTrue(continuation.traceLine.contains("taskMemory=on"))
+
+        let legacy = LingShuContextAssemblyPlan.legacyTaskTurn(
+            recordID: "record-2",
+            source: "legacy_task_route",
+            reason: "foreground_interaction"
+        )
+        XCTAssertEqual(legacy.strategy, .legacyTaskTurn)
+        XCTAssertEqual(legacy.targetRecordID, "record-2")
+        XCTAssertTrue(legacy.includeMainRecentContext)
+        XCTAssertTrue(legacy.includeTaskMemory)
+        XCTAssertEqual(legacy.toolScope, .full)
+        XCTAssertTrue(legacy.traceLine.contains("strategy=legacy_task_turn"))
+        XCTAssertTrue(legacy.traceLine.contains("record=record-2"))
+        XCTAssertTrue(legacy.traceLine.contains("source=legacy_task_route"))
     }
 
     func testSnapshotBreaksDownMessagesToolsAndImages() throws {
@@ -145,5 +159,27 @@ final class ContextAssemblyTraceTests: XCTestCase {
         XCTAssertEqual(latest.responseKind, "failed_stream")
         XCTAssertEqual(latest.errorKind, "quota_exceeded")
         XCTAssertTrue(latest.finishLogLine.contains("error=quota_exceeded"))
+    }
+
+    func testMeterKeepsRecentSnapshotsWithinLimit() {
+        let meter = LingShuContextAssemblyMeter.shared
+        meter.reset()
+
+        for i in 0..<140 {
+            _ = meter.begin(.make(
+                provider: "unit",
+                model: "measurement-\(i)",
+                protocolName: "OpenAI",
+                stream: false,
+                hasContinuationToken: false,
+                messages: [.init(role: .user, content: "turn-\(i)")],
+                tools: []
+            ))
+        }
+
+        let recent = meter.recent(limit: 200)
+        XCTAssertEqual(recent.count, 120)
+        XCTAssertEqual(recent.first?.model, "measurement-20")
+        XCTAssertEqual(recent.last?.model, "measurement-139")
     }
 }

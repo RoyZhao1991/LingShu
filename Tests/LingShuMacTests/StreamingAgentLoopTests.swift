@@ -79,11 +79,15 @@ final class StreamingAgentLoopTests: XCTestCase {
         XCTAssertEqual(filter.consume("\n```"), "")
     }
 
-    func testPlainTextStreamStillPassesThrough() {
+    func testPlainTextStreamBuffersBrieflyThenPassesThroughWhenNoProtocolAppears() {
         var filter = LingShuStructuredStreamVisibilityFilter()
 
-        XCTAssertEqual(filter.consume("你好"), "你好")
-        XCTAssertEqual(filter.consume("，灵枢在。"), "，灵枢在。")
+        XCTAssertEqual(filter.consume("你好"), "", "短的未解析片段先停留在加载态，避免稍后接 JSON 时协议泄漏")
+        let longPlain = String(repeating: "这是一段普通自然语言回复。", count: 12)
+        let visible = filter.consume(longPlain)
+        XCTAssertTrue(visible.contains("你好"))
+        XCTAssertTrue(visible.contains("普通自然语言回复"))
+        XCTAssertEqual(filter.consume("后续继续透出。"), "后续继续透出。")
     }
 
     @MainActor
@@ -99,16 +103,16 @@ final class StreamingAgentLoopTests: XCTestCase {
     }
 
     @MainActor
-    func testStateStreamingBubbleStillShowsPlainTextDeltas() {
+    func testStateStreamingBubbleStillShowsLongPlainTextDeltas() {
         let state = LingShuState()
         let bubble = ChatMessage(speaker: "灵枢", text: "", isUser: false, isLoading: true)
         state.chatMessages = [bubble]
 
-        state.appendStreamingBubbleText("你好", to: bubble.id)
-        state.appendStreamingBubbleText("，我在。", to: bubble.id)
+        let longPlain = String(repeating: "你好，我在。", count: 24)
+        state.appendStreamingBubbleText(longPlain, to: bubble.id)
         state.flushStreamingBubbleText(for: bubble.id)
 
-        XCTAssertEqual(state.chatMessages.first?.text, "你好，我在。")
+        XCTAssertEqual(state.chatMessages.first?.text, longPlain)
     }
 
     @MainActor
@@ -118,11 +122,40 @@ final class StreamingAgentLoopTests: XCTestCase {
         state.chatMessages = [bubble]
 
         state.appendStreamingBubbleText("短句未完", to: bubble.id)
-        XCTAssertEqual(state.chatMessages.first?.text, "", "短小未收口 delta 不应每 token 刷新 UI")
-        XCTAssertEqual(state.streamingBubblePendingDeltas[bubble.id], "短句未完")
+        XCTAssertEqual(state.chatMessages.first?.text, "", "短小未解析 delta 不应每 token 刷新 UI")
+        XCTAssertNil(state.streamingBubblePendingDeltas[bubble.id])
+        XCTAssertEqual(state.chatMessages.first?.thinkingPreview, "正在解析结构化回复，确认最终可见内容…")
 
         state.flushStreamingBubbleText(for: bubble.id)
-        XCTAssertEqual(state.chatMessages.first?.text, "短句未完")
+        XCTAssertEqual(state.chatMessages.first?.text, "")
         XCTAssertNil(state.streamingBubblePendingDeltas[bubble.id])
+    }
+
+    @MainActor
+    func testMixedStructuredJSONStreamClearsVisiblePrefixAndHidesProtocol() {
+        let state = LingShuState()
+        let bubble = ChatMessage(speaker: "灵枢", text: "", isUser: false, isLoading: true)
+        state.chatMessages = [bubble]
+
+        let temporaryPlain = String(repeating: "临时说明。", count: 28)
+        state.appendStreamingBubbleText(temporaryPlain, to: bubble.id)
+        state.flushStreamingBubbleText(for: bubble.id)
+        XCTAssertEqual(state.chatMessages.first?.text, temporaryPlain)
+
+        state.appendStreamingBubbleText("\n{\"reply\":\"最终正文\",\"completion\":{\"status\":\"ok\",\"needs_user\":false},\"OAuth\":null}", to: bubble.id)
+        state.flushStreamingBubbleText(for: bubble.id)
+
+        XCTAssertEqual(state.chatMessages.first?.text, "", "发现结构化协议后，要清掉此前误露的临时文本")
+        XCTAssertEqual(state.chatMessages.first?.thinkingPreview, "正在解析结构化回复，确认最终可见内容…")
+    }
+
+    func testMixedStructuredJSONFinalVisibleTextExtractsReplyWithoutDrivingFlow() {
+        let mixed = """
+        这个问题问的是定义性知识，可以直接回答。
+        {"reply":"最终只展示这句话","completion":{"status":"ok","needs_user":false},"user_input":null,"inability":null,"OAuth":null}
+        """
+
+        XCTAssertNil(LingShuStructuredModelOutput.parse(mixed), "流程层仍只接受整段完整 JSON，混合文本不能驱动 OAuth/user_input/completion")
+        XCTAssertEqual(LingShuStructuredModelOutput.visibleText(from: mixed), "最终只展示这句话")
     }
 }

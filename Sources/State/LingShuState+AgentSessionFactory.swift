@@ -81,8 +81,29 @@ extension LingShuState {
             classicCompact: d.string(forKey: "lingshu.historyCompaction") == "classic",
             tokenBudget: rawBudget > 0 ? rawBudget : 24_000,
             deferredCatalog: deferred,
-            factSink: { [weak self] facts in await self?.rememberCompactedFacts(facts) }
+            factSink: { [weak self] facts in await self?.rememberCompactedFacts(facts) },
+            loopTraceSink: { [weak self] event in
+                await MainActor.run {
+                    self?.appendTrace(
+                        kind: Self.traceKind(for: event.kind),
+                        actor: event.actor,
+                        title: event.title,
+                        detail: event.detail
+                    )
+                }
+            }
         )
+    }
+
+    nonisolated static func traceKind(for kind: LingShuAgentLoopTraceKind) -> LingShuTraceKind {
+        switch kind {
+        case .model: return .model
+        case .route: return .route
+        case .runtime: return .runtime
+        case .tool: return .tool
+        case .warning: return .warning
+        case .result: return .result
+        }
     }
 
     /// 当前脑力起步档(差距2 HarnessProfile 复用):基准分主导 + 运行净分微调 → lean/balanced/guided。

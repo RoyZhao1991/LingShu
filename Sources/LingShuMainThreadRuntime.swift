@@ -163,6 +163,24 @@ final class LingShuMainThreadKernel {
         persist()
     }
 
+    func observeTaskThreadCommit(_ commit: LingShuTaskThreadCommit) {
+        let compactLine = Self.compact(commit.ledgerLine, limit: 260)
+        snapshot.lastExecutionSummary = compactLine
+        if commit.isOpen {
+            snapshot.activeTaskID = commit.taskId
+            snapshot.activeTaskSummary = compactLine
+            snapshot.hotContextSummary = "任务线程已提交运行态：\(Self.compact(commit.progressSummary, limit: 160))"
+        } else {
+            if snapshot.activeTaskID == commit.taskId {
+                snapshot.activeTaskID = nil
+                snapshot.activeTaskSummary = nil
+            }
+            snapshot.hotContextSummary = "任务线程已收束：\(Self.compact(commit.progressSummary, limit: 160))"
+        }
+        snapshot.updatedAt = Date()
+        persist()
+    }
+
     func promptHint(baseMemory: String) -> String {
         """
         主线程常驻快照：

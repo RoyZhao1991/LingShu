@@ -321,24 +321,34 @@ struct LingShuMemoryStatsPanel: View {
     @ObservedObject var state: LingShuState
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            SectionHeader(icon: "brain", title: "记忆", subtitle: "语义库 + 经验规则（任务失败提炼的通用规则，复利增长）")
+        VStack(alignment: .leading, spacing: 14) {
+            SectionHeader(icon: "brain", title: "记忆", subtitle: "本地知识图谱 + 本机知识索引 + 经验资产")
 
-            let ruleCount = state.memoryService.experienceRuleCount
+            let stats = state.memoryDashboardStats()
             HStack(spacing: 12) {
-                statCard(title: "经验规则", value: "\(ruleCount)", hint: "被打回的任务自动沉淀")
-                statCard(title: "热聊天历史", value: "\(state.chatMessages.count)", hint: "当前会话气泡")
-                statCard(title: "任务记录", value: "\(state.taskExecutionRecordLookup.count)", hint: "可回放的执行流程")
+                statCard(title: "图谱节点", value: "\(stats.graphNodes)", hint: "本地 Markdown vault")
+                statCard(title: "经验资产", value: "\(stats.experienceAssets)", hint: experienceHint(stats))
+                statCard(title: "任务记录", value: "\(stats.retainedTaskRecords)", hint: "热 \(stats.hotTaskRecords) · 冷 \(stats.coldTaskRecords)")
             }
 
-            Text("经验规则来自协同管线：任务被评审打回又修正后，灵枢把「问题→修正」提炼成一句通用规则写入语义库，下次同领域任务的规划阶段自动参考——记忆从流水账变成复利。")
+            Text("图谱节点来自长期记忆 vault：每条原子笔记都是一个本地 Markdown 文件，可被召回、补链、归并和归档；经验资产来自终态任务的结构化沉淀，任务记录显示当前热记录与冷备保留窗口，用于回放和续接。")
                 .font(.system(size: 11.5, weight: .medium))
                 .foregroundStyle(Color.lingFg.opacity(0.5))
                 .fixedSize(horizontal: false, vertical: true)
+
+            LingShuKnowledgeGraphView(state: state)
         }
         .padding(14)
         .background(Color.lingFg.opacity(0.045), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
         .overlay { RoundedRectangle(cornerRadius: 10, style: .continuous).stroke(Color.lingHolo.opacity(0.14)) }
+    }
+
+    private func experienceHint(_ stats: LingShuMemoryDashboardStats) -> String {
+        var parts = ["经验 \(stats.goalExperiences)", "规则 \(stats.experienceRules)"]
+        if stats.pendingExperienceBackfill > 0 {
+            parts.append("待回填 \(stats.pendingExperienceBackfill)")
+        }
+        return parts.joined(separator: " · ")
     }
 
     private func statCard(title: String, value: String, hint: String) -> some View {

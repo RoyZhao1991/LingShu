@@ -88,6 +88,12 @@ final class LingShuKnowledgeGraph {
         return action
     }
 
+    func clearAll() {
+        vault.clearAll()
+        notes.removeAll()
+        vectors.removeAll()
+    }
+
     /// 决策知识种子(方案 P0②):首启把第一个知识包种进图谱(陈述性事实/教训)。幂等——有标记笔记即跳过。
     /// 返回本次新种条数(0 = 已种过)。每条仍走 `remember`(过纪律闸 + 园丁去重),所以重复调用安全。
     @discardableResult

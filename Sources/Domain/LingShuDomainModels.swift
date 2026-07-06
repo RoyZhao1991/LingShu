@@ -126,7 +126,7 @@ enum LingShuCoreState: String {
 
     var color: Color {
         switch self {
-        case .standby: .white
+        case .standby: .lingFg
         case .thinking: .cyan
         case .executing: .lingHolo
         case .abnormal: .orange

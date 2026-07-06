@@ -85,6 +85,19 @@ final class MemoryVaultTests: XCTestCase {
         XCTAssertEqual(kg.count, 0, "敏感内容不入库(隐私红线)")
     }
 
+    func testFacadeClearAllRemovesNotesAndCanReuseVault() {
+        let kg = LingShuKnowledgeGraph(root: root)
+        kg.remember(.init(kind: .preference, title: "回复语言", body: "中文", source: .userExplicit, confidence: 0.9))
+        XCTAssertEqual(kg.count, 1)
+
+        kg.clearAll()
+        XCTAssertEqual(kg.count, 0)
+        XCTAssertTrue(kg.recall("回复语言").isEmpty, "清空后不应召回旧知识")
+
+        kg.remember(.init(kind: .preference, title: "输出风格", body: "简洁", source: .userExplicit, confidence: 0.9))
+        XCTAssertEqual(kg.recall("输出风格").first?.body, "简洁", "清空后 vault 仍应可继续使用")
+    }
+
     func testRecallTextReinforcesHitNotes() {
         // M2:经 recallText(=recall_memory 工具路径)召回 → 命中 note 置信增 + 核验刷新。
         let kg = LingShuKnowledgeGraph(root: root)

@@ -25,6 +25,11 @@ enum LingShuMemoryGardener {
         case skip(String)
     }
 
+    enum AdmissionDecision: Equatable {
+        case admit
+        case reject(String)
+    }
+
     /// M2 召回反哺:一条 note 被召回(=被用到)→ 置信微增 + 刷新核验时间(抵消衰减)。久不被召回的自然沉底。
     static func reinforce(_ note: LingShuMemoryNote, now: Date = Date(), bump: Double = 0.02) -> LingShuMemoryNote {
         var n = note
@@ -41,19 +46,13 @@ enum LingShuMemoryGardener {
         now: Date = Date(),
         makeID: (String) -> String = LingShuMemoryGardener.defaultID
     ) -> Action {
-        // —— 硬护栏 ——
-        if candidate.sensitive { return .skip("敏感内容拒入(隐私红线)") }
         let title = candidate.title.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !title.isEmpty else { return .skip("空标题") }
-        // 知识纪律(陈述非祈使):祈使/步骤型候选拒入——知识库只收事实/教训,不收替大脑定步骤的框架
-        // (见 `Docs/能力分层与知识驱动架构方案.md` §3.3;这道闸保证"知识不退化成框架")。
-        if case .imperative(let reason) = LingShuKnowledgeDiscipline.classify(candidate.body) {
-            return .skip("祈使/步骤型不入库(知识须陈述事实/教训):\(reason)")
-        }
-
         // —— 归一:标题或任一别名命中已有 note ——
         let hitID = LingShuMemoryGraph.resolve(name: title, in: notes)
             ?? candidate.aliases.lazy.compactMap { LingShuMemoryGraph.resolve(name: $0, in: notes) }.first
+        if case .reject(let reason) = admissionDecision(for: candidate, creatingNew: hitID == nil) {
+            return .skip(reason)
+        }
         if let hitID, var note = notes.first(where: { $0.id == hitID }) {
             // 合并别名(把候选标题/别名都纳入,排除与正式标题重名)
             let incoming = ([title] + candidate.aliases).filter { LingShuMemoryGraph.norm($0) != LingShuMemoryGraph.norm(note.title) }
@@ -104,6 +103,47 @@ enum LingShuMemoryGardener {
             history: []
         )
         return .create(note)
+    }
+
+    /// 第一层记忆准入:决定"这件事是否值得进知识图谱"。
+    ///
+    /// 这里不识别具体业务词,只判断候选本身是否像**稳定、可复用、可核验**的知识:
+    /// 用户明说的偏好/身份/决策可以进;工具观察到的事实可以进;低置信推断、执行流水账、祈使步骤和一次性过程不进。
+    static func admissionDecision(for candidate: Candidate, creatingNew: Bool = true) -> AdmissionDecision {
+        if candidate.sensitive { return .reject("敏感内容拒入(隐私红线)") }
+
+        let title = candidate.title.trimmingCharacters(in: .whitespacesAndNewlines)
+        let body = candidate.body.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !title.isEmpty else { return .reject("空标题") }
+        guard !body.isEmpty else { return .reject("空正文") }
+        guard !title.contains(where: { $0.isNewline }) else { return .reject("标题含换行,疑似原始输入片段") }
+        guard title.count <= 80 else { return .reject("标题过长,疑似原始指令或流水账") }
+
+        if looksLikeExecutionLedger(title: title, body: body) {
+            return .reject("执行流水账不入知识图谱,应进入任务/经验记录")
+        }
+
+        if case .imperative(let reason) = LingShuKnowledgeDiscipline.classify(body) {
+            return .reject("祈使/步骤型不入库(知识须陈述事实/教训):\(reason)")
+        }
+
+        let minimumConfidence: Double
+        switch candidate.source {
+        case .userExplicit: minimumConfidence = 0.35
+        case .tool: minimumConfidence = 0.40
+        case .inference: minimumConfidence = 0.65
+        }
+        if creatingNew {
+            guard candidate.confidence >= minimumConfidence else {
+                return .reject("置信度不足(\(String(format: "%.2f", candidate.confidence)) < \(String(format: "%.2f", minimumConfidence)))")
+            }
+
+            if candidate.source == .inference && inferenceRequiresStrongerEvidence(candidate) {
+                return .reject("低证据推断不入图谱")
+            }
+        }
+
+        return .admit
     }
 
     /// 置信度衰减:长期未核验的 note 置信随时间指数下降(半衰期默认 30 天)。返回更新后的全集。
@@ -173,6 +213,25 @@ enum LingShuMemoryGardener {
             out.append(t)
         }
         return out
+    }
+
+    private static func inferenceRequiresStrongerEvidence(_ candidate: Candidate) -> Bool {
+        switch candidate.kind {
+        case .person, .project, .preference, .decision:
+            return true
+        case .fact:
+            return candidate.confidence < 0.78
+        case .skill, .glossary:
+            return false
+        }
+    }
+
+    private static func looksLikeExecutionLedger(title: String, body: String) -> Bool {
+        let compact = (title + "\n" + body).replacingOccurrences(of: " ", with: "")
+        let statusMarkers = ["结果=", "状态=", "已直接回答", "本轮", "任务记录", "产出:", "总用时", "排队", "执行中"]
+        let hasGoalMarker = compact.contains("目标") || compact.contains("objective")
+        let markerHits = statusMarkers.filter { compact.contains($0) }.count
+        return hasGoalMarker && markerHits >= 1
     }
 
     private static func iso(_ date: Date) -> String {

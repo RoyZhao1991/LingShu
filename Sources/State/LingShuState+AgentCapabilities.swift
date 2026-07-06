@@ -9,8 +9,12 @@ extension LingShuState {
     /// `force=false` 时有 TTL 节流(默认 5 分钟内不重复发现);注册新 agent / 用户点"刷新"用 `force=true`。
     func refreshAgentCapabilities(force: Bool = false) {
         if !force, let at = agentCapabilitiesRefreshedAt, Date().timeIntervalSince(at) < 300 { return }
-        let agents = LingShuAgentPluginStore.load().filter { $0.capabilities?.discover != nil && $0.executableExists }
-        guard !agents.isEmpty else { return }
+        let agents = LingShuAgentPluginStore.load().filter { $0.capabilities?.discover != nil && $0.isCallableNow }
+        guard !agents.isEmpty else {
+            if !discoveredAgentCapabilities.isEmpty { discoveredAgentCapabilities = [] }
+            invalidateInvocablePluginCatalog()
+            return
+        }
         agentCapabilitiesRefreshedAt = Date()   // 先占位,避免并发重复发现
         Task.detached(priority: .utility) {
             var all: [LingShuAgentCapability] = []
@@ -18,6 +22,7 @@ extension LingShuState {
             let snapshot = all
             await MainActor.run {
                 self.discoveredAgentCapabilities = snapshot
+                self.invalidateInvocablePluginCatalog()
                 let enabled = snapshot.filter { $0.enabled && $0.installed }.count
                 lingShuControlLog("agent能力发现: 归一 \(snapshot.count) 项,已启用 \(enabled) 项 | " +
                     Set(snapshot.map(\.agentID)).sorted().joined(separator: ","))
@@ -31,6 +36,12 @@ extension LingShuState {
     func dispatchAgentCapability(agentID: String, capabilityID: String, task: String) {
         guard let agent = LingShuAgentPluginStore.plugin(id: agentID) else {
             chatMessages.append(.init(speaker: "灵枢", text: "⚠️ 找不到已注册 agent「\(agentID)」。", isUser: false)); return
+        }
+        guard agent.isCallableNow else {
+            let reason = agent.unavailableReason?.trimmingCharacters(in: .whitespacesAndNewlines)
+            chatMessages.append(.init(speaker: "灵枢", text: "⚠️ \(agent.displayName) 当前不可用\(reason?.isEmpty == false ? ":\(reason!)" : ""),我已从可调用目录隐藏它。请先恢复后在自检里重新探活。", isUser: false))
+            markAgentPluginCatalogChanged(agentID: agent.id)
+            return
         }
         let cap = discoveredAgentCapabilities.first { $0.agentID == agentID && $0.id == capabilityID }
         let capName = cap?.name ?? capabilityID
@@ -86,7 +97,8 @@ extension LingShuState {
     /// 给大脑能力 grounding 用的一段文本:已接入 agent 各自带的子能力(只列已启用的,避免噪声)。
     /// 让自动路由也"认得"——例如用户说"生成一张图",大脑知道某 agent 有出图能力,而不是自己用 Pillow 硬画。
     func agentCapabilitiesGroundingText() -> String {
-        let enabled = discoveredAgentCapabilities.filter { $0.enabled && $0.installed }
+        let callableAgentIDs = Set(LingShuAgentPluginStore.load().filter(\.isCallableNow).map(\.id))
+        let enabled = discoveredAgentCapabilities.filter { $0.enabled && $0.installed && callableAgentIDs.contains($0.agentID) }
         guard !enabled.isEmpty else { return "" }
         let byAgent = Dictionary(grouping: enabled, by: \.agentID)
         var lines: [String] = []
@@ -96,5 +108,15 @@ extension LingShuState {
         }
         return "【已接入 agent 自带的专长子能力】需要这些专长(如出图/视频/表格/PPT)时,**优先把活派给对应 agent 让它用自带能力做**(显式 @它·能力 或你判断调度),别自己用代码硬扛(如出图别 Pillow 画几何拼贴)。\n"
             + lines.joined(separator: "\n")
+    }
+
+    func invalidateInvocablePluginCatalog() {
+        invocablePluginCatalogRevision &+= 1
+        refreshInvocationChips()
+    }
+
+    func markAgentPluginCatalogChanged(agentID: String) {
+        discoveredAgentCapabilities.removeAll { $0.agentID == agentID }
+        invalidateInvocablePluginCatalog()
     }
 }

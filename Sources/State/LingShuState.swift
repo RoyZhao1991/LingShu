@@ -299,6 +299,8 @@ final class LingShuState: ObservableObject {
     let connectorRegistry = LingShuConnectorRegistry()
     /// 本机工具执行器（读写文件/列目录/抓网页/跑命令）；协议化可替换沙箱实现。
     let toolExecutor: any LingShuToolExecuting = LingShuLocalToolExecutor()
+    /// 宿主托管长命令：构建/测试/转换/下载/服务启动等超过普通工具回合的动作走 job_id 查询/取消/去重。
+    let longCommandRegistry = LingShuLongCommandRegistry()
     let dialogueAcknowledgement = LingShuDialogueAcknowledgement()
     /// 统一的待确认问题编排中心：自主运行非交互裁决等据此判断。见 LingShuClarificationCenter。
     let clarificationCenter = LingShuClarificationCenter()
@@ -335,6 +337,8 @@ final class LingShuState: ObservableObject {
     var resumedOrphanRecordIDs: Set<String> = []
     /// **第三方 agent 子能力缓存(适配器发现结果,2026-06-29)**:各已注册 agent 跑自己的发现命令归一出的能力清单。
     @Published var discoveredAgentCapabilities: [LingShuAgentCapability] = []
+    /// 可调用插件/agent 目录版本号:agent 探活、运行时掉线、子能力发现变化后递增,驱动输入框「+」菜单与 @ 补全刷新。
+    @Published var invocablePluginCatalogRevision = 0
     /// 上次刷新 agent 子能力的时间(供 TTL/面板"刷新"判定)。
     var agentCapabilitiesRefreshedAt: Date?
     /// 派发任务的「评审绑定」:记录 id →(maker 引擎 / checker 引擎 / 是否异源)。创建子线程时解析并标注,验收时据 checker 复核。
@@ -716,6 +720,15 @@ final class LingShuState: ObservableObject {
         if !rolePipelineOrphans.isEmpty { resumeOrphanedRolePipelinesOnLaunch(rolePipelineOrphans) }
         taskRecordFeedback = (UserDefaults.standard.dictionary(forKey: "lingshu.taskFeedback") as? [String: Bool]) ?? [:]
         archivedTaskExecutionRecords = taskExecutionJournal.loadArchivedRecords()
+        let repairedExperience = reconcileExperienceArtifactsFromRecords()
+        if repairedExperience.goalExperiencesAdded > 0 || repairedExperience.rulesAdded > 0 {
+            appendTrace(
+                kind: .system,
+                actor: "记忆",
+                title: "经验资产回填",
+                detail: "从历史任务记录补回经验 \(repairedExperience.goalExperiencesAdded) 条、规则 \(repairedExperience.rulesAdded) 条。"
+            )
+        }
         publishControlSnapshot()
         refreshRemoteSessionStatus()
         logEvent("现在  \(report.statusText)")
@@ -1331,6 +1344,17 @@ final class LingShuState: ObservableObject {
         chatScrollToLatestRequest &+= 1
     }
 
+    /// 新一轮用户输入进入时，旧回复的音频必须立即失效：停止整段 TTS、流式早读、排队句子与演示预合成。
+    /// 这是一条通用输入边界，不绑定具体任务类型，避免旧音频和新回复重叠。
+    func interruptSpeechForOutgoingUserMessage() {
+        if let interruptSpeechOutput {
+            interruptSpeechOutput()
+        } else {
+            voiceManager?.stopSpeaking()
+        }
+        spokenStreamOffsets.removeAll()
+    }
+
     /// 提交一条指令并**带上待发附件**(把附件正文折入提示 + 清空托盘)。
     /// UI sendPrompt 与 MCP `lingshu_send_prompt` 共用——修"MCP 发送时附件没一并带出"的 bug。
     @discardableResult
@@ -1339,6 +1363,7 @@ final class LingShuState: ObservableObject {
         guard !pendingAttachments.isEmpty else {
             return submitTextInput(userText, source: source)
         }
+        interruptSpeechForOutgoingUserMessage()
         // **结构化输入 {message: userText, files: attachedPaths}(2026-06-27 用户定调)**:附件路径随消息带出
         // (不只把正文折进 prompt、不丢路径)。把随发的附件名挂到这条用户消息上(气泡里展示)。
         let names = pendingAttachments.map(\.filename)
@@ -1408,9 +1433,15 @@ final class LingShuState: ObservableObject {
         let triagePrompt = turnInput.triageText
         guard !trimmedPrompt.isEmpty else { return "" }
 
-        // 当前台预览/演示材料已经打开时,主人明确说“关闭/收起/结束”属于可视控制动作,
-        // 应先确定性落实到 UI 状态,再允许内置技能/大脑解释。否则演示技能会口头答应 stop,
-        // 但只停讲解不关预览,导致测试与真实 UX 都卡在“看似结束、窗口还在”。
+        // 第一层:活动任务优先接管。演示/答疑、录制这类前台活动有自己的暂停、续演、落盘和收尾语义,
+        // 必须先拿到输入;否则通用音频打断/分诊会抢在活动任务前面破坏状态机。
+        if appendUserMessage {
+            for skill in builtinSkills where skill.interceptActiveInput(userFacingPrompt) { return "" }
+        }
+        if appendUserMessage, handleProcedureRecordingInputIfNeeded(userFacingPrompt) { return "" }
+
+        // 活动任务没有接管时,若前台预览仍打开且用户明确要求关闭/收起/结束,这是宿主级前台控制动作。
+        // 真实演示技能会把这类宿主级关闭意图让回这里处理;普通活动任务接管时则不越权关闭。
         if appendUserMessage,
            previewController.isPresented,
            LingShuNestedStagePlanner.isExitPresentationCommand(userFacingPrompt) {
@@ -1434,13 +1465,9 @@ final class LingShuState: ObservableObject {
             return ack
         }
 
-        // **内置技能活动中拦截**:如演示与答疑进行时,用户开口=实时答疑(主线程线性),拦下来处理,不走常规分诊/派发。
-        // 通用遍历,内核不点名具体技能。
-        if appendUserMessage {
-            for skill in builtinSkills where skill.interceptActiveInput(userFacingPrompt) { return "" }
-        }
-        // 「Record & Replay」录制进行时:用户开口=记一步(或完成/取消),拦下来,不走常规分诊。
-        if appendUserMessage, handleProcedureRecordingInputIfNeeded(userFacingPrompt) { return "" }
+        // 第二层:没有活动任务接管,才执行通用输入边界的音频打断并进入常规流程。
+        interruptSpeechForOutgoingUserMessage()
+
         // **声明式调插件**:`@演示`/输入框「+」菜单插入 @ → 确定性直达,跳过大脑分诊(根治误调用)。
         // 注:**演示「启动」只走这条显式 `@演示` + 大脑的 `present_documents` 工具**——已删掉旧的「关键词嗅探演示意图」自动启动路由
         // (`detectPresentationRequest` 之类),它对"句子里只是提到'演示'+ 带个文档路径"过度误触发(2026-06-27 用户定调)。
@@ -1598,7 +1625,7 @@ final class LingShuState: ObservableObject {
             )
             let isNewActiveTurn = triage.kind != .reply
             let shouldDeriveGoalSpec = self.goalSpecEnabled && isNewActiveTurn
-            async let goalSpecA: LingShuGoalSpec? = shouldDeriveGoalSpec ? self.deriveGoalSpec(for: trimmedPrompt, taskRecordID: nil) : nil
+            async let goalSpecA: LingShuGoalSpec? = shouldDeriveGoalSpec ? self.deriveGoalSpec(for: trimmedPrompt, taskRecordID: nil, activeTurnContext: true) : nil
             let goalSpec = await goalSpecA
             let needsCapabilityPreflight = self.goalSpecEnabled && Self.goalKindNeedsCapabilityPreflight(goalSpec?.kind)
             let activeTurnRoute = triage.kind == .reply ? "reply" : "active_turn"

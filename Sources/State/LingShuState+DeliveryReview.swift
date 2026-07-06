@@ -8,7 +8,7 @@ import AppKit
 @MainActor
 extension LingShuState {
 
-    /// 独立 verifier(maker≠checker):真实落盘 + **看图审版式** + **据知识核事实**,复用 LingShuChecklistVerdict。
+    /// 独立 verifier(maker≠checker):真实落盘 + **看图审版式** + **据知识核事实**,输出标准 JSON verdict。
     /// 任一维度不过即「需修正」,反馈给 maker 续修(goal-driven,直到通过或停滞交还)。
     func verifyAgentDeliverable(userRequest: String, reply: String, taskRecordID: String?) async -> (passed: Bool, critique: String) {
         let reviewer = expertProfileRegistry.reviewerProfile()
@@ -82,15 +82,14 @@ extension LingShuState {
             return deterministicDelivery
         }
 
-        // **差距2:按交付物类型 gate 贵 LLM 评审**(确定性门照跑、只省 LLM 自评)。纯代码交付——确定性门(测试/运行)
-        // 已**权威定正确性**:过则直接通过、跳过冗余 LLM(省一次贵调用 + 往返延迟,差距2/7);不过则按确定性失败直接返工。
-        // 主观交付物(PPT/文档)或代码+主观混合 → 仍跑 LLM(事实/版式/完整性是主观维度,下方继续)。
+        // 按交付物类型 gate LLM 评审:确定性门照跑。代码门失败 → 直接返工;代码门通过 → 仍进入 LLM
+        // 评审代码质量/可维护性/边界风险(用户定调:有交付物和测试绿不等于代码质量合格)。
         switch LingShuVerifierGate.decide(codeFileCount: codeFiles.count,
                                           hasSubjectiveArtifact: LingShuVerifierGate.hasSubjectiveArtifact(realFilePaths: realFiles),
                                           codeGatePassed: codeGatePassed) {
         case .skipPassedByDeterministicGate:
-            appendTrace(kind: .result, actor: "验收", title: "确定性门通过·跳过LLM评审", detail: "纯代码交付:测试全绿+运行起来+跑出可见结果,确定性门已定正确性,省一次贵 LLM 自评。")
-            return (true, "确定性代码门通过(测试全绿 + 运行起来 + 跑出可见结果),跳过冗余 LLM 评审。")
+            appendTrace(kind: .result, actor: "验收", title: "确定性门通过", detail: "保留兼容分支;新逻辑下纯代码通过后仍应进入 LLM 质量评审。")
+            break
         case .skipFailedByDeterministicGate:
             appendTrace(kind: .warning, actor: "验收", title: "确定性门未过·跳过LLM评审", detail: "纯代码交付确定性门失败,直接按失败反馈返工。")
             return (false, codeGateFailureReason(testGate: testGate, runGate: runGate, runGateBlocks: runGateBlocks))
@@ -120,18 +119,25 @@ extension LingShuState {
             ? "真实结果信号:⚠️ 本回合**唯一交付是文档/指南、且没有任何真实动作工具成功执行**。**若用户要的是真实效果(接入设备/开关灯/操作电脑/控外设这类动作型请求),写一篇说明文档≠做到 → 判未达标、不收**(动作型任务的交付是真实效果,不是文件)。若用户要的本就是一篇文档/资料,则此信号无关、按文档正常评审。"
             : "真实结果信号:本回合\(hadAction ? "有真实动作工具成功执行" : "无'仅文档冒充'风险")。"
 
-        // 看 + 核:抽产出物正文(事实核查)+ 渲染图像交云端 VL 审版式(重叠/截断/空白)。只看一个主产出物以控成本。
-        var contentBlock = ""
+        // 看 + 核:抽产出物正文/源码(事实核查 + 代码质量评审)+ 渲染图像交云端 VL 审版式(重叠/截断/空白)。
+        var contentSnippets: [String] = []
         var visualBlock = "版式视觉评审:未启用(无渲染器或视觉通道)"
         if let primary = realFiles.first(where: { ["pptx", "docx", "html", "md", "pdf", "csv", "txt"].contains(($0 as NSString).pathExtension.lowercased()) }) {
             // **正文截断(根因修:整份 40KB+ 塞进 prompt → 调用又大又慢 → 18s 超时)**:事实核查取节选即可
             // (确定性正确性由代码门/VL 看图把关,验收脑不必读完整份);截到 8000 字,既够核查又不拖超时。
             let text = String(await extractArtifactContent(path: primary).prefix(8000))
-            if !text.isEmpty { contentBlock = "\n【产出物正文(节选,供事实核查)】\n\(text)\n" }
+            if !text.isEmpty { contentSnippets.append("【产出物正文(节选,供事实核查) \(primary)】\n\(text)") }
             if let visual = await visuallyReviewArtifact(path: primary) {
                 visualBlock = "版式视觉评审(VL 看图,逐页):\n\(visual)"
             }
         }
+        for path in codeFiles.prefix(4) {
+            let text = String(await extractArtifactContent(path: path, maxChars: 5000).prefix(5000))
+            if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                contentSnippets.append("【源码节选(供质量评审) \(path)】\n\(text)")
+            }
+        }
+        let contentBlock = contentSnippets.isEmpty ? "" : "\n" + contentSnippets.joined(separator: "\n\n") + "\n"
 
         // P1 目标认知消费:记录里有 typed GoalSpec 的成功标准则给验收官参考(完整性维度据此核对是否真达成);无则空串、不加压。
         let goalCriteria = goalSpec(for: taskRecordID)?.acceptanceCriteriaBlock ?? ""
@@ -151,11 +157,8 @@ extension LingShuState {
         2. 事实准确性:用你的知识逐条审查正文里的关键数据/年份/事件/数字/人名,**发现明确错误或与公认事实不符才 ❌ 并写出正确值**;不要把"我没法 100% 确认"当作不达标。**但忽略"自指/易变"事实**——产出物描述它自己的文件体积/字节数/页数/生成时间戳这类(每次重生成都会变、且与用户关心的内容无关),以及 KB 四舍五入这种琐碎数值差(如 41KB vs 40KB),**一律不算事实错误、不得据此打回**,以免陷入自指返工死循环。
         3. 完整性:是否覆盖用户要求的主题、结构与数量;**若上面给了【成功标准】,逐条核对是否真达成**(未达成的写明缺哪条)。
         4. 版式:若有视觉评审,凡文字重叠/被截断/溢出/错位空白 → ❌ 并指出第几页;无视觉评审则此项默认达标。
-        5. 代码门:以上【代码门】结论为准——标 ❌ 则本维度未达标(代码任务需有确定性成功证据:**测试全绿 或 真构建/运行起来不崩,二者择一**);标 ✅ 或"非代码交付跳过"则达标。
-        输出格式(严格遵守):
-        1. 先逐条核对并写明达标/未达标及理由(未达标写清缺什么、怎么改)。
-        2. 另起一行:核对统计 PASS=<达标条数> FAIL=<未达标条数>
-        3. 最后单独一行:全部达标写「结论:通过」,有未达标写「结论:需修正」。
+        5. 代码门:以上【代码门】结论为准——标 ❌ 则本维度未达标;标 ✅ 或"非代码交付跳过"则达标。代码门通过只证明能跑,你还必须继续评审代码质量、边界、可维护性和安全风险。
+        \(LingShuCheckerVerdict.outputContract)
         """
         let verifier = LingShuAgentSession(
             id: "verifier-\(UUID().uuidString.prefix(6))",
@@ -185,7 +188,14 @@ extension LingShuState {
             }
             return (false, "评审器未返回有效意见，且缺少可核验的确定性证据；请补充真实产出物、动作结果或成功标准证据后再交付。")
         }
-        let verdict = LingShuChecklistVerdict.parse(critique)
+        if let verdict = LingShuCheckerVerdict.parse(critique) {
+            let rendered = verdict.renderedSummary
+            if !codeFiles.isEmpty, !codeGatePassed {
+                let reasonText = codeGateFailureReason(testGate: testGate, runGate: runGate, runGateBlocks: runGateBlocks)
+                return (false, rendered + "\n\n" + reasonText)
+            }
+            return (verdict.passed, rendered)
+        }
         // 代码门是**确定性硬门**:代码任务未满足「有测试且全绿」或「程序构建/运行不崩」→ 即使 LLM 评审放行也判未达标,
         // 把缺哪条 + 崩溃片段回灌给 maker,逼它修到真跑通(执行恢复力),而不是把异常当交付。
         if !codeFiles.isEmpty, !codeGatePassed {
@@ -193,7 +203,7 @@ extension LingShuState {
             let appended = critique.isEmpty ? reasonText : critique + "\n\n" + reasonText
             return (false, appended)
         }
-        return (verdict.allPassed, critique)
+        return (false, "评审官未按 JSON verdict 协议返回结果,无法确认交付质量。请重试验收。")
     }
 
     /// 是否真跑出**可见结果**(用户定调"我要看到结果"):任一 run_command 成功且输出**非"（无输出，退出码 N）"空跑占位**、有实质内容。

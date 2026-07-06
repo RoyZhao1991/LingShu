@@ -132,4 +132,12 @@ final class VoicePhaseTests: XCTestCase {
         XCTAssertTrue(out.contains("讲解开始"))
         XCTAssertTrue(out.contains("正文继续"))
     }
+
+    @MainActor func testOralizeDropsElapsedTimeFooterAndInlineTail() {
+        let footer = VoiceIOManager.strippedForSpeech("好的,我已经处理完了。\n\n⏱ 总用时 12秒")
+        XCTAssertEqual(footer, "好的,我已经处理完了。")
+
+        let inline = VoiceIOManager.strippedForSpeech("好的,我已经处理完了。 ⏱ 总用时 12秒")
+        XCTAssertEqual(inline, "好的,我已经处理完了。")
+    }
 }

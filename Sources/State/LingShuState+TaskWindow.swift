@@ -12,7 +12,13 @@ extension LingShuState {
     /// 因为 GoalSpec 会把 goal 抽象掉**字面目录/路径/文件名**(「在 /tmp/x 下写 a.py」→「在指定目录创建文件」),
     /// 只靠 goal+summary 续接,**中途取消、产物还没落盘**的任务一续接就不知道写哪 → 退回默认 workdir 交错地方
     /// (2026-06-30 E2E 实锤:scraper.py 被写进了 ~/app 而非要求的 /tmp/lingshu-e2e)。带上原始 prompt 即守得住。
-    nonisolated static func resumeContextPrompt(originalRequest: String?, summary: String?, goal: String?, resumeInput: String) -> String {
+    nonisolated static func resumeContextPrompt(
+        originalRequest: String?,
+        summary: String?,
+        goal: String?,
+        artifacts: [LingShuTaskExecutionArtifact] = [],
+        resumeInput: String
+    ) -> String {
         let orig = (originalRequest ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         let brief = [summary, goal]
             .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
@@ -22,9 +28,15 @@ extension LingShuState {
             parts.append("原始任务请求(务必沿用其中的**目录/路径/文件名/约束**,别改交付位置):\n\(String(orig.prefix(600)))")
         }
         if !brief.isEmpty { parts.append("此前进展/目标:\(String(brief.prefix(200)))") }
+        let artifactLines = artifacts.prefix(12).map { artifact in
+            "- \(artifact.title): \(artifact.location)"
+        }
+        if !artifactLines.isEmpty {
+            parts.append("已登记产出物(续接时优先基于这些真实文件操作,不要重新猜路径):\n\(artifactLines.joined(separator: "\n"))")
+        }
         return parts.isEmpty
             ? resumeInput
-            : "【接续这条隔离任务】\n" + parts.joined(separator: "\n\n") + "\n\n续接指令:\n\(resumeInput)"
+            : "【接续这条隔离任务】\n这是同一条任务线程的后续指令,不是新任务。优先沿用已有上下文和已登记产出物继续推进。\n\n" + parts.joined(separator: "\n\n") + "\n\n续接指令:\n\(resumeInput)"
     }
 
     func submitTaskFollowup(_ text: String, recordID: String, appendUserMessage: Bool = true) {
@@ -51,6 +63,17 @@ extension LingShuState {
         }
         if appendUserMessage {   // 干预 fallback 进来时,纠正已作为「纠正」贴过,不重复贴
             appendTaskRecordMessage(recordID, actor: "你", role: "追问", kind: .user, text: display)
+        }
+        if let record = taskExecutionRecords.first(where: { $0.id == recordID }),
+           record.status.isTerminal {
+            commitTaskThreadState(
+                recordID: recordID,
+                status: .running,
+                phase: .planning,
+                summary: "收到后续指令,正在接续原任务线程。",
+                persist: false,
+                trace: true
+            )
         }
         captureDesignFeedbackForDreaming(trimmed, recordID: recordID)   // 设计任务的追问/改进→dreaming 固化
         clearAttachments()
@@ -82,7 +105,12 @@ extension LingShuState {
         let record = taskExecutionRecords.first { $0.id == recordID }
         // **续接必带原始请求(2026-06-30 修 cancel+resume 丢工作目录上下文)**:见 `resumeContextPrompt` 注释。
         let isolatedInput = Self.resumeContextPrompt(
-            originalRequest: record?.prompt, summary: record?.summary, goal: record?.goal, resumeInput: resumeInput)
+            originalRequest: record?.prompt,
+            summary: record?.summary,
+            goal: record?.goal,
+            artifacts: record?.artifacts ?? [],
+            resumeInput: resumeInput
+        )
         _ = dispatchIsolatedTask(prompt: isolatedInput, taskRecordID: recordID, goal: record?.goal)
     }
 

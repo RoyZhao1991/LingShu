@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// 任务执行时主线程对话里的紧凑状态行：转圈 + 当前步骤名 + 实时耗时（秒）。
@@ -59,6 +60,9 @@ struct ChatBubbleView: View {
     @State private var previewItem: AttachmentPreviewItem?
 
     private var accent: Color { message.isUser ? .lingHolo : .lingHoloAlt }
+    private var hasCopyableText: Bool {
+        !message.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
 
     /// 气泡内回复直达该任务的隔离会话(不经主输入/分诊)。
     private func sendTaskReply(_ recordID: String) {
@@ -74,10 +78,18 @@ struct ChatBubbleView: View {
                 Spacer(minLength: 80)
             }
 
-            VStack(alignment: .leading, spacing: 6) {
-                Text(message.isUser ? state.loc("你", "You") : state.appName)
-                    .font(.system(size: 11, weight: .bold))
-                    .foregroundStyle(message.isUser ? Color.lingFg.opacity(0.72) : Color.lingHolo.opacity(0.84))
+            VStack(alignment: message.isUser ? .trailing : .leading, spacing: 6) {
+                HStack(spacing: 7) {
+                    if message.isUser { Spacer(minLength: 0) }
+                    Text(message.isUser ? state.loc("你", "You") : state.appName)
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundStyle(message.isUser ? Color.lingFg.opacity(0.72) : Color.lingHolo.opacity(0.84))
+                    Text(message.createdAt.chatBubbleDisplayTime)
+                        .font(.system(size: 10.5, weight: .medium, design: .monospaced))
+                        .foregroundStyle(Color.lingFg.opacity(0.34))
+                    if !message.isUser { Spacer(minLength: 0) }
+                }
+                .frame(maxWidth: .infinity, alignment: message.isUser ? .trailing : .leading)
 
                 if message.isLoading && !message.isUser {
                     // 已有流式正文(message.text 非空)→ 逐字显示;还没正文(工具执行中/未开始)→ 紧凑进度行。
@@ -111,9 +123,12 @@ struct ChatBubbleView: View {
 
                                 // 直答通道：流式片段一到就分块显示；还没有内容时只显示安静的“思考中…”。
                                 if message.text.isEmpty {
-                                    Text("思考中…")
-                                        .font(.system(size: 14.5, weight: .medium))
-                                        .foregroundStyle(Color.lingFg.opacity(0.5))
+                                    TimelineView(.periodic(from: .now, by: 1)) { context in
+                                        let elapsed = max(0, Int(context.date.timeIntervalSince(message.createdAt)))
+                                        Text("思考中 \(Self.formatLoadingElapsed(elapsed))")
+                                            .font(.system(size: 14.5, weight: .medium, design: .monospaced))
+                                            .foregroundStyle(Color.lingFg.opacity(0.5))
+                                    }
                                 } else {
                                     LingShuMessageContentView(text: message.text)
                                 }
@@ -207,10 +222,15 @@ struct ChatBubbleView: View {
                     .buttonStyle(.plain)
                     .help("打开本轮任务的 agent 群聊式执行记录")
                 }
+
+                if hasCopyableText {
+                    LingShuBubbleCopyBar(markdown: message.text)
+                        .padding(.top, 2)
+                }
             }
             .padding(.vertical, 12)
             .padding(.horizontal, 14)
-            .frame(maxWidth: message.isUser ? 420 : 760, alignment: .leading)
+            .frame(maxWidth: message.isUser ? 420 : 760, alignment: message.isUser ? .trailing : .leading)
             .background(
                 LinearGradient(
                     colors: message.isUser
@@ -241,6 +261,149 @@ struct ChatBubbleView: View {
         .onAppear {
             withAnimation(.easeInOut(duration: 2.6).repeatForever(autoreverses: true)) { glow = true }
         }
+    }
+
+    private static func formatLoadingElapsed(_ seconds: Int) -> String {
+        let minutes = seconds / 60
+        let rest = seconds % 60
+        return String(format: "%02d:%02d", minutes, rest)
+    }
+}
+
+private struct LingShuBubbleCopyBar: View {
+    let markdown: String
+    @State private var copiedMode: CopyMode?
+
+    private enum CopyMode {
+        case plain
+        case markdown
+
+        var tipText: String {
+            switch self {
+            case .plain:
+                return "已复制文本"
+            case .markdown:
+                return "已复制 Markdown"
+            }
+        }
+    }
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Button {
+                copyPlain()
+            } label: {
+                Image(systemName: copiedMode == .plain ? "checkmark" : "doc.on.doc")
+                    .font(.system(size: 11.5, weight: .semibold))
+                    .frame(width: 18, height: 18)
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(copiedMode == .plain ? Color.lingHolo : Color.lingFg.opacity(0.42))
+            .help("复制纯文本")
+
+            Button {
+                copyMarkdown()
+            } label: {
+                Image(systemName: copiedMode == .markdown ? "checkmark" : "curlybraces")
+                    .font(.system(size: 11.5, weight: .semibold))
+                    .frame(width: 18, height: 18)
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(copiedMode == .markdown ? Color.lingHolo : Color.lingFg.opacity(0.42))
+            .help("复制 Markdown")
+
+            if let copiedMode {
+                Text(copiedMode.tipText)
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(Color.lingHolo)
+                    .lineLimit(1)
+                    .fixedSize()
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 3)
+                    .background(
+                        Capsule()
+                            .fill(Color.lingHolo.opacity(0.12))
+                    )
+                    .overlay(
+                        Capsule()
+                            .stroke(Color.lingHolo.opacity(0.26), lineWidth: 0.8)
+                    )
+                    .transition(.opacity.combined(with: .move(edge: .leading)))
+            }
+        }
+        .opacity(0.86)
+        .animation(.easeOut(duration: 0.16), value: copiedMode)
+    }
+
+    private func copyPlain() {
+        LingShuBubbleClipboard.copyPlainText(fromMarkdown: markdown)
+        flash(.plain)
+    }
+
+    private func copyMarkdown() {
+        LingShuBubbleClipboard.copyMarkdown(markdown)
+        flash(.markdown)
+    }
+
+    private func flash(_ mode: CopyMode) {
+        withAnimation(.easeOut(duration: 0.16)) {
+            copiedMode = mode
+        }
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 1_200_000_000)
+            if copiedMode == mode {
+                withAnimation(.easeOut(duration: 0.16)) {
+                    copiedMode = nil
+                }
+            }
+        }
+    }
+}
+
+private enum LingShuBubbleClipboard {
+    static func copyPlainText(fromMarkdown markdown: String) {
+        copy(string: plainText(fromMarkdown: markdown), includeMarkdownType: false)
+    }
+
+    static func copyMarkdown(_ markdown: String) {
+        copy(string: markdown, includeMarkdownType: true)
+    }
+
+    private static func copy(string: String, includeMarkdownType: Bool) {
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(string, forType: .string)
+        if includeMarkdownType {
+            pasteboard.setString(string, forType: NSPasteboard.PasteboardType("public.markdown"))
+            pasteboard.setString(string, forType: NSPasteboard.PasteboardType("net.daringfireball.markdown"))
+        }
+    }
+
+    static func plainText(fromMarkdown markdown: String) -> String {
+        var output: [String] = []
+        var inCodeBlock = false
+        for rawLine in markdown.components(separatedBy: .newlines) {
+            var line = rawLine
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.hasPrefix("```") {
+                inCodeBlock.toggle()
+                continue
+            }
+            if !inCodeBlock {
+                line = line.replacingOccurrences(of: "^\\s{0,3}#{1,6}\\s*", with: "", options: .regularExpression)
+                line = line.replacingOccurrences(of: "^\\s{0,3}>\\s?", with: "", options: .regularExpression)
+                line = line.replacingOccurrences(of: "^\\s*[-*+]\\s+", with: "", options: .regularExpression)
+                line = line.replacingOccurrences(of: "^\\s*\\d+[.)]\\s+", with: "", options: .regularExpression)
+                line = line.replacingOccurrences(of: "!\\[([^\\]]*)\\]\\([^\\)]*\\)", with: "$1", options: .regularExpression)
+                line = line.replacingOccurrences(of: "\\[([^\\]]+)\\]\\([^\\)]*\\)", with: "$1", options: .regularExpression)
+                line = line.replacingOccurrences(of: "(`+)(.*?)\\1", with: "$2", options: .regularExpression)
+                line = line.replacingOccurrences(of: "(\\*\\*|__)(.*?)\\1", with: "$2", options: .regularExpression)
+                line = line.replacingOccurrences(of: "(\\*|_)(.*?)\\1", with: "$2", options: .regularExpression)
+                line = line.replacingOccurrences(of: "~~(.*?)~~", with: "$1", options: .regularExpression)
+            }
+            output.append(line)
+        }
+        return output.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }
 
