@@ -206,6 +206,44 @@ final class ArchitectureGuardTests: XCTestCase {
         }
     }
 
+    func testValidationArtifactsStayIgnoredAndUntracked() throws {
+        let gitignore = try readText(".gitignore")
+        for pattern in [".lingshu-e2e-output/", "验收结果.*", "Resources/RuntimeConfig/*.token"] {
+            XCTAssertTrue(gitignore.contains(pattern), ".gitignore must keep local artifact/credential pattern: \(pattern)")
+        }
+
+        guard FileManager.default.isExecutableFile(atPath: "/usr/bin/git") else { throw XCTSkip("无 git") }
+        let tracked = try gitOutput([
+            "ls-files",
+            ".lingshu-e2e-output",
+            "验收结果.pdf",
+            "验收结果.txt"
+        ]).trimmingCharacters(in: .whitespacesAndNewlines)
+        XCTAssertTrue(tracked.isEmpty, "local E2E/probe artifacts must not be tracked:\n\(tracked)")
+    }
+
+    func testArchitectureQuickReferenceStatesCurrentCodeReality() throws {
+        let document = try readText("Docs/架构速查手册.md")
+        let requiredMarkers = [
+            "最后更新:2026-07-07",
+            "LingShuAgentOrchestrator(maxConcurrent:1)",
+            "pendingSerialInputs",
+            "FullStackE2E200Tests",
+            "不能直接当当前 HEAD 绿灯",
+            "表内带日期的“实测 / 全量 N 测试 0 失败”",
+            "旧 `DirectChat`/`LocalAnswers`/`TaskResume` 已不存在"
+        ]
+
+        for marker in requiredMarkers {
+            XCTAssertTrue(document.contains(marker), "架构速查手册缺少当前代码态标记: \(marker)")
+        }
+
+        XCTAssertFalse(
+            document.contains("`submitTextInput` 唯一出口= `runMainAgentTurn`"),
+            "架构速查手册不能再把旧主会话路径写成当前唯一出口"
+        )
+    }
+
     private func readText(_ relativePath: String) throws -> String {
         try String(contentsOf: projectRoot.appendingPathComponent(relativePath), encoding: .utf8)
     }
@@ -230,5 +268,27 @@ final class ArchitectureGuardTests: XCTestCase {
             let values = try url.resourceValues(forKeys: [.isRegularFileKey])
             return values.isRegularFile == true ? url : nil
         } ?? [])
+    }
+
+    private func gitOutput(_ arguments: [String]) throws -> String {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
+        process.currentDirectoryURL = projectRoot
+        process.arguments = arguments
+
+        let output = Pipe()
+        let error = Pipe()
+        process.standardOutput = output
+        process.standardError = error
+
+        try process.run()
+        let data = output.fileHandleForReading.readDataToEndOfFile()
+        let errorData = error.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+
+        let text = String(data: data, encoding: .utf8) ?? ""
+        let errorText = String(data: errorData, encoding: .utf8) ?? ""
+        XCTAssertEqual(process.terminationStatus, 0, "git \(arguments.joined(separator: " ")) failed: \(errorText)")
+        return text
     }
 }

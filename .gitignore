@@ -22,6 +22,8 @@ ValidationArtifacts/presentation-*
 ValidationArtifacts/crawler-*
 ValidationArtifacts/software-*
 ValidationArtifacts/document-local-*
+.lingshu-e2e-output/
+验收结果.*
 
 # Runtime credentials bundled into local app packages only
 Resources/RuntimeConfig/*.token
