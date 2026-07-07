@@ -15,6 +15,17 @@ extension LingShuState {
     /// 重建这条管线用过的 agent:从**参与方**(非灵枢/你/系统)名映射到已注册的 agent 插件(精确续跑要靠它们,如 Claude→claude、Codex→codex)。
     func rolePipelineAgents(for record: LingShuTaskExecutionRecord) -> [(id: String, name: String)] {
         let plugins = LingShuAgentPluginStore.load()
+        if !record.roleSlots.isEmpty {
+            var slotted: [(id: String, name: String)] = []
+            for slot in record.roleSlots {
+                guard let agentID = slot.agentID?.trimmingCharacters(in: .whitespacesAndNewlines),
+                      !agentID.isEmpty,
+                      let plugin = plugins.first(where: { $0.id.caseInsensitiveCompare(agentID) == .orderedSame }),
+                      !slotted.contains(where: { $0.id == plugin.id }) else { continue }
+                slotted.append((id: plugin.id, name: slot.agentName))
+            }
+            if !slotted.isEmpty { return slotted }
+        }
         let skip: Set<String> = ["你", "灵枢", "系统", "用户", "需求方", "中枢", ""]
         var out: [(id: String, name: String)] = []
         for raw in record.participants {
@@ -66,6 +77,7 @@ extension LingShuState {
             if let i = chatMessages.firstIndex(where: { $0.id == bubble.id }) { chatMessages[i].isLoading = false; chatMessages[i].text = "续跑重排角色失败,可手动重发。" }
             return
         }
+        bindRolePipelineSlots(steps, recordID: rid)
         mirrorRolePipelinePlan(steps, recordID: rid)
         if let i = chatMessages.firstIndex(where: { $0.id == bubble.id }) {
             chatMessages[i].text = "🔧 续跑:" + steps.map { "\($0.roleTitle)(\($0.agentName ?? "灵枢"))" }.joined(separator: " → ")

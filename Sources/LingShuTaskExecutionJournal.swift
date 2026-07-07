@@ -84,6 +84,46 @@ struct LingShuPlanStep: Codable, Equatable, Sendable, Identifiable {
     }
 }
 
+/// 任务 Loop 的结构化角色槽位状态。
+/// 这是“模型编排出的角色结构”,不是从消息文本反推;用于任务窗口参与方、MCP task_detail、断点续跑。
+enum LingShuTaskRoleSlotStatus: String, Codable, Equatable, Sendable {
+    case pending = "待执行"
+    case running = "执行中"
+    case completed = "已完成"
+    case failed = "未完成"
+}
+
+/// 一条任务 Loop 中的一个角色槽位。
+/// roleID/roleTitle 来自角色注册表,agentID/agentName 来自模型规划选择的执行者。
+struct LingShuTaskRoleSlot: Identifiable, Codable, Equatable, Sendable {
+    var id: String
+    var roleID: String
+    var roleTitle: String
+    var agentID: String?
+    var agentName: String
+    /// 通用语义角色,只表达槽位性质(maker/checker/role),不用于关键词路由。
+    var semanticRole: String
+    var status: LingShuTaskRoleSlotStatus
+
+    init(
+        id: String = UUID().uuidString,
+        roleID: String,
+        roleTitle: String,
+        agentID: String?,
+        agentName: String,
+        semanticRole: String,
+        status: LingShuTaskRoleSlotStatus = .pending
+    ) {
+        self.id = id
+        self.roleID = roleID
+        self.roleTitle = roleTitle
+        self.agentID = agentID
+        self.agentName = agentName
+        self.semanticRole = semanticRole
+        self.status = status
+    }
+}
+
 struct LingShuTaskExecutionMessage: Identifiable, Codable, Equatable, Sendable {
     var id: String
     var timestamp: Date
@@ -184,6 +224,8 @@ struct LingShuTaskExecutionRecord: Identifiable, Codable, Equatable, Sendable {
     var status: LingShuTaskExecutionStatus
     var summary: String
     var participants: [String]
+    /// 模型编排出的 Loop 角色槽位。UI/MCP/续跑优先读这里,不要再从消息文本猜参与方。
+    var roleSlots: [LingShuTaskRoleSlot]
     var relatedRecordIDs: [String]
     var createdAt: Date
     var updatedAt: Date
@@ -264,6 +306,7 @@ struct LingShuTaskExecutionRecord: Identifiable, Codable, Equatable, Sendable {
         case status
         case summary
         case participants
+        case roleSlots
         case relatedRecordIDs
         case createdAt
         case updatedAt
@@ -293,6 +336,7 @@ struct LingShuTaskExecutionRecord: Identifiable, Codable, Equatable, Sendable {
         status: LingShuTaskExecutionStatus,
         summary: String,
         participants: [String],
+        roleSlots: [LingShuTaskRoleSlot] = [],
         relatedRecordIDs: [String] = [],
         createdAt: Date,
         updatedAt: Date,
@@ -331,6 +375,7 @@ struct LingShuTaskExecutionRecord: Identifiable, Codable, Equatable, Sendable {
         self.status = status
         self.summary = summary
         self.participants = participants
+        self.roleSlots = roleSlots
         self.relatedRecordIDs = relatedRecordIDs
         self.createdAt = createdAt
         self.updatedAt = updatedAt
@@ -350,6 +395,7 @@ struct LingShuTaskExecutionRecord: Identifiable, Codable, Equatable, Sendable {
         status = try container.decode(LingShuTaskExecutionStatus.self, forKey: .status)
         summary = try container.decode(String.self, forKey: .summary)
         participants = try container.decode([String].self, forKey: .participants)
+        roleSlots = try container.decodeIfPresent([LingShuTaskRoleSlot].self, forKey: .roleSlots) ?? []
         relatedRecordIDs = try container.decodeIfPresent([String].self, forKey: .relatedRecordIDs) ?? []
         createdAt = try container.decode(Date.self, forKey: .createdAt)
         updatedAt = try container.decode(Date.self, forKey: .updatedAt)

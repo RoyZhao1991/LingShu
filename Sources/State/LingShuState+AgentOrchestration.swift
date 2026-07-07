@@ -58,6 +58,7 @@ extension LingShuState {
             }
         case .completed(let id, let objective, let summary):
             guard !isRoleAgentEventID(id) else { return }
+            let displaySummary = LingShuVisibleModelText.clean(summary)
             let recordID = agentSubTaskRecords[id]
             if recordID == blockedDispatchedRecordID { blockedDispatchedRecordID = nil }   // 收尾即解除"等回答"
             // P2 真闭环:终态由完成闸定(防伪完成)——派发任务即便 orchestrator 报 completed,
@@ -66,22 +67,22 @@ extension LingShuState {
             let status = Self.finishStatus(for: outcome, fallback: .completed)
             let trulyDone = status == .completed || status == .verified
             if let recordID {
-                appendTaskRecordMessage(recordID, actor: "灵枢", role: trulyDone ? "结果" : "未竟", kind: trulyDone ? .result : .warning, text: summary)
-                finishTaskRecord(recordID, status: status, summary: summary)
+                appendTaskRecordMessage(recordID, actor: "灵枢", role: trulyDone ? "结果" : "未竟", kind: trulyDone ? .result : .warning, text: displaySummary)
+                finishTaskRecord(recordID, status: status, summary: displaySummary)
                 if trulyDone {
-                    recordDeliverable(recordID: recordID, title: objective, summary: summary)   // 登记产出物供"运行起来/继续"接上
+                    recordDeliverable(recordID: recordID, title: objective, summary: displaySummary)   // 登记产出物供"运行起来/继续"接上
                 }
             }
             if trulyDone {
-                briefMainThread("子任务「\(objective)」已完成:\(summary.prefix(200))")
-                promoteSubtaskKnowledge(objective: objective, summary: summary)   // M3:子线程知识蒸馏进常驻主脑(v2),事后主线程可召回
+                briefMainThread("子任务「\(objective)」已完成:\(displaySummary.prefix(200))")
+                promoteSubtaskKnowledge(objective: objective, summary: displaySummary)   // M3:子线程知识蒸馏进常驻主脑(v2),事后主线程可召回
                 // **完成汇报时机(用户定调 2026-06-19,通用):一律入待汇报队列,由 drain 择机发——互动中捎带下次主线程汇报、待机则主动出声。**
-                deliverOrQueueSubtaskReport(recordID: recordID, objective: objective, summary: summary)
+                deliverOrQueueSubtaskReport(recordID: recordID, objective: objective, summary: displaySummary)
             } else {
                 // 未真完成:如实回灌(summary 已含完成闸的诚实补尾),不入"做好了"汇报队列。
                 let label = status == .waitingForUser ? "⏸ 等待前提" : (status == .partial ? "⚠️ 部分完成" : "⚠️ 未能完成")
-                postOrchestratorChat(recordID: recordID, dispatched: summary, spawned: "\(label):子任务「\(objective)」——\(summary.prefix(200))")
-                briefMainThread("子任务「\(objective)」\(label):\(summary.prefix(180))")
+                postOrchestratorChat(recordID: recordID, dispatched: displaySummary, spawned: "\(label):子任务「\(objective)」——\(displaySummary.prefix(200))")
+                briefMainThread("子任务「\(objective)」\(label):\(displaySummary.prefix(180))")
                 // 续接优先恢复:待用户/部分完成的派发任务 → 指向它,用户下条消息直接续这条隔离会话(spec 第14条)。
                 if status == .waitingForUser || status == .partial, let recordID { blockedDispatchedRecordID = recordID }
             }
@@ -137,7 +138,7 @@ extension LingShuState {
             // 以完成闸为准——给出「需要你…」的诚实收尾,而不是笼统「异常」,并指向它便于续接。
             let outcome = recordID.flatMap { rid in taskExecutionRecords.first { $0.id == rid }?.taskOutcome }
             let status = Self.finishStatus(for: outcome, fallback: .blocked)
-            let honest = recordID.flatMap { outcomeAwareSummary(recordID: $0, base: summary) } ?? summary
+            let honest = recordID.flatMap { outcomeAwareSummary(recordID: $0, base: summary) } ?? LingShuVisibleModelText.clean(summary)
             if let recordID {
                 appendTaskRecordMessage(recordID, actor: "灵枢", role: status == .waitingForUser ? "待用户" : "失败", kind: .warning, text: honest)
                 finishTaskRecord(recordID, status: status, summary: honest)
@@ -202,10 +203,11 @@ extension LingShuState {
         if let recordID, dispatchedTaskBubbles[recordID] != nil {
             fillDispatchedBubble(recordID, text: dispatched)
         } else {
+            let displaySpawned = LingShuVisibleModelText.clean(spawned)
             // 同 fillDispatchedBubble:只有任务真在等用户输入才解析选项卡,免得**已完成**的交付编号清单被误抽成无效选项。
             let awaits = recordID.map { dispatchedRecordNeedsUserInput($0) } ?? false
-            let choices = awaits ? LingShuChoiceParsing.parse(spawned) : nil
-            chatMessages.append(.init(speaker: "灵枢", text: spawned, isUser: false, taskRecordID: recordID, choices: choices))
+            let choices = awaits ? LingShuChoiceParsing.parse(displaySpawned) : nil
+            chatMessages.append(.init(speaker: "灵枢", text: displaySpawned, isUser: false, taskRecordID: recordID, choices: choices))
         }
     }
 
@@ -217,12 +219,13 @@ extension LingShuState {
     /// 子任务完成 → **一律入待汇报队列**(回填它的派发气泡作记录、并标记已念以抑制自动朗读=不在此刻打断互动)。
     /// 真正的汇报由 drain 择机发:互动中捎带下次主线程回复(finishAutonomousRun)、待机时主动出声(deliverPendingReportsIfIdle)。
     func deliverOrQueueSubtaskReport(recordID: String?, objective: String, summary: String) {
-        let report = "你交代的「\(objective)」我做好了:\(summary.trimmingCharacters(in: .whitespacesAndNewlines).prefix(140))"
+        let displaySummary = LingShuVisibleModelText.clean(summary)
+        let report = "你交代的「\(objective)」我做好了:\(displaySummary.trimmingCharacters(in: .whitespacesAndNewlines).prefix(140))"
         if pendingSubtaskReports.isEmpty { firstPendingReportAt = Date() }   // 本批第一个完成,记起点(防抖上限用)
         lastSubtaskReportEnqueuedAt = Date()                                 // 刷新"最近完成"时刻(防抖:接连完成的合并)
         pendingSubtaskReports.append(String(report))
         if let recordID, let bid = dispatchedTaskBubbles[recordID] {
-            fillDispatchedBubble(recordID, text: "✅ \(summary)")   // 回填,别让派发气泡空转
+            fillDispatchedBubble(recordID, text: "✅ \(displaySummary)")   // 回填,别让派发气泡空转
             lastSpokenMessageID = bid                                // 标记已念→抑制自动朗读,汇报择机由 drain 统一发
         }
         appendTrace(kind: .system, actor: "灵枢", title: "子任务完成·入待汇报队列", detail: String(report.prefix(36)))

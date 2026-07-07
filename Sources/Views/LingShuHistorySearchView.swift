@@ -3,11 +3,32 @@ import SwiftUI
 struct LingShuHistorySearchSheet: View {
     @ObservedObject var state: LingShuState
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.colorScheme) private var colorScheme
     @State private var query = ""
     @State private var scope: LingShuHistorySearchScope = .all
 
     private var results: [LingShuHistorySearchHit] {
         state.searchConversationHistory(keyword: query, scope: scope)
+    }
+
+    private var isDark: Bool { colorScheme == .dark }
+    private var panelSurface: Color {
+        isDark ? Color(red: 0.035, green: 0.050, blue: 0.052) : Color.lingPanel
+    }
+    private var fieldSurface: Color {
+        isDark ? Color.white.opacity(0.065) : Color.lingFg.opacity(0.055)
+    }
+    private var chipSurface: Color {
+        isDark ? Color.white.opacity(0.07) : Color.lingFg.opacity(0.055)
+    }
+    private var primaryText: Color {
+        isDark ? Color.white.opacity(0.93) : Color.lingFg.opacity(0.92)
+    }
+    private var secondaryText: Color {
+        isDark ? Color.white.opacity(0.58) : Color.lingFg.opacity(0.54)
+    }
+    private var tertiaryText: Color {
+        isDark ? Color.white.opacity(0.36) : Color.lingFg.opacity(0.42)
     }
 
     var body: some View {
@@ -18,12 +39,13 @@ struct LingShuHistorySearchSheet: View {
                     .foregroundStyle(Color.lingHolo)
                 Text("历史检索")
                     .font(.system(size: 20, weight: .bold))
-                    .foregroundStyle(Color.lingFg)
+                    .foregroundStyle(primaryText)
                 Spacer()
                 Button { dismiss() } label: {
                     Image(systemName: "xmark")
                         .font(.system(size: 13, weight: .bold))
                         .frame(width: 30, height: 30)
+                        .foregroundStyle(secondaryText)
                 }
                 .buttonStyle(.plain)
             }
@@ -32,18 +54,13 @@ struct LingShuHistorySearchSheet: View {
                 TextField("搜索热记录和冷备记录中的关键字", text: $query)
                     .textFieldStyle(.plain)
                     .font(.system(size: 14, weight: .medium))
+                    .foregroundStyle(primaryText)
                     .padding(.horizontal, 12)
                     .frame(height: 38)
-                    .background(Color.lingFg.opacity(0.06), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    .background(fieldSurface, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
                     .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).stroke(Color.lingHolo.opacity(0.22), lineWidth: 1))
 
-                Picker("", selection: $scope) {
-                    ForEach(LingShuHistorySearchScope.allCases) { item in
-                        Text(item.label).tag(item)
-                    }
-                }
-                .pickerStyle(.segmented)
-                .frame(width: 230)
+                scopeSelector
             }
 
             HStack {
@@ -52,7 +69,7 @@ struct LingShuHistorySearchSheet: View {
                 Text("热对话 / 冷备对话 / 热任务 / 冷备任务")
             }
             .font(.system(size: 11.5, weight: .semibold, design: .monospaced))
-            .foregroundStyle(Color.lingFg.opacity(0.48))
+            .foregroundStyle(tertiaryText)
 
             Divider().overlay(Color.lingHolo.opacity(0.18))
 
@@ -75,7 +92,39 @@ struct LingShuHistorySearchSheet: View {
         }
         .padding(20)
         .frame(width: 760, height: 620)
-        .background(Color.lingPanel.opacity(0.98))
+        .background(
+            RoundedRectangle(cornerRadius: 24, style: .continuous)
+                .fill(panelSurface.opacity(0.98))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 24, style: .continuous)
+                .stroke(Color.lingHolo.opacity(isDark ? 0.30 : 0.16), lineWidth: 1)
+        )
+        .shadow(color: Color.black.opacity(isDark ? 0.45 : 0.18), radius: 26, y: 14)
+    }
+
+    private var scopeSelector: some View {
+        HStack(spacing: 6) {
+            ForEach(LingShuHistorySearchScope.allCases) { item in
+                let selected = item == scope
+                Button {
+                    scope = item
+                } label: {
+                    Text(item.label)
+                        .font(.system(size: 12, weight: .bold))
+                        .foregroundStyle(selected ? Color.lingVoid : secondaryText)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 32)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .background(
+                    selected ? Color.lingHolo : chipSurface,
+                    in: RoundedRectangle(cornerRadius: 7, style: .continuous)
+                )
+            }
+        }
+        .frame(width: 230)
     }
 
     private func openTaskRecord(from hit: LingShuHistorySearchHit) {
@@ -93,7 +142,7 @@ struct LingShuHistorySearchSheet: View {
                 .foregroundStyle(Color.lingHolo.opacity(0.55))
             Text(text)
                 .font(.system(size: 13, weight: .medium))
-                .foregroundStyle(Color.lingFg.opacity(0.55))
+                .foregroundStyle(secondaryText)
         }
         .frame(maxWidth: .infinity, minHeight: 220)
     }
@@ -102,25 +151,44 @@ struct LingShuHistorySearchSheet: View {
 private struct LingShuHistorySearchResultRow: View {
     let hit: LingShuHistorySearchHit
     let open: () -> Void
+    @Environment(\.colorScheme) private var colorScheme
+
+    private var isDark: Bool { colorScheme == .dark }
+    private var primaryText: Color {
+        isDark ? Color.white.opacity(0.92) : Color.lingFg.opacity(0.92)
+    }
+    private var secondaryText: Color {
+        isDark ? Color.white.opacity(0.66) : Color.lingFg.opacity(0.68)
+    }
+    private var tertiaryText: Color {
+        isDark ? Color.white.opacity(0.44) : Color.lingFg.opacity(0.42)
+    }
+    private var rowSurface: Color {
+        isDark ? Color.white.opacity(0.060) : Color.lingFg.opacity(0.055)
+    }
 
     var body: some View {
-        Button(action: open) {
+        Button(action: {
+            if hit.source.isTask {
+                open()
+            }
+        }) {
             VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 8) {
                     Text(hit.source.label)
                         .font(.system(size: 10, weight: .heavy, design: .monospaced))
-                        .foregroundStyle(.black.opacity(0.82))
+                        .foregroundStyle(sourceLabelText)
                         .padding(.horizontal, 7)
                         .padding(.vertical, 3)
                         .background(sourceColor.opacity(0.9), in: Capsule())
                     Text(hit.title)
                         .font(.system(size: 14, weight: .bold))
-                        .foregroundStyle(Color.lingFg.opacity(0.92))
+                        .foregroundStyle(primaryText)
                         .lineLimit(1)
                     Spacer()
                     Text(Self.dateFormatter.string(from: hit.timestamp))
                         .font(.system(size: 10.5, weight: .semibold, design: .monospaced))
-                        .foregroundStyle(Color.lingFg.opacity(0.42))
+                        .foregroundStyle(tertiaryText)
                     if hit.source.isTask {
                         Image(systemName: "arrow.up.forward.square")
                             .font(.system(size: 12, weight: .bold))
@@ -130,16 +198,15 @@ private struct LingShuHistorySearchResultRow: View {
 
                 Text(hit.snippet.isEmpty ? "（无文本摘要）" : hit.snippet)
                     .font(.system(size: 12.5, weight: .medium))
-                    .foregroundStyle(Color.lingFg.opacity(0.68))
+                    .foregroundStyle(secondaryText)
                     .lineLimit(3)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
             .padding(12)
-            .background(Color.lingFg.opacity(0.055), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .background(rowSurface, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
             .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).stroke(Color.lingHolo.opacity(0.16), lineWidth: 1))
         }
         .buttonStyle(.plain)
-        .disabled(!hit.source.isTask)
         .help(hit.source.isTask ? "打开任务执行记录" : "聊天命中记录")
     }
 
@@ -149,6 +216,13 @@ private struct LingShuHistorySearchResultRow: View {
         case .coldChat: return .cyan
         case .hotTask: return .orange
         case .coldTask: return .purple
+        }
+    }
+
+    private var sourceLabelText: Color {
+        switch hit.source {
+        case .coldTask: return .white.opacity(0.92)
+        default: return .black.opacity(0.82)
         }
     }
 

@@ -147,19 +147,25 @@ extension LingShuState {
             guard let self else { return }
             self.isModelExecuting = true
             defer { self.isModelExecuting = false; self.drainSerialInputsIfIdle() }
+            let contextualGoalSpec = self.goalSpecEnabled
+                ? await self.deriveGoalSpec(for: fullPrompt, taskRecordID: nil, activeTurnContext: true)
+                : nil
             // **大脑先规划角色管线**(读现有角色 + agent,决定启用哪些角色、谁来干)。≥2 角色→走通用多角色管线;否则回退 maker/checker。
-            if await self.runRolePipelineDispatch(task: fullPrompt, agents: agents) { return }
+            if await self.runRolePipelineDispatch(task: fullPrompt, agents: agents, preflightGoalSpec: contextualGoalSpec) { return }
             // 回退:无/单角色 → maker/checker 派发(大脑装配,失败用位置兜底)。
             let asm = await self.resolveAgentRoleAssembly(prompt: fullPrompt, agents: agents)
                 ?? (makerAgentID: agents.first!.id, makerName: agents.first!.name,
                     checkers: Array(agents.dropFirst()), makerTask: fullPrompt)
             let objective = asm.makerTask.trimmingCharacters(in: .whitespacesAndNewlines)
-            let displayObjective = objective.isEmpty ? "\(asm.makerName ?? "灵枢") 任务" : objective
+            let displayObjective = contextualGoalSpec?.objective.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+                ? contextualGoalSpec!.objective
+                : (objective.isEmpty ? "\(asm.makerName ?? "灵枢") 任务" : objective)
+            let executionObjective = self.contextualTaskPrompt(rawObjective: objective, userPrompt: fullPrompt, goalSpec: contextualGoalSpec)
             let rid = self.createTaskExecutionRecord(for: displayObjective)
-            if self.goalSpecEnabled { self.bindGoalSpec(LingShuGoalSpec(objective: displayObjective, kind: .task), to: rid) }
+            if self.goalSpecEnabled { self.bindGoalSpec(contextualGoalSpec ?? LingShuGoalSpec(objective: displayObjective, kind: .task), to: rid) }
             self.appendTrace(kind: .route, actor: "声明式调用", title: "@agent 进 LOOP(大脑装配角色)",
                              detail: "maker=\(asm.makerName ?? "灵枢") · checker=\(asm.checkers.first?.name ?? "灵枢")")
-            _ = self.dispatchIsolatedTask(prompt: objective, taskRecordID: rid, goal: objective.isEmpty ? nil : objective,
+            _ = self.dispatchIsolatedTask(prompt: executionObjective, taskRecordID: rid, goal: displayObjective,
                                           makerAgentID: asm.makerAgentID, makerName: asm.makerName,
                                           checkerAgentID: asm.checkers.first?.id, checkerName: asm.checkers.first?.name,
                                           extraCheckerAgentIDs: asm.checkers.dropFirst().map(\.id))

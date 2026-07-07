@@ -53,4 +53,39 @@ final class RolePipelinePlanMirrorTests: XCTestCase {
         let plan = state.taskExecutionRecords.first { $0.id == rid }?.plan ?? []
         XCTAssertTrue(plan.allSatisfy { $0.status == .completed }, "两环都完成后全部打钩")
     }
+
+    /// 模型编排出的 Loop 角色槽必须持久化到 record,供 UI/MCP/断点续跑读取。
+    /// 这避免再从日志 actor 里猜参与者:显式要求 @Codex 复核时,即使 Codex 还没产生日志,也应先显示 checker 槽。
+    func testRoleSlotsPersistPlannedMakerAndChecker() {
+        let state = LingShuState()
+        let rid = state.createTaskExecutionRecord(for: "@Claude 生成报告，@Codex 复核报告")
+        defer { state.taskExecutionRecords.removeAll { $0.id == rid }; state.persistTaskExecutionRecords() }
+
+        state.bindRolePipelineSlots(steps(), recordID: rid)
+
+        guard let record = state.taskExecutionRecords.first(where: { $0.id == rid }) else {
+            return XCTFail("任务记录应存在")
+        }
+        XCTAssertEqual(record.roleSlots.count, 2)
+        XCTAssertEqual(record.roleSlots.map(\.agentName), ["Claude", "Codex"])
+        XCTAssertEqual(record.roleSlots.map(\.semanticRole), ["maker", "checker"])
+        XCTAssertTrue(record.participants.contains("Claude"))
+        XCTAssertTrue(record.participants.contains("Codex"))
+        XCTAssertFalse(record.goal.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, "任务详情顶层 objective 不能再为空")
+    }
+
+    /// 槽位状态按 roleID + agent 双键推进,同一任务多个 agent 时不会串槽。
+    func testRoleSlotStatusAdvancesIndependently() {
+        let state = LingShuState()
+        let rid = state.createTaskExecutionRecord(for: "角色槽位状态推进测试")
+        defer { state.taskExecutionRecords.removeAll { $0.id == rid }; state.persistTaskExecutionRecords() }
+        let s = steps()
+        state.bindRolePipelineSlots(s, recordID: rid)
+
+        state.setRolePipelineSlotStatus(s[1], status: .running, recordID: rid)
+        let slots = state.taskExecutionRecords.first { $0.id == rid }?.roleSlots ?? []
+
+        XCTAssertEqual(slots.first { $0.agentName == "Claude" }?.status, .pending)
+        XCTAssertEqual(slots.first { $0.agentName == "Codex" }?.status, .running)
+    }
 }

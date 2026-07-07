@@ -214,9 +214,15 @@ actor LingShuAgentOrchestrator {
             // `resumeWithInput` 收到答案后续跑(必要时重新占槽,用户前台续接优先)。
             admitNext(after: id)
         case .maxTurnsReached(let lastText):
-            upsert(id: id, objective: objective, status: .failed, summary: "达轮次上限未收尾:\(digest(lastText))")
-            pushes.append("子任务「\(objective)」未能自行收尾,已暂停等你介入。")
-            Task { await self.onEvent?(.failed(id: id, objective: objective, summary: digest(lastText))) }
+            if LingShuStructuredModelOutput.parse(lastText)?.completion?.status == .ok {
+                upsert(id: id, objective: objective, status: .completed, summary: digest(lastText))
+                pushes.append("子任务「\(objective)」已完成:\(digest(lastText))")
+                Task { await self.onEvent?(.completed(id: id, objective: objective, summary: lastText)) }
+            } else {
+                upsert(id: id, objective: objective, status: .failed, summary: "达轮次上限未收尾:\(digest(lastText))")
+                pushes.append("子任务「\(objective)」未能自行收尾,已暂停等你介入。")
+                Task { await self.onEvent?(.failed(id: id, objective: objective, summary: digest(lastText))) }
+            }
             admitNext(after: id)
         case .interrupted(let reason):
             // 模型通道可恢复中断(网络/超时/限流/5xx):**非失败**——标"已暂停"、保留会话上下文、登记待恢复。
@@ -290,7 +296,7 @@ actor LingShuAgentOrchestrator {
     }
 
     private func digest(_ text: String, limit: Int = 60) -> String {
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmed = LingShuVisibleModelText.clean(text)
         return trimmed.count <= limit ? trimmed : String(trimmed.prefix(limit)) + "…"
     }
 }

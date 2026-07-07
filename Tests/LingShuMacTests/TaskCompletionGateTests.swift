@@ -382,6 +382,52 @@ final class TaskCompletionGateTests: XCTestCase {
         XCTAssertEqual(decision.status, .ok, "旧问答记录没有任务证据时也不应触发完成闸")
     }
 
+    @MainActor
+    func testDispatchedBubbleDisplaysStructuredReplyOnly() {
+        let state = LingShuState()
+        let rid = state.createTaskExecutionRecord(for: "生成分析报告")
+        defer {
+            state.taskExecutionRecords.removeAll { $0.id == rid }
+            state.chatMessages.removeAll { $0.taskRecordID == rid }
+            state.dispatchedTaskBubbles.removeValue(forKey: rid)
+            state.persistTaskExecutionRecords()
+            state.taskExecutionJournal.flush()
+        }
+        let pending = ChatMessage(speaker: "灵枢", text: "处理中", isUser: false, isLoading: true, taskRecordID: rid)
+        state.chatMessages.append(pending)
+        state.dispatchedTaskBubbles[rid] = pending.id
+
+        let raw = #"{"reply":"分析报告已生成,保存在 /tmp/report.md。","completion":{"status":"ok","reason":"目标已达成","needs_user":false},"user_input":null,"inability":null,"OAuth":null}"#
+        state.fillDispatchedBubble(rid, text: raw)
+
+        let bubble = state.chatMessages.first { $0.id == pending.id }
+        XCTAssertEqual(bubble?.text, "分析报告已生成,保存在 /tmp/report.md。")
+        XCTAssertFalse(bubble?.text.contains(#""reply""#) ?? true, "气泡只展示 reply,不得泄漏协议 JSON")
+    }
+
+    @MainActor
+    func testContextualTaskPromptCarriesPriorGoalSpecIntoSubtask() {
+        let state = LingShuState()
+        let spec = LingShuGoalSpec(
+            objective: "延续上一轮股票走势与新闻分析,生成更准确的投资分析报告,并交由 Codex 复核",
+            kind: .task,
+            constraints: ["延续上一轮主题与对象", "不得把当前短句单独当成新目标"],
+            successCriteria: ["报告必须围绕上一轮股票分析主题", "必须包含复核结论"]
+        )
+
+        let prompt = state.contextualTaskPrompt(
+            rawObjective: "出一份更准确的分析报告",
+            userPrompt: "给我出一份更准确的分析报告,你来出报告,让 @Codex 复核你的报告",
+            goalSpec: spec
+        )
+
+        XCTAssertTrue(prompt.contains("上一轮股票走势"))
+        XCTAssertTrue(prompt.contains("原始子目标"))
+        XCTAssertTrue(prompt.contains("用户本轮原话"))
+        XCTAssertTrue(prompt.contains("Codex"))
+        XCTAssertTrue(prompt.contains("成功标准"))
+    }
+
     // MARK: 状态映射
 
     func testFinishStatusMapping() {

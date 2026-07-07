@@ -4,8 +4,8 @@ import AppKit
 struct TaskExecutionRecordSheet: View {
     @ObservedObject var state: LingShuState
     @Environment(\.dismiss) private var dismiss
-    /// 选中的参与 agent(nil=全部):点参与方过滤栏里某个 agent → 时间线只看它的对话。差距6 可见性落到子页面。
-    @State private var selectedAgent: String?
+    /// 选中的参与方槽位(nil=全部):点参与方过滤栏里某个角色槽 → 时间线只看它的对话。
+    @State private var selectedParticipantID: String?
     /// 多模态工作区面板是否展开铺满(隐藏左侧时间线)。
     @State private var workspaceExpanded = false
     /// 是否隐藏右侧多模态面板(对齐 Codex 右栏可隐藏):隐藏后时间线独占整窗。
@@ -18,7 +18,75 @@ struct TaskExecutionRecordSheet: View {
     /// 真正参与本任务的 agent 列表(按出场顺序去重 + 各自消息数)——参与方过滤栏的数据。
     /// 排除**内部机制标签**(Agent循环/中枢/系统是循环/路由的实现细节,不是参与的 agent)和用户本人(你)。
     private static let nonAgentActors: Set<String> = ["你", "Agent循环", "中枢", "系统", "编排"]
+
+    private struct ParticipantFilter: Identifiable, Equatable {
+        let id: String
+        let label: String
+        let actor: String
+        let roleTitle: String?
+        let semanticRole: String?
+        let count: Int
+        let icon: String
+    }
+
+    private func messageMatches(_ message: LingShuTaskExecutionMessage, filter: ParticipantFilter, record: LingShuTaskExecutionRecord) -> Bool {
+        guard message.actor == filter.actor else { return false }
+        let sameActorSlots = record.roleSlots.filter { $0.agentName == filter.actor }.count
+        guard sameActorSlots > 1 else { return true }
+        let role = message.role.lowercased()
+        if let title = filter.roleTitle, !title.isEmpty, message.role.contains(title) { return true }
+        if let semantic = filter.semanticRole, !semantic.isEmpty, role.contains(semantic.lowercased()) { return true }
+        return false
+    }
+
     private func agentList(_ record: LingShuTaskExecutionRecord) -> [(name: String, count: Int)] {
+        participantFilters(record).map { ($0.label, $0.count) }
+    }
+
+    private func participantFilters(_ record: LingShuTaskExecutionRecord) -> [ParticipantFilter] {
+        if !record.roleSlots.isEmpty {
+            var filters: [ParticipantFilter] = []
+            for slot in record.roleSlots {
+                let semanticLabel: String
+                switch slot.semanticRole {
+                case "checker": semanticLabel = "checker"
+                case "maker": semanticLabel = "maker"
+                default: semanticLabel = slot.roleTitle
+                }
+                let label = slot.agentName == "灵枢" ? "\(slot.roleTitle)" : "\(slot.agentName) \(semanticLabel)"
+                let provisional = ParticipantFilter(
+                    id: slot.id,
+                    label: label,
+                    actor: slot.agentName,
+                    roleTitle: slot.roleTitle,
+                    semanticRole: slot.semanticRole,
+                    count: 0,
+                    icon: slot.semanticRole == "checker" ? "checkmark.seal.fill" : "person.fill"
+                )
+                let count = record.messages.filter { messageMatches($0, filter: provisional, record: record) }.count
+                filters.append(.init(id: provisional.id, label: provisional.label, actor: provisional.actor,
+                                     roleTitle: provisional.roleTitle, semanticRole: provisional.semanticRole,
+                                     count: count, icon: provisional.icon))
+            }
+
+            let slottedActors = Set(record.roleSlots.map(\.agentName))
+            var extraOrder: [String] = []
+            var extraCounts: [String: Int] = [:]
+            for message in record.messages {
+                let actor = message.actor.trimmingCharacters(in: .whitespaces)
+                guard !actor.isEmpty,
+                      !Self.nonAgentActors.contains(actor),
+                      !slottedActors.contains(actor) else { continue }
+                if extraCounts[actor] == nil { extraOrder.append(actor) }
+                extraCounts[actor, default: 0] += 1
+            }
+            filters.append(contentsOf: extraOrder.map {
+                ParticipantFilter(id: "actor-\($0)", label: $0, actor: $0, roleTitle: nil, semanticRole: nil,
+                                  count: extraCounts[$0] ?? 0, icon: "person.fill")
+            })
+            return filters
+        }
+
         var order: [String] = []; var counts: [String: Int] = [:]
         for m in record.messages {
             let a = m.actor.trimmingCharacters(in: .whitespaces)
@@ -26,7 +94,10 @@ struct TaskExecutionRecordSheet: View {
             if counts[a] == nil { order.append(a) }
             counts[a, default: 0] += 1
         }
-        return order.map { ($0, counts[$0] ?? 0) }
+        return order.map {
+            ParticipantFilter(id: "actor-\($0)", label: $0, actor: $0, roleTitle: nil, semanticRole: nil,
+                              count: counts[$0] ?? 0, icon: "person.fill")
+        }
     }
 
     var body: some View {
@@ -57,7 +128,7 @@ struct TaskExecutionRecordSheet: View {
                         Text(record.status.rawValue)
                             .font(.system(size: 11, weight: .bold))
                             .foregroundStyle(record.status.color)
-                        Text("\(agentList(record).count) 个参与方")   // 与下方过滤 chip 同源(排除「你」+内部机制标签),不再头部5/下面4 对不上
+                        Text("\(participantFilters(record).count) 个参与方")   // 与下方过滤 chip 同源(排除「你」+内部机制标签),不再头部5/下面4 对不上
                             .font(.system(size: 11, weight: .semibold))
                             .foregroundStyle(Color.lingFg.opacity(0.52))
                         Text(record.updatedAt.taskRecordDisplayTime)
@@ -155,14 +226,14 @@ struct TaskExecutionRecordSheet: View {
     /// 参与方过滤栏:列出真正参与本任务的 agent(命名角色/审查员/工具/中枢…),点一个 → 时间线只看它的对话。
     @ViewBuilder
     private func agentFilterBar(record: LingShuTaskExecutionRecord) -> some View {
-        let agents = agentList(record)
+        let agents = participantFilters(record)
         if agents.count > 1 {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 6) {
-                    agentChip("全部", icon: "person.3.fill", count: record.messages.count, selected: selectedAgent == nil) { selectedAgent = nil }
-                    ForEach(agents, id: \.name) { a in
-                        agentChip(a.name, icon: "person.fill", count: a.count, selected: selectedAgent == a.name) {
-                            selectedAgent = (selectedAgent == a.name) ? nil : a.name
+                    agentChip("全部", icon: "person.3.fill", count: record.messages.count, selected: selectedParticipantID == nil) { selectedParticipantID = nil }
+                    ForEach(agents) { a in
+                        agentChip(a.label, icon: a.icon, count: a.count, selected: selectedParticipantID == a.id) {
+                            selectedParticipantID = (selectedParticipantID == a.id) ? nil : a.id
                         }
                     }
                 }
@@ -228,12 +299,13 @@ struct TaskExecutionRecordSheet: View {
                         // 计划 / 任务摘要 / 产出物 一律移到右侧侧栏(TaskDevToolsPanel);
                         // 左栏对**所有**任务(开发与交付统一)只留对话叙述(据用户反馈 2026-06-15)。
 
-                        let shownMessages = selectedAgent == nil ? record.messages : record.messages.filter { $0.actor == selectedAgent }
+                        let selectedFilter = participantFilters(record).first { $0.id == selectedParticipantID }
+                        let shownMessages = selectedFilter == nil ? record.messages : record.messages.filter { messageMatches($0, filter: selectedFilter!, record: record) }
                         ForEach(shownMessages) { message in
                             TaskExecutionMessageRow(message: message, state: state, recordID: record.id)
                         }
                         if shownMessages.isEmpty {
-                            Text("「\(selectedAgent ?? "")」这个参与方在本任务里还没有消息。")
+                            Text("「\(selectedFilter?.label ?? "")」这个参与方在本任务里还没有消息。")
                                 .font(.system(size: 12, weight: .medium)).foregroundStyle(Color.lingFg.opacity(0.4))
                         }
 

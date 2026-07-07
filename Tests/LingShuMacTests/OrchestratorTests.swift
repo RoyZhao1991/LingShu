@@ -12,6 +12,23 @@ private final class PerCallScriptedModel: LingShuAgentModel, @unchecked Sendable
     }
 }
 
+private actor FixedResultSession: LingShuAgentSessioning {
+    let result: LingShuAgentRunResult
+    var isBlocked: Bool = false
+    var turnsUsed: Int = 0
+    var toolInvocations: [String] = []
+    var messages: [LingShuAgentMessage] = []
+
+    init(_ result: LingShuAgentRunResult) { self.result = result }
+
+    func setTextDeltaSink(_ sink: (@Sendable (String) async -> Void)?) {}
+    func send(_ userText: String) async -> LingShuAgentRunResult { result }
+    func resume(_ answer: String) async -> LingShuAgentRunResult { result }
+    func continueLoop() async -> LingShuAgentRunResult { result }
+    func injectCorrection(_ text: String) -> Bool { false }
+    func injectBriefing(_ text: String) {}
+}
+
 final class OrchestratorTests: XCTestCase {
 
     private func session(_ id: String, _ script: [LingShuAgentModelResponse]) -> LingShuAgentSession {
@@ -53,6 +70,26 @@ final class OrchestratorTests: XCTestCase {
         XCTAssertEqual(ledger.first?.status, .completed)
         let pushes = await orch.pendingPushes()
         XCTAssertTrue(pushes.contains { $0.contains("已完成") })
+    }
+
+    func testStructuredOkAtTurnCeilingIsRecordedAsCompleted() async {
+        let orch = LingShuAgentOrchestrator(maxConcurrent: 3)
+        let raw = #"{"reply":"分析报告已生成,并已登记复核结果。","completion":{"status":"ok","reason":"目标已达成","needs_user":false},"user_input":null,"inability":null,"OAuth":null}"#
+        let result = await orch.spawn(
+            id: "sub-report",
+            objective: "生成分析报告并复核",
+            session: FixedResultSession(.maxTurnsReached(lastText: raw))
+        )
+
+        guard case .maxTurnsReached = result else {
+            return XCTFail("测试夹具应模拟会话在轮次边界返回 maxTurnsReached")
+        }
+        let ledger = await orch.ledger()
+        XCTAssertEqual(ledger.first?.status, .completed, "结构化 completion.ok 已经是收尾信号,不能再误报未能自行收尾")
+        XCTAssertEqual(ledger.first?.summary, "分析报告已生成,并已登记复核结果。")
+        let pushes = await orch.pendingPushes()
+        XCTAssertTrue(pushes.contains { $0.contains("已完成") })
+        XCTAssertFalse(pushes.contains { $0.contains("未能自行收尾") })
     }
 
     // 死锁回归:卡在 ask_user 等用户的任务**不占并发槽**——否则多条"等你补充"占满槽 → 新任务永远派不出去 = 死锁。

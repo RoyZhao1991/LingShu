@@ -372,22 +372,23 @@ extension LingShuState {
 
     /// 回填某条派发任务的加载气泡(完成/失败/背压时用);找不到就追加一条。回填后清掉映射。
     func fillDispatchedBubble(_ recordID: String, text: String) {
+        let displayText = LingShuVisibleModelText.clean(text)
         let shouldAwaitUser = dispatchedRecordNeedsUserInput(recordID)
         // **修(2026-06-27):只有任务真在等用户输入(blocked/waiting)时才解析/渲染选项卡。**
         // 否则**已完成**的交付文本里的编号清单(如"三页内容概览:1.封面 2... 3...")会被 LingShuChoiceParsing
         // 误抽成"无效选项卡"(用户实测:点了无效)——交付不是选择题,绝不该有选项。
         let choices = shouldAwaitUser
-            ? (LingShuChoiceParsing.parse(text) ?? userPrerequisiteChoicePromptIfNeeded(resultText: text, taskRecordID: recordID))
+            ? (LingShuChoiceParsing.parse(displayText) ?? userPrerequisiteChoicePromptIfNeeded(resultText: displayText, taskRecordID: recordID))
             : nil
         let awaitingRecordID = shouldAwaitUser ? recordID : nil
         if let bubbleID = dispatchedTaskBubbles[recordID],
            let idx = chatMessages.firstIndex(where: { $0.id == bubbleID }) {
-            chatMessages[idx].text = text
+            chatMessages[idx].text = displayText
             chatMessages[idx].isLoading = false
             chatMessages[idx].choices = choices
             chatMessages[idx].awaitingInputForRecordID = awaitingRecordID
         } else {
-            chatMessages.append(.init(speaker: "灵枢", text: text, isUser: false, taskRecordID: recordID,
+            chatMessages.append(.init(speaker: "灵枢", text: displayText, isUser: false, taskRecordID: recordID,
                                       choices: choices, awaitingInputForRecordID: awaitingRecordID))
         }
         dispatchedTaskBubbles[recordID] = nil

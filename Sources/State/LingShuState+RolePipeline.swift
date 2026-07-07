@@ -25,10 +25,19 @@ extension LingShuState {
     @discardableResult
     /// `fixedSteps` 给定时**跳过大脑角色规划**,直接用这套确定的角色(如能力直达:某 agent 当 maker + 灵枢 当 checker)——
     /// 单 agent 场景大脑规划常返 <2 角色导致整条 dispatch 早退,确定步骤避开它。
-    func runRolePipelineDispatch(task: String, agents: [(id: String, name: String)], existingBubbleID: UUID? = nil, fixedSteps: [LingShuRoleStep]? = nil) async -> Bool {
+    func runRolePipelineDispatch(
+        task: String,
+        agents: [(id: String, name: String)],
+        existingBubbleID: UUID? = nil,
+        fixedSteps: [LingShuRoleStep]? = nil,
+        preflightGoalSpec: LingShuGoalSpec? = nil
+    ) async -> Bool {
         // **立即建记录 + 绑气泡 + 注册线程(发出即开好、可打开、可见"执行中";别等规划那几秒)**——
         // 修「发完消息长延迟才出气泡」+「执行完才看到执行记录」:规划/执行都在记录已可见之后进行。
-        let rid = createTaskExecutionRecord(for: task)
+        let displayTask = preflightGoalSpec?.objective.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+            ? preflightGoalSpec!.objective
+            : task
+        let rid = createTaskExecutionRecord(for: displayTask)
         let subID = "pipe-\(rid.suffix(8))"
         agentSubTaskRecords[subID] = rid
         // **持有"管线驱动中"标记**:角色管线是直接 Task、不在 orchestrator 的 driveTasks 里,孤儿看门狗据此跳过(否则 ~20s 就把还在跑的它误收口成 .partial)。
@@ -46,10 +55,22 @@ extension LingShuState {
         openTaskRecord(rid)   // **发出即自动打开执行记录窗口**(用户要的「子线程直接开好、能看执行中」),不必再点「定位」
         // **真目标认知**:用 deriveGoalSpec 让大脑把请求**提炼成精炼目标 + 逐条可验收成功标准**(不是把原话照抄进去),
         // 供执行引导 + 评审官据此逐条核验。放窗口打开之后:先弹窗、再填目标认知。
-        if goalSpecEnabled, let spec = await deriveGoalSpec(for: task, taskRecordID: rid) { bindGoalSpec(spec, to: rid) }
+        let boundGoalSpec: LingShuGoalSpec?
+        if goalSpecEnabled {
+            if let preflightGoalSpec {
+                boundGoalSpec = preflightGoalSpec
+                bindGoalSpec(preflightGoalSpec, to: rid)
+            } else {
+                boundGoalSpec = await deriveGoalSpec(for: task, taskRecordID: rid)
+                bindGoalSpec(boundGoalSpec, to: rid)
+            }
+        } else {
+            boundGoalSpec = nil
+        }
+        let executionTask = contextualTaskPrompt(rawObjective: task, userPrompt: task, goalSpec: boundGoalSpec)
 
         let steps: [LingShuRoleStep]
-        if let fixedSteps { steps = fixedSteps } else { steps = await planRolePipeline(task: task, agents: agents) }
+        if let fixedSteps { steps = fixedSteps } else { steps = await planRolePipeline(task: executionTask, agents: agents) }
         guard steps.count >= 2 else {
             // 没规划出多角色 → 清理这条预建记录/气泡,返回 false 让调用方回退 maker/checker(干净重来)。
             agentSubTaskRecords[subID] = nil
@@ -60,13 +81,14 @@ extension LingShuState {
             return false
         }
         lastPipelineAgents = agents.map { LingShuRoleAgentRef(id: $0.id, name: $0.name) }   // 记下供续接继承
-        lastPipelineTask = task
+        lastPipelineTask = displayTask
+        bindRolePipelineSlots(steps, recordID: rid)   // 结构化参与方:让 checker/maker 在任务窗口与 MCP 中稳定可见
         appendTaskRecordMessage(rid, actor: "灵枢", role: "派生子任务", kind: .router,
                                 text: "派生角色管线子线程:" + steps.map { "\($0.roleTitle)(\($0.agentName ?? "灵枢"))" }.joined(separator: " → "))
         let intake = "🔧 已规划角色管线:" + steps.map { "\($0.roleTitle)(\($0.agentName ?? "灵枢"))" }.joined(separator: " → ")
         if let idx = chatMessages.firstIndex(where: { $0.id == bid }) { chatMessages[idx].text = intake }
         mirrorRolePipelinePlan(steps, recordID: rid)   // 把规划阶段镜像进 record.plan → 右侧「分步计划」看得到执行步骤
-        let (result, passed) = await runRolePipeline(recordID: rid, task: task, steps: steps)
+        let (result, passed) = await runRolePipeline(recordID: rid, task: executionTask, steps: steps)
         agentSubTaskRecords[subID] = nil
         let wasCancelled = cancelledPipelineRecords.contains(rid)   // 用户中途点了停止
         cancelledPipelineRecords.remove(rid)
@@ -146,12 +168,69 @@ extension LingShuState {
         "\(step.roleTitle)（\(step.agentName ?? "灵枢")）"
     }
 
+    /// 角色槽位 id = 角色 + agent + 序号。只做结构稳定性,不参与语义路由。
+    nonisolated static func roleSlotID(_ step: LingShuRoleStep, index: Int) -> String {
+        let raw = "\(index)-\(step.roleID)-\(step.agentID ?? step.agentName ?? "lingshu")"
+        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-_"))
+        return "role-" + raw.unicodeScalars.map { allowed.contains($0) ? String($0) : "-" }.joined()
+    }
+
+    nonisolated static func isReviewerRole(_ step: LingShuRoleStep, reviewerID: String, reviewerTitle: String) -> Bool {
+        step.roleID == reviewerID || step.roleTitle == reviewerTitle
+    }
+
+    nonisolated static func roleSemantic(_ step: LingShuRoleStep, reviewerID: String, reviewerTitle: String) -> String {
+        isReviewerRole(step, reviewerID: reviewerID, reviewerTitle: reviewerTitle) ? "checker" : "maker"
+    }
+
     /// 规划完角色管线后,把各环镜像成 `record.plan` 的分步计划(pending)→ 右侧面板的「分步计划」就能显示**执行步骤**。
     /// (角色管线走确定性阶段、不经大脑 `update_plan`,以前只在左侧出参与方气泡、右侧没步骤——这里补上,与大脑驱动任务一致。)
     /// goal 传 nil:不覆盖已由 GoalSpec 蒸馏写入的一句话总目标。
     func mirrorRolePipelinePlan(_ steps: [LingShuRoleStep], recordID: String) {
         let planSteps = steps.map { LingShuPlanStep(title: Self.rolePlanTitle($0), status: .pending) }
         applyTaskPlan(planSteps, goal: nil, recordID: recordID)
+    }
+
+    /// 把模型规划出的角色管线绑定到任务记录的结构化槽位。
+    /// UI/MCP/断点续跑都读 roleSlots,避免再从消息 actor 里猜参与方导致 checker 消失或 tab 数量漂移。
+    func bindRolePipelineSlots(_ steps: [LingShuRoleStep], recordID: String) {
+        guard let idx = taskExecutionRecords.firstIndex(where: { $0.id == recordID }) else { return }
+        let reviewer = expertProfileRegistry.reviewerProfile()
+        let slots = steps.enumerated().map { index, step in
+            LingShuTaskRoleSlot(
+                id: Self.roleSlotID(step, index: index),
+                roleID: step.roleID,
+                roleTitle: step.roleTitle,
+                agentID: step.agentID,
+                agentName: step.agentName ?? "灵枢",
+                semanticRole: Self.roleSemantic(step, reviewerID: reviewer.id, reviewerTitle: reviewer.title),
+                status: .pending
+            )
+        }
+        taskExecutionRecords[idx].roleSlots = slots
+        for slot in slots where !taskExecutionRecords[idx].participants.contains(slot.agentName) {
+            taskExecutionRecords[idx].participants.append(slot.agentName)
+        }
+        if taskExecutionRecords[idx].goal.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            let objective = taskExecutionRecords[idx].goalSpec?.objective.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            taskExecutionRecords[idx].goal = objective.isEmpty ? taskExecutionRecords[idx].title : objective
+        }
+        taskExecutionRecords[idx].updatedAt = Date()
+        persistTaskExecutionRecords()
+    }
+
+    /// 角色槽位状态推进。按 roleID + agent 双键更新,同一 agent 多角色时也不会串。
+    func setRolePipelineSlotStatus(_ step: LingShuRoleStep, status: LingShuTaskRoleSlotStatus, recordID: String) {
+        guard let idx = taskExecutionRecords.firstIndex(where: { $0.id == recordID }) else { return }
+        let agentName = step.agentName ?? "灵枢"
+        guard let si = taskExecutionRecords[idx].roleSlots.firstIndex(where: {
+            $0.roleID == step.roleID
+                && ($0.agentID ?? "") == (step.agentID ?? "")
+                && $0.agentName == agentName
+        }) else { return }
+        taskExecutionRecords[idx].roleSlots[si].status = status
+        taskExecutionRecords[idx].updatedAt = Date()
+        persistTaskExecutionRecords()
     }
 
     /// 逐环推进时更新对应计划步的状态(按标题匹配**首个未完成**的同名步,逐环打钩)。
@@ -168,9 +247,9 @@ extension LingShuState {
     /// 评审官再验,**通过才交付**(有界轮次)。每个角色作为**命名参与方**可见。返回(产出汇总, 是否通过)。
     func runRolePipeline(recordID rid: String, task: String, steps: [LingShuRoleStep], initialPrior: String = "") async -> (summary: String, passed: Bool) {
         let roles = expertProfileRegistry.allProfiles
-        let reviewerID = expertProfileRegistry.reviewerProfile().id   // 评审官角色 id(从注册表取,非关键词)
-        let builders = steps.filter { $0.roleID != reviewerID }       // 建设角色(架构/开发…)
-        let reviewers = steps.filter { $0.roleID == reviewerID }      // 评审官(可多个)
+        let reviewer = expertProfileRegistry.reviewerProfile()
+        let builders = steps.filter { !Self.isReviewerRole($0, reviewerID: reviewer.id, reviewerTitle: reviewer.title) }       // 建设角色(架构/开发…)
+        let reviewers = steps.filter { Self.isReviewerRole($0, reviewerID: reviewer.id, reviewerTitle: reviewer.title) }      // 评审官(可多个)
         var prior = initialPrior   // **续跑时**:上一轮的 maker 交付 + 评审意见作为承接上下文(别丢之前的进度/反馈)
         let goalCriteria = goalSpec(for: rid)?.acceptanceCriteriaBlock ?? ""   // 提炼出的逐条成功标准,注入每个角色(尤其评审官据此核验)
         appendTrace(kind: .route, actor: "角色规划", title: "多角色管线(\(steps.count) 环)",
@@ -178,6 +257,7 @@ extension LingShuState {
 
         // 跑单个角色(agent 或灵枢会话),记参与方,返回产出。
         func runRole(_ step: LingShuRoleStep, tag: String, extra: String) async -> String {
+            setRolePipelineSlotStatus(step, status: .running, recordID: rid)
             let rolePrompt = roles.first { $0.id == step.roleID }?.promptBlock ?? ""
             let objective = """
             你在本任务里担任角色:**\(step.roleTitle)**。
@@ -191,12 +271,15 @@ extension LingShuState {
             let actor = step.agentName ?? "灵枢"
             let startText = "▶ \(actor) 担任「\(step.roleTitle)」:\(step.subtask.prefix(80))"
             let output: String
+            var roleSucceeded = true
             if let agentID = step.agentID, let plugin = LingShuAgentPluginStore.plugin(id: agentID) {
                 // **流式**:边跑边把 agent 输出更新进同一条参与方气泡(不再干等)。
                 switch await runAgentStreamingToRecord(plugin, objective: objective, recordID: rid,
                                                        actor: actor, role: "\(step.roleTitle)·\(tag)", startText: startText) {
                 case .completed(let t): output = t
-                case .failure(let f):   output = "(\(plugin.displayName) 未完成:\(f))"
+                case .failure(let f):
+                    roleSucceeded = false
+                    output = "(\(plugin.displayName) 未完成:\(f))"
                 }
             } else {
                 appendTaskRecordMessage(rid, actor: actor, role: "\(step.roleTitle)·\(tag)", kind: .agent, text: startText)
@@ -205,6 +288,7 @@ extension LingShuState {
                                                tools: tools, model: makeAgentModelAdapter(), maxTurns: 40)
                 output = LingShuStructuredModelOutput.visibleText(from: Self.runResultText(await session.send(objective)))
             }
+            setRolePipelineSlotStatus(step, status: roleSucceeded ? .completed : .failed, recordID: rid)
             return output
         }
 

@@ -99,15 +99,18 @@ final class LingShuControlSnapshotStore: @unchecked Sendable {
     }
 
     private func taskDetailPayload(_ record: LingShuTaskExecutionRecord, feedback: Bool?) -> [String: Any] {
+        let objective = Self.recordObjective(record)
         var object: [String: Any] = [
             "id": record.id,
             "title": record.title,
+            "objective": objective,
             "prompt": record.prompt,
             "status": record.status.rawValue,
             "summary": record.summary,
             "updatedAt": ISO8601DateFormatter().string(from: record.updatedAt),
             "feedback": feedback.map { $0 ? "up" : "down" } ?? "none",
             "plan": record.plan.map { ["title": $0.title, "status": $0.status.rawValue] },
+            "roleSlots": record.roleSlots.map(Self.roleSlotPayload),
             "designScore": record.designScore as Any,
             "codeChanges": record.codeChanges.map { code in
                 [
@@ -125,6 +128,26 @@ final class LingShuControlSnapshotStore: @unchecked Sendable {
             object["threadCommit"] = Self.threadCommitPayload(commit)
         }
         return object
+    }
+
+    private static func recordObjective(_ record: LingShuTaskExecutionRecord) -> String {
+        let goal = record.goal.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !goal.isEmpty { return goal }
+        let specObjective = record.goalSpec?.objective.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !specObjective.isEmpty { return specObjective }
+        return record.title
+    }
+
+    private static func roleSlotPayload(_ slot: LingShuTaskRoleSlot) -> [String: Any] {
+        [
+            "id": slot.id,
+            "roleID": slot.roleID,
+            "roleTitle": slot.roleTitle,
+            "agentID": slot.agentID as Any,
+            "agentName": slot.agentName,
+            "semanticRole": slot.semanticRole,
+            "status": slot.status.rawValue
+        ]
     }
 
     private static func threadCommitPayload(_ commit: LingShuTaskThreadCommit) -> [String: Any] {

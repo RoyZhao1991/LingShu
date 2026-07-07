@@ -57,15 +57,16 @@ extension LingShuState {
 
     /// 据记录已绑的 taskOutcome 给收尾文案补诚实尾巴。
     func outcomeAwareSummary(recordID: String?, base: String) -> String {
-        guard let recordID, let outcome = taskExecutionRecords.first(where: { $0.id == recordID })?.taskOutcome else { return base }
+        let visibleBase = LingShuVisibleModelText.clean(base)
+        guard let recordID, let outcome = taskExecutionRecords.first(where: { $0.id == recordID })?.taskOutcome else { return visibleBase }
         let ask = capabilityUserAsk(taskRecordID: recordID)
         switch outcome {
         case .waitingForUser:
-            return base + "\n\n⏸ 最后一步我没法独自完成,需要你:\(ask.isEmpty ? "提供必要的授权/凭据" : ask)。给到我就接着完成。"
+            return visibleBase + "\n\n⏸ 最后一步我没法独自完成,需要你:\(ask.isEmpty ? "提供必要的授权/凭据" : ask)。给到我就接着完成。"
         case .partial:
-            return base + (ask.isEmpty ? "" : "\n\n⚠️ 还差需要你:\(ask)。")
+            return visibleBase + (ask.isEmpty ? "" : "\n\n⚠️ 还差需要你:\(ask)。")
         default:
-            return base
+            return visibleBase
         }
     }
 
