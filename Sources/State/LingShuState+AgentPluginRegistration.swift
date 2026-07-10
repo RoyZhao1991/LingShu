@@ -6,8 +6,11 @@ import Foundation
 @MainActor
 extension LingShuState {
 
-    func agentPluginTools(recordIDProvider: @escaping @MainActor @Sendable () -> String? = { nil }) -> [LingShuAgentTool] {
-        [registerAgentTool(), runAgentTool(recordIDProvider: recordIDProvider)]
+    func agentPluginTools(
+        recordIDProvider: @escaping @MainActor @Sendable () -> String? = { nil },
+        includeRegistration: Bool = true
+    ) -> [LingShuAgentTool] {
+        (includeRegistration ? [registerAgentTool()] : []) + [runAgentTool(recordIDProvider: recordIDProvider)]
     }
 
     private func registerAgentTool() -> LingShuAgentTool {

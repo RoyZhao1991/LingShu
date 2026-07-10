@@ -9,6 +9,7 @@ import AppKit
 struct LingShuMessageContentView: View {
     let text: String
     var textColor: Color = Color.lingFg.opacity(0.88)
+    var onPreviewFile: ((URL) -> Void)? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 9) {
@@ -17,7 +18,7 @@ struct LingShuMessageContentView: View {
                 case .code(let language, let code):
                     LingShuCodeBlockView(language: language, code: code)
                 case .markdown(let content):
-                    LingShuMarkdownText(content: content, color: textColor)
+                    LingShuMarkdownText(content: content, color: textColor, onPreviewFile: onPreviewFile)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
@@ -123,6 +124,8 @@ struct LingShuCodeBlockView: View {
 struct LingShuMarkdownText: View {
     let content: String
     var color: Color = Color.lingFg.opacity(0.88)
+    var onPreviewFile: ((URL) -> Void)? = nil
+    private static let previewURLScheme = "lingshu-preview-file"
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -135,6 +138,14 @@ struct LingShuMarkdownText: View {
                 }
             }
         }
+        .environment(\.openURL, OpenURLAction { url in
+            guard url.scheme == Self.previewURLScheme,
+                  let path = Self.previewPath(from: url) else {
+                return .systemAction(url)
+            }
+            onPreviewFile?(URL(fileURLWithPath: path))
+            return .handled
+        })
     }
 
     /// 正文元素:普通行,或一张 Markdown 表格(连续 `|...|` 行 + 第二行分隔线)。
@@ -189,7 +200,8 @@ struct LingShuMarkdownText: View {
         Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 5) {
             GridRow {
                 ForEach(0..<colCount, id: \.self) { c in
-                    inline(c < header.count ? header[c] : "")
+                    let cell = c < header.count ? header[c] : ""
+                    inline(displayText(cell), previewPaths: previewPaths(in: cell))
                         .font(.system(size: 13, weight: .bold)).foregroundStyle(color)
                 }
             }
@@ -197,7 +209,8 @@ struct LingShuMarkdownText: View {
             ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
                 GridRow {
                     ForEach(0..<colCount, id: \.self) { c in
-                        inline(c < row.count ? row[c] : "")
+                        let cell = c < row.count ? row[c] : ""
+                        inline(displayText(cell), previewPaths: previewPaths(in: cell))
                             .font(.system(size: 13, weight: .medium)).foregroundStyle(color.opacity(0.92))
                     }
                 }
@@ -218,26 +231,54 @@ struct LingShuMarkdownText: View {
         } else if trimmed == "---" || trimmed == "***" || trimmed == "___" {
             Divider().overlay(Color.lingFg.opacity(0.14))
         } else if trimmed.hasPrefix("### ") {
-            inline(String(trimmed.dropFirst(4)))
-                .font(.system(size: 14, weight: .bold)).foregroundStyle(color)
+            let body = String(trimmed.dropFirst(4))
+            richLine {
+                inline(displayText(body), previewPaths: previewPaths(in: raw))
+                    .font(.system(size: 14, weight: .bold)).foregroundStyle(color)
+            }
         } else if trimmed.hasPrefix("## ") {
-            inline(String(trimmed.dropFirst(3)))
-                .font(.system(size: 15.5, weight: .bold)).foregroundStyle(color)
+            let body = String(trimmed.dropFirst(3))
+            richLine {
+                inline(displayText(body), previewPaths: previewPaths(in: raw))
+                    .font(.system(size: 15.5, weight: .bold)).foregroundStyle(color)
+            }
         } else if trimmed.hasPrefix("# ") {
-            inline(String(trimmed.dropFirst(2)))
-                .font(.system(size: 17, weight: .bold)).foregroundStyle(color)
+            let body = String(trimmed.dropFirst(2))
+            richLine {
+                inline(displayText(body), previewPaths: previewPaths(in: raw))
+                    .font(.system(size: 17, weight: .bold)).foregroundStyle(color)
+            }
         } else if let (marker, body) = listItem(trimmed) {
             HStack(alignment: .top, spacing: 6) {
                 Text(marker)
                     .font(.system(size: 14.5, weight: .semibold, design: .monospaced))
                     .foregroundStyle(Color.lingHolo.opacity(0.82))
-                inline(body)
-                    .font(.system(size: 14.5, weight: .medium)).foregroundStyle(color)
+                richLine {
+                    inline(displayText(body), previewPaths: previewPaths(in: body))
+                        .font(.system(size: 14.5, weight: .medium)).foregroundStyle(color)
+                }
             }
         } else {
-            inline(trimmed)
-                .font(.system(size: 14.5, weight: .medium)).foregroundStyle(color)
+            richLine {
+                inline(displayText(trimmed), previewPaths: previewPaths(in: raw))
+                    .font(.system(size: 14.5, weight: .medium)).foregroundStyle(color)
+            }
         }
+    }
+
+    private func displayText(_ raw: String) -> String {
+        guard onPreviewFile != nil else { return raw }
+        return LingShuLocalPathDetector.displayTextHidingExistingFilePaths(in: raw)
+    }
+
+    private func previewPaths(in raw: String) -> [String] {
+        guard onPreviewFile != nil else { return [] }
+        return LingShuLocalPathDetector.existingFilePaths(in: raw)
+    }
+
+    @ViewBuilder
+    private func richLine<Content: View>(@ViewBuilder content: () -> Content) -> some View {
+        content()
     }
 
     /// 识别无序（-、*、+）和有序（1.）列表项，返回（项目符号, 正文）。
@@ -267,13 +308,34 @@ struct LingShuMarkdownText: View {
     }
 
     /// 行内 Markdown：交给系统解析器，保留空白；解析失败回退为纯文本。
-    private func inline(_ s: String) -> Text {
-        if let attributed = try? AttributedString(
+    private func inline(_ s: String, previewPaths: [String] = []) -> Text {
+        var attributed = (try? AttributedString(
             markdown: s,
             options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)
-        ) {
-            return Text(attributed)
+        )) ?? AttributedString(s)
+        for (index, path) in previewPaths.enumerated() {
+            guard let url = Self.previewURL(for: path) else { continue }
+            attributed.append(AttributedString(" "))
+            var link = AttributedString(previewPaths.count == 1 ? "预览" : "预览\(index + 1)")
+            link.link = url
+            link.foregroundColor = Color.lingHolo
+            attributed.append(link)
         }
-        return Text(s)
+        return Text(attributed)
+    }
+
+    private static func previewURL(for path: String) -> URL? {
+        var components = URLComponents()
+        components.scheme = previewURLScheme
+        components.host = "open"
+        components.queryItems = [URLQueryItem(name: "path", value: path)]
+        return components.url
+    }
+
+    private static func previewPath(from url: URL) -> String? {
+        URLComponents(url: url, resolvingAgainstBaseURL: false)?
+            .queryItems?
+            .first(where: { $0.name == "path" })?
+            .value
     }
 }

@@ -157,7 +157,7 @@ extension LingShuState {
         // 实测大脑(Kimi/DeepSeek 都有此病)看见"先 apply_skill"那一步嫌麻烦就跳过、改从零现编。把固化技能的
         // **完整方法内联**进呈现,大脑不必多走一步就能照做。仍是"呈现 + 让大脑自己判断用不用",不强制、不写死场景
         // (内联的是该 skill **自己声明的内容** promptBlock,通用机制非特判)。
-        let method = profile.promptBlock.trimmingCharacters(in: .whitespacesAndNewlines)
+        let method = profile.promptBlock(for: prompt).trimmingCharacters(in: .whitespacesAndNewlines)
         let hasGenerator = profile.bundledScriptName != nil
         var out = "【本任务有现成的固化方法】匹配到固化专家技能「\(profile.title)」。**下面是它的完整方法——照它做通常更快更稳、产出更一致(你若判断确实不合适,也可以不照它做):**\n\n"
         out += String(method.prefix(1800))
@@ -184,7 +184,7 @@ extension LingShuState {
                 guard let self else { return "技能库不可用" }
                 let workingDir = self.effectiveAgentWorkingDirectory(override: workingDirectoryOverride, fallback: defaultWorkingDir)
                 let profile = self.expertProfileRegistry.profile(for: task)
-                var out = profile.promptBlock
+                var out = profile.promptBlock(for: task)
                 if !profile.reviewChecklist.isEmpty {
                     out += "\n评审清单(交付前自检):\n" + profile.reviewChecklist.map { "- \($0)" }.joined(separator: "\n")
                 }

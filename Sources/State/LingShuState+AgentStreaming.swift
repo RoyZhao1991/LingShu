@@ -27,7 +27,7 @@ extension LingShuState {
         // **产出物归属真相源(2026-06-28,影子 git)**:跑前打基线、跑后量 delta——只认本次**真改/新建**的文件,
         // 取代"mtime 足迹/agent 自报",根治共享工作目录里旧文件被串进产出物(见 [[artifact-attribution-shadow-git]])。
         let shadowBaseline = await Task.detached { LingShuShadowGit.baseline(workDir: workDir) }.value
-        let result = await LingShuAgentPluginStore.run(
+        var result = await LingShuAgentPluginStore.run(
             plugin, objective: objective, workingDirectory: workDir,
             progress: { tail in
                 Task { @MainActor [weak self] in
@@ -37,6 +37,13 @@ extension LingShuState {
                         text: startText + "\n\n⏳ 运行中(\(secs)s):\n" + String(tail.suffix(700)))
                 }
             })
+        if case .failure(let failureText) = result,
+           let diagnosis = await diagnoseAgentFailureIfNeeded(plugin: plugin, failureText: failureText, recordID: rid) {
+            let normalized = normalizeAgentRunFailure(failureText, plugin: plugin, diagnosis: diagnosis)
+            appendTaskRecordMessage(rid, actor: plugin.displayName, role: "状态理解", kind: .warning,
+                                    text: "\(diagnosis.traceSummary)\n\(normalized)")
+            result = .failure(normalized)
+        }
         // producedFilesSink 不再传:agent 自报"碰过"的文件会多报(连只 touch 的旧文件都报)→ 不当归属真相,改用跑后影子 delta。
         // 收尾:把这条流式气泡定格成最终结论尾部,并持久化一次。
         let finalText: String

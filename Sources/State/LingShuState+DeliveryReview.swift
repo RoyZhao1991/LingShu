@@ -162,7 +162,7 @@ extension LingShuState {
         """
         let verifier = LingShuAgentSession(
             id: "verifier-\(UUID().uuidString.prefix(6))",
-            system: reviewer.promptBlock,
+            system: reviewer.promptBlock(for: userRequest),
             tools: [],
             model: checkerAdapter(taskRecordID: taskRecordID),   // 异源绑定 → 真用 checker 复核;否则原验收脑
             maxTurns: 1

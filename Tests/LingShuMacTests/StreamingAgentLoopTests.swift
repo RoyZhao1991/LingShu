@@ -158,4 +158,32 @@ final class StreamingAgentLoopTests: XCTestCase {
         XCTAssertNil(LingShuStructuredModelOutput.parse(mixed), "流程层仍只接受整段完整 JSON，混合文本不能驱动 OAuth/user_input/completion")
         XCTAssertEqual(LingShuStructuredModelOutput.visibleText(from: mixed), "最终只展示这句话")
     }
+
+    func testTruncatedStructuredReplyStillRendersGeneratedMarkdownBody() {
+        let truncated = #"{"reply":"坦克大战已交付 ✅\n\n## 一句话交付\n- 一份 886 行 pygame 完整可运行的坦克大战（含玩家坦克、敌方 AI、子弹、砖/"#
+
+        let visible = LingShuVisibleModelText.clean(truncated)
+
+        XCTAssertTrue(visible.hasPrefix("坦克大战已交付 ✅"))
+        XCTAssertTrue(visible.contains("\n\n## 一句话交付\n- 一份 886 行"))
+        XCTAssertFalse(visible.contains("{\"reply\""))
+        XCTAssertFalse(visible.contains("\\n"))
+    }
+
+    func testLegacyRolePipelineProtocolTailIsHiddenAtRenderTime() {
+        let legacy = """
+        🔧 已规划角色管线:工程执行专家(Codex) → 评审官(灵枢)
+
+        ✅ 管线完成,评审通过、已交付。
+        254, pixelHeight=1254, hasAlpha=no, {"name":"落盘位置","passed":true},"blockingIssues":[],"evidence":[]
+        """
+
+        let visible = LingShuVisibleModelText.clean(legacy)
+
+        XCTAssertTrue(visible.contains("**协作流程**"))
+        XCTAssertTrue(visible.contains("工程执行专家（Codex） → 评审官（灵枢）"))
+        XCTAssertTrue(visible.contains("**已完成并通过验收**"))
+        XCTAssertFalse(visible.contains("pixelHeight"))
+        XCTAssertFalse(visible.contains("blockingIssues"))
+    }
 }

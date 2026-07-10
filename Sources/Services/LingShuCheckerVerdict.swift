@@ -46,6 +46,42 @@ struct LingShuCheckerVerdict: Equatable, Sendable {
         return lines.joined(separator: "\n")
     }
 
+    /// 主对话使用的紧凑验收摘要。JSON verdict 是控制面协议,不能直接暴露给用户;
+    /// 这里把字段转换成可扫描的 Markdown,同时限制单项长度,避免一条证据撑满整个气泡。
+    var conversationSummary: String {
+        var sections: [String] = []
+        let cleanedSummary = summary.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !cleanedSummary.isEmpty {
+            sections.append(cleanedSummary)
+        }
+        if !checks.isEmpty {
+            var lines = ["**验收明细**"]
+            for check in checks.prefix(6) {
+                let reason = Self.compact(check.reason, limit: 180)
+                let suffix = reason.isEmpty ? "" : "：\(reason)"
+                lines.append("- \(check.passed ? "✅" : "❌") **\(check.name)**\(suffix)")
+            }
+            if checks.count > 6 {
+                lines.append("- 其余 \(checks.count - 6) 项详见任务执行记录")
+            }
+            sections.append(lines.joined(separator: "\n"))
+        }
+        if !blockingIssues.isEmpty {
+            sections.append((["**需要修正**"] + blockingIssues.prefix(6).map {
+                "- \(Self.compact($0, limit: 180))"
+            }).joined(separator: "\n"))
+        }
+        if !evidence.isEmpty {
+            sections.append((["**核验依据**"] + evidence.prefix(3).map {
+                "- \(Self.compact($0, limit: 220))"
+            }).joined(separator: "\n"))
+        }
+        if let needsUser, !needsUser.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            sections.append("**需要你确认**：\(Self.compact(needsUser, limit: 180))")
+        }
+        return sections.joined(separator: "\n\n")
+    }
+
     static let outputContract = """
     只输出一个 JSON 对象,不要 markdown,不要代码围栏,不要额外解释。格式:
     {
@@ -139,5 +175,13 @@ struct LingShuCheckerVerdict: Equatable, Sendable {
         if let n = value as? NSNumber { return n.doubleValue }
         if let s = value as? String { return Double(s) }
         return nil
+    }
+
+    private static func compact(_ value: String, limit: Int) -> String {
+        let flattened = value
+            .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard flattened.count > limit else { return flattened }
+        return String(flattened.prefix(max(1, limit - 1))) + "…"
     }
 }

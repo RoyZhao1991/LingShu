@@ -50,4 +50,30 @@ final class IndependentCheckerTests: XCTestCase {
         XCTAssertEqual(parsed?.passed, false)
         XCTAssertTrue(parsed?.renderedSummary.contains("函数过长") == true)
     }
+
+    func testConversationSummaryTurnsVerdictIntoReadableMarkdown() {
+        let raw = #"{"passed":true,"summary":"图标已生成并通过验收","checks":[{"name":"输出规格","passed":true,"reason":"PNG, 254 x 254,透明背景"},{"name":"落盘位置","passed":true,"reason":"文件存在"}],"blockingIssues":[],"evidence":["file 输出确认 PNG"],"needsUser":null}"#
+        let summary = LingShuCheckerVerdict.parse(raw)?.conversationSummary ?? ""
+
+        XCTAssertTrue(summary.contains("**验收明细**"))
+        XCTAssertTrue(summary.contains("- ✅ **输出规格**"))
+        XCTAssertTrue(summary.contains("**核验依据**"))
+        XCTAssertFalse(summary.contains("\"passed\""))
+        XCTAssertFalse(summary.contains("{\""))
+    }
+
+    func testRolePipelineBubbleNeverAppendsRawProtocolPayload() {
+        let bubble = LingShuState.rolePipelineBubbleText(
+            route: "🔧 **协作流程**\n工程执行专家（Codex） → 评审官（灵枢）",
+            passed: true,
+            stopped: false,
+            unavailableNotice: nil,
+            reviewSummary: "图标已生成。\n\n**验收明细**\n- ✅ **输出规格**：PNG"
+        )
+
+        XCTAssertTrue(bubble.contains("已完成并通过验收"))
+        XCTAssertTrue(bubble.contains("**验收明细**"))
+        XCTAssertFalse(bubble.contains("blockingIssues"))
+        XCTAssertFalse(bubble.contains("samplesPerPixel"))
+    }
 }

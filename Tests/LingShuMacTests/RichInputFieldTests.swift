@@ -54,4 +54,18 @@ final class RichInputFieldTests: XCTestCase {
         XCTAssertNil(mention("普通文字", 4), "没有 @ 不算")
         XCTAssertNil(mention("", 0))
     }
+
+    @MainActor
+    func testSendClearsInvocationHintChips() {
+        let state = LingShuState()
+        state.prompt = " "
+        state.detectedInvocationChips = [
+            .init(name: "Codex", role: "maker", isAgent: true)
+        ]
+
+        _ = state.sendPrompt()
+
+        XCTAssertTrue(state.prompt.isEmpty)
+        XCTAssertTrue(state.detectedInvocationChips.isEmpty, "发送后输入框上方的「将调用」提示必须清空")
+    }
 }

@@ -41,15 +41,36 @@ struct LingShuExpertProfile: Identifiable, Equatable, Sendable {
     }
 
     /// 拼进执行提示词的完整专家档案文本。
+    /// 无具体任务名时仍给出可读标题,避免把 `{任务名}` 这类模板占位符原样交给 agent。
     var promptBlock: String {
-        """
+        promptBlock(for: "")
+    }
+
+    /// 拼进执行提示词的完整专家档案文本,并把模板标题中的占位符替换为当前真实任务。
+    func promptBlock(for taskName: String) -> String {
+        let renderedTemplate = renderedDeliverableTemplate(for: taskName)
+        return """
         【专家档案：\(title)】
         职责：\(mission)
         专业要点（产出必须体现）：
         \(knowledgeHighlights.map { "- \($0)" }.joined(separator: "\n"))
         交付物模板（按此结构组织产出，可按任务裁剪小节但不得改变层级风格）：
-        \(deliverableTemplate)
+        \(renderedTemplate)
         """
+    }
+
+    func renderedDeliverableTemplate(for taskName: String) -> String {
+        let clean = taskName
+            .replacingOccurrences(of: "\n", with: " ")
+            .split(separator: " ")
+            .joined(separator: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let fallback = title.replacingOccurrences(of: "专家", with: "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let value = clean.isEmpty ? (fallback.isEmpty ? "当前任务" : fallback) : clean
+        let placeholders = ["{任务名}", "{项目名}", "{产品/功能名}", "{系统名}", "{主题}", "{合同名}"]
+        return placeholders.reduce(deliverableTemplate) { rendered, token in
+            rendered.replacingOccurrences(of: token, with: value)
+        }
     }
 }
 

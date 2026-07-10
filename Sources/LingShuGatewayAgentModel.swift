@@ -19,6 +19,8 @@ final class LingShuGatewayAgentModel: LingShuAgentModel, @unchecked Sendable {
     var onReasoning: (@Sendable (String) -> Void)?
     /// **每次真实请求成功后上报(provider, model)**——地面真相:实际在用的脑(可能与 UI 选中的不同,如会话快照滞后)。供 UI 显示"实际在用"。
     var onActualCall: (@Sendable (String, String) -> Void)?
+    /// 原生多模态发送门:默认保留图片；若运行时已确认该模型/端点拒绝 image_url,wire 前剥掉历史里的图片。
+    var shouldSendNativeMultimodal: (@Sendable () -> Bool)?
 
     /// #1·模型通道续接状态(锁保护):上回合会话签名 + 上回合网关返回的原生续接 id。
     /// 据此判"本回合是否干净追加",决定续接模式(改写过历史则降级 prefixStable),并在 native 模式带上 id。
@@ -65,7 +67,7 @@ final class LingShuGatewayAgentModel: LingShuAgentModel, @unchecked Sendable {
     }
 
     func respond(messages: [LingShuAgentMessage], tools: [LingShuAgentTool]) async -> LingShuAgentModelResponse {
-        let conversation = Self.sanitizeToolCallSequence(messages.map(Self.toModelMessage))
+        let conversation = Self.sanitizeToolCallSequence(messages.map(toModelMessage))
         let toolDefs = tools.map(Self.toToolDefinition)
         let plan = continuationPlan(for: messages)   // #1:原生续接(支持的通道+干净追加)或 nil(无状态/已改写,行为零变更)
         let request = LingShuRemoteModelRequest(
@@ -184,7 +186,7 @@ final class LingShuGatewayAgentModel: LingShuAgentModel, @unchecked Sendable {
             provider: provider, model: model, endpoint: endpoint, protocolName: protocolName,
             apiKey: apiKey, systemPrompt: "", userPrompt: "", temperature: temperature,
             stream: true, timeout: timeout, continuationToken: plan.token,
-            conversationMessages: Self.sanitizeToolCallSequence(messages.map(Self.toModelMessage)), tools: tools.map(Self.toToolDefinition)
+            conversationMessages: Self.sanitizeToolCallSequence(messages.map(toModelMessage)), tools: tools.map(Self.toToolDefinition)
         )
         let trace = LingShuContextAssemblyMeter.shared.begin(.make(
             provider: provider,
@@ -298,15 +300,16 @@ final class LingShuGatewayAgentModel: LingShuAgentModel, @unchecked Sendable {
         return result
     }
 
-    private static func toModelMessage(_ message: LingShuAgentMessage) -> LingShuModelMessage {
-        LingShuModelMessage(
+    private func toModelMessage(_ message: LingShuAgentMessage) -> LingShuModelMessage {
+        let images = (shouldSendNativeMultimodal?() ?? true) ? message.imageDataURLs : nil
+        return LingShuModelMessage(
             role: message.role.rawValue,
             content: message.content,
             toolCalls: message.toolCalls.isEmpty ? nil : message.toolCalls.map {
                 LingShuToolCall(id: $0.id, name: $0.name, arguments: $0.argumentsJSON)
             },
             toolCallID: message.toolCallID,
-            imageDataURLs: message.imageDataURLs
+            imageDataURLs: images
         )
     }
 

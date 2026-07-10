@@ -20,6 +20,8 @@ extension LingShuState {
         Task { await orchestrator.setAcceptanceHook { @MainActor [weak self] subID, objective, session, initial in
             guard let self else { return initial }
             let rid = self.agentSubTaskRecords[subID]
+            let artifactBaseline = self.takeSubtaskArtifactCountBaseline(subID: subID, recordID: rid)
+            await self.registerSubtaskArtifactsFromGitDelta(subID: subID)
             // **maker session ≠ checker session(用户硬性要求:LOOP 必须两个独立角色 session,哪怕都是 GLM)**:
             // - 默认(本地脑 maker)→ checker 用**独立 agent 会话** `runCheckerSession`(useCheckerSession),它自己读代码/跑测试独立验收;
             // - maker 是外部 agent(@Codex)→ checker 走 `runIndependentAgentCheckerIfNeeded`(另一个 agent 进程 / 异源审查员)。
@@ -28,7 +30,8 @@ extension LingShuState {
             // **唯一 checker(消除双重验收)**:任一方是外部 agent → 由 runIndependentAgentCheckerIfNeeded 跑(agent checker),
             // verifyAndContinue 跳过内部审查员;都本地(灵枢自建双角色)→ verifyAndContinue 用**独立 GLM checker 会话**。
             let verified = await self.verifyAndContinue(session: session, result: initial, userRequest: objective,
-                                                        taskRecordID: rid, useCheckerSession: !hasExternalRole, skipReview: hasExternalRole)
+                                                        taskRecordID: rid, artifactBaseline: artifactBaseline,
+                                                        useCheckerSession: !hasExternalRole, skipReview: hasExternalRole)
             return await self.runIndependentAgentCheckerIfNeeded(recordID: rid, makerResult: verified, objective: objective)
         } }
     }
@@ -139,6 +142,16 @@ extension LingShuState {
             let outcome = recordID.flatMap { rid in taskExecutionRecords.first { $0.id == rid }?.taskOutcome }
             let status = Self.finishStatus(for: outcome, fallback: .blocked)
             let honest = recordID.flatMap { outcomeAwareSummary(recordID: $0, base: summary) } ?? LingShuVisibleModelText.clean(summary)
+            if let notice = LingShuAgentPluginStore.unavailableNotice(from: honest, knownPlugins: LingShuAgentPluginStore.load()) {
+                if let recordID {
+                    appendTaskRecordMessage(recordID, actor: notice.agentName, role: "插件不可用", kind: .warning, text: notice.message)
+                    finishTaskRecord(recordID, status: .failed, summary: notice.message)
+                }
+                let head = "⚠️ \(notice.agentName) 插件不可用"
+                postOrchestratorChat(recordID: recordID, dispatched: notice.message, spawned: "\(head):子任务「\(objective)」——\(notice.message.prefix(220))")
+                briefMainThread("子任务「\(objective)」\(head):\(notice.message.prefix(160))")
+                return
+            }
             if let recordID {
                 appendTaskRecordMessage(recordID, actor: "灵枢", role: status == .waitingForUser ? "待用户" : "失败", kind: .warning, text: honest)
                 finishTaskRecord(recordID, status: status, summary: honest)
@@ -149,6 +162,28 @@ extension LingShuState {
             briefMainThread("子任务「\(objective)」\(head):\(honest.prefix(160))")
         case .interrupted(let id, let objective, let reason):
             guard !isRoleAgentEventID(id) else { return }
+            if LingShuModelServiceFailure.isNativeMultimodalUnsupportedReason(reason) {
+                let message = LingShuModelServiceFailure.userFacingReason(reason)
+                markCurrentModelNativeMultimodalUnsupported(reason: message)
+                let recordID = agentSubTaskRecords[id]
+                if let recordID {
+                    appendTaskRecordMessage(
+                        recordID,
+                        actor: "模型通道",
+                        role: "多模态降级",
+                        kind: .warning,
+                        text: "原生多模态请求被当前模型拒绝，已标记 \(modelProvider)/\(modelName) 下次直接走图片解析降级；本子任务从断点改用附件摘要/本机路径继续。"
+                    )
+                    commitTaskThreadState(
+                        recordID: recordID,
+                        status: .running,
+                        phase: .executing,
+                        summary: "原生多模态不可用，已自动降级并继续。"
+                    )
+                }
+                Task { await agentOrchestrator.resumeInterrupted(id: id) }
+                return
+            }
             if LingShuModelServiceFailure.isNonRecoverableReason(reason) {
                 let message = LingShuModelServiceFailure.userFacingReason(reason)
                 let status = LingShuModelServiceFailure.decodeReason(reason)?.taskStatus ?? .failed

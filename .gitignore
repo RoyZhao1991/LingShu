@@ -23,6 +23,7 @@ ValidationArtifacts/crawler-*
 ValidationArtifacts/software-*
 ValidationArtifacts/document-local-*
 .lingshu-e2e-output/
+outputs/
 验收结果.*
 
 # Runtime credentials bundled into local app packages only

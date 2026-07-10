@@ -58,13 +58,15 @@ final class GoalSpecTests: XCTestCase {
 
     func testParseReferenceScopeFields() {
         let spec = LingShuGoalSpecParser.parse(
-            #"{"objective":"继续最近的自我介绍","kind":"question","output_mode":"chat_reply","reference_scope":"default_anchor","reference_explicit":false,"reference_evidence":["灵枢: 我是灵枢"],"success_criteria":[]}"#
+            #"{"objective":"继续最近的自我介绍","kind":"question","output_mode":"chat_reply","reference_scope":"default_anchor","reference_explicit":false,"reference_confidence":"high","reference_evidence":["灵枢: 我是灵枢"],"success_criteria":[]}"#
         )
         XCTAssertEqual(spec?.referenceScope, .defaultAnchor)
         XCTAssertEqual(spec?.referenceExplicit, false)
+        XCTAssertEqual(spec?.referenceConfidence, .high)
         XCTAssertEqual(spec?.referenceEvidence, ["灵枢: 我是灵枢"])
         XCTAssertEqual(LingShuGoalSpecParser.parseReferenceScope("visible-context"), .visibleContext)
         XCTAssertEqual(LingShuGoalSpecParser.parseReferenceScope("task thread"), .taskThread)
+        XCTAssertEqual(LingShuGoalSpecParser.parseReferenceConfidence("moderate"), .medium)
     }
 
     func testNoObjectiveIsNil() {
@@ -76,6 +78,54 @@ final class GoalSpecTests: XCTestCase {
         XCTAssertNil(LingShuGoalSpecParser.parse("这根本不是 JSON"))
         XCTAssertNil(LingShuGoalSpecParser.parse(""))
         XCTAssertNil(LingShuGoalSpecParser.parse("{ 坏掉的 json"))
+    }
+
+    func testExecutionReadinessRequiresCompleteControlContract() {
+        let ready = LingShuGoalSpec(
+            objective: "生成并交付方案文档",
+            kind: .task,
+            successCriteria: ["文档真实落盘", "按要求完成复核"],
+            outputMode: .artifact,
+            referenceScope: .currentInput,
+            referenceConfidence: .high
+        )
+        XCTAssertNil(LingShuGoalSpecParser.executionReadinessIssue(ready))
+
+        var missingMode = ready
+        missingMode.outputMode = .unspecified
+        XCTAssertEqual(LingShuGoalSpecParser.executionReadinessIssue(missingMode), "output_mode 未明确")
+
+        var missingCriteria = ready
+        missingCriteria.successCriteria = []
+        XCTAssertEqual(
+            LingShuGoalSpecParser.executionReadinessIssue(missingCriteria),
+            "task/interaction 缺少 success_criteria"
+        )
+
+        var unknownReference = ready
+        unknownReference.referenceConfidence = .unknown
+        XCTAssertEqual(
+            LingShuGoalSpecParser.executionReadinessIssue(unknownReference),
+            "reference_confidence 未明确"
+        )
+    }
+
+    func testGoalSpecUsesBoundedIncreasingRegenerationTimeouts() {
+        XCTAssertEqual(LingShuControlPlaneRole.goalSpec.generationTimeouts, [8, 16, 30])
+        XCTAssertEqual(LingShuControlPlaneRole.triage.generationTimeouts, [6])
+    }
+
+    func testMissingGoalSpecBlocksOnlyNewActiveTurnWhenEnabled() {
+        XCTAssertTrue(LingShuState.mustBlockForMissingGoalSpec(enabled: true, isNewActiveTurn: true, goalSpec: nil))
+        XCTAssertFalse(LingShuState.mustBlockForMissingGoalSpec(enabled: false, isNewActiveTurn: true, goalSpec: nil))
+        XCTAssertFalse(LingShuState.mustBlockForMissingGoalSpec(enabled: true, isNewActiveTurn: false, goalSpec: nil))
+        XCTAssertFalse(
+            LingShuState.mustBlockForMissingGoalSpec(
+                enabled: true,
+                isNewActiveTurn: true,
+                goalSpec: LingShuGoalSpec(objective: "已有目标", kind: .question)
+            )
+        )
     }
 
     func testSummaryReadable() {
@@ -133,6 +183,7 @@ final class GoalSpecTests: XCTestCase {
         XCTAssertEqual(spec.referenceScope, .unknown)
         XCTAssertEqual(spec.referenceEvidence, [])
         XCTAssertEqual(spec.referenceExplicit, false)
+        XCTAssertEqual(spec.referenceConfidence, .unknown)
     }
 
     // MARK: 持久化:GoalSpec 作为 typed 字段随任务记录跨重启(Item 1)
@@ -179,7 +230,40 @@ final class GoalSpecTests: XCTestCase {
         XCTAssertFalse(foreground.contains("灵枢: "), "loading 空占位不能进入候选背景")
         XCTAssertFalse(foreground.contains(where: { $0.trimmingCharacters(in: .whitespacesAndNewlines) == "灵枢:" }),
                        "loading 空占位不能进入候选背景")
+        let context = try! XCTUnwrap(json["conversation_context"] as? [[String: Any]])
+        XCTAssertTrue(context.contains { ($0["text"] as? String) == "你是谁,介绍一下你自己" },
+                      "GoalSpec 必须拿到更宽的完整上下文,不能只看 default_anchor")
+        XCTAssertFalse(context.contains { ($0["text"] as? String)?.isEmpty == true },
+                       "loading 空占位不能进入完整上下文")
         XCTAssertEqual(request.components(separatedBy: "用户: 继续").count - 1, 0, "当前裸输入不能在历史前景里重复出现")
+    }
+
+    @MainActor
+    func testActiveTurnGoalSpecRequestCarriesOlderReferencedContext() {
+        let state = LingShuState()
+        var messages: [ChatMessage] = [
+            .init(speaker: "你", text: "先记住这三个标的:港股通创新药ETF华宝、农牧渔ETF、券商ETF华宝", isUser: true),
+            .init(speaker: "灵枢", text: "已记录三只标的:港股通创新药ETF华宝、农牧渔ETF、券商ETF华宝。", isUser: false)
+        ]
+        for i in 1...10 {
+            messages.append(.init(speaker: "你", text: "普通插话 \(i)", isUser: true))
+            messages.append(.init(speaker: "灵枢", text: "普通回复 \(i)", isUser: false))
+        }
+        messages.append(.init(speaker: "你", text: "给那三个出一份更准确的分析报告", isUser: true))
+        state.chatMessages = messages
+
+        let request = state.activeTurnGoalSpecRequest(for: "给那三个出一份更准确的分析报告")
+
+        let data = try! XCTUnwrap(request.data(using: .utf8))
+        let json = try! XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let context = try! XCTUnwrap(json["conversation_context"] as? [[String: Any]])
+        let joined = context.compactMap { $0["text"] as? String }.joined(separator: "\n")
+        XCTAssertTrue(joined.contains("港股通创新药ETF华宝"))
+        XCTAssertTrue(joined.contains("农牧渔ETF"))
+        XCTAssertTrue(joined.contains("券商ETF华宝"))
+        let anchor = try! XCTUnwrap(json["default_anchor"] as? [String])
+        XCTAssertFalse(anchor.joined(separator: "\n").contains("港股通创新药ETF华宝"),
+                       "本用例的目标对象在十轮前,不是最近 default_anchor；完整上下文必须补上")
     }
 
     func testActiveTurnReferenceRepairFallsBackToDefaultAnchorWithoutExplicitEvidence() {
@@ -222,6 +306,67 @@ final class GoalSpecTests: XCTestCase {
         )
 
         XCTAssertEqual(repaired, raw)
+    }
+
+    func testActiveTurnReferenceRepairAllowsCandidateEvidenceFromFullContext() {
+        let raw = LingShuGoalSpec(
+            objective: "基于三只标的生成更准确的分析报告",
+            kind: .task,
+            successCriteria: ["保留三只标的并逐项分析"],
+            outputMode: .artifact,
+            referenceScope: .candidateBackground,
+            referenceEvidence: ["港股通创新药ETF华宝"],
+            referenceExplicit: true
+        )
+
+        let repaired = LingShuState.repairActiveTurnGoalSpecReference(
+            raw,
+            currentInput: "给那三个出一份更准确的分析报告",
+            defaultAnchorLines: ["用户: 普通插话", "灵枢: 普通回复"],
+            candidateSupportLines: ["灵枢: 已记录三只标的:港股通创新药ETF华宝、农牧渔ETF、券商ETF华宝。"]
+        )
+
+        XCTAssertEqual(repaired, raw, "十轮前上下文里的证据被完整上下文支持时,不能被打回最近一轮")
+    }
+
+    func testActiveTurnGoalSpecTriggersHistoryFallbackWhenReferenceIsNotHighConfidence() {
+        let medium = LingShuGoalSpec(
+            objective: "基于之前的股票分析生成更准确报告",
+            kind: .task,
+            referenceScope: .candidateBackground,
+            referenceEvidence: ["之前的股票分析"],
+            referenceExplicit: true,
+            referenceConfidence: .medium
+        )
+
+        XCTAssertTrue(
+            LingShuState.activeTurnGoalSpecNeedsHistoryFallback(medium, currentInput: "给那三个出一份更准确的分析报告"),
+            "非高置信引用必须进入历史兜底,不能直接把泛化目标交给执行链"
+        )
+
+        let genericHigh = LingShuGoalSpec(
+            objective: "基于之前的分析生成更准确报告",
+            kind: .task,
+            referenceScope: .candidateBackground,
+            referenceEvidence: ["之前的分析"],
+            referenceExplicit: true,
+            referenceConfidence: .high
+        )
+        XCTAssertTrue(
+            LingShuState.activeTurnGoalSpecNeedsHistoryFallback(genericHigh, currentInput: "给那三个出一份更准确的分析报告"),
+            "模型自称 high 但目标仍是泛指时,仍要走历史兜底"
+        )
+
+        let high = LingShuGoalSpec(
+            objective: "解释量子纠缠",
+            kind: .question,
+            referenceScope: .currentInput,
+            referenceConfidence: .high
+        )
+        XCTAssertFalse(
+            LingShuState.activeTurnGoalSpecNeedsHistoryFallback(high, currentInput: "解释量子纠缠"),
+            "自足且高置信的当前输入不应额外检索历史"
+        )
     }
 
     func testDefaultAnchorNonInteractiveDowngradesVisibleOutputMode() {

@@ -5,9 +5,57 @@ import Foundation
 /// 边界:这条只管**显式附件**;**态势感知(环境感知)另走 `perceptionVLTask`、一律强制 VL/零留存**,不经此路。见 [[LingShuMultimodal]]。
 @MainActor
 extension LingShuState {
+    func configureNativeMultimodalGate(on adapter: LingShuGatewayAgentModel) {
+        let provider = modelProvider
+        let model = modelName
+        let currentEndpoint = endpoint
+        let protocolName = selectedModelPreset?.protocolName ?? "OpenAI 兼容"
+        adapter.shouldSendNativeMultimodal = {
+            LingShuMultimodal.shouldAttemptNativeMultimodal(
+                provider: provider,
+                model: model,
+                endpoint: currentEndpoint,
+                protocolName: protocolName
+            )
+        }
+    }
+
+    func shouldAttemptNativeMultimodalForCurrentModel() -> Bool {
+        LingShuMultimodal.shouldAttemptNativeMultimodal(
+            provider: modelProvider,
+            model: modelName,
+            endpoint: endpoint,
+            protocolName: selectedModelPreset?.protocolName ?? "OpenAI 兼容"
+        )
+    }
+
+    func isCurrentModelMarkedNativeMultimodalUnsupported() -> Bool {
+        LingShuMultimodal.isMarkedNativeMultimodalUnsupported(
+            provider: modelProvider,
+            model: modelName,
+            endpoint: endpoint,
+            protocolName: selectedModelPreset?.protocolName ?? "OpenAI 兼容"
+        )
+    }
+
+    func markCurrentModelNativeMultimodalUnsupported(reason: String) {
+        LingShuMultimodal.markNativeMultimodalUnsupported(
+            provider: modelProvider,
+            model: modelName,
+            endpoint: endpoint,
+            protocolName: selectedModelPreset?.protocolName ?? "OpenAI 兼容"
+        )
+        appendTrace(
+            kind: .warning,
+            actor: "模型通道",
+            title: "原生多模态降级",
+            detail: "已标记 \(modelProvider)/\(modelName) 不支持原生多模态:\(reason.prefix(120))"
+        )
+    }
+
     /// 把待发图片/PDF 读成 base64 data URL(供直发大脑);脑不支持看图则返回 [](调用方回退 VL→文字)。只直发图片/PDF;粗挡 >20MB。
     func directBrainImageDataURLs() -> [String] {
-        guard LingShuMultimodal.isVisionCapable(provider: modelProvider, model: modelName) else { return [] }
+        guard shouldAttemptNativeMultimodalForCurrentModel() else { return [] }
         var urls: [String] = []
         for att in pendingAttachments {
             guard let url = att.localURL, let data = try? Data(contentsOf: url), data.count <= 20_000_000 else { continue }
@@ -38,5 +86,37 @@ extension LingShuState {
             return await loop.send(text, imageDataURLs: imageDataURLs)
         }
         return await session.send(text)
+    }
+
+    /// 首次原生多模态被模型拒绝时,记住该模型能力并在同一会话中续跑纯文本降级。
+    func retryMainTurnAfterNativeMultimodalRejection(
+        result: LingShuAgentRunResult,
+        session: any LingShuAgentSessioning,
+        imageDataURLs: [String]?,
+        taskRecordID: String?,
+        userRequest: String
+    ) async -> LingShuAgentRunResult {
+        guard case .interrupted(let reason) = result,
+              imageDataURLs?.isEmpty == false,
+              LingShuModelServiceFailure.isNativeMultimodalUnsupportedReason(reason) else {
+            return result
+        }
+        let message = LingShuModelServiceFailure.userFacingReason(reason)
+        markCurrentModelNativeMultimodalUnsupported(reason: message)
+        appendTaskRecordMessage(
+            taskRecordID,
+            actor: "模型通道",
+            role: "多模态降级",
+            kind: .warning,
+            text: "原生多模态请求被当前模型拒绝,已标记 \(modelProvider)/\(modelName) 下次直接走图片解析降级;本轮改用附件摘要/本机路径继续。"
+        )
+        let retry = await session.continueLoop()
+        return await verifyAndContinue(
+            session: session,
+            result: retry,
+            userRequest: userRequest,
+            taskRecordID: taskRecordID,
+            trustReplyClaim: false
+        )
     }
 }

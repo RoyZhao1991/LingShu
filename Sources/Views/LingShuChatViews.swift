@@ -1,48 +1,139 @@
 import AppKit
 import SwiftUI
 
-/// 任务执行时主线程对话里的紧凑状态行：转圈 + 当前步骤名 + 实时耗时（秒）。
-/// 主线程只报"在干什么、干了多久"（语音交互友好，不刷屏）；点一下进**任务子线程窗口**
+/// 任务执行时主线程对话里的紧凑状态行：转圈 + 当前步骤名 + 实时耗时 + 最近诊断。
+/// 主线程只报关键事实（当前计划、最近工具/文件动作、心跳/trace）；点一下进**任务子线程窗口**
 /// 看一边执行一边汇报的多段过程（规划/产出/工具/评审/纠正…全程，与主线程互不干扰）。
 struct LingShuTaskProgressIndicator: View {
     let stage: String
     let startedAt: Date
+    var diagnosticProvider: ((Date) -> LingShuTaskProgressDiagnostic?)?
     var onOpen: (() -> Void)?
 
     var body: some View {
-        Button {
-            onOpen?()
-        } label: {
-            HStack(spacing: 9) {
-                ProgressView()
-                    .progressViewStyle(.circular)
-                    .controlSize(.small)
-                    .tint(Color.lingHolo)
-                    .frame(width: 16, height: 16)
-                Text(stage)
-                    .font(.system(size: 13.5, weight: .semibold))
-                    .foregroundStyle(Color.lingFg.opacity(0.85))
-                TimelineView(.periodic(from: .now, by: 1)) { context in
-                    let elapsed = max(0, Int(context.date.timeIntervalSince(startedAt)))
+        Group {
+            if let onOpen {
+                Button(action: onOpen) {
+                    progressContent
+                }
+                .buttonStyle(.plain)
+                .help("打开任务子线程窗口，实时查看多段执行过程")
+            } else {
+                progressContent
+            }
+        }
+    }
+
+    private var progressContent: some View {
+        TimelineView(.periodic(from: .now, by: 1)) { context in
+            let elapsed = max(0, Int(context.date.timeIntervalSince(startedAt)))
+            let diagnostic = diagnosticProvider?(context.date)
+
+            VStack(alignment: .leading, spacing: diagnostic == nil ? 0 : 6) {
+                HStack(spacing: 9) {
+                    ProgressView()
+                        .progressViewStyle(.circular)
+                        .controlSize(.small)
+                        .tint(Color.lingHolo)
+                        .frame(width: 16, height: 16)
+                    Text(stage)
+                        .font(.system(size: 13.5, weight: .semibold))
+                        .foregroundStyle(Color.lingFg.opacity(0.85))
                     Text("\(elapsed)s")
                         .font(.system(size: 11.5, weight: .medium, design: .monospaced))
                         .foregroundStyle(Color.lingFg.opacity(0.4))
-                }
-                Spacer(minLength: 8)
-                if onOpen != nil {
-                    HStack(spacing: 3) {
-                        Image(systemName: "rectangle.split.2x1")
-                        Text("查看执行过程")
+                    Spacer(minLength: 8)
+                    if onOpen != nil {
+                        HStack(spacing: 3) {
+                            Image(systemName: "rectangle.split.2x1")
+                            Text("查看执行过程")
+                        }
+                        .font(.system(size: 10.5, weight: .semibold))
+                        .foregroundStyle(Color.lingHolo.opacity(0.85))
                     }
-                    .font(.system(size: 10.5, weight: .semibold))
-                    .foregroundStyle(Color.lingHolo.opacity(0.85))
+                }
+
+                if let diagnostic {
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack(alignment: .firstTextBaseline, spacing: 6) {
+                            Image(systemName: diagnostic.isStale || diagnostic.isTerminalButLoading ? "exclamationmark.triangle.fill" : "waveform.path.ecg")
+                                .font(.system(size: 10.5, weight: .bold))
+                                .foregroundStyle(diagnostic.isStale || diagnostic.isTerminalButLoading ? Color.orange.opacity(0.86) : Color.lingHolo.opacity(0.74))
+                            Text(diagnostic.phase)
+                                .font(.system(size: 10.5, weight: .bold))
+                                .foregroundStyle(Color.lingHolo.opacity(0.82))
+                            Text(diagnostic.headline)
+                                .font(.system(size: 11.5, weight: .semibold))
+                                .foregroundStyle(Color.lingFg.opacity(0.68))
+                                .lineLimit(1)
+                        }
+
+                        if !diagnostic.detail.isEmpty {
+                            Text(diagnostic.detail)
+                                .font(.system(size: 11, weight: .medium))
+                                .foregroundStyle(Color.lingFg.opacity(0.52))
+                                .lineLimit(2)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+
+                        diagnosticRunBar(diagnostic)
+
+                        if let trace = diagnostic.lastTrace {
+                            Text(trace)
+                                .font(.system(size: 10, weight: .medium))
+                                .foregroundStyle(Color.lingFg.opacity(0.36))
+                                .lineLimit(1)
+                        }
+                    }
+                    .padding(.leading, 25)
                 }
             }
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
-        .disabled(onOpen == nil)
-        .help("打开任务子线程窗口，实时查看多段执行过程")
+    }
+
+    private func diagnosticRunBar(_ diagnostic: LingShuTaskProgressDiagnostic) -> some View {
+        HStack(spacing: 5) {
+            diagnosticChip("record", diagnostic.recordIDShort, monospaced: true)
+            diagnosticChip("trace", diagnostic.lastTraceTime, monospaced: true)
+            diagnosticChip("step", diagnostic.currentStep)
+                .layoutPriority(1)
+            diagnosticChip("wait", diagnostic.waitState, warning: diagnostic.isStale || diagnostic.isTerminalButLoading)
+            diagnosticChip("hb", diagnostic.heartbeatText, warning: diagnostic.isStale)
+        }
+        .padding(.vertical, 3)
+        .padding(.horizontal, 5)
+        .background(
+            RoundedRectangle(cornerRadius: 5, style: .continuous)
+                .fill(Color.lingFg.opacity(0.035))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 5, style: .continuous)
+                .stroke(Color.lingHolo.opacity(0.10), lineWidth: 1)
+        )
+    }
+
+    private func diagnosticChip(
+        _ label: String,
+        _ value: String,
+        warning: Bool = false,
+        monospaced: Bool = false
+    ) -> some View {
+        HStack(spacing: 2) {
+            Text(label)
+                .foregroundStyle(Color.lingFg.opacity(0.34))
+            Text(value)
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .foregroundStyle(warning ? Color.orange.opacity(0.88) : Color.lingFg.opacity(0.58))
+        }
+        .font(.system(size: 9.6, weight: .semibold, design: monospaced ? .monospaced : .default))
+        .padding(.vertical, 2)
+        .padding(.horizontal, 4)
+        .background(
+            Capsule(style: .continuous)
+                .fill((warning ? Color.orange : Color.lingHolo).opacity(0.075))
+        )
     }
 }
 
@@ -60,8 +151,12 @@ struct ChatBubbleView: View {
     @State private var previewItem: AttachmentPreviewItem?
 
     private var accent: Color { message.isUser ? .lingHolo : .lingHoloAlt }
+    /// 所有模型通道共用同一展示清洗:解开结构化 reply,并兼容历史截断协议消息。
+    private var renderedMessageText: String {
+        message.isUser ? message.text : LingShuVisibleModelText.clean(message.text)
+    }
     private var hasCopyableText: Bool {
-        !message.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        !renderedMessageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     /// 气泡内回复直达该任务的隔离会话(不经主输入/分诊)。
@@ -98,9 +193,14 @@ struct ChatBubbleView: View {
                         // 点一下进任务子线程窗口看实时的多段执行过程——对齐 codex/claude 的状态行做法。
                         // per-task 活动:显示**这条消息自己任务**的进度,不读全局 missionTitle(根治多任务并行时串台)。
                         HStack(spacing: 8) {
-                            LingShuTaskProgressIndicator(stage: state.activityLabel(for: message.taskRecordID), startedAt: message.createdAt) {
-                                state.openTaskRecord(message.taskRecordID)
-                            }
+                            LingShuTaskProgressIndicator(
+                                stage: state.activityLabel(for: message.taskRecordID),
+                                startedAt: message.createdAt,
+                                diagnosticProvider: { now in
+                                    state.activityDiagnostic(for: message.taskRecordID, now: now)
+                                },
+                                onOpen: nil
+                            )
                             // 问答线可删:**等待中(未执行)**的问答显示删除按钮(执行中的那条不可删)。
                             if state.canDeletePendingChatTurn(message.id) {
                                 Button { state.deletePendingChatTurn(bubbleID: message.id) } label: {
@@ -130,7 +230,9 @@ struct ChatBubbleView: View {
                                             .foregroundStyle(Color.lingFg.opacity(0.5))
                                     }
                                 } else {
-                                    LingShuMessageContentView(text: message.text)
+                                    LingShuMessageContentView(text: renderedMessageText) { url in
+                                        previewItem = .init(url: url)
+                                    }
                                 }
                             }
 
@@ -153,16 +255,18 @@ struct ChatBubbleView: View {
                         .foregroundStyle(Color.lingFg.opacity(0.94))
                         .fixedSize(horizontal: false, vertical: true)
                         .textSelection(.enabled)
+                    LingShuOpenablePathChips(text: message.text) { url in
+                        previewItem = .init(url: url)
+                    }
                     if let names = message.attachmentNames, !names.isEmpty {
                         // 已发送的附件:在消息气泡里展示(留痕);**点击可重新预览**(发送时已落到稳定目录,见 persistedSentAttachmentPath)。
                         FlowChips(names: names, paths: message.attachmentPaths) { url in previewItem = .init(url: url) }
-                            .sheet(item: $previewItem) { item in
-                                LingShuArtifactPreviewSheet(title: item.url.lastPathComponent, fileURL: item.url) { previewItem = nil }
-                            }
                     }
                 } else {
                     // 灵枢回复：结构化分块（代码块单独成卡片，正文走 Markdown）。
-                    LingShuMessageContentView(text: message.text)
+                    LingShuMessageContentView(text: renderedMessageText) { url in
+                        previewItem = .init(url: url)
+                    }
                         .textSelection(.enabled)
                 }
 
@@ -202,9 +306,8 @@ struct ChatBubbleView: View {
                 }
 
                 if !message.isUser,
-                   !message.isLoading,
                    let taskRecordID = message.taskRecordID,
-                   state.taskExecutionRecordLookup.contains(where: { $0.id == taskRecordID }) {
+                   state.canOpenTaskRecord(taskRecordID) {
                     Button {
                         state.openTaskRecord(taskRecordID)
                     } label: {
@@ -224,7 +327,7 @@ struct ChatBubbleView: View {
                 }
 
                 if hasCopyableText {
-                    LingShuBubbleCopyBar(markdown: message.text)
+                    LingShuBubbleCopyBar(markdown: renderedMessageText)
                         .padding(.top, 2)
                 }
             }
@@ -260,6 +363,9 @@ struct ChatBubbleView: View {
         .frame(maxWidth: .infinity, alignment: message.isUser ? .trailing : .leading)
         .onAppear {
             withAnimation(.easeInOut(duration: 2.6).repeatForever(autoreverses: true)) { glow = true }
+        }
+        .sheet(item: $previewItem) { item in
+            LingShuArtifactPreviewSheet(title: item.url.lastPathComponent, fileURL: item.url) { previewItem = nil }
         }
     }
 

@@ -302,7 +302,8 @@ struct LingShuModelGatewaySurface: View {
     /// 附件入脑策略(**自动按脑能力,无手动开关** 2026-06-28 用户定调):多模态脑→对话附件原图直发它;非多模态脑→VL 抽成文字(零留存)。
     /// 态势感知(环境感知)不在此列——一律强制 VL/零留存。这里只做**状态展示**(让用户知道附件会怎么处理),不再是可切换的控制。
     private var directToBrainStatus: some View {
-        let vision = LingShuMultimodal.isVisionCapable(provider: state.modelProvider, model: state.modelName)
+        let vision = state.shouldAttemptNativeMultimodalForCurrentModel()
+        let downgraded = state.isCurrentModelMarkedNativeMultimodalUnsupported()
         return HStack(spacing: 12) {
             Image(systemName: vision ? "photo.on.rectangle.angled" : "doc.text.magnifyingglass")
                 .font(.system(size: 14, weight: .bold))
@@ -310,8 +311,10 @@ struct LingShuModelGatewaySurface: View {
             VStack(alignment: .leading, spacing: 3) {
                 Text("附件入脑(自动按脑能力)").font(.system(size: 12.5, weight: .bold)).foregroundStyle(Color.lingFg)
                 Text(vision
-                     ? "当前脑「\(state.modelName)」多模态 → 对话附件(图片/PDF)原图直发它,用原生视觉看。"
-                     : "当前脑「\(state.modelName)」非多模态 → 对话附件走 VL 抽成文字再喂(零留存)。换多模态脑(如 Claude)即原图直发。")
+                     ? "当前脑「\(state.modelName)」将先尝试 OpenAI 兼容多模态直发；若服务端拒绝，会自动标记并降级。"
+                     : (downgraded
+                        ? "当前脑「\(state.modelName)」已确认不支持原生多模态 → 附件走图片解析降级。"
+                        : "当前脑「\(state.modelName)」不走原生多模态 → 附件走图片解析降级。"))
                     .font(.system(size: 10.5, weight: .medium)).foregroundStyle(Color.lingFg.opacity(0.5))
                     .fixedSize(horizontal: false, vertical: true)
             }

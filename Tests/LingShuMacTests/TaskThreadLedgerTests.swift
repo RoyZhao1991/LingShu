@@ -111,6 +111,46 @@ final class TaskThreadLedgerTests: XCTestCase {
         XCTAssertEqual(record?.threadCommit?.phase, .delivering)
     }
 
+    func testArtifactModifiedRegistrationRefreshesTimestamp() {
+        let t1 = Date(timeIntervalSince1970: 1_000)
+        let t2 = Date(timeIntervalSince1970: 2_000)
+        var record = LingShuTaskExecutionRecord.create(prompt: "测试产物修改时间", now: t1)
+
+        record.appendArtifact(title: "旧标题", location: "/tmp/lingshu-artifact-time.docx", producer: "初始", operation: .created, now: t1)
+        record.appendArtifact(title: "新标题", location: "/tmp/lingshu-artifact-time.docx", producer: "返工", operation: .modified, now: t2)
+
+        XCTAssertEqual(record.artifacts.count, 1)
+        XCTAssertEqual(record.artifacts.first?.operation, .modified)
+        XCTAssertEqual(record.artifacts.first?.title, "新标题")
+        XCTAssertEqual(record.artifacts.first?.producer, "返工")
+        XCTAssertEqual(record.artifacts.first?.createdAt, t2, "同一路径产物被修改登记时,卡片登记时间应刷新到最新修改段")
+    }
+
+    func testArtifactDisplayTimestampUsesLocalFileModificationDate() throws {
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("lingshu-artifact-mtime-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let file = dir.appendingPathComponent("report.docx")
+        try Data("docx".utf8).write(to: file)
+        let registeredAt = Date(timeIntervalSince1970: 1_000)
+        let modifiedAt = Date(timeIntervalSince1970: 3_000)
+        try FileManager.default.setAttributes([.modificationDate: modifiedAt], ofItemAtPath: file.path)
+
+        let artifact = LingShuTaskExecutionArtifact(
+            title: "报告",
+            location: file.path,
+            producer: "测试",
+            createdAt: registeredAt,
+            operation: .modified
+        )
+
+        let actualMtime = try XCTUnwrap(artifact.fileModificationDate)
+        XCTAssertEqual(actualMtime.timeIntervalSince1970, modifiedAt.timeIntervalSince1970, accuracy: 0.001)
+        XCTAssertEqual(artifact.displayTimestamp.timeIntervalSince1970, modifiedAt.timeIntervalSince1970, accuracy: 0.001)
+    }
+
     @MainActor
     func testRecentCompletedTaskIsNotStarvedByOldOpenTasks() {
         let state = LingShuState()

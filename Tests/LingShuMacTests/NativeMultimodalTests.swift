@@ -1,7 +1,7 @@
 import XCTest
 @testable import LingShuMac
 
-/// 原生多模态兼容:supportsNativeMultimodal 的模型,图片内联进 OpenAI 多模态 content 数组。
+/// 原生多模态兼容:OpenAI/GPT 兼容通道默认先尝试 image_url,失败后再按模型记忆降级。
 final class NativeMultimodalTests: XCTestCase {
     private let gateway = LingShuModelGateway()
 
@@ -38,5 +38,36 @@ final class NativeMultimodalTests: XCTestCase {
         let messages = try XCTUnwrap(object["messages"] as? [[String: Any]])
         // 无图片 → content 仍是普通字符串(走既有 Codable 路径,零回归)。
         XCTAssertTrue(messages.allSatisfy { $0["content"] is String })
+    }
+
+    func testOpenAICompatibleModelAttemptsNativeMultimodalByDefaultThenCanBeMarkedUnsupported() {
+        let suiteName = "NativeMultimodalTests-\(UUID().uuidString)"
+        let suite = UserDefaults(suiteName: suiteName)!
+        defer { suite.removePersistentDomain(forName: suiteName) }
+        let provider = "MiniMax 官方"
+        let model = "MiniMax-M3"
+        let endpoint = "https://api.minimaxi.com/v1"
+        let proto = "OpenAI Chat"
+
+        XCTAssertTrue(LingShuMultimodal.shouldAttemptNativeMultimodal(
+            provider: provider, model: model, endpoint: endpoint, protocolName: proto, defaults: suite
+        ), "GPT/OpenAI 兼容通道默认先尝试原生多模态,不再靠模型名白名单")
+
+        LingShuMultimodal.markNativeMultimodalUnsupported(
+            provider: provider, model: model, endpoint: endpoint, protocolName: proto, defaults: suite
+        )
+
+        XCTAssertFalse(LingShuMultimodal.shouldAttemptNativeMultimodal(
+            provider: provider, model: model, endpoint: endpoint, protocolName: proto, defaults: suite
+        ), "确认端点拒绝后,同一模型下次直接走降级策略")
+    }
+
+    func testImageURLRejectionClassifiedAsNativeMultimodalUnsupported() {
+        let failure = LingShuModelServiceFailure.classify(
+            statusCode: 400,
+            body: #"{"error":{"message":"unsupported content type image_url for this model"}}"#
+        )
+        XCTAssertEqual(failure.kind, .multimodalUnsupported)
+        XCTAssertTrue(LingShuModelServiceFailure.isNativeMultimodalUnsupportedReason(failure.encodedReason))
     }
 }

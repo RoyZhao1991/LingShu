@@ -305,10 +305,8 @@ struct ModelProviderPreset: Identifiable {
     let authMode: String
     let defaultModels: [String]
     let note: String
-    /// 是否原生多模态（图片可直接喂主模型）。
-    /// false（如 MiniMax M3）→ 图片走云视觉解析成文字再注入（零留存）；
-    /// true（如 KIMI K2.6 这类原生多模态）→ 图片内联进消息，和 codex/claude 架构统一。
-    /// 换原生多模态模型时把这个置 true 即可，不必改调用链。
+    /// 兼容旧配置的静态提示位。真实附件入脑策略不再依赖白名单:
+    /// GPT/OpenAI 兼容通道默认先尝试 image_url 多模态；若服务端拒绝，再标记该模型降级。
     var supportsNativeMultimodal: Bool = false
 
     var displayName: String {
@@ -320,12 +318,12 @@ struct ModelProviderPreset: Identifiable {
         id: "minimax-official",
         name: "MiniMax 官方",
         region: "国内·官方直连",
-        category: "纯推理通道",
+        category: "OpenAI 兼容",
         endpoint: "https://api.minimaxi.com/v1",
         protocolName: "OpenAI Chat",
         authMode: "API Key",
         defaultModels: ["MiniMax-M3", "MiniMax-M2.7"],
-        note: "MiniMax 官方直连，纯文本推理、标准流式、无 agent 框架注入（prompt 基数约 178 而非网关的 1.34 万）。文本与中枢调度走这里；图片/音频/视频感知仍走数据网络网关专项接口。"
+        note: "MiniMax 官方直连，标准流式、无 agent 框架注入（prompt 基数约 178 而非网关的 1.34 万）。OpenAI 兼容通道会优先尝试 image_url 多模态；若端点拒绝则自动降级到数据网络网关图片解析。"
     )
 
     static let dataNetGateway = ModelProviderPreset(

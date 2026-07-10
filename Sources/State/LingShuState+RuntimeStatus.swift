@@ -1,5 +1,19 @@
 import Foundation
 
+struct LingShuTaskProgressDiagnostic: Equatable {
+    var phase: String
+    var headline: String
+    var detail: String
+    var lastTrace: String?
+    var lastTraceTime: String
+    var currentStep: String
+    var waitState: String
+    var heartbeatText: String
+    var recordIDShort: String
+    var isStale: Bool
+    var isTerminalButLoading: Bool
+}
+
 /// 对话页与运行态侧栏的状态派生值。
 /// 这些值只组合现有状态，不承载路由、记忆或执行副作用。
 @MainActor
@@ -141,6 +155,170 @@ extension LingShuState {
         case .queued: return "排队中"
         default: return "理解需求"
         }
+    }
+
+    /// 加载气泡的可解释运行态：把任务账本、计划、最近结构化消息和 trace 合成一行可读诊断。
+    /// 目的不是替代任务窗口，而是在长时间推进时让主界面至少知道“卡在什么环节”。
+    func activityDiagnostic(for recordID: String?, now: Date = Date()) -> LingShuTaskProgressDiagnostic? {
+        guard let recordID, let record = taskExecutionRecords.first(where: { $0.id == recordID }) else { return nil }
+        let commit = record.threadCommit
+        let heartbeatAt = commit?.lastHeartbeatAt ?? record.updatedAt
+        let heartbeatAge = max(0, Int(now.timeIntervalSince(heartbeatAt)))
+        let isTerminal = record.status.isTerminal
+        let isStale = !isTerminal && heartbeatAge >= 60
+        let phase = activityDiagnosticPhase(commit?.phase, status: record.status)
+        let headline = activityDiagnosticHeadline(record, heartbeatAge: heartbeatAge, isStale: isStale)
+        let detail = activityDiagnosticDetail(record)
+        let traceEvent = activityDiagnosticMatchedTrace(recordID: recordID, record: record)
+        let trace = activityDiagnosticTrace(from: traceEvent)
+        let heartbeatLabel = isTerminal ? "更新" : "心跳"
+
+        return LingShuTaskProgressDiagnostic(
+            phase: phase,
+            headline: headline,
+            detail: detail,
+            lastTrace: trace,
+            lastTraceTime: traceEvent?.displayTime ?? "无",
+            currentStep: activityDiagnosticCurrentStep(record),
+            waitState: activityDiagnosticWaitState(record),
+            heartbeatText: "\(heartbeatLabel) \(formatElapsed(heartbeatAge)) 前",
+            recordIDShort: String(record.id.suffix(8)),
+            isStale: isStale,
+            isTerminalButLoading: isTerminal
+        )
+    }
+
+    private func activityDiagnosticPhase(
+        _ phase: LingShuTaskThreadCommit.Phase?,
+        status: LingShuTaskExecutionStatus
+    ) -> String {
+        let resolved = phase ?? LingShuTaskThreadCommit.phase(for: status)
+        switch resolved {
+        case .planning: return "规划"
+        case .executing: return "执行"
+        case .checking: return "验收"
+        case .delivering: return "交付"
+        case .waiting: return "等待"
+        case .failed: return "失败"
+        }
+    }
+
+    private func activityDiagnosticHeadline(
+        _ record: LingShuTaskExecutionRecord,
+        heartbeatAge: Int,
+        isStale: Bool
+    ) -> String {
+        if record.status.isTerminal {
+            return compactActivityDiagnosticText("记录已\(record.status.rawValue)，主气泡等待收口", limit: 42)
+        }
+
+        let completed = record.plan.filter { $0.status == .completed }.count
+        if let step = record.plan.first(where: { $0.status == .inProgress }) {
+            return compactActivityDiagnosticText("计划 \(completed + 1)/\(max(record.plan.count, 1))：\(step.title)", limit: 48)
+        }
+        if let step = record.plan.first(where: { $0.status == .pending }) {
+            return compactActivityDiagnosticText("下一步 \(completed + 1)/\(max(record.plan.count, 1))：\(step.title)", limit: 48)
+        }
+
+        let summary = record.threadCommit?.progressSummary ?? record.summary
+        let prefix = isStale ? "超过 \(formatElapsed(heartbeatAge)) 无新心跳：" : ""
+        return compactActivityDiagnosticText("\(prefix)\(summary)", limit: 52)
+    }
+
+    private func activityDiagnosticCurrentStep(_ record: LingShuTaskExecutionRecord) -> String {
+        let completed = record.plan.filter { $0.status == .completed }.count
+        if let step = record.plan.first(where: { $0.status == .inProgress }) {
+            return compactActivityDiagnosticText("\(completed + 1)/\(max(record.plan.count, 1)) \(step.title)", limit: 32)
+        }
+        if let step = record.plan.first(where: { $0.status == .pending }) {
+            return compactActivityDiagnosticText("待 \(completed + 1)/\(max(record.plan.count, 1)) \(step.title)", limit: 32)
+        }
+        return record.status.rawValue
+    }
+
+    private func activityDiagnosticWaitState(_ record: LingShuTaskExecutionRecord) -> String {
+        if record.status.isTerminal { return "已结束" }
+        switch record.status {
+        case .queued:
+            return "等待排队"
+        case .waitingForUser:
+            return "等待用户"
+        case .acquiringCapability:
+            return "等待能力"
+        case .blocked, .needsRevision, .partial, .suspended, .failed:
+            return record.status.rawValue
+        default:
+            break
+        }
+
+        if let detail = record.messages.reversed().compactMap(\.detail).first {
+            switch detail {
+            case .toolCall:
+                return "等待工具"
+            case .toolResult, .fileEdit:
+                return "等待模型"
+            }
+        }
+
+        if isModelExecuting || coreState == .thinking || runtimePhase != .idle {
+            return "等待模型"
+        }
+        return "等待推进"
+    }
+
+    private func activityDiagnosticDetail(_ record: LingShuTaskExecutionRecord) -> String {
+        if let structured = record.messages.reversed().compactMap({ message -> String? in
+            guard let detail = message.detail else { return nil }
+            switch detail {
+            case let .toolCall(tool, summary, _):
+                let brief = compactActivityDiagnosticText(summary, limit: 52)
+                return brief.isEmpty ? "工具调用：\(Self.toolDisplayName(tool))" : "工具调用：\(Self.toolDisplayName(tool)) · \(brief)"
+            case let .toolResult(tool, success, output):
+                let brief = compactActivityDiagnosticText(output, limit: 52)
+                let result = success ? "完成" : "失败"
+                return brief.isEmpty ? "工具结果：\(Self.toolDisplayName(tool)) \(result)" : "工具结果：\(Self.toolDisplayName(tool)) \(result) · \(brief)"
+            case let .fileEdit(path, operation, added, removed, _):
+                let name = URL(fileURLWithPath: path).lastPathComponent
+                return "文件\(operation.rawValue)：\(name) +\(added)/-\(removed)"
+            }
+        }).first {
+            return structured
+        }
+
+        if let message = record.messages.reversed().first(where: { $0.kind != .user }) {
+            let text = compactActivityDiagnosticText(message.text, limit: 64)
+            if !text.isEmpty {
+                return "\(message.actor) · \(text)"
+            }
+        }
+
+        return compactActivityDiagnosticText(record.threadCommit?.ledgerLine ?? record.summary, limit: 64)
+    }
+
+    private func activityDiagnosticMatchedTrace(recordID: String, record: LingShuTaskExecutionRecord) -> ExecutionTraceEvent? {
+        executionTrace.reversed().first {
+            $0.detail.contains(recordID) || $0.detail.contains(record.title) || $0.title.contains(record.title)
+        } ?? executionTrace.last
+    }
+
+    private func activityDiagnosticTrace(from matched: ExecutionTraceEvent?) -> String? {
+        guard let matched else { return nil }
+        let detail = compactActivityDiagnosticText(matched.detail, limit: 42)
+        if detail.isEmpty {
+            return "\(matched.displayTime) \(matched.actor) · \(matched.title)"
+        }
+        return "\(matched.displayTime) \(matched.actor) · \(matched.title)：\(detail)"
+    }
+
+    private func compactActivityDiagnosticText(_ text: String, limit: Int) -> String {
+        let normalized = text
+            .replacingOccurrences(of: "\n", with: " ")
+            .replacingOccurrences(of: "\t", with: " ")
+            .split(separator: " ")
+            .joined(separator: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard normalized.count > limit else { return normalized }
+        return "\(normalized.prefix(max(1, limit - 1)))…"
     }
 
     // MARK: - 本轮真实进展（侧栏绑真实进展,替代静态聚合遥测,计划 §2）

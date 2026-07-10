@@ -11,8 +11,10 @@ extension LingShuState {
 
         // 大脑(可换)。
         var brainItems = ["当前大脑:\(modelProvider) / \(modelName)"]
-        if selectedModelPreset?.supportsNativeMultimodal == true {
-            brainItems.append("原生多模态(图片可直接喂主模型)")
+        if shouldAttemptNativeMultimodalForCurrentModel() {
+            brainItems.append("原生多模态:本通道默认尝试 image_url 直发")
+        } else if isCurrentModelMarkedNativeMultimodalUnsupported() {
+            brainItems.append("原生多模态:已确认不可用，附件走图片解析降级")
         }
         brainItems.append("大脑可热切换、换脑后记忆延续(codex/claude 是 agent 插件,不是大脑)")
         capabilities.append(.init(title: "🧠 大脑", items: brainItems))

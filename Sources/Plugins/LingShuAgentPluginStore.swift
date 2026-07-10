@@ -80,6 +80,10 @@ enum LingShuAgentPluginStore {
             ("please login", "需登录"), ("login required", "需登录"), ("not authenticated", "未认证"),
             ("no api key", "缺 API Key"), ("missing api key", "缺 API Key"), ("invalid api key", "API Key 无效"),
             ("api key required", "缺 API Key"), ("credit balance is too low", "额度不足"), ("quota exceeded", "额度用尽"),
+            ("usage limit reached", "额度用尽"), ("reached your usage limit", "额度用尽"),
+            ("monthly usage limit", "额度用尽"), ("weekly usage limit", "额度用尽"), ("daily usage limit", "额度用尽"),
+            ("out of credits", "额度用尽"), ("not enough credits", "额度不足"),
+            ("billing hard limit", "账单限额已达"), ("spending limit", "账单限额已达"),
             ("account on hold", "账号被暂停"), ("account is on hold", "账号被暂停"), ("account suspended", "账号被暂停"),
             ("organization has been disabled", "组织/账号被禁用"), ("organisation has been disabled", "组织/账号被禁用"),
             ("organization disabled", "组织/账号被禁用"), ("org disabled", "组织/账号被禁用"),
@@ -89,11 +93,55 @@ enum LingShuAgentPluginStore {
         let zh: [(String, String)] = [
             ("未登录", "未登录"), ("请先登录", "需登录"), ("登录已过期", "登录过期"), ("登录失效", "登录失效"),
             ("认证失败", "认证失败"), ("授权已过期", "授权过期"), ("令牌已过期", "令牌过期"), ("令牌过期", "令牌过期"),
-            ("额度不足", "额度不足"), ("余额不足", "余额不足"), ("账户被暂停", "账号被暂停"), ("账号被暂停", "账号被暂停"),
+            ("需登录", "需登录"), ("未认证", "未认证"), ("额度不足", "额度不足"), ("额度已用尽", "额度用尽"),
+            ("额度用尽", "额度用尽"), ("没有额度", "额度用尽"), ("没额度", "额度用尽"),
+            ("使用上限", "额度用尽"), ("用量上限", "额度用尽"), ("超出限额", "额度用尽"),
+            ("余额不足", "余额不足"), ("账户被暂停", "账号被暂停"), ("账号被暂停", "账号被暂停"),
             ("组织已被禁用", "组织/账号被禁用"), ("组织被禁用", "组织/账号被禁用"),
         ]
         for (needle, reason) in zh where text.contains(needle) { return reason }
         return nil
+    }
+
+    nonisolated static func unavailableMessage(agentName: String, reason: String) -> String {
+        "\(agentName) 插件当前不可用:\(reason)。请先恢复(如登录/补额度/补凭据)后再重试。"
+    }
+
+    nonisolated static func unavailableReason(fromFailureText text: String, agent: LingShuAgentPlugin? = nil) -> String? {
+        if let reason = outputIndicatesUnavailable(text) { return reason }
+        guard let agent else { return nil }
+        let latest = LingShuAgentPluginStore.plugin(id: agent.id)
+        let storedReason = latest?.unavailableReason?.trimmingCharacters(in: .whitespacesAndNewlines)
+            ?? agent.unavailableReason?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if latest?.isCallableNow == false || agent.isCallableNow == false {
+            return storedReason?.isEmpty == false ? storedReason : "不可用"
+        }
+        return nil
+    }
+
+    nonisolated static func unavailableNotice(from text: String, knownPlugins: [LingShuAgentPlugin] = []) -> (agentName: String, reason: String, message: String)? {
+        guard let reason = outputIndicatesUnavailable(text) else { return nil }
+        let agentName = mentionedAgentName(in: text, knownPlugins: knownPlugins) ?? "外部 agent"
+        return (agentName, reason, unavailableMessage(agentName: agentName, reason: reason))
+    }
+
+    private nonisolated static func mentionedAgentName(in text: String, knownPlugins: [LingShuAgentPlugin]) -> String? {
+        for plugin in knownPlugins {
+            let aliases = plugin.allAliases.sorted { $0.count > $1.count }
+            if aliases.contains(where: { alias in
+                text.range(of: alias, options: [.caseInsensitive, .diacriticInsensitive]) != nil
+            }) {
+                return plugin.displayName
+            }
+        }
+        let marker = text.range(of: "插件当前不可用") ?? text.range(of: "当前不可用")
+        guard let marker else { return nil }
+        let prefix = String(text[..<marker.lowerBound])
+        let separators = CharacterSet.whitespacesAndNewlines.union(CharacterSet(charactersIn: ":：()（）[]【】,，。!！"))
+        let tokens = prefix.components(separatedBy: separators)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty && $0.count <= 40 && $0 != "插件" && $0 != "未完成" }
+        return tokens.last
     }
 
     /// **注册时探活**:用极短超时跑一个无害 objective——登录/认证失败会很快返回(判不可用);
@@ -222,12 +270,14 @@ enum LingShuAgentPluginStore {
                 // 把插件标记为不可用(下次 @/派活前 isAvailableNow 据此过滤),并把这次当失败返回——别把"未登录"当成功产出。
                 if !timedOut, let unavail = (outputIndicatesUnavailable(text) ?? outputIndicatesUnavailable(errText)) {
                     markUnavailable(id: plugin.id, reason: unavail)
-                    cont.resume(returning: .failure("\(plugin.displayName) 当前不可用:\(unavail)。已标记该插件不可用,请先恢复(如登录/补凭据)再用。"))
+                    cont.resume(returning: .failure(unavailableMessage(agentName: plugin.displayName, reason: unavail)))
                     return
                 }
                 if timedOut { cont.resume(returning: .failure("\(plugin.displayName) 软超时(连续\(plugin.timeoutSeconds)s无输出,疑似卡死)")) }
-                else if proc.terminationStatus != 0 && text.isEmpty {
-                    cont.resume(returning: .failure("\(plugin.displayName) 退出码 \(proc.terminationStatus):\(errText.isEmpty ? "无输出" : String(errText.prefix(300)))"))
+                else if proc.terminationStatus != 0 {
+                    let deliverable = isStream ? LingShuAgentStreamParser.finalText(fromStreamJSON: text) : text
+                    let diagnostic = deliverable.isEmpty ? errText : deliverable
+                    cont.resume(returning: .failure("\(plugin.displayName) 退出码 \(proc.terminationStatus):\(diagnostic.isEmpty ? "无输出" : String(diagnostic.prefix(300)))"))
                 } else {
                     // stream-json:最终交付从 result 字段提取(否则返回的是一坨 NDJSON);text:原样。
                     let deliverable = isStream ? LingShuAgentStreamParser.finalText(fromStreamJSON: text) : text

@@ -90,7 +90,11 @@ extension LingShuState {
             let resumeInput = isWaitingForPrerequisite && providesPrerequisite
                 ? combined + "\n\n" + capabilityResumePreamble(recordID: recordID)
                 : combined
-            Task { await agentOrchestrator.resumeWithInput(id: subID, input: resumeInput) }
+            let orchestrator = agentOrchestrator
+            Task { @MainActor [weak self] in
+                await self?.prepareSubtaskArtifactDelta(subID: subID, recordID: recordID)
+                await orchestrator.resumeWithInput(id: subID, input: resumeInput)
+            }
             return
         }
         // **线程隔离(用户定调 2026-06-25):任务窗口的追问绝不落主会话**——这条记录是一条**独立隔离线程**。

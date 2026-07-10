@@ -43,6 +43,15 @@ enum LingShuGoalReferenceScope: String, Codable, Sendable, Equatable {
     }
 }
 
+/// GoalSpec 对“当前输入到底接谁”的置信度。低/中置信会触发历史检索兜底,
+/// 让模型先主动找证据再最终定目标。
+enum LingShuGoalReferenceConfidence: String, Codable, Sendable, Equatable {
+    case high
+    case medium
+    case low
+    case unknown
+}
+
 struct LingShuGoalSpec: Codable, Sendable, Equatable {
     var objective: String          // 一句话:模型重述用户真正想要的结果
     var kind: LingShuGoalKind      // 任务 / 互动 / 疑问
@@ -50,6 +59,7 @@ struct LingShuGoalSpec: Codable, Sendable, Equatable {
     var referenceScope: LingShuGoalReferenceScope // 本目标引用的上下文范围
     var referenceEvidence: [String] // 支撑引用范围的原文证据(短引用)
     var referenceExplicit: Bool     // 是否由当前输入显式指向非默认候选
+    var referenceConfidence: LingShuGoalReferenceConfidence // 引用归属置信度
     var constraints: [String]      // 必须满足的条件(格式/时限/工具/环境)
     var boundaries: [String]       // 明确不该做 / 越界即停
     var risks: [String]            // 隐私/资金/账号/不可逆/对外发布/物理动作等风险点
@@ -60,16 +70,18 @@ struct LingShuGoalSpec: Codable, Sendable, Equatable {
          boundaries: [String] = [], risks: [String] = [], successCriteria: [String] = [],
          openQuestions: [String] = [], outputMode: LingShuOutputMode = .unspecified,
          referenceScope: LingShuGoalReferenceScope = .unknown,
-         referenceEvidence: [String] = [], referenceExplicit: Bool = false) {
+         referenceEvidence: [String] = [], referenceExplicit: Bool = false,
+         referenceConfidence: LingShuGoalReferenceConfidence = .unknown) {
         self.objective = objective; self.kind = kind; self.outputMode = outputMode
         self.referenceScope = referenceScope; self.referenceEvidence = referenceEvidence; self.referenceExplicit = referenceExplicit
+        self.referenceConfidence = referenceConfidence
         self.constraints = constraints
         self.boundaries = boundaries; self.risks = risks
         self.successCriteria = successCriteria; self.openQuestions = openQuestions
     }
 
     private enum CodingKeys: String, CodingKey {
-        case objective, kind, outputMode, referenceScope, referenceEvidence, referenceExplicit
+        case objective, kind, outputMode, referenceScope, referenceEvidence, referenceExplicit, referenceConfidence
         case constraints, boundaries, risks, successCriteria, openQuestions
     }
 
@@ -81,6 +93,7 @@ struct LingShuGoalSpec: Codable, Sendable, Equatable {
         referenceScope = try container.decodeIfPresent(LingShuGoalReferenceScope.self, forKey: .referenceScope) ?? .unknown
         referenceEvidence = try container.decodeIfPresent([String].self, forKey: .referenceEvidence) ?? []
         referenceExplicit = try container.decodeIfPresent(Bool.self, forKey: .referenceExplicit) ?? false
+        referenceConfidence = try container.decodeIfPresent(LingShuGoalReferenceConfidence.self, forKey: .referenceConfidence) ?? .unknown
         constraints = try container.decodeIfPresent([String].self, forKey: .constraints) ?? []
         boundaries = try container.decodeIfPresent([String].self, forKey: .boundaries) ?? []
         risks = try container.decodeIfPresent([String].self, forKey: .risks) ?? []
@@ -96,6 +109,7 @@ struct LingShuGoalSpec: Codable, Sendable, Equatable {
         try container.encode(referenceScope, forKey: .referenceScope)
         try container.encode(referenceEvidence, forKey: .referenceEvidence)
         try container.encode(referenceExplicit, forKey: .referenceExplicit)
+        try container.encode(referenceConfidence, forKey: .referenceConfidence)
         try container.encode(constraints, forKey: .constraints)
         try container.encode(boundaries, forKey: .boundaries)
         try container.encode(risks, forKey: .risks)
@@ -137,6 +151,7 @@ struct LingShuGoalSpec: Codable, Sendable, Equatable {
         var lines = ["目标:\(objective)(\(kind.rawValue))"]
         if outputMode != .unspecified { lines.append("输出模式:\(outputMode.rawValue)") }
         if referenceScope != .unknown { lines.append("引用范围:\(referenceScope.rawValue);显式:\(referenceExplicit ? "true" : "false")") }
+        if referenceConfidence != .unknown { lines.append("引用置信度:\(referenceConfidence.rawValue)") }
         if !referenceEvidence.isEmpty { lines.append("引用证据:" + referenceEvidence.joined(separator: ";")) }
         if !constraints.isEmpty { lines.append("约束:" + constraints.joined(separator: ";")) }
         if !boundaries.isEmpty { lines.append("边界:" + boundaries.joined(separator: ";")) }
@@ -156,7 +171,8 @@ enum LingShuGoalSpecParser {
     - output_mode: 四选一 —— "chat_reply"(最终只需要聊天回复)、"artifact"(需要落文件/产物)、"visible_interaction"(需要打开/演示/讲解/播报等可感知交互)、"external_action"(需要改变外部系统/设备/网络/账号状态)
     - reference_scope: 七选一 —— "current_input"(当前输入自足)、"default_anchor"(省略/续接/指代时承接默认回合)、"candidate_background"(当前输入明确指向旧背景候选)、"visible_context"(当前输入明确指向当前可见材料/屏幕/预览)、"task_thread"(当前输入明确指向某个任务线程)、"memory"(当前输入明确要求回溯长期记忆)、"unknown"
     - reference_explicit: boolean。只有当前输入明确说出了要跳转的对象/材料/任务/记忆时才为 true;裸省略、裸续接、泛指一律 false。
-    - reference_evidence: 数组。放支撑 reference_scope 的短原文证据;如果选择非 default_anchor 的候选,必须引用【当前用户输入】里的显式对象,或默认承接回合里的对象。
+    - reference_confidence: 四选一 —— "high"(上下文对象有明确原文证据且实体被保留)、"medium"(对象大致可推断但证据不完整)、"low"(看起来在指代但找不到可靠对象)、"unknown"
+    - reference_evidence: 数组。放支撑 reference_scope 的短原文证据;如果选择非 default_anchor 的候选,必须引用【当前用户输入】、default_anchor、conversation_context、retrieved_history_context 或历史检索工具结果里的支撑对象。
     - constraints: 必须满足的条件数组(格式/时限/指定工具/环境约束),无则 []
     - boundaries: 明确不该做、越界即停的数组,无则 []
     - risks: 涉及隐私/资金/账号/不可逆/对外发布/物理动作等风险点数组,无则 []
@@ -164,8 +180,11 @@ enum LingShuGoalSpecParser {
     - open_questions: 信息不足、需要先问用户澄清的数组,无则 []
 
     分类边界:
-    - 如果用户消息是 LingShu active turn 上下文 JSON:只把 current_user_input 视为新的用户请求;default_anchor 是无明确主体/省略/指代/续接输入的优先锚点;candidate_background 只是可选背景,不能抢成当前目标。
-    - 对上下文 JSON:当前输入没有明确指定其他对象时,reference_scope 必须是 "default_anchor";objective 必须围绕 default_anchor 继续。只有 current_user_input 明确指向某个候选时,才允许 reference_scope 跳到 candidate_background/visible_context/task_thread/memory,且 reference_explicit=true。
+    - 如果用户消息是 LingShu active turn 上下文 JSON:只把 current_user_input 视为新的用户请求;conversation_context 是完整引用池,default_anchor 只是最近完成回合的快速锚点,不是唯一可选目标。
+    - 对上下文 JSON:必须先通读 conversation_context 再选择被引用的轮次/对象。当前输入可能承接很多轮之前的某个对象/报告/文件/股票/任务,不要机械接最近一轮。只有确实没有更强语义指向时,才把 default_anchor 当作目标。
+    - 如果选择的上下文里有具体实体(股票/基金/标的/文件名/路径/人名/项目名/id/编号等),objective 和 success_criteria 必须逐项保留这些实体或明确集合名,不得泛化成"之前的分析/这个文件/相关内容"。
+    - 如果 reference_scope 选择 candidate_background/visible_context/task_thread/memory,reference_explicit 必须为 true,reference_evidence 必须引用 current_user_input、default_anchor、conversation_context、retrieved_history_context 或历史检索工具结果中的支撑原文。
+    - 只有当你能指出被引用对象的原文证据、并在 objective / success_criteria 中保留关键实体时,reference_confidence 才能是 "high"。如果只是写成"之前的分析/那份报告/相关内容"而没有实体或证据,reference_confidence 必须是 "medium" 或 "low"。
     - question = 用户只要你给出一段信息性回答/解释/建议/比较/提醒/一句话说明,最终交付就是聊天回复本身;即使用户说"给我/告诉我/说明一下/解释一下/提醒一下/用一句话",只要不要求落文件、不要求真实操作、不要求打开/控制/发送/同步,就归 question,success_criteria 通常为 []。
     - task = 用户要求产生持久交付物或改变外部状态,例如写文件/生成 PPT 或 PDF/保存结果/修改代码/运行验证/发送同步/控制设备/操作电脑/联网采集并落档。
     - interaction = 用户要求你陪同进行一个实时过程,例如演示、讲解、答疑、带人看材料、连续播报;它不是静态文件交付,但需要持续互动。
@@ -192,8 +211,25 @@ enum LingShuGoalSpecParser {
             outputMode: outputMode,
             referenceScope: referenceScope,
             referenceEvidence: arr("reference_evidence").isEmpty ? arr("referenceEvidence") : arr("reference_evidence"),
-            referenceExplicit: (obj["reference_explicit"] as? Bool) ?? (obj["referenceExplicit"] as? Bool) ?? false
+            referenceExplicit: (obj["reference_explicit"] as? Bool) ?? (obj["referenceExplicit"] as? Bool) ?? false,
+            referenceConfidence: parseReferenceConfidence(obj["reference_confidence"] ?? obj["referenceConfidence"])
         )
+    }
+
+    /// 新任务真正开始前的最小结构契约。解析成 JSON 不等于 GoalSpec 已经可执行;
+    /// 缺少类型、输出形态或验收标准时应重新生成,不能让下游自行猜测。
+    static func executionReadinessIssue(_ spec: LingShuGoalSpec) -> String? {
+        if spec.objective.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return "objective 为空"
+        }
+        if spec.kind == .unknown { return "kind 未明确" }
+        if spec.outputMode == .unspecified { return "output_mode 未明确" }
+        if spec.referenceScope == .unknown { return "reference_scope 未明确" }
+        if spec.referenceConfidence == .unknown { return "reference_confidence 未明确" }
+        if (spec.kind == .task || spec.kind == .interaction), spec.successCriteria.isEmpty {
+            return "task/interaction 缺少 success_criteria"
+        }
+        return nil
     }
 
     static func parseOutputMode(_ raw: Any?) -> LingShuOutputMode {
@@ -239,6 +275,25 @@ enum LingShuGoalSpecParser {
             return .memory
         default:
             return LingShuGoalReferenceScope(rawValue: normalized) ?? .unknown
+        }
+    }
+
+    static func parseReferenceConfidence(_ raw: Any?) -> LingShuGoalReferenceConfidence {
+        guard let value = (raw as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty else {
+            return .unknown
+        }
+        let normalized = value.lowercased()
+            .replacingOccurrences(of: "-", with: "_")
+            .replacingOccurrences(of: " ", with: "_")
+        switch normalized {
+        case "high", "strong", "confident":
+            return .high
+        case "medium", "mid", "moderate", "partial":
+            return .medium
+        case "low", "weak", "uncertain":
+            return .low
+        default:
+            return LingShuGoalReferenceConfidence(rawValue: normalized) ?? .unknown
         }
     }
 

@@ -43,8 +43,8 @@ struct LingShuDialogueSurface: View {
 }
 
 /// 聊天滚动列表——**只订阅 `state`**(不碰 voice/vision),把高频电平刷新与聊天重渲解耦。
-/// 自动滚到底:只响应“用户发送消息”的一次性请求。任务执行/流式输出/状态变化不得拉动滚动条,
-/// 否则用户向上查历史时会被执行过程反复拽回底部。
+/// 自动滚到底:首次打开/用户发送会明确定位；流式更新由贴底观察器按当前位置决定是否跟随。
+/// 用户向上查历史时不会被执行过程拽回,自行滚回底部后恢复实时跟随。
 private struct LingShuChatScroll: View {
     @ObservedObject var chatStore: LingShuChatStore
     let state: LingShuState
@@ -82,20 +82,46 @@ private struct LingShuChatScroll: View {
                     Color.clear
                         .frame(height: 1)
                         .id("lingshu-chat-bottom")
+
+                    // AppKit 层观察 documentView 高度和用户滚动位置：贴底时流式增长持续跟随，
+                    // 离底后不抢滚动；自行回到底部后恢复跟随。
+                    LingShuPinnedChatScrollObserver()
+                        .frame(width: 0, height: 0)
                 }
                 .padding(.vertical, 6)
                 .padding(.horizontal, 2)
             }
-            .onChange(of: chatStore.scrollToLatestRequest) { _ in
-                // 用户发送后下一轮主线程再定位,让用户气泡/紧随其后的占位气泡先完成布局。
+            .onAppear {
+                // 启动恢复历史后默认定位到最新消息。延迟两帧,等恢复出的长气泡完成首轮布局,
+                // 避免 scrollTo 在内容高度还没稳定时落到历史中段。
                 DispatchQueue.main.async {
-                    if let lastID = chatStore.messages.last?.id {
-                        proxy.scrollTo(lastID, anchor: .bottom)
-                    } else {
-                        proxy.scrollTo("lingshu-chat-bottom", anchor: .bottom)
+                    scrollToBottom(proxy, animated: false)
+                    DispatchQueue.main.async {
+                        scrollToBottom(proxy, animated: false)
                     }
                 }
             }
+            .onChange(of: chatStore.scrollToLatestRequest) { _, _ in
+                // 用户发送后下一轮主线程再定位,让用户气泡/紧随其后的占位气泡先完成布局。
+                DispatchQueue.main.async {
+                    scrollToBottom(proxy, animated: true)
+                }
+            }
+        }
+    }
+
+    private func scrollToBottom(_ proxy: ScrollViewProxy, animated: Bool) {
+        let action = {
+            if let lastID = chatStore.messages.last?.id {
+                proxy.scrollTo(lastID, anchor: .bottom)
+            } else {
+                proxy.scrollTo("lingshu-chat-bottom", anchor: .bottom)
+            }
+        }
+        if animated {
+            withAnimation(.easeOut(duration: 0.18), action)
+        } else {
+            action()
         }
     }
 }
@@ -385,10 +411,12 @@ struct LingShuRunningTaskBar: View {
                     .foregroundStyle(Color.lingFg.opacity(0.92))
                     .lineLimit(1)
                 Spacer(minLength: 6)
-                Button { state.openTaskRecord(rec.id) } label: {
-                    Label("定位", systemImage: "scope").font(.system(size: 10.5, weight: .semibold))
+                if state.canOpenTaskRecord(rec.id) {
+                    Button { state.openTaskRecord(rec.id) } label: {
+                        Label("定位", systemImage: "scope").font(.system(size: 10.5, weight: .semibold))
+                    }
+                    .buttonStyle(.bordered).controlSize(.small)
                 }
-                .buttonStyle(.bordered).controlSize(.small)
                 Button { state.stopDispatchedTask(recordID: rec.id) } label: {
                     Label("停止", systemImage: "stop.fill")
                         .font(.system(size: 10.5, weight: .semibold))
@@ -931,6 +959,8 @@ struct LingShuInputDock: View {
 
         syncDraftPromptToState(draftPrompt)
         _ = state.sendPrompt()
+        mentionQuery = nil
+        mentionSelected = 0
         if draftPrompt != state.prompt {
             draftPrompt = state.prompt
         }

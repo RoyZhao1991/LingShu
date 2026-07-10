@@ -12,6 +12,7 @@ struct LingShuModelServiceFailure: Equatable, Sendable {
         case rateLimited
         case auth
         case quota
+        case multimodalUnsupported
         case requestInvalid
         case server
         case unknown
@@ -27,7 +28,7 @@ struct LingShuModelServiceFailure: Equatable, Sendable {
         switch kind {
         case .network, .timeout, .rateLimited, .server, .unknown:
             return true
-        case .auth, .quota, .requestInvalid:
+        case .auth, .quota, .multimodalUnsupported, .requestInvalid:
             return false
         }
     }
@@ -36,7 +37,7 @@ struct LingShuModelServiceFailure: Equatable, Sendable {
         switch kind {
         case .network, .timeout, .rateLimited, .server:
             return true
-        case .auth, .quota, .requestInvalid, .unknown:
+        case .auth, .quota, .multimodalUnsupported, .requestInvalid, .unknown:
             return false
         }
     }
@@ -45,7 +46,7 @@ struct LingShuModelServiceFailure: Equatable, Sendable {
         switch kind {
         case .auth, .quota:
             return .waitingForUser
-        case .requestInvalid, .unknown:
+        case .multimodalUnsupported, .requestInvalid, .unknown:
             return .failed
         case .network, .timeout, .rateLimited, .server:
             return .suspended
@@ -65,6 +66,8 @@ struct LingShuModelServiceFailure: Equatable, Sendable {
             return "模型服务认证失败\(suffix)。请检查 API Key、登录状态或模型权限后再继续。"
         case .quota:
             return "模型服务额度异常\(suffix)。请充值、提升额度或切换可用模型后再继续。"
+        case .multimodalUnsupported:
+            return "当前模型通道拒绝原生多模态输入\(suffix)。我会把该模型标记为不支持原生多模态，并降级为图片解析后再发。"
         case .requestInvalid:
             return "模型请求被服务端拒绝\(suffix)。这更像是请求结构、参数或模型适配问题，不应按网络故障重试。"
         case .server:
@@ -88,6 +91,8 @@ struct LingShuModelServiceFailure: Equatable, Sendable {
             return "模型服务认证失败，等待你处理模型配置"
         case .quota:
             return "模型服务额度异常，等待你处理额度或切换模型"
+        case .multimodalUnsupported:
+            return "当前模型不支持原生多模态，本轮将降级为图片解析"
         case .requestInvalid:
             return "模型请求被拒绝，等待适配修正"
         case .unknown:
@@ -109,6 +114,8 @@ struct LingShuModelServiceFailure: Equatable, Sendable {
             return "模型服务认证仍未恢复"
         case .quota:
             return "模型服务额度仍不可用"
+        case .multimodalUnsupported:
+            return "当前模型仍不支持原生多模态"
         case .requestInvalid:
             return "模型请求仍被拒绝"
         case .unknown:
@@ -122,7 +129,7 @@ struct LingShuModelServiceFailure: Equatable, Sendable {
             return "模型通道网络已恢复，正在接着把任务跑完。"
         case .timeout, .rateLimited, .server:
             return "模型通道已恢复，正在接着把任务跑完。"
-        case .auth, .quota, .requestInvalid, .unknown:
+        case .auth, .quota, .multimodalUnsupported, .requestInvalid, .unknown:
             return userFacingMessage
         }
     }
@@ -172,6 +179,10 @@ struct LingShuModelServiceFailure: Equatable, Sendable {
 
     static func userFacingReason(_ reason: String) -> String {
         decodeReason(reason)?.detail ?? reason
+    }
+
+    static func isNativeMultimodalUnsupportedReason(_ reason: String) -> Bool {
+        decodeReason(reason)?.kind == .multimodalUnsupported
     }
 
     static func classify(_ error: Error) -> LingShuModelServiceFailure {
@@ -241,6 +252,10 @@ struct LingShuModelServiceFailure: Equatable, Sendable {
             return .init(kind: .rateLimited, statusCode: statusCode, detail: detail)
         }
 
+        if looksLikeNativeMultimodalUnsupported(lower, statusCode: statusCode) {
+            return .init(kind: .multimodalUnsupported, statusCode: statusCode, detail: detail)
+        }
+
         if let statusCode {
             if statusCode == -1 {
                 return .init(kind: .network, statusCode: statusCode, detail: detail)
@@ -267,6 +282,28 @@ struct LingShuModelServiceFailure: Equatable, Sendable {
 
     private static func containsAny(_ text: String, _ needles: [String]) -> Bool {
         needles.contains { text.contains($0.lowercased()) }
+    }
+
+    private static func looksLikeNativeMultimodalUnsupported(_ lower: String, statusCode: Int?) -> Bool {
+        guard statusCode == nil || (400..<500).contains(statusCode ?? 400) else { return false }
+        if lower.contains("image_url") || lower.contains("input_image") || lower.contains("image input") {
+            return containsAny(lower, [
+                "not support", "unsupported", "invalid", "not allowed", "only text",
+                "不支持", "暂不支持", "非法", "无效"
+            ])
+        }
+        if lower.contains("multimodal") || lower.contains("multi-modal") || lower.contains("多模态") {
+            return containsAny(lower, ["not support", "unsupported", "不支持", "暂不支持", "disabled", "disable"])
+        }
+        if lower.contains("content") && lower.contains("array")
+            && containsAny(lower, ["not support", "unsupported", "invalid", "不支持", "无效"]) {
+            return true
+        }
+        if lower.contains("image") && lower.contains("content")
+            && containsAny(lower, ["not support", "unsupported", "invalid", "不支持", "无效"]) {
+            return true
+        }
+        return false
     }
 
     private static func sanitizedDetail(_ body: String) -> String {

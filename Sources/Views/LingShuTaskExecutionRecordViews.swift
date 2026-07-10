@@ -344,7 +344,7 @@ struct TaskArtifactFilesPanel: View {
             .flatMap(\.artifacts)
             .filter { artifact in !record.artifacts.contains(where: { $0.id == artifact.id }) }
             .map { (artifact: $0, fromHistory: true) }
-        return (current + historical).sorted { $0.artifact.createdAt > $1.artifact.createdAt }
+        return (current + historical).sorted { $0.artifact.displayTimestamp > $1.artifact.displayTimestamp }
     }
 
     private var hasCode: Bool { record.codeChanges != nil }
@@ -539,7 +539,7 @@ struct TaskArtifactFileCard: View {
                                 .padding(.vertical, 1)
                                 .background(Color.lingFg.opacity(0.08), in: Capsule())
                         }
-                        Text(artifact.createdAt.taskRecordDisplayTime)
+                        Text(artifact.displayTimestamp.taskRecordDisplayTime)
                             .font(.system(size: 9.5, weight: .medium, design: .monospaced))
                             .foregroundStyle(Color.lingFg.opacity(0.36))
                         if let sizeText = fileSizeText {
@@ -681,7 +681,7 @@ struct TaskExecutionArtifactRow: View {
                     Text(artifact.producer)
                         .font(.system(size: 10.5, weight: .semibold))
                         .foregroundStyle(Color.lingFg.opacity(0.42))
-                    Text(artifact.createdAt.taskRecordDisplayTime)
+                    Text(artifact.displayTimestamp.taskRecordDisplayTime)
                         .font(.system(size: 10.5, weight: .medium, design: .monospaced))
                         .foregroundStyle(Color.lingFg.opacity(0.34))
                     Spacer()

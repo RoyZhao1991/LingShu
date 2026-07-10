@@ -2,8 +2,29 @@ import Foundation
 
 @MainActor
 extension LingShuState {
+    nonisolated static func taskRecordAllowsThreadInspection(
+        _ record: LingShuTaskExecutionRecord,
+        isMappedSubthread: Bool = false
+    ) -> Bool {
+        if let spec = record.goalSpec {
+            // The triage output is the single source of truth for this entry:
+            // only an explicit chat_reply stays in the main conversation.
+            return spec.outputMode != .chatReply
+        }
+        if record.status == .answered { return false }
+        if isMappedSubthread { return true }
+        return !record.artifacts.isEmpty || record.isDevelopmentTask
+    }
+
+    func canOpenTaskRecord(_ recordID: String?) -> Bool {
+        guard let recordID,
+              let record = taskExecutionRecordLookup.first(where: { $0.id == recordID }) else { return false }
+        let isMappedSubthread = agentSubTaskRecords.values.contains(recordID) || livePipelineRecordIDs.contains(recordID)
+        return Self.taskRecordAllowsThreadInspection(record, isMappedSubthread: isMappedSubthread)
+    }
+
     func openTaskRecord(_ recordID: String?) {
-        guard let recordID, taskExecutionRecordLookup.contains(where: { $0.id == recordID }) else { return }
+        guard let recordID, canOpenTaskRecord(recordID) else { return }
         selectedTaskRecordID = recordID
         isTaskRecordPresented = true
     }
@@ -123,11 +144,12 @@ extension LingShuState {
         let finalSummary = visibleSummary.isEmpty ? summary : visibleSummary
 
         taskExecutionRecords[index].finish(status: status, summary: finalSummary)
+        _ = reconcileTaskRecordArtifactsFromMentionedExistingFiles(recordID: recordID)
         commitTaskThreadState(
             recordID: recordID,
             status: status,
             phase: LingShuTaskThreadCommit.phase(for: status),
-            summary: finalSummary,
+            summary: taskExecutionRecords[index].summary,
             persist: false,
             trace: true
         )
@@ -243,7 +265,8 @@ extension LingShuState {
 
     /// 是否源码/配置/文档类路径(用于把交付物/素材排除在"代码改动"之外)。
     nonisolated static func isCodeLikePath(_ path: String) -> Bool {
-        let excludedExts: Set<String> = ["pptx", "potx", "ppt", "jpg", "jpeg", "png", "gif", "webp", "bmp", "tiff",
+        let excludedExts: Set<String> = ["pptx", "potx", "ppt", "docx", "doc", "xlsx", "xls", "pages",
+                                         "jpg", "jpeg", "png", "gif", "webp", "bmp", "tiff",
                                          "pdf", "wav", "mp3", "m4a", "mp4", "mov", "zip", "tar", "gz", "key", "numbers"]
         let ext = (path as NSString).pathExtension.lowercased()
         if excludedExts.contains(ext) { return false }
@@ -300,7 +323,8 @@ extension LingShuState {
     /// 解析 `git status --porcelain` 为代码改动文件(纯函数,可测)。
     /// 只留**源码/配置/文档**;交付物/二进制素材(pptx/图片/pdf/音频/压缩包 及 assets 目录)归产出文件面板,不进代码块。
     nonisolated static func parseGitPorcelain(_ porcelain: String) -> [LingShuCodeChangeSummary.Change] {
-        let excludedExts: Set<String> = ["pptx", "potx", "ppt", "jpg", "jpeg", "png", "gif", "webp", "bmp", "tiff",
+        let excludedExts: Set<String> = ["pptx", "potx", "ppt", "docx", "doc", "xlsx", "xls", "pages",
+                                         "jpg", "jpeg", "png", "gif", "webp", "bmp", "tiff",
                                          "pdf", "wav", "mp3", "m4a", "mp4", "mov", "zip", "tar", "gz", "key", "numbers"]
         return porcelain
             .split(separator: "\n", omittingEmptySubsequences: true)

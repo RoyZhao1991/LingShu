@@ -200,8 +200,24 @@ extension LingShuState {
             if self.goalSpecEnabled, !continuing,
                !objective.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
                self.goalSpec(for: recordID) == nil || self.gapAnalysis(for: recordID) == nil {
-                await self.bindPreflightCognition(request: objective, recordID: recordID)
+                let preflightReady = await self.bindPreflightCognition(request: objective, recordID: recordID)
                 guard !Task.isCancelled, self.autonomousRunGeneration == generation, self.autonomousRun.phase != .idle else { return }
+                guard preflightReady else {
+                    self.autonomousSessionHolder = nil
+                    self.autonomousRunTask = nil
+                    self.endAutonomousActivity()
+                    self.updateAutonomousRun(phase: .paused, statusLine: "GoalSpec 生成失败,未启动执行。")
+                    self.missionTitle = "独立运行未启动"
+                    self.missionStatus = "核心目标生成失败,请稍后重试。"
+                    self.chatMessages.append(.init(
+                        speaker: "灵枢",
+                        text: Self.goalSpecUnavailableUserMessage,
+                        isUser: false,
+                        taskRecordID: recordID
+                    ))
+                    self.enterCoreState(.standby, resetTimer: false)
+                    return
+                }
             }
             let result: LingShuAgentRunResult
             let isStandingKickoff = objective.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !continuing

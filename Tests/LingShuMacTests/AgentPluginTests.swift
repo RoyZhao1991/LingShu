@@ -35,6 +35,26 @@ final class AgentPluginTests: XCTestCase {
         XCTAssertEqual(LingShuAgentPluginStore.load(from: dir).count, 0)
     }
 
+    func testAgentPluginGroundingListsCallableAndUnavailableAgents() {
+        let codex = LingShuAgentPlugin(
+            id: "codex", displayName: "Codex", aliases: ["codex"],
+            executable: "/bin/echo", argsTemplate: ["{{objective}}"], role: .checker,
+            available: true
+        )
+        let claude = LingShuAgentPlugin(
+            id: "claude", displayName: "Claude", aliases: ["claude"],
+            executable: "/bin/echo", argsTemplate: ["{{objective}}"], role: .maker,
+            available: false, unavailableReason: "额度用尽"
+        )
+
+        let text = LingShuState.agentPluginGroundingText(agents: [codex, claude])
+
+        XCTAssertTrue(text.contains("run_agent"))
+        XCTAssertTrue(text.contains("Codex(id=codex, role=checker, 可调用"))
+        XCTAssertTrue(text.contains("Claude(id=claude, role=maker, 不可用:额度用尽"))
+        XCTAssertTrue(text.contains("不要说没有能力"))
+    }
+
     /// 流式进度(修「派发 agent 交给 X 后干等没进度」):run 边跑边回调 progress 把累计输出尾部喂出来,结果含全部输出。
     func testRunStreamsProgressAndReturnsOutput() async {
         let plugin = LingShuAgentPlugin(

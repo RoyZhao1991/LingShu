@@ -55,7 +55,7 @@ struct TaskDevToolsPanel: View {
         let historical = lineageRecords.flatMap(\.artifacts)
             .filter { artifact in !record.artifacts.contains(where: { $0.id == artifact.id }) }
             .map { (artifact: $0, fromHistory: true) }
-        return (current + historical).sorted { $0.artifact.createdAt > $1.artifact.createdAt }
+        return (current + historical).sorted { $0.artifact.displayTimestamp > $1.artifact.displayTimestamp }
     }
 
     var body: some View {

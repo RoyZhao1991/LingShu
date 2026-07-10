@@ -256,12 +256,14 @@ extension LingShuState {
         let recordProvider: @MainActor @Sendable () -> String? = { [weak self] in self?.agentSubTaskRecords[subID] }
         let dispatchedWorkingDir = effectiveAgentWorkingDirectory(override: Self.explicitWorkingDirectoryHint(in: prompt))
         try? FileManager.default.createDirectory(at: URL(fileURLWithPath: dispatchedWorkingDir), withIntermediateDirectories: true)
+        agentSubTaskWorkingDirectories[subID] = dispatchedWorkingDir
         let tools = withPhaseTracking(   // 相位跟踪:派发任务也驱动本体显示理解/规划/执行/验收(光球随环节变色变脉动)
             // 继承父上下文的 shell 预授权:在岗/自主完整授权时给 autoAllowShell,否则派发任务跑 shell 会卡在审批框(见 dispatchedTaskExecutionPolicy)。
             agentBuiltinTools(recordIDProvider: recordProvider, executionPolicy: dispatchedTaskExecutionPolicy, workingDirectoryOverride: dispatchedWorkingDir)
             + [Self.timeTool(), Self.locationTool(), webSearchTool(), recallMemoryTool(), Self.askUserTool(),
                findImagesTool(), acquireResourceTool(),
                updateTaskPlanTool(recordIDProvider: recordProvider), reviewDesignTool(recordIDProvider: recordProvider), speakTool(), digitalHumanTool(), enterManagedModeTool()]
+            + agentPluginTools(recordIDProvider: recordProvider, includeRegistration: false)
             + previewTools()
             + browserTools()           // 内置浏览器(网页演示/自动化)
             + backgroundWatchTools()   // 派发的长任务正是"等外部条件(构建/部署/下载)再续"的主场,必须有 watch_until
@@ -279,6 +281,10 @@ extension LingShuState {
         if !preflightGuidance.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             initialMessages.append(.init(role: .system, content: preflightGuidance))
         }
+        let agentGrounding = [agentPluginGroundingText(), agentCapabilitiesGroundingText()]
+            .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+            .joined(separator: "\n\n")
+        if !agentGrounding.isEmpty { initialMessages.append(.init(role: .system, content: agentGrounding)) }
         // **通用 skill 可发现性也注入派发任务**(2026-06-27 修覆盖盲区):`matchedSkillHint` 此前只在主会话(executeMainTurn)
         // 注入、漏了派发任务——而复杂任务一律走派发,于是永远看不到匹配的固化技能、从零现编(端到端实测实锤:做PPT派发
         // 38次run_command没碰ppt-builder)。这是**通用机制**(按 skill 自己声明的 triggers 匹配,不写死任何场景),
@@ -292,7 +298,7 @@ extension LingShuState {
         if !neighborhood.isEmpty { initialMessages.append(.init(role: .system, content: neighborhood)) }
         // **能看就别写像素码**(仅多模态脑):有眼睛就直接看图识别标记/核验结果,别写逐像素扫描比对
         // (实测把"删一行字"拖成 20+ 分钟还判错——把方框描边当文字)。非多模态脑没眼睛,不注入。
-        if LingShuMultimodal.isVisionCapable(provider: modelProvider, model: modelName) {
+        if shouldAttemptNativeMultimodalForCurrentModel() {
             initialMessages.append(.init(role: .system, content: Self.visionOverPixelsDirective))
         }
         // **maker 是外部 agent(@Codex 等):把开发委托给它,你只编排+验收(maker≠checker 跨厂商)。**
@@ -316,7 +322,7 @@ extension LingShuState {
             【本任务你是开发方(maker)· LOOP 两个独立角色】
             你负责**开发 / 产出**。你完成后,会有一个**独立的验收官(checker)**(另一条会话/agent、独立上下文,看不到你的内部过程)**独立核验**你的产出——它会真去 read_file 看代码、run_command 跑测试 / 把程序运行起来。
             所以:① 真正做完做对,产物**真实落盘**;② 写了代码就**自己先跑一遍测试 / 运行起来**确认能用;③ 别只口头声称完成——checker 会独立核,过不了会打回让你修。
-            ④ **铁律:你只管开发,绝不自己调 `run_agent` 去找别的 agent 验收 / 复核**——独立 checker 由系统在你交付后**自动**跑,不归你管;你交付后就结束回合。
+            ④ **铁律:你只管开发,别自行找别的 agent 代替系统 checker 自评**——独立 checker 由系统在你交付后**自动**跑,不归你管;你交付后就结束回合。**但如果当前或后续用户明确指定某外部 agent 参与/复核/验收(如 Codex),必须按用户要求调用 `run_agent` 委托,不要说没有能力。**
             """))
         }
         let sub = makeAgentSession(
@@ -333,6 +339,7 @@ extension LingShuState {
         )
         let orchestrator = agentOrchestrator
         Task { @MainActor [weak self] in
+            await self?.prepareSubtaskArtifactDelta(subID: subID, recordID: taskRecordID, workingDirectory: dispatchedWorkingDir)
             if await orchestrator.spawnDetached(id: subID, objective: prompt, session: sub, imageDataURLs: directImages) { return }   // 有空位,直接派出(带真图)
             // 满并发上限(N=3)→ **不直接拒绝用户任务,改排队**:轮询等空位再自动派出(bubble 保持加载=排队中)。
             // 老练度补齐(2026-06-19):用户快速连发几条任务时旧逻辑直接拒"重发一次"体验差;改为自动排队续派。
@@ -452,7 +459,11 @@ extension LingShuState {
         chatMessages.append(pending)
         dispatchedTaskBubbles[recordID] = pending.id
         appendTrace(kind: .route, actor: "任务气泡", title: "气泡内直答", detail: "气泡内回复直达派发任务隔离会话(不经分诊)。")
-        Task { await agentOrchestrator.resumeWithInput(id: subID, input: resumeInput) }
+        let orchestrator = agentOrchestrator
+        Task { @MainActor [weak self] in
+            await self?.prepareSubtaskArtifactDelta(subID: subID, recordID: recordID)
+            await orchestrator.resumeWithInput(id: subID, input: resumeInput)
+        }
     }
 
     /// 派发任务执行者的系统提示(隔离 session 用):LOOP 计划 + 真落盘 + 不造假的核心规则。

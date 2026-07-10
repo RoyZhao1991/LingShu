@@ -30,7 +30,12 @@ extension LingShuState {
         if session is LingShuNestedAgentSession { return initial }
         // 撞顶恢复(执行恢复力核心):一段推进用满 per-run 安全天花板却还没收尾,**不是失败**——
         // 若任务确有在制品(已落产出物 / 动过工具),把它当检查点,补一段全新预算让它接着做完 / 把崩溃修到跑通。
-        let result = await recoverFromExhaustionIfNeeded(session: session, result: initial, taskRecordID: taskRecordID)
+        var result = await recoverFromExhaustionIfNeeded(session: session, result: initial, taskRecordID: taskRecordID)
+        result = await continueAfterAwaitedLongCommands(
+            session: session,
+            result: result,
+            taskRecordID: taskRecordID
+        )
         // skipReview:checker 由外部统一接管(agent / 独立 checker 会话)→ 这里不再跑内部审查员,避免双重验收。
         let verified = skipReview ? result : await runVerificationLoop(session: session, result: result, userRequest: userRequest, taskRecordID: taskRecordID, artifactBaseline: artifactBaseline, trustReplyClaim: trustReplyClaim, useCheckerSession: useCheckerSession)
         // **收尾兜底(2026-06-21,清分系统实测根因)**:模型最后一步若是个静默 `run_command`(输出写进文件、stdout 为空),
@@ -91,7 +96,11 @@ extension LingShuState {
             recovered += 1
             recordBrainFallback("撞顶续跑(框架补预算兜底)")   // 大脑评分:触发兜底 −1
             appendTrace(kind: .warning, actor: "执行恢复", title: "撞顶续跑(第\(recovered)次)", detail: "推进用满一段预算未收尾,补预算继续完成/修复,不当失败。")
-            result = await session.resume("你这一段推进用满了预算但还没给出最终结果——这不是失败,继续干。请把没做完的部分做完;如果程序还报错/崩溃,就一路修到它能正常构建、运行、跑通(测试全绿、运行不崩),然后用一句话交付结果 + 产出物绝对路径。")
+            result = await resumeSessionRegisteringArtifactDelta(
+                session,
+                prompt: "你这一段推进用满了预算但还没给出最终结果——这不是失败,继续干。请把没做完的部分做完;如果程序还报错/崩溃,就一路修到它能正常构建、运行、跑通(测试全绿、运行不崩),然后用一句话交付结果 + 产出物绝对路径。",
+                taskRecordID: taskRecordID
+            )
         }
         return result
     }
@@ -215,7 +224,11 @@ extension LingShuState {
             appendTrace(kind: .warning, actor: "验收", title: "未通过(第\(round + 1)轮,继续修)", detail: String(critique.prefix(80)))
             // 升级阶梯并入验收门(方案 §2):验收不过不再"原样重试",而是按返工轮次**逐级加厚脚手架**
             // (Rung0 原样意见 → Rung1 结构化引导 → Rung2 切确定性兜底)。强脑通常 round 0 就过。
-            result = await session.resume(LingShuCapabilityEscalation.revisionGuidance(round: round, critique: critique))
+            result = await resumeSessionRegisteringArtifactDelta(
+                session,
+                prompt: LingShuCapabilityEscalation.revisionGuidance(round: round, critique: critique),
+                taskRecordID: taskRecordID
+            )
             round += 1
             lastArtifactCount = artifactCount
             lastCritique = critique

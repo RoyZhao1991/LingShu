@@ -150,6 +150,11 @@ extension LingShuState {
             let contextualGoalSpec = self.goalSpecEnabled
                 ? await self.deriveGoalSpec(for: fullPrompt, taskRecordID: nil, activeTurnContext: true)
                 : nil
+            guard !Task.isCancelled else { return }
+            if self.goalSpecEnabled, contextualGoalSpec == nil {
+                self.markGoalSpecPreflightFailure(request: fullPrompt)
+                return
+            }
             // **大脑先规划角色管线**(读现有角色 + agent,决定启用哪些角色、谁来干)。≥2 角色→走通用多角色管线;否则回退 maker/checker。
             if await self.runRolePipelineDispatch(task: fullPrompt, agents: agents, preflightGoalSpec: contextualGoalSpec) { return }
             // 回退:无/单角色 → maker/checker 派发(大脑装配,失败用位置兜底)。
@@ -162,7 +167,7 @@ extension LingShuState {
                 : (objective.isEmpty ? "\(asm.makerName ?? "灵枢") 任务" : objective)
             let executionObjective = self.contextualTaskPrompt(rawObjective: objective, userPrompt: fullPrompt, goalSpec: contextualGoalSpec)
             let rid = self.createTaskExecutionRecord(for: displayObjective)
-            if self.goalSpecEnabled { self.bindGoalSpec(contextualGoalSpec ?? LingShuGoalSpec(objective: displayObjective, kind: .task), to: rid) }
+            if self.goalSpecEnabled, let contextualGoalSpec { self.bindGoalSpec(contextualGoalSpec, to: rid) }
             self.appendTrace(kind: .route, actor: "声明式调用", title: "@agent 进 LOOP(大脑装配角色)",
                              detail: "maker=\(asm.makerName ?? "灵枢") · checker=\(asm.checkers.first?.name ?? "灵枢")")
             _ = self.dispatchIsolatedTask(prompt: executionObjective, taskRecordID: rid, goal: displayObjective,

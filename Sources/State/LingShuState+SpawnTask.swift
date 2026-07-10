@@ -33,13 +33,18 @@ extension LingShuState {
             // P1+P2:派生前先建记录、再前置认知(GoalSpec + 能力缺口分析)绑定记录,**再** spawnDetached——
             // 避免子任务先跑完而认知还没绑的竞态。已绑过则幂等跳过。
             if let recordID {
-                await self?.bindPreflightCognition(request: objective, recordID: recordID)
+                let preflightReady = await self?.bindPreflightCognition(request: objective, recordID: recordID) ?? false
+                guard preflightReady else {
+                    await MainActor.run { [weak self] in self?.agentSubTaskRecords[subID] = nil }
+                    return "⛔ 子任务未启动:GoalSpec 重新生成耗尽,系统没有用默认目标降级执行。"
+                }
             }
 
             let subWorkingDir = await MainActor.run { [weak self] () -> String in
                 guard let self else { return LingShuState.defaultWorkspaceDirectory }
                 let dir = self.effectiveAgentWorkingDirectory(override: Self.explicitWorkingDirectoryHint(in: objective))
                 try? FileManager.default.createDirectory(at: URL(fileURLWithPath: dir), withIntermediateDirectories: true)
+                self.agentSubTaskWorkingDirectories[subID] = dir
                 return dir
             }
             let subTools = await MainActor.run { [weak self] () -> [LingShuAgentTool] in
@@ -65,13 +70,15 @@ extension LingShuState {
                 ] } ?? []
                 let bodyTools = self.map { [$0.speakTool(), $0.digitalHumanTool()] } ?? []
                 let asyncTools = self.map { $0.backgroundWatchTools() + $0.scheduledTaskTools() } ?? []
-                return builtin + [Self.timeTool(), Self.locationTool(), Self.askUserTool()] + (self.map { [$0.webSearchTool()] } ?? []) + bodyTools + extras + asyncTools
+                let agentTools = self?.agentPluginTools(recordIDProvider: { [weak self] in self?.agentSubTaskRecords[subID] }, includeRegistration: false) ?? []
+                return builtin + [Self.timeTool(), Self.locationTool(), Self.askUserTool()] + (self.map { [$0.webSearchTool()] } ?? []) + bodyTools + extras + asyncTools + agentTools
             }
 
             let sub: (any LingShuAgentSessioning)? = await MainActor.run { [weak self] in
-                self?.makeAgentSession(
+                let agentGrounding = self?.agentPluginGroundingText() ?? ""
+                return self?.makeAgentSession(
                     id: subID,
-                    system: LingShuPersona.system("现在你作为一条子任务线,独立完成给定目标。工作目录:\(subWorkingDir)。**有产出物的必须用 write_file/run_command 真把文件落到工作目录并汇报路径,不要只口头说完成**;写代码必须真构建+运行不崩+测试全绿,跑崩了/报错是要修复的观测、不是交付;信息确实不足才调用 ask_user。"),
+                    system: LingShuPersona.system("现在你作为一条子任务线,独立完成给定目标。工作目录:\(subWorkingDir)。**有产出物的必须用 write_file/run_command 真把文件落到工作目录并汇报路径,不要只口头说完成**;写代码必须真构建+运行不崩+测试全绿,跑崩了/报错是要修复的观测、不是交付;信息确实不足才调用 ask_user。\n\(agentGrounding)"),
                     tools: subTools,
                     model: adapter,
                     maxTurns: 80,
@@ -80,6 +87,7 @@ extension LingShuState {
             }
             guard let sub else { return "（执行环境已释放,本次未派生「\(objective)」。）" }
 
+            await self?.prepareSubtaskArtifactDelta(subID: subID, recordID: recordID, workingDirectory: subWorkingDir)
             let admitted = await orchestrator.spawnDetached(id: subID, objective: objective, session: sub)
             guard admitted else {
                 if let recordID {

@@ -4,6 +4,103 @@ import XCTest
 /// 子任务窗口对齐 codex 的纯逻辑测试:行 diff + 撤销还原 + 录制净化 + 工具卡摘要。
 final class TaskWindowRenderingTests: XCTestCase {
 
+    // MARK: 主界面本地路径预览
+
+    func testLocalPathDetectorFindsExistingPathWithSpacesBeforeChineseSuffix() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("LingShu Path Detector Tests", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let file = dir.appendingPathComponent("stock_analysis_report_20260708.docx")
+        try "doc".write(to: file, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let text = "Word 文档: \(file.path) — 包含大盘概况、风险提示。"
+
+        XCTAssertEqual(LingShuLocalPathDetector.existingFilePaths(in: text), [file.path])
+    }
+
+    func testLocalPathDetectorHidesExistingPathForDisplay() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("LingShu Hidden Path Tests", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let file = dir.appendingPathComponent("stock_analysis_report_20260708.docx")
+        try "doc".write(to: file, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let text = "Word 文档: \(file.path) — 包含大盘概况"
+
+        XCTAssertEqual(
+            LingShuLocalPathDetector.displayTextHidingExistingFilePaths(in: text),
+            "Word 文档：包含大盘概况"
+        )
+    }
+
+    func testLocalPathDetectorRemovesMarkdownBackticksAroundHiddenPath() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("LingShu Backtick Path Tests", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let file = dir.appendingPathComponent("codex_review_report.md")
+        try "review".write(to: file, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let text = "Codex 复核报告：`\(file.path)` — 32项检查全部通过"
+
+        XCTAssertEqual(
+            LingShuLocalPathDetector.displayTextHidingExistingFilePaths(in: text),
+            "Codex 复核报告：32项检查全部通过"
+        )
+    }
+
+    func testLocalPathDetectorIgnoresMissingPaths() {
+        let text = "Markdown 源文件: /Users/example/Library/Application Support/LingShu/Workspace/missing_report.md"
+
+        XCTAssertTrue(LingShuLocalPathDetector.existingFilePaths(in: text).isEmpty)
+    }
+
+    // MARK: 子线程入口门禁
+
+    func testChatReplyRecordDoesNotExposeTaskThreadEvenWhenMapped() {
+        var record = LingShuTaskExecutionRecord.create(prompt: "只回答我这个问题")
+        record.goalSpec = LingShuGoalSpec(
+            objective: "回答用户问题",
+            kind: .question,
+            outputMode: .chatReply
+        )
+
+        XCTAssertFalse(
+            LingShuState.taskRecordAllowsThreadInspection(record, isMappedSubthread: true),
+            "chat_reply 是聊天任务,即使底层有记录或误映射,也不能露出查看子线程入口"
+        )
+    }
+
+    func testArtifactRecordExposesTaskThread() {
+        var record = LingShuTaskExecutionRecord.create(prompt: "生成一份报告")
+        record.goalSpec = LingShuGoalSpec(
+            objective: "生成报告文件",
+            kind: .task,
+            outputMode: .artifact
+        )
+
+        XCTAssertTrue(LingShuState.taskRecordAllowsThreadInspection(record))
+    }
+
+    func testEveryNonChatReplyTriageResultExposesRunningTaskThread() {
+        for mode in [LingShuOutputMode.artifact, .visibleInteraction, .externalAction, .unspecified] {
+            var record = LingShuTaskExecutionRecord.create(prompt: "执行中的任务")
+            record.status = .running
+            record.goalSpec = LingShuGoalSpec(
+                objective: "推进任务",
+                kind: .question,
+                outputMode: mode
+            )
+
+            XCTAssertTrue(
+                LingShuState.taskRecordAllowsThreadInspection(record),
+                "分诊结果 \(mode.rawValue) 不是 chat_reply，执行中就应显示子线程入口"
+            )
+        }
+    }
+
     // MARK: 行 diff
 
     func testLineDiffCountsAddedRemoved() {
@@ -67,6 +164,7 @@ final class CodeChangeSummaryTests: XCTestCase {
          M Sources/State/LingShuState.swift
         A  Sources/New.swift
         ?? 演示.pptx
+        ?? 报告.docx
         ?? assets/cover.jpg
          M report.pdf
         ?? notes.md
@@ -77,6 +175,7 @@ final class CodeChangeSummaryTests: XCTestCase {
         XCTAssertTrue(paths.contains("Sources/New.swift"))
         XCTAssertTrue(paths.contains("notes.md"))
         XCTAssertFalse(paths.contains("演示.pptx"), "交付物 pptx 不进代码块")
+        XCTAssertFalse(paths.contains("报告.docx"), "交付物 docx 不进代码块")
         XCTAssertFalse(paths.contains("assets/cover.jpg"), "assets 素材不进代码块")
         XCTAssertFalse(paths.contains("report.pdf"), "pdf 不进代码块")
     }

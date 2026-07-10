@@ -1,12 +1,8 @@
 import Foundation
-
 /// 通用中枢 P1·目标认知**接线**(见 `Docs/通用AI中枢推进方案.md`)。
-/// **P1 完全落地**:入口(`submitTextInput` 分诊之前)派生 `LingShuGoalSpec` 并存 `goalSpecsByRecord`,
-/// 由 ① `driveAgentDelivery` 注入执行引导(循环消费)② `verifyAgentDeliverable` 引用成功标准(验收消费)
-/// ③ 任务记录落痕(记忆消费)。开关 `lingshu.goalSpec`(DEBUG 默认开)。
+/// 入口派生 `LingShuGoalSpec`,由执行、验收与记忆链路共同消费;开关为 `lingshu.goalSpec`。
 @MainActor
 extension LingShuState {
-
     /// 目标认知开关:**默认开(发布态亦然=完整可用)**;配置入口 `setGoalSpecEnabled` / MCP `lingshu_set_goalspec` 可关。
     /// 关 → 零行为/零成本变更(不发那次解析模型调用、不注入引导/成功标准/不沉淀经验)。状态见 `lingshu_status.goalSpecEnabled`。
     var goalSpecEnabled: Bool {
@@ -21,13 +17,20 @@ extension LingShuState {
                                : "已关闭:零成本零行为变更。")
     }
 
-    /// 从一条用户请求派生 GoalSpec(模型 1-shot、无工具),落 trace。返回解析结果(失败 nil)。
+    /// 从一条用户请求派生 GoalSpec。每次都携带同一份完整上下文建立新会话;
+    /// 超时、模型中断或结构不完整时有界重新生成。重试耗尽返回 nil,由入口硬门阻止执行。
     /// 调用方拿到后存 `goalSpecsByRecord[记录]` → 供执行引导/验收成功标准/记忆消费。
     @discardableResult
-    func deriveGoalSpec(for request: String, taskRecordID: String?, activeTurnContext: Bool = false) async -> LingShuGoalSpec? {
+    func deriveGoalSpec(
+        for request: String,
+        taskRecordID: String?,
+        activeTurnContext: Bool = false,
+        onProgress: ((Int, Int, String) -> Void)? = nil
+    ) async -> LingShuGoalSpec? {
         let trimmed = request.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
         let activeTurnAnchor = activeTurnContext ? activeTurnGoalSpecLatestCompletedExchange(excludingCurrentRawPrompt: trimmed) : []
+        let activeTurnSupportLines = activeTurnContext ? activeTurnGoalSpecReferenceSupportLines(excludingCurrentRawPrompt: trimmed) : []
         let activeTurnAnchorIsInteractive: Bool = {
             guard activeTurnContext,
                   let anchor = activeTurnGoalSpecLatestCompletedAssistant(excludingCurrentRawPrompt: trimmed),
@@ -36,23 +39,32 @@ extension LingShuState {
             return turnDidProvideInteractiveOutput(recordID)
         }()
         let modelRequest = activeTurnContext ? activeTurnGoalSpecRequest(for: trimmed) : trimmed
-        let adapter = controlPlaneModelAdapter(.goalSpec, taskRecordID: taskRecordID)
-        let session = LingShuAgentSession(
-            id: "goalspec-\(UUID().uuidString.prefix(6))",
-            system: LingShuGoalSpecParser.systemPrompt,
-            tools: [], model: adapter, maxTurns: 1
-        )
-        guard case .completed(let text) = await session.send(modelRequest) else { return nil }
-        guard let spec = LingShuGoalSpecParser.parse(LingShuReasoningText.stripThinkTags(text)) else {
-            appendTrace(kind: .system, actor: "目标认知", title: "GoalSpec 解析失败",
-                        detail: "模型未产出可解析的目标规格(本回合按无目标规格执行,不影响)。")
-            return nil
+        guard var spec = await generateValidatedGoalSpec(
+            modelRequest: modelRequest,
+            taskRecordID: taskRecordID,
+            onProgress: onProgress
+        ) else { return nil }
+        var historyFallbackSupportLines: [String] = []
+        if activeTurnContext, Self.activeTurnGoalSpecNeedsHistoryFallback(spec, currentInput: trimmed) {
+            guard let fallback = await deriveGoalSpecWithHistoryFallback(
+                for: trimmed,
+                initialSpec: spec,
+                taskRecordID: taskRecordID,
+                onProgress: onProgress
+            ) else {
+                appendTrace(kind: .system, actor: "目标认知", title: "GoalSpec 历史归属失败·已阻止执行",
+                            detail: "首轮 GoalSpec 不具备高置信引用,历史检索重试后仍无法确认对象。未使用低置信结果继续执行。")
+                return nil
+            }
+            spec = fallback.spec
+            historyFallbackSupportLines = fallback.supportLines
         }
         let normalized = activeTurnContext
             ? Self.repairActiveTurnGoalSpecReference(
                 spec,
                 currentInput: trimmed,
                 defaultAnchorLines: activeTurnAnchor,
+                candidateSupportLines: activeTurnSupportLines + historyFallbackSupportLines,
                 defaultAnchorIsInteractive: activeTurnAnchorIsInteractive
             )
             : spec
@@ -70,35 +82,191 @@ extension LingShuState {
     func activeTurnGoalSpecRequest(for request: String) -> String {
         let trimmed = request.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return request }
+        guard let payload = activeTurnGoalSpecContextPayload(for: trimmed) else { return trimmed }
+        return serializedGoalSpecPayload(payload, fallbackText: trimmed)
+    }
+
+    private func activeTurnGoalSpecContextPayload(for trimmed: String) -> [String: Any]? {
         let foreground = activeTurnGoalSpecForegroundLines(excludingCurrentRawPrompt: trimmed)
+        let conversationContext = activeTurnGoalSpecConversationContext(excludingCurrentRawPrompt: trimmed)
         let anchor = activeTurnGoalSpecLatestCompletedExchange(excludingCurrentRawPrompt: trimmed)
-        guard !foreground.isEmpty else { return trimmed }
+        guard !foreground.isEmpty || !conversationContext.isEmpty else { return nil }
         let payload: [String: Any] = [
             "type": "lingshu_active_turn_goal_context",
             "contract": [
                 "current_user_input_is_the_only_new_request": true,
-                "default_anchor_is_primary_for_ellipsis": true,
+                "conversation_context_is_reference_pool": true,
+                "default_anchor_is_fallback_not_the_only_target": true,
                 "candidate_background_is_optional_only": true,
-                "must_return_reference_scope_fields": true
+                "must_return_reference_scope_fields": true,
+                "must_preserve_entities_from_selected_context": true,
+                "must_return_reference_confidence": true
             ],
             "current_user_input": trimmed,
             "default_anchor": anchor,
             "candidate_background": foreground,
+            "conversation_context": conversationContext,
             "selection_rules": [
-                "If current_user_input does not explicitly name another object/thread/material/memory, set reference_scope=default_anchor and reference_explicit=false.",
-                "If reference_scope is candidate_background/visible_context/task_thread/memory, reference_explicit must be true and reference_evidence must quote the explicit object from current_user_input or default_anchor.",
-                "Do not let older candidate_background override default_anchor."
+                "Read the full conversation_context before choosing the referenced turn; the target may be many turns earlier, not only the latest default_anchor.",
+                "Use default_anchor only when it is truly the best semantic target or the input is a bare continuation with no better referenced object in conversation_context.",
+                "If the selected context contains concrete entities (stocks, files, people, ids, task names, paths, products), preserve those entities in objective and success_criteria instead of collapsing them into generic labels.",
+                "If reference_scope is candidate_background/visible_context/task_thread/memory, reference_explicit must be true and reference_evidence must quote support from current_user_input, default_anchor, or conversation_context.",
+                "Do not let noisy or failed older turns override a clearly referenced target, but do not ignore an older turn when current_user_input semantically points to it."
             ]
         ]
+        return payload
+    }
+
+    private func serializedGoalSpecPayload(_ payload: [String: Any], fallbackText: String) -> String {
         if let data = try? JSONSerialization.data(withJSONObject: payload, options: [.prettyPrinted, .sortedKeys]),
            let text = String(data: data, encoding: .utf8) {
             return text
         }
-        return """
-        current_user_input=\(trimmed)
-        default_anchor=\(anchor.joined(separator: "\n"))
-        candidate_background=\(foreground.joined(separator: "\n"))
+        return fallbackText
+    }
+
+    private func activeTurnGoalSpecHistoryFallbackRequest(
+        for request: String,
+        initialSpec: LingShuGoalSpec
+    ) -> String {
+        var payload = activeTurnGoalSpecContextPayload(for: request) ?? [
+            "type": "lingshu_active_turn_goal_context",
+            "current_user_input": request
+        ]
+        payload["type"] = "lingshu_active_turn_goal_context_history_fallback"
+        payload["initial_goal_spec"] = [
+            "summary": initialSpec.summary,
+            "reference_scope": initialSpec.referenceScope.rawValue,
+            "reference_confidence": initialSpec.referenceConfidence.rawValue,
+            "reference_evidence": initialSpec.referenceEvidence
+        ]
+        payload["history_fallback_rules"] = [
+            "You are in history fallback mode because the first GoalSpec did not provide a high-confidence referenced target.",
+            "Before returning the final JSON, call search_goal_history at least once with the best query you can infer from current_user_input and the provided context.",
+            "If the first search is too broad or misses the target, call search_goal_history again with a different query or a broader scope.",
+            "After reading retrieved history, return one GoalSpec JSON with reference_confidence high only when concrete evidence supports the selected target.",
+            "If no reliable target is found, return a low-confidence GoalSpec with open_questions instead of inventing the target."
+        ]
+        return serializedGoalSpecPayload(payload, fallbackText: request)
+    }
+
+    private func deriveGoalSpecWithHistoryFallback(
+        for request: String,
+        initialSpec: LingShuGoalSpec,
+        taskRecordID: String?,
+        onProgress: ((Int, Int, String) -> Void)? = nil
+    ) async -> (spec: LingShuGoalSpec, supportLines: [String])? {
+        let supportBox = LingShuGoalSpecHistorySupportBox()
+        let baseSystem = LingShuGoalSpecParser.systemPrompt + """
+
+        历史兜底模式:
+        - 本轮会给你 search_goal_history 工具。你必须先调用至少一次工具检索历史,再输出最终 GoalSpec JSON。
+        - 工具可返回热/冷对话、任务记录、主线程记忆等候选。你要从候选里选择最能解释 current_user_input 的对象。
+        - 找到对象后,objective/success_criteria 必须保留具体实体；找不到就把 reference_confidence 设为 "low" 并写 open_questions,不要编造。
         """
+        let prompt = activeTurnGoalSpecHistoryFallbackRequest(for: request, initialSpec: initialSpec)
+        let timeouts = LingShuControlPlaneRole.goalSpec.generationTimeouts
+        var lastIssue = "历史检索未完成"
+        for (offset, timeout) in timeouts.enumerated() {
+            guard !Task.isCancelled else { return nil }
+            let attempt = offset + 1
+            let total = timeouts.count
+            onProgress?(attempt, total, "目标引用不确定,正在检索历史并重新生成(\(attempt)/\(total))…")
+            let system = attempt == 1 ? baseSystem : baseSystem + """
+
+
+            历史归属的上一次生成未通过。请重新调用 search_goal_history,以具体证据重新产出完整 GoalSpec。
+            """
+            let adapter = controlPlaneModelAdapter(
+                .goalSpec,
+                taskRecordID: taskRecordID,
+                timeoutOverride: timeout
+            )
+            let session = LingShuAgentSession(
+                id: "goalspec-history-\(UUID().uuidString.prefix(6))",
+                system: system,
+                tools: [goalSpecHistorySearchTool(excludingCurrentRawPrompt: request, supportBox: supportBox)],
+                model: adapter,
+                maxTurns: 4
+            )
+            let result = await session.send(prompt)
+            guard !Task.isCancelled else { return nil }
+            let invocations = await session.toolInvocations
+            switch result {
+            case .completed(let text):
+                guard invocations.contains("search_goal_history") else {
+                    lastIssue = "模型未调用 search_goal_history"
+                    break
+                }
+                guard let spec = LingShuGoalSpecParser.parse(LingShuReasoningText.stripThinkTags(text)) else {
+                    lastIssue = "模型未产出可解析 GoalSpec JSON"
+                    break
+                }
+                if let issue = LingShuGoalSpecParser.executionReadinessIssue(spec) {
+                    lastIssue = issue
+                    break
+                }
+                guard spec.referenceConfidence == .high else {
+                    lastIssue = "历史检索后引用置信度仍为 \(spec.referenceConfidence.rawValue)"
+                    break
+                }
+                let supportLines = await supportBox.snapshot()
+                appendTrace(kind: .system, actor: "目标认知", title: "GoalSpec 历史兜底",
+                            detail: "首轮引用置信度=\(initialSpec.referenceConfidence.rawValue), scope=\(initialSpec.referenceScope.rawValue); 第 \(attempt)/\(total) 次完成; 工具调用=\(invocations.joined(separator: ",")); 兜底结果=\(spec.summary)")
+                return (spec, supportLines)
+            case .interrupted(let reason):
+                lastIssue = "模型调用中断:\(String(reason.prefix(180)))"
+            case .blocked(let question):
+                lastIssue = "历史归属意外进入等待:\(String(question.prefix(180)))"
+            case .maxTurnsReached(let lastText):
+                lastIssue = "历史归属达到回合上限:\(String(lastText.prefix(180)))"
+            }
+            appendTrace(
+                kind: .system,
+                actor: "目标认知",
+                title: attempt < total ? "GoalSpec 历史兜底未完成·准备重试" : "GoalSpec 历史兜底未完成",
+                detail: "第 \(attempt)/\(total) 次(timeout=\(Int(timeout))s):\(lastIssue)"
+            )
+        }
+        appendTrace(kind: .system, actor: "目标认知", title: "GoalSpec 历史兜底耗尽",
+                    detail: "已尝试 \(timeouts.count) 次,最后原因:\(lastIssue)。")
+        return nil
+    }
+
+    private func goalSpecHistorySearchTool(
+        excludingCurrentRawPrompt rawPrompt: String,
+        supportBox: LingShuGoalSpecHistorySupportBox
+    ) -> LingShuAgentTool {
+        LingShuAgentTool(
+            name: "search_goal_history",
+            description: "检索用于 GoalSpec 引用归属的历史记录。可返回热/冷对话、任务记录、主线程记忆和关键词命中；当 current_user_input 出现“那几个/上一份/继续/更准确/复核”等弱指代时用它找被引用对象。",
+            parametersJSON: """
+            {"type":"object","properties":{
+            "query":{"type":"string","description":"要检索的历史线索。可以是当前用户输入,也可以是你从上下文推断出的主题/实体/任务名。"},
+            "scope":{"type":"string","description":"可选: all/recent/chat/task/memory,默认 all。"},
+            "limit":{"type":"number","description":"每类最多返回多少候选,默认 8,最大 24。"}
+            },"required":["query"]}
+            """
+        ) { [weak self] argsJSON in
+            guard let self else { return "执行环境不可用。" }
+            let query = (Self.jsonField(argsJSON, "query") ?? rawPrompt)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let scope = (Self.jsonField(argsJSON, "scope") ?? "all")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .lowercased()
+            let rawLimit = Int(Self.jsonNumber(argsJSON, "limit") ?? 8)
+            let limit = max(3, min(24, rawLimit))
+            let result = await MainActor.run {
+                self.goalSpecHistorySearchPayload(
+                    query: query.isEmpty ? rawPrompt : query,
+                    scope: scope,
+                    excludingCurrentRawPrompt: rawPrompt,
+                    limit: limit
+                )
+            }
+            await supportBox.append(result.supportLines)
+            return result.text
+        }
     }
 
     /// 第④站引用范围修复闸:只看模型**结构字段**,不看“继续/PPT/介绍”等关键词。
@@ -107,13 +275,14 @@ extension LingShuState {
         _ spec: LingShuGoalSpec,
         currentInput: String,
         defaultAnchorLines: [String],
+        candidateSupportLines: [String] = [],
         defaultAnchorIsInteractive: Bool = false
     ) -> LingShuGoalSpec {
         var repaired = spec
         let evidence = spec.referenceEvidence
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
-        let supportCorpus = ([currentInput] + defaultAnchorLines)
+        let supportCorpus = ([currentInput] + defaultAnchorLines + candidateSupportLines)
             .joined(separator: "\n")
             .trimmingCharacters(in: .whitespacesAndNewlines)
         let hasQuotedSupport = evidence.contains { supportCorpus.contains($0) }
@@ -178,7 +347,58 @@ extension LingShuState {
         return reversed.reversed()
     }
 
-    private func activeTurnGoalSpecForegroundMessages(excludingCurrentRawPrompt rawPrompt: String) -> [ChatMessage] {
+    /// GoalSpec 的完整引用池:按时间顺序给模型一段更宽的上下文,让「更详细/复核/继续那份」
+    /// 不被硬绑到最近一轮。旧的 default_anchor / candidate_background 保留做兼容和快速锚点。
+    private func activeTurnGoalSpecConversationContext(
+        excludingCurrentRawPrompt rawPrompt: String,
+        limit: Int = 80,
+        budget: Int = LingShuState.conversationContextBudget
+    ) -> [[String: Any]] {
+        let visible = activeTurnGoalSpecForegroundMessages(excludingCurrentRawPrompt: rawPrompt)
+        guard !visible.isEmpty else { return [] }
+        var remaining = budget
+        var selected: [(index: Int, message: ChatMessage, text: String)] = []
+        for (index, message) in visible.enumerated().reversed() {
+            let text = message.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !text.isEmpty else { continue }
+            let overhead = 160
+            let cost = text.count + overhead
+            if cost > remaining {
+                if selected.isEmpty {
+                    let room = max(200, remaining - overhead)
+                    selected.append((index, message, String(text.prefix(room)) + "…（节选）"))
+                }
+                break
+            }
+            selected.append((index, message, text))
+            remaining -= cost
+            if selected.count >= limit { break }
+        }
+        let formatter = ISO8601DateFormatter()
+        return selected.reversed().map { item in
+            var entry: [String: Any] = [
+                "turn_index": item.index + 1,
+                "role": item.message.isUser ? "user" : "assistant",
+                "speaker": item.message.speaker,
+                "text": item.text,
+                "created_at": formatter.string(from: item.message.createdAt)
+            ]
+            if let taskRecordID = item.message.taskRecordID {
+                entry["task_record_id"] = taskRecordID
+            }
+            return entry
+        }
+    }
+
+    private func activeTurnGoalSpecReferenceSupportLines(excludingCurrentRawPrompt rawPrompt: String) -> [String] {
+        activeTurnGoalSpecConversationContext(excludingCurrentRawPrompt: rawPrompt).compactMap { entry in
+            guard let role = entry["role"] as? String,
+                  let text = entry["text"] as? String else { return nil }
+            return "\(role == "user" ? "用户" : "灵枢"): \(text)"
+        }
+    }
+
+    func activeTurnGoalSpecForegroundMessages(excludingCurrentRawPrompt rawPrompt: String) -> [ChatMessage] {
         let raw = rawPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
         var skippedCurrentUserPrompt = false
         return chatMessages.reversed().compactMap { message -> ChatMessage? in

@@ -61,11 +61,28 @@ extension LingShuState {
                 boundGoalSpec = preflightGoalSpec
                 bindGoalSpec(preflightGoalSpec, to: rid)
             } else {
-                boundGoalSpec = await deriveGoalSpec(for: task, taskRecordID: rid)
+                boundGoalSpec = await deriveGoalSpec(
+                    for: task,
+                    taskRecordID: rid,
+                    onProgress: { _, _, status in
+                        guard let index = self.chatMessages.firstIndex(where: { $0.id == bid }) else { return }
+                        self.chatMessages[index].text = status
+                        self.chatMessages[index].isLoading = true
+                    }
+                )
                 bindGoalSpec(boundGoalSpec, to: rid)
             }
         } else {
             boundGoalSpec = nil
+        }
+        guard !Task.isCancelled else { return true }
+        if goalSpecEnabled, boundGoalSpec == nil {
+            markGoalSpecPreflightFailure(request: task, recordID: rid, bubbleID: bid)
+            agentSubTaskRecords[subID] = nil
+            return true
+        }
+        if let index = chatMessages.firstIndex(where: { $0.id == bid }) {
+            chatMessages[index].text = "核心目标已确认,正在规划角色管线…"
         }
         let executionTask = contextualTaskPrompt(rawObjective: task, userPrompt: task, goalSpec: boundGoalSpec)
 
@@ -85,26 +102,63 @@ extension LingShuState {
         bindRolePipelineSlots(steps, recordID: rid)   // 结构化参与方:让 checker/maker 在任务窗口与 MCP 中稳定可见
         appendTaskRecordMessage(rid, actor: "灵枢", role: "派生子任务", kind: .router,
                                 text: "派生角色管线子线程:" + steps.map { "\($0.roleTitle)(\($0.agentName ?? "灵枢"))" }.joined(separator: " → "))
-        let intake = "🔧 已规划角色管线:" + steps.map { "\($0.roleTitle)(\($0.agentName ?? "灵枢"))" }.joined(separator: " → ")
+        let intake = "🔧 **协作流程**\n" + steps.map { "\($0.roleTitle)（\($0.agentName ?? "灵枢")）" }.joined(separator: " → ")
         if let idx = chatMessages.firstIndex(where: { $0.id == bid }) { chatMessages[idx].text = intake }
         mirrorRolePipelinePlan(steps, recordID: rid)   // 把规划阶段镜像进 record.plan → 右侧「分步计划」看得到执行步骤
-        let (result, passed) = await runRolePipeline(recordID: rid, task: executionTask, steps: steps)
+        let (result, passed, reviewSummary) = await runRolePipeline(recordID: rid, task: executionTask, steps: steps)
         agentSubTaskRecords[subID] = nil
         let wasCancelled = cancelledPipelineRecords.contains(rid)   // 用户中途点了停止
         cancelledPipelineRecords.remove(rid)
+        let unavailableNotice = LingShuAgentPluginStore.unavailableNotice(from: result, knownPlugins: LingShuAgentPluginStore.load())?.message
         if let idx = chatMessages.firstIndex(where: { $0.id == bid }) {
-            chatMessages[idx].text = intake + (wasCancelled ? "\n\n⏹ 已停止。"
-                : (passed ? "\n\n✅ 管线完成,评审通过、已交付。\n" : "\n\n⚠️ 评审未通过,已交还(未交付,需修正后重验)。\n") + String(result.suffix(500)))
+            chatMessages[idx].text = Self.rolePipelineBubbleText(
+                route: intake,
+                passed: passed,
+                stopped: wasCancelled,
+                unavailableNotice: unavailableNotice,
+                reviewSummary: reviewSummary
+            )
             chatMessages[idx].isLoading = false
         }
         if !wasCancelled {   // 被停止的已由 stopDispatchedTask 标 .failed,别再覆盖成 verified/needsRevision
             // **评审未通过用 .needsRevision(未达标),不要 .partial(部分完成)**:气泡明说"未交付、需修正后重验",
             // 而 .partial 显示"部分完成"=暗示有部分交付,与气泡矛盾(用户实测:内 部分完成 / 外 评审未通过已交还,不一致)。
             // .needsRevision 的"未达标"与气泡同义、且仍可被「继续」恢复返工(已加入 isResumableUnfinished)。
-            finishTaskRecord(rid, status: passed ? .verified : .needsRevision,
-                             summary: (passed ? "角色管线评审通过:" : "角色管线评审未通过(未达标·已交还、未交付):") + steps.map(\.roleTitle).joined(separator: "→"))
+            let finalStatus: LingShuTaskExecutionStatus = passed ? .verified : (unavailableNotice == nil ? .needsRevision : .failed)
+            let finalPrefix = passed ? "角色管线评审通过:"
+                : (unavailableNotice.map { "角色管线因 agent 插件不可用中止:\($0)。" } ?? "角色管线评审未通过(未达标·已交还、未交付):")
+            finishTaskRecord(rid, status: finalStatus,
+                             summary: finalPrefix + steps.map(\.roleTitle).joined(separator: "→"))
         }
         return true
+    }
+
+    /// 主对话只呈现人能读懂的交付状态。完整执行过程留在任务记录,
+    /// `result` 中的角色原文和 checker JSON 不再用 `suffix` 截断后泄漏到聊天气泡。
+    nonisolated static func rolePipelineBubbleText(
+        route: String,
+        passed: Bool,
+        stopped: Bool,
+        unavailableNotice: String?,
+        reviewSummary: String,
+        resumed: Bool = false
+    ) -> String {
+        var sections = [route]
+        if stopped {
+            sections.append("⏹ **已停止**")
+        } else if let unavailableNotice,
+                  !unavailableNotice.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            sections.append("⚠️ **Agent 不可用**\n\(unavailableNotice)")
+        } else if passed {
+            sections.append(resumed ? "✅ **续跑完成并通过验收**" : "✅ **已完成并通过验收**")
+        } else {
+            sections.append(resumed ? "⚠️ **续跑尚未通过验收**" : "⚠️ **尚未通过验收,任务未交付**")
+        }
+        let cleanedReview = reviewSummary.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !cleanedReview.isEmpty, !stopped, unavailableNotice == nil {
+            sections.append(cleanedReview)
+        }
+        return sections.joined(separator: "\n\n")
     }
 
     /// **续接继承(用户定调:延续之前任务应沿用同样的 agent,不重置回灵枢)**:大脑判断这条新消息是不是上一个角色管线任务的延续。
@@ -244,21 +298,23 @@ extension LingShuState {
     }
 
     /// 按规划执行角色管线:**建设角色按序跑**(产出承接),然后**评审官把关**——评审官判不过→退回最后一个建设角色返工→
-    /// 评审官再验,**通过才交付**(有界轮次)。每个角色作为**命名参与方**可见。返回(产出汇总, 是否通过)。
-    func runRolePipeline(recordID rid: String, task: String, steps: [LingShuRoleStep], initialPrior: String = "") async -> (summary: String, passed: Bool) {
+    /// 评审官再验,**通过才交付**(有界轮次)。每个角色作为**命名参与方**可见。
+    /// 返回内部承接上下文、是否通过,以及已经去协议化的主对话验收摘要。
+    func runRolePipeline(recordID rid: String, task: String, steps: [LingShuRoleStep], initialPrior: String = "") async -> (summary: String, passed: Bool, reviewSummary: String) {
         let roles = expertProfileRegistry.allProfiles
         let reviewer = expertProfileRegistry.reviewerProfile()
         let builders = steps.filter { !Self.isReviewerRole($0, reviewerID: reviewer.id, reviewerTitle: reviewer.title) }       // 建设角色(架构/开发…)
         let reviewers = steps.filter { Self.isReviewerRole($0, reviewerID: reviewer.id, reviewerTitle: reviewer.title) }      // 评审官(可多个)
         var prior = initialPrior   // **续跑时**:上一轮的 maker 交付 + 评审意见作为承接上下文(别丢之前的进度/反馈)
+        var latestReviewSummary = ""
         let goalCriteria = goalSpec(for: rid)?.acceptanceCriteriaBlock ?? ""   // 提炼出的逐条成功标准,注入每个角色(尤其评审官据此核验)
         appendTrace(kind: .route, actor: "角色规划", title: "多角色管线(\(steps.count) 环)",
                     detail: steps.map { "\($0.roleTitle)=\($0.agentName ?? "灵枢")" }.joined(separator: " → "))
 
-        // 跑单个角色(agent 或灵枢会话),记参与方,返回产出。
-        func runRole(_ step: LingShuRoleStep, tag: String, extra: String) async -> String {
+        // 跑单个角色(agent 或灵枢会话),记参与方,返回产出与是否为插件不可用类失败。
+        func runRole(_ step: LingShuRoleStep, tag: String, extra: String) async -> (output: String, unavailableNotice: String?) {
             setRolePipelineSlotStatus(step, status: .running, recordID: rid)
-            let rolePrompt = roles.first { $0.id == step.roleID }?.promptBlock ?? ""
+            let rolePrompt = roles.first { $0.id == step.roleID }?.promptBlock(for: task) ?? ""
             let objective = """
             你在本任务里担任角色:**\(step.roleTitle)**。
             \(rolePrompt)
@@ -271,15 +327,36 @@ extension LingShuState {
             let actor = step.agentName ?? "灵枢"
             let startText = "▶ \(actor) 担任「\(step.roleTitle)」:\(step.subtask.prefix(80))"
             let output: String
+            var unavailableNotice: String?
             var roleSucceeded = true
             if let agentID = step.agentID, let plugin = LingShuAgentPluginStore.plugin(id: agentID) {
+                if !plugin.isCallableNow {
+                    roleSucceeded = false
+                    let reason = plugin.unavailableReason?.trimmingCharacters(in: .whitespacesAndNewlines)
+                    let notice = LingShuAgentPluginStore.unavailableMessage(
+                        agentName: plugin.displayName,
+                        reason: reason?.isEmpty == false ? reason! : "不可用"
+                    )
+                    unavailableNotice = notice
+                    output = notice
+                    appendTaskRecordMessage(rid, actor: actor, role: "\(step.roleTitle)·插件不可用", kind: .warning, text: notice)
+                    setRolePipelineSlotStatus(step, status: .failed, recordID: rid)
+                    return (output, unavailableNotice)
+                }
                 // **流式**:边跑边把 agent 输出更新进同一条参与方气泡(不再干等)。
                 switch await runAgentStreamingToRecord(plugin, objective: objective, recordID: rid,
                                                        actor: actor, role: "\(step.roleTitle)·\(tag)", startText: startText) {
                 case .completed(let t): output = t
                 case .failure(let f):
                     roleSucceeded = false
-                    output = "(\(plugin.displayName) 未完成:\(f))"
+                    if let reason = LingShuAgentPluginStore.unavailableReason(fromFailureText: f, agent: plugin) {
+                        let notice = LingShuAgentPluginStore.unavailableMessage(agentName: plugin.displayName, reason: reason)
+                        unavailableNotice = notice
+                        output = notice
+                        appendTaskRecordMessage(rid, actor: actor, role: "\(step.roleTitle)·插件不可用", kind: .warning, text: notice)
+                    } else {
+                        output = "(\(plugin.displayName) 未完成:\(f))"
+                    }
                 }
             } else {
                 appendTaskRecordMessage(rid, actor: actor, role: "\(step.roleTitle)·\(tag)", kind: .agent, text: startText)
@@ -289,20 +366,26 @@ extension LingShuState {
                 output = LingShuStructuredModelOutput.visibleText(from: Self.runResultText(await session.send(objective)))
             }
             setRolePipelineSlotStatus(step, status: roleSucceeded ? .completed : .failed, recordID: rid)
-            return output
+            return (output, unavailableNotice)
         }
 
         // 1) 建设角色按序跑一遍。
         for (i, step) in builders.enumerated() {
             if Task.isCancelled || batchInterruptRequested || cancelledPipelineRecords.contains(rid) { break }
             setRolePipelinePlanStatus(step, status: .inProgress, recordID: rid)   // 右侧分步计划:本环进行中
-            let o = await runRole(step, tag: "上岗(第\(i + 1)环)", extra: "")
+            let roleResult = await runRole(step, tag: "上岗(第\(i + 1)环)", extra: "")
+            let o = roleResult.output
+            if let notice = roleResult.unavailableNotice {
+                setRolePipelinePlanStatus(step, status: .failed, recordID: rid)
+                prior += "\n【\(step.roleTitle)·\(step.agentName ?? "灵枢")】\n\(notice)"
+                return (prior + "\n\n(\(notice),未继续进入评审。)", false, latestReviewSummary)
+            }
             appendTaskRecordMessage(rid, actor: step.agentName ?? "灵枢", role: "\(step.roleTitle)·产出", kind: .result, text: String(o.prefix(1500)))
             prior += "\n【\(step.roleTitle)·\(step.agentName ?? "灵枢")】\n\(o.prefix(1500))"
             setRolePipelinePlanStatus(step, status: .completed, recordID: rid)    // 本环完成,打钩
         }
         // 没评审官 → 没把关,直接交付(大脑没规划评审就不强加)。
-        guard !reviewers.isEmpty else { return (prior, true) }
+        guard !reviewers.isEmpty else { return (prior, true, latestReviewSummary) }
 
         // 2) 评审官把关 → 不过退回最后一个建设角色返工 → 再验。**通过才交付,这是 LOOP 闭环。**
         // **无返工上限(2026-06-28 用户定调:不过就一直修,直到通过或手动中止;除此之外不该自己放弃)**——
@@ -314,34 +397,53 @@ extension LingShuState {
                 // insert,见 TaskWindow:180)=真·手动中止;`Task.isCancelled`/`batchInterruptRequested` 可能是别的中断/泄漏,如实说。
                 let userStopped = cancelledPipelineRecords.contains(rid)
                 return (prior + (userStopped ? "\n\n(已手动中止,未交付。)"
-                                             : "\n\n(执行被中断、未交付——不是你主动停的;可点「继续」重试。)"), false)
+                                             : "\n\n(执行被中断、未交付——不是你主动停的;可点「继续」重试。)"), false, latestReviewSummary)
             }
             round += 1
             var fails: [String] = []
+            var roundReviewSummaries: [String] = []
             for rev in reviewers {
                 setRolePipelinePlanStatus(rev, status: .inProgress, recordID: rid)   // 右侧分步计划:评审进行中
-                let v = await runRole(rev, tag: "验收(第\(round)轮)", extra: "你是把关方,独立核验前序产出是否达成目标(读代码/跑测试/运行)。\(LingShuCheckerVerdict.outputContract)")
+                let reviewResult = await runRole(rev, tag: "验收(第\(round)轮)", extra: "你是把关方,独立核验前序产出是否达成目标(读代码/跑测试/运行)。\(LingShuCheckerVerdict.outputContract)")
+                let v = reviewResult.output
+                if let notice = reviewResult.unavailableNotice {
+                    setRolePipelinePlanStatus(rev, status: .failed, recordID: rid)
+                    return (prior + "\n\n(\(notice),验收未能启动。)", false, latestReviewSummary)
+                }
                 // 验收遇模型通道故障(超时/网络)≠ 验收驳回:产物已落地,暂停待重验,别误判需修正去返工。
                 if let f = LingShuModelServiceFailure.decodeReason(v), f.shouldAutoResume {
                     appendTaskRecordMessage(rid, actor: rev.agentName ?? "灵枢", role: "\(rev.roleTitle)·验收暂停(模型通道故障)", kind: .warning,
                                             text: "验收时\(f.userFacingMessage)（产物已落地,非需修正;通道恢复后可重验)。")
-                    return (prior + "\n\n(验收遇模型通道故障,产物已落地、待重验,未误判需修正。)", false)
+                    return (prior + "\n\n(验收遇模型通道故障,产物已落地、待重验,未误判需修正。)", false, latestReviewSummary)
                 }
-                let passed = Self.checkerVerdictPassed(v)
+                let verdict = LingShuCheckerVerdict.parse(v)
+                let passed = verdict?.passed == true
+                let renderedReview = verdict?.renderedSummary
+                    ?? "⚠️ 评审结果格式异常,无法确认交付质量。"
+                let conversationReview = verdict?.conversationSummary ?? renderedReview
+                roundReviewSummaries.append(reviewers.count > 1
+                    ? "**\(rev.roleTitle)**\n\(conversationReview)"
+                    : conversationReview)
                 appendTaskRecordMessage(rid, actor: rev.agentName ?? "灵枢",
                                         role: passed ? "\(rev.roleTitle)·通过" : "\(rev.roleTitle)·需修正(第\(round)轮)",
-                                        kind: passed ? .result : .agent, text: String(v.prefix(1200)))
+                                        kind: passed ? .result : .agent, text: renderedReview)
                 if !passed { fails.append("【\(rev.roleTitle)】\(v.prefix(400))") }
                 prior += "\n【\(rev.roleTitle)·\(passed ? "通过" : "需修正")】\n\(v.prefix(800))"
                 setRolePipelinePlanStatus(rev, status: .completed, recordID: rid)   // 评审给出结论,本环打钩
             }
-            if fails.isEmpty { return (prior, true) }                 // 全部评审通过 → 交付
+            latestReviewSummary = roundReviewSummaries.joined(separator: "\n\n")
+            if fails.isEmpty { return (prior, true, latestReviewSummary) }                 // 全部评审通过 → 交付
             guard let producer = builders.last else {
-                return (prior + "\n\n(评审未通过,但无可返工的建设角色,未交付。)", false)
+                return (prior + "\n\n(评审未通过,但无可返工的建设角色,未交付。)", false, latestReviewSummary)
             }
             // 退回最后一个建设角色返工(带评审意见)。无上限——一直修到过或手动停。
             let critique = fails.joined(separator: "\n")
-            let fixed = await runRole(producer, tag: "返工(第\(round)轮)", extra: "**评审未通过,据下面意见返工修正(必须真改到能通过):**\n\(critique.prefix(1000))")
+            let fixResult = await runRole(producer, tag: "返工(第\(round)轮)", extra: "**评审未通过,据下面意见返工修正(必须真改到能通过):**\n\(critique.prefix(1000))")
+            let fixed = fixResult.output
+            if let notice = fixResult.unavailableNotice {
+                setRolePipelinePlanStatus(producer, status: .failed, recordID: rid)
+                return (prior + "\n\n(\(notice),返工未能启动。)", false, latestReviewSummary)
+            }
             appendTaskRecordMessage(rid, actor: producer.agentName ?? "灵枢", role: "\(producer.roleTitle)·返工交付(第\(round)轮)", kind: .result, text: String(fixed.prefix(1500)))
             prior += "\n【\(producer.roleTitle)·返工】\n\(fixed.prefix(1500))"
         }

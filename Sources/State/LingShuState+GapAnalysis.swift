@@ -187,21 +187,33 @@ extension LingShuState {
     }
 
     /// P2 覆盖对齐:**已知是 task 型目标**的入口(自主真实目标 / spawn 子任务)统一前置认知——
-    /// 并发派生 GoalSpec + 能力缺口分析并绑定记录(与主输入 task 路径同款消费:执行引导/验收/经验)。
-    /// GoalSpec 解析失败给最小兜底(objective=原请求);gap 失败则不绑(按无缺口)。已绑过则不重派(幂等)。
-    func bindPreflightCognition(request: String, recordID: String) async {
-        guard goalSpecEnabled else { return }
-        async let specF = deriveGoalSpec(for: request, taskRecordID: nil)
+    /// GoalSpec 先独立完成并通过结构校验,再并发派生能力缺口/需求。
+    /// 核心目标重试耗尽时返回 false 并将记录收口为失败,调用方必须停止派生执行器。
+    @discardableResult
+    func bindPreflightCognition(request: String, recordID: String) async -> Bool {
+        guard goalSpecEnabled else { return true }
+        let spec: LingShuGoalSpec?
+        if let existing = goalSpec(for: recordID) {
+            spec = existing
+        } else {
+            spec = await deriveGoalSpec(for: request, taskRecordID: recordID)
+        }
+        guard !Task.isCancelled else { return false }
+        guard let spec else {
+            markGoalSpecPreflightFailure(
+                request: request,
+                recordID: recordID,
+                appendChatIfMissing: false
+            )
+            return false
+        }
+        if goalSpec(for: recordID) == nil { bindGoalSpec(spec, to: recordID) }
         async let gapF = deriveGapAnalysis(for: request)
         async let reqF = deriveCapabilityRequirements(for: request)   // P2 真闭环:通用能力需求(查图谱)
-        let spec = await specF
         let analysis = await gapF
         let reqs = await reqF
-        if goalSpec(for: recordID) == nil {
-            bindGoalSpec(spec ?? LingShuGoalSpec(objective: request, kind: .task,
-                         successCriteria: ["完成并可验证目标:\(String(request.prefix(60)))"]), to: recordID)
-        }
         if gapAnalysis(for: recordID) == nil { bindGapAnalysis(analysis, to: recordID) }
         bindCapabilityRequirements(reqs, to: recordID)
+        return true
     }
 }

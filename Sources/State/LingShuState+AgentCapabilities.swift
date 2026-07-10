@@ -110,6 +110,27 @@ extension LingShuState {
             + lines.joined(separator: "\n")
     }
 
+    func agentPluginGroundingText() -> String {
+        Self.agentPluginGroundingText(agents: LingShuAgentPluginStore.load())
+    }
+
+    nonisolated static func agentPluginGroundingText(agents: [LingShuAgentPlugin]) -> String {
+        guard !agents.isEmpty else { return "" }
+        let lines = agents.sorted { $0.displayName < $1.displayName }.map { agent -> String in
+            let status = agent.isCallableNow
+                ? "可调用"
+                : "不可用" + ((agent.unavailableReason?.trimmingCharacters(in: .whitespacesAndNewlines)).map { $0.isEmpty ? "" : ":\($0)" } ?? "")
+            let aliases = agent.allAliases.filter { $0 != agent.displayName && $0 != agent.id }
+            let aliasText = aliases.isEmpty ? "" : "；别名=\(aliases.joined(separator: "、"))"
+            return "- \(agent.displayName)(id=\(agent.id), role=\(agent.role.rawValue), \(status)\(aliasText))"
+        }
+        return """
+        【已注册外部 agent 插件】
+        子线程也可以按用户要求调用外部 agent:用 `run_agent(agent:"id或名称", objective:"自足目标")` 委托。用户明确说“让 Codex/Claude/某 agent 复核、验收、开发”时,不要说没有能力;应调用对应 agent。若该 agent 标为不可用,如实报告插件不可用。
+        \(lines.joined(separator: "\n"))
+        """
+    }
+
     func invalidateInvocablePluginCatalog() {
         invocablePluginCatalogRevision &+= 1
         refreshInvocationChips()

@@ -90,7 +90,7 @@ final class LingShuPresentationSkill: LingShuBuiltinSkill {
                 let clean = verbatim.trimmingCharacters(in: .whitespacesAndNewlines)
                 // **多模态:看着这一页的画面讲**(用户实测:图/表页只读抽出来的字=念字不是理解)。多模态脑就渲染本页喂图、
                 // 让它真看懂图表/表格/流程再讲;非多模态脑/取不到图则回退纯文字。
-                let visionOK = LingShuMultimodal.isVisionCapable(provider: host.modelProvider, model: host.modelName)
+                let visionOK = host.shouldAttemptNativeMultimodalForCurrentModel()
                 let pageImage = visionOK ? host.previewController.pageImageDataURL(n - 1) : nil
                 guard !clean.isEmpty || pageImage != nil else { return "（这一页以图为主，我看着画面讲。）" }
                 // 身份锚定靠 LingShuPersona(系统提示词已是灵枢本人)+ 让大脑自己判断这页是否在讲自己——
@@ -179,9 +179,9 @@ final class LingShuPresentationSkill: LingShuBuiltinSkill {
         installHooks()
         // **看不到画面就明说,别静默照本宣科(2026-06-29 用户实测:DeepSeek 演 PPT 只念字)**:
         // 非多模态脑取不到页面图,只能按抽出的文字讲(图/表/版式页讲不透)。提醒换多模态脑才能"看着画面讲"。
-        if let host, !LingShuMultimodal.isVisionCapable(provider: host.modelProvider, model: host.modelName) {
+        if let host, !host.shouldAttemptNativeMultimodalForCurrentModel() {
             host.chatMessages.append(.init(speaker: "灵枢",
-                text: "⚠️ 当前大脑「\(host.modelName)」不是多模态,看不到幻灯片画面——只能按抽出的**文字**讲(图/表/版式页讲不透、容易像念稿)。想让我**看着画面真正讲解**,换个多模态脑(如 Claude sonnet-4-6 / GPT / Gemini)再演示。",
+                text: "⚠️ 当前大脑「\(host.modelName)」已走图片解析降级,不能原生直看幻灯片画面——只能按抽出的**文字**讲(图/表/版式页讲不透、容易像念稿)。想让我**看着画面真正讲解**,换个支持原生多模态的脑再演示。",
                 isUser: false))
         }
         await controller.buildQueue(documentPaths: paths)

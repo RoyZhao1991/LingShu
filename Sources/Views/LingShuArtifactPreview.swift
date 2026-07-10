@@ -84,22 +84,6 @@ struct LingShuArtifactPreviewSheet: View {
         .frame(width: 900, height: 620)
         .background(Color.lingVoid)
         .onExitCommand(perform: close)   // Esc 关闭(嵌套窗口里 dismiss 失灵时的兜底)
-        // **悬浮关闭钮(2026-06-29 修"关闭胶囊在哪/没关闭按钮")**:顶部头条在嵌套 sheet 里可能被裁掉/看不见,
-        // 这里在预览右上角再钉一个**绝对定位、永远在最上层**的圆形 ✕,无论头条渲染与否都能一眼看到、点得到。
-        .overlay(alignment: .topTrailing) {
-            Button(action: close) {
-                Image(systemName: "xmark")
-                    .font(.system(size: 14, weight: .heavy))
-                    .foregroundStyle(Color.lingFg)
-                    .frame(width: 32, height: 32)
-                    .background(Circle().fill(closeButtonSurface))
-                    .overlay(Circle().stroke(toolbarStroke, lineWidth: 1))
-            }
-            .buttonStyle(.plain)
-            .keyboardShortcut(.cancelAction)
-            .padding(14)
-            .help("关闭预览（Esc）")
-        }
     }
 
     private var toolbarSurface: Color {
@@ -108,10 +92,6 @@ struct LingShuArtifactPreviewSheet: View {
 
     private var toolbarButtonSurface: Color {
         colorScheme == .dark ? Color.lingFg.opacity(0.12) : Color.lingFg.opacity(0.075)
-    }
-
-    private var closeButtonSurface: Color {
-        colorScheme == .dark ? Color.black.opacity(0.72) : Color.white.opacity(0.95)
     }
 
     private var toolbarStroke: Color {

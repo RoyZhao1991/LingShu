@@ -17,6 +17,37 @@ final class AgentAvailabilityTests: XCTestCase {
         XCTAssertEqual(LingShuAgentPluginStore.outputIndicatesUnavailable("API Error: 400 This organization has been disabled."), "组织/账号被禁用")
     }
 
+    func testDetectsCodexQuotaFailureSignals() {
+        XCTAssertEqual(LingShuAgentPluginStore.outputIndicatesUnavailable("You have reached your usage limit"), "额度用尽")
+        XCTAssertEqual(LingShuAgentPluginStore.outputIndicatesUnavailable("usage limit reached for this account"), "额度用尽")
+        XCTAssertEqual(LingShuAgentPluginStore.outputIndicatesUnavailable("monthly usage limit has been reached"), "额度用尽")
+        XCTAssertEqual(LingShuAgentPluginStore.outputIndicatesUnavailable("out of credits"), "额度用尽")
+        XCTAssertEqual(LingShuAgentPluginStore.outputIndicatesUnavailable("额度已用尽,请稍后重试"), "额度用尽")
+        XCTAssertEqual(LingShuAgentPluginStore.outputIndicatesUnavailable("当前没有额度"), "额度用尽")
+    }
+
+    func testUnavailableNoticeNamesPluginInsteadOfGenericWrapup() {
+        let plugin = LingShuAgentPlugin(id: "codex", displayName: "Codex", aliases: ["codex"],
+                                        executable: "/bin/echo", argsTemplate: ["{{objective}}"])
+        let text = "Codex 插件当前不可用:额度用尽。请先恢复后再重试。"
+        let notice = LingShuAgentPluginStore.unavailableNotice(from: text, knownPlugins: [plugin])
+        XCTAssertEqual(notice?.agentName, "Codex")
+        XCTAssertEqual(notice?.message, "Codex 插件当前不可用:额度用尽。请先恢复(如登录/补额度/补凭据)后再重试。")
+    }
+
+    func testRunTreatsQuotaOnStdoutAsFailure() async {
+        let plugin = LingShuAgentPlugin(
+            id: "quota-stdout-\(UUID().uuidString)", displayName: "QuotaStdout",
+            executable: "/bin/sh",
+            argsTemplate: ["-c", "printf 'You have reached your usage limit'; exit 1"],
+            role: .general, timeoutSeconds: 10)
+        let result = await LingShuAgentPluginStore.run(plugin, objective: "ignored", workingDirectory: "/tmp")
+        guard case .failure(let message) = result else {
+            return XCTFail("额度错误落在 stdout 时也应失败,实际:\(result)")
+        }
+        XCTAssertTrue(message.contains("QuotaStdout 插件当前不可用:额度用尽"), message)
+    }
+
     func testNoFalsePositiveOnNormalOutput() {
         // 代码 agent 正常产出里出现的宽泛词不该误判不可用。
         XCTAssertNil(LingShuAgentPluginStore.outputIndicatesUnavailable("已完成,文件写入 /tmp/a.py,24 passed"))

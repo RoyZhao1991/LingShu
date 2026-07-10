@@ -82,12 +82,25 @@ extension LingShuState {
         if let i = chatMessages.firstIndex(where: { $0.id == bubble.id }) {
             chatMessages[i].text = "🔧 续跑:" + steps.map { "\($0.roleTitle)(\($0.agentName ?? "灵枢"))" }.joined(separator: " → ")
         }
-        let (result, passed) = await runRolePipeline(recordID: rid, task: resumeTask, steps: steps, initialPrior: priorContext)
-        finishTaskRecord(rid, status: passed ? .verified : .needsRevision,
-            summary: (passed ? "续跑评审通过、已交付:" : "续跑评审未通过(需修正后重验):") + steps.map(\.roleTitle).joined(separator: "→"))
+        let (result, passed, reviewSummary) = await runRolePipeline(recordID: rid, task: resumeTask, steps: steps, initialPrior: priorContext)
+        let unavailableNotice = LingShuAgentPluginStore.unavailableNotice(from: result, knownPlugins: LingShuAgentPluginStore.load())?.message
+        finishTaskRecord(rid, status: passed ? .verified : (unavailableNotice == nil ? .needsRevision : .failed),
+            summary: (passed ? "续跑评审通过、已交付:"
+                      : (unavailableNotice.map { "续跑因 agent 插件不可用中止:\($0)。" } ?? "续跑评审未通过(需修正后重验):"))
+                + steps.map(\.roleTitle).joined(separator: "→"))
         if let i = chatMessages.firstIndex(where: { $0.id == bubble.id }) {
             chatMessages[i].isLoading = false
-            chatMessages[i].text = (passed ? "✅ 续跑完成,评审通过、已交付。\n" : "⚠️ 续跑后评审仍未通过,需再修。\n") + String(result.suffix(400))
+            let route = "🔧 **续跑协作流程**\n" + steps.map {
+                "\($0.roleTitle)（\($0.agentName ?? "灵枢")）"
+            }.joined(separator: " → ")
+            chatMessages[i].text = Self.rolePipelineBubbleText(
+                route: route,
+                passed: passed,
+                stopped: false,
+                unavailableNotice: unavailableNotice,
+                reviewSummary: reviewSummary,
+                resumed: true
+            )
         }
     }
 

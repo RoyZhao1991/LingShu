@@ -73,6 +73,7 @@ extension LingShuState {
                 self.actualBrainProvider = provider; self.actualBrainModel = model; self.actualBrainAt = Date()
             }
         }
+        configureNativeMultimodalGate(on: adapter)
         return adapter
     }
 
@@ -376,7 +377,7 @@ extension LingShuState {
             appendTrace(kind: .tool, actor: "确定性查证", title: "已预取联网资料", detail: String(turn.prompt.prefix(40)))
         }
 
-        let result: LingShuAgentRunResult
+        var result: LingShuAgentRunResult
         if turn.resumeBlocked, await session.isBlocked {
             let initial = await session.resume(turn.prompt)
             result = await verifyAndContinue(
@@ -389,6 +390,14 @@ extension LingShuState {
         } else {
             result = await driveAgentDelivery(session: session, prompt: turn.prompt, guidance: guidance, taskRecordID: turn.taskRecordID, trustReplyClaim: false, imageDataURLs: turn.imageDataURLs)
         }
+
+        result = await retryMainTurnAfterNativeMultimodalRejection(
+            result: result,
+            session: session,
+            imageDataURLs: turn.imageDataURLs,
+            taskRecordID: turn.taskRecordID,
+            userRequest: turn.originalPromptForVerification ?? turn.prompt
+        )
 
         guard !Task.isCancelled, !cancelledChatTurnIDs.contains(pendingID) else { return }
         if case .interrupted(let reason) = result {

@@ -67,6 +67,7 @@ struct LingShuPlanStep: Codable, Equatable, Sendable, Identifiable {
         case pending = "待办"
         case inProgress = "进行中"
         case completed = "已完成"
+        case failed = "未完成"
     }
     var id: String = UUID().uuidString
     var title: String
@@ -187,6 +188,17 @@ struct LingShuTaskExecutionArtifact: Identifiable, Codable, Equatable, Sendable 
         self.producer = producer
         self.createdAt = createdAt
         self.operation = operation
+    }
+
+    /// UI 展示与排序使用的产物时间:本地文件存在时优先读真实修改时间,否则回退登记时间。
+    var displayTimestamp: Date {
+        fileModificationDate ?? createdAt
+    }
+
+    var fileModificationDate: Date? {
+        let path = location.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard path.hasPrefix("/") else { return nil }
+        return (try? FileManager.default.attributesOfItem(atPath: path)[.modificationDate]) as? Date
     }
 }
 
@@ -479,10 +491,13 @@ struct LingShuTaskExecutionRecord: Identifiable, Codable, Equatable, Sendable {
         guard !cleanedLocation.isEmpty else { return }
 
         let cleanedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
-        // 已登记过同一文件:若这次是"修改"而之前记的是"新增",升级标注为修改(同回合多次写同一文件)。
+        // 已登记过同一文件:修改登记代表同一产物的新版本,时间和标签都应刷新。
         if let index = artifacts.firstIndex(where: { $0.location == cleanedLocation }) {
-            if operation == .modified, artifacts[index].operation != .modified {
+            if operation == .modified {
+                if !cleanedTitle.isEmpty { artifacts[index].title = cleanedTitle }
+                artifacts[index].producer = producer
                 artifacts[index].operation = .modified
+                artifacts[index].createdAt = now
                 updatedAt = now
             }
             return

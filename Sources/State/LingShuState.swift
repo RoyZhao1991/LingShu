@@ -301,6 +301,8 @@ final class LingShuState: ObservableObject {
     let toolExecutor: any LingShuToolExecuting = LingShuLocalToolExecutor()
     /// 宿主托管长命令：构建/测试/转换/下载/服务启动等超过普通工具回合的动作走 job_id 查询/取消/去重。
     let longCommandRegistry = LingShuLongCommandRegistry()
+    /// task record -> 必须等到终态才能收尾的长命令。默认有限任务进入此表；明确声明 background 的常驻服务不进入。
+    var awaitedLongCommandJobIDsByRecord: [String: Set<String>] = [:]
     let dialogueAcknowledgement = LingShuDialogueAcknowledgement()
     /// 统一的待确认问题编排中心：自主运行非交互裁决等据此判断。见 LingShuClarificationCenter。
     let clarificationCenter = LingShuClarificationCenter()
@@ -322,6 +324,12 @@ final class LingShuState: ObservableObject {
     var mainAgentSessionHolder: (any LingShuAgentSessioning)?
     /// 编排器子会话 id → 任务执行记录 id(让每条并行子任务成为列表里独立任务号)。
     var agentSubTaskRecords: [String: String] = [:]
+    /// 编排器子会话 id → 本段执行的工作目录。用于续跑前后用影子 git delta 归属新增产物。
+    var agentSubTaskWorkingDirectories: [String: String] = [:]
+    /// 编排器子会话 id → 本段执行前的影子 git 基线。跑后按 delta 统一登记产出物。
+    var agentSubTaskArtifactBaselines: [String: LingShuShadowGit.Baseline] = [:]
+    /// 编排器子会话 id → 本段执行前 record 已有的真实产物数量。验收门只看本段增量。
+    var agentSubTaskArtifactCountBaselines: [String: Int] = [:]
     /// 能力探测·**已调用的本地能力**:记录 id → 已记过的本地能力标签集合(去重,首次用某类本地能力才记一条进"能力探测",不刷屏)。
     var announcedLocalCapabilities: [String: Set<String>] = [:]
     // 注:P1 GoalSpec 不再用内存字典 —— 作为 typed 字段持久化进 LingShuTaskExecutionRecord.goalSpec(跨重启),经 goalSpec(for:) 读。
@@ -710,7 +718,16 @@ final class LingShuState: ObservableObject {
             taskExecutionRecords[i].status = .suspended
             hadZombie = true
         }
-        if hadZombie { persistTaskExecutionRecords() }
+        let repairedMentionedArtifacts = reconcileAllTaskRecordArtifactsFromMentionedExistingFiles()
+        if hadZombie || repairedMentionedArtifacts > 0 { persistTaskExecutionRecords() }
+        if repairedMentionedArtifacts > 0 {
+            appendTrace(
+                kind: .system,
+                actor: "任务账本",
+                title: "历史产物补登",
+                detail: "从任务记录中补回 \(repairedMentionedArtifacts) 个已落盘但未登记的产物。"
+            )
+        }
         // 也捞回**最近停在 .suspended 的角色管线孤儿**(上次中断/续跑没跑完的)——一并原地续跑(不限次,直到做完)。
         let recentCutoff = Date().addingTimeInterval(-3 * 3600)
         for rec in taskExecutionRecords where rec.status == .suspended && rec.updatedAt >= recentCutoff
@@ -760,10 +777,9 @@ final class LingShuState: ObservableObject {
         ModelProviderPreset.catalog.first { $0.name == modelProvider }
     }
 
-    /// 当前主模型是否原生多模态。true → 图片内联进消息直喂模型（KIMI K2.6 类）；
-    /// false → 图片走云视觉解析成文字再注入（MiniMax M3 类，零留存）。换模型只动这个判断。
+    /// 当前主模型本轮是否会尝试原生多模态。GPT/OpenAI 兼容默认先试；已确认不支持的模型走图片解析降级。
     var usesNativeMultimodal: Bool {
-        selectedModelPreset?.supportsNativeMultimodal ?? false
+        shouldAttemptNativeMultimodalForCurrentModel()
     }
 
     var usesLocalModelGateway: Bool {
@@ -1337,6 +1353,7 @@ final class LingShuState: ObservableObject {
     func sendPrompt() -> String {
         let text = prompt
         prompt = ""
+        if !detectedInvocationChips.isEmpty { detectedInvocationChips = [] }
         return submitTextWithAttachments(text, source: .typed)
     }
 
@@ -1625,8 +1642,28 @@ final class LingShuState: ObservableObject {
             )
             let isNewActiveTurn = triage.kind != .reply
             let shouldDeriveGoalSpec = self.goalSpecEnabled && isNewActiveTurn
-            async let goalSpecA: LingShuGoalSpec? = shouldDeriveGoalSpec ? self.deriveGoalSpec(for: trimmedPrompt, taskRecordID: nil, activeTurnContext: true) : nil
-            let goalSpec = await goalSpecA
+            let goalSpec: LingShuGoalSpec? = shouldDeriveGoalSpec
+                ? await self.deriveGoalSpec(
+                    for: trimmedPrompt,
+                    taskRecordID: nil,
+                    activeTurnContext: true,
+                    onProgress: { _, _, status in
+                        guard let index = self.chatMessages.firstIndex(where: { $0.id == placeholderID }) else { return }
+                        self.chatMessages[index].text = status
+                        self.chatMessages[index].isLoading = true
+                    }
+                )
+                : nil
+            guard !Task.isCancelled else { return }
+            if Self.mustBlockForMissingGoalSpec(
+                enabled: self.goalSpecEnabled,
+                isNewActiveTurn: isNewActiveTurn,
+                goalSpec: goalSpec
+            ) {
+                self.markGoalSpecPreflightFailure(request: userFacingPrompt, bubbleID: placeholderID)
+                self.drainSerialInputsIfIdle()
+                return
+            }
             let needsCapabilityPreflight = self.goalSpecEnabled && Self.goalKindNeedsCapabilityPreflight(goalSpec?.kind)
             let activeTurnRoute = triage.kind == .reply ? "reply" : "active_turn"
             let goalSpecTraceReason: String = {
@@ -1658,7 +1695,7 @@ final class LingShuState: ObservableObject {
             let newRecordBoundToGoal: @MainActor (LingShuGoalKind, String?) -> String = { fallbackKind, fallbackObjective in
                 let rid = self.createTaskExecutionRecord(for: userFacingPrompt)
                 var boundSpec = goalSpec
-                if boundSpec == nil, fallbackKind != .unknown {
+                if boundSpec == nil, (!self.goalSpecEnabled || !isNewActiveTurn), fallbackKind != .unknown {
                     boundSpec = LingShuGoalSpec(objective: fallbackObjective ?? userFacingPrompt, kind: fallbackKind)
                 }
                 if fallbackKind == .task, boundSpec?.kind != .task {
