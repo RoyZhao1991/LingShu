@@ -104,6 +104,7 @@ struct LingShuRichInputField: NSViewRepresentable {
 
     static let baseFont = NSFont.systemFont(ofSize: 15.5, weight: .medium)
 
+    @MainActor
     final class Coordinator: NSObject, NSTextViewDelegate {
         var parent: LingShuRichInputField
         weak var textView: LingShuInputTextView?
