@@ -73,6 +73,22 @@ fi
 security find-identity -v -p codesigning 2>/dev/null | grep -F "\"$IDENTITY\"" >/dev/null \
   || fail "signing identity is not currently valid: $IDENTITY"
 
+SIGNING_PROBE="$TMP_DIR/signing-probe"
+SIGNING_PROBE_LOG="$TMP_DIR/signing-probe.log"
+cp /usr/bin/true "$SIGNING_PROBE"
+if ! codesign --force --sign "$IDENTITY" --options runtime \
+  "$SIGNING_PROBE" 2>"$SIGNING_PROBE_LOG"; then
+  cat "$SIGNING_PROBE_LOG" >&2
+  fail "Developer ID private key is not usable; unlock the login keychain and allow codesign access to the certificate's private key"
+fi
+
+cp /usr/bin/true "$SIGNING_PROBE"
+if ! codesign --force --sign "$IDENTITY" --options runtime --timestamp \
+  "$SIGNING_PROBE" 2>"$SIGNING_PROBE_LOG"; then
+  cat "$SIGNING_PROBE_LOG" >&2
+  fail "Developer ID timestamp signing failed; check access to Apple's timestamp service and temporarily bypass incompatible local proxies"
+fi
+
 echo "==> release preflight"
 echo "    version: $VERSION ($BUILD_NUMBER)"
 echo "    identity: $IDENTITY"
