@@ -88,8 +88,15 @@ struct LingShuToolMetadata: Sendable, Equatable {
             return .init(effect: .scaffold, parallelPolicy: .serial, scaffoldRole: .optional)
         case "browser_open", "browser_click", "browser_type", "browser_key", "browser_scroll",
              "preview_open", "preview_next", "preview_previous", "preview_fullscreen",
-             "computer_click", "computer_type", "computer_key", "computer_scroll", "speak":
+             "computer_click", "computer_type", "computer_key", "computer_scroll",
+             "computer_click_element", "computer_set_text", "computer_press_key", "computer_scroll_element",
+             "computer_drag_element", "computer_perform_action",
+             "click", "double_click", "move_mouse", "type_text", "press_key", "scroll", "speak":
             return .init(effect: .control, parallelPolicy: .serial)
+        case "computer_list_apps":
+            return .init(effect: .readOnly, parallelPolicy: .parallelSafe)
+        case "computer_get_state", "screen_capture", "list_ui_elements":
+            return .init(effect: .readOnly, parallelPolicy: .serial)
         case "fetch_url", "web_search", "discover_skill":
             return .init(effect: .network, parallelPolicy: .parallelSafe)
         default:

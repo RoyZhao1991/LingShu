@@ -66,7 +66,7 @@ enum LingShuAttachmentError: Error {
     case unsupported
 }
 
-/// 把本地文件抽取成模型可读上下文。图片走云感知专项接口（零留存），
+/// 把本地文件抽取成模型可读上下文。图片可走云感知专项接口（服务端留存边界以实际部署条款为准），
 /// PPT/PDF/文本在本机抽取正文，不上传原始媒体。
 struct LingShuAttachmentIngestor {
     /// 图片解析所用的云感知客户端；为 nil 时图片只登记元数据，不做内容理解。

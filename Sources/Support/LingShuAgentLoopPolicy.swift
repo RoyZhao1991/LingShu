@@ -54,9 +54,11 @@ enum LingShuAgentLoopPolicy {
     }
 
     static func missingRequiredParam(for call: LingShuAgentToolCall, tools: [LingShuAgentTool]) -> String? {
-        guard let object = parseArguments(call.argumentsJSON) else { return nil }
+        guard let object = parseArguments(call.argumentsJSON),
+              let tool = tool(named: call.name, in: tools) else { return nil }
+        let propertySchemas = parameterPropertySchemas(tool.parametersJSON)
         return requiredParams(for: call.name, in: tools).sorted().first { field in
-            isBlank(object[field])
+            requiredValueIsInvalid(object[field], schema: propertySchemas[field])
         }
     }
 
@@ -109,15 +111,30 @@ enum LingShuAgentLoopPolicy {
         return object
     }
 
-    private static func isBlank(_ value: Any?) -> Bool {
+    private static func requiredValueIsInvalid(_ value: Any?, schema: [String: Any]?) -> Bool {
         guard let value else { return true }
         if value is NSNull { return true }
         if let text = value as? String {
             return text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         }
-        if let array = value as? [Any] { return array.isEmpty }
-        if let dict = value as? [String: Any] { return dict.isEmpty }
+        if let array = value as? [Any], let minimum = schema?["minItems"] as? NSNumber {
+            return array.count < minimum.intValue
+        }
+        if let dict = value as? [String: Any], let minimum = schema?["minProperties"] as? NSNumber {
+            return dict.count < minimum.intValue
+        }
         return false
+    }
+
+    private static func parameterPropertySchemas(_ parametersJSON: String) -> [String: [String: Any]] {
+        guard let data = parametersJSON.data(using: .utf8),
+              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let properties = root["properties"] as? [String: Any] else { return [:] }
+        return properties.reduce(into: [:]) { result, item in
+            if let schema = item.value as? [String: Any] {
+                result[item.key] = schema
+            }
+        }
     }
 
     private static func shellCommandContractError(_ command: String) -> String? {

@@ -737,7 +737,6 @@ actor LingShuAgentSession: LingShuAgentSessioning {
             guard let v else { return true }
             if let s = v as? String { return s.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
             if v is NSNull { return true }
-            if let a = v as? [Any] { return a.isEmpty }
             return false
         }
         let trimmed = argsJSON.trimmingCharacters(in: .whitespacesAndNewlines)

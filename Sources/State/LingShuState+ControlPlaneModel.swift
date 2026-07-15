@@ -11,6 +11,7 @@ enum LingShuControlPlaneRole: String, Sendable {
     case acceptancePlanner = "验收分类"
     case deliveryReview = "交付评审"
     case deliveryComposer = "交付播报"
+    case prerequisitePauseComposer = "暂停说明"
     case agentFailure = "agent失败分类"
 
     var timeoutSeconds: TimeInterval {
@@ -21,16 +22,7 @@ enum LingShuControlPlaneRole: String, Sendable {
         // 验收要处理大产物正文 + VL 看图审版式,18s 对 40KB+ 的 HTML/代码太短(健康模型也被拖超时 → 误判通道故障)。
         // 抬到 90s(配合正文截断),既不超时也不空等。
         case .deliveryReview: return 90
-        case .deliveryComposer: return 8
-        }
-    }
-
-    /// GoalSpec 每次都建立新会话并使用完整上下文重新生成。
-    /// 逐次放宽超时既能覆盖瞬时抖动/慢模型,又不会让入口无界等待。
-    var generationTimeouts: [TimeInterval] {
-        switch self {
-        case .goalSpec: return [8, 16, 30]
-        default: return [timeoutSeconds]
+        case .deliveryComposer, .prerequisitePauseComposer: return 8
         }
     }
 
@@ -46,7 +38,7 @@ enum LingShuControlPlaneRole: String, Sendable {
             return .init(kind: .task, criteriaCount: 2)
         case .deliveryReview:
             return .init(kind: .task, constraintCount: 2, criteriaCount: 3)
-        case .deliveryComposer:
+        case .deliveryComposer, .prerequisitePauseComposer:
             return .init(kind: .interaction, criteriaCount: 1)
         case .agentFailure:
             return .init(kind: .task, constraintCount: 1)
@@ -58,8 +50,8 @@ enum LingShuControlPlaneRole: String, Sendable {
 extension LingShuState {
 
     /// 控制面模型调用统一走当前启用主脑。
-    /// 单个适配器请求仍只尝试一次;GoalSpec 在更上层用新会话按 `generationTimeouts`
-    /// 重新生成,因此超时与非法 JSON 都能重试,且每次均可观测。
+    /// 单个适配器请求仍只尝试一次;GoalSpec 在更上层按输入规模分配超时并新建会话，
+    /// 因此超时、协议不支持与非法结构都能独立恢复，且每次均可观测。
     /// `timeoutOverride`:某些控制面活儿延迟容忍不同(如**看图生成讲稿**要给多模态脑发整页图、远超分类器的 8s)——
     /// 演示前预生成讲稿不卡用户,给足超时;分类器仍用 role 自己的短超时(用户在飞等)。
     func controlPlaneModelAdapter(_ role: LingShuControlPlaneRole, taskRecordID: String? = nil, timeoutOverride: TimeInterval? = nil) -> LingShuGatewayAgentModel {

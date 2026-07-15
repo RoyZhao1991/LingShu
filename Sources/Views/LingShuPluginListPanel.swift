@@ -3,11 +3,15 @@ import SwiftUI
 /// **插件列表**(配置 > 插件):展示当前真正可调用的入口;外部 agent 跟随自检健康状态动态出现/隐藏。
 struct LingShuPluginListPanel: View {
     @ObservedObject var state: LingShuState
+    @State private var isConnectingComputerUse = false
+    @State private var computerUseMessage = ""
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             SectionHeader(icon: "square.grid.2x2", title: "插件列表",
                           subtitle: "可调用入口跟随自检结果动态刷新:agent 不可用时不会出现在这里或输入框「+」菜单。")
+
+            codexComputerUseCard
 
             let all = state.invocablePlugins()
             let agents = all.filter { $0.kind == .agent }
@@ -32,6 +36,64 @@ struct LingShuPluginListPanel: View {
                 row(name: p.displayName, badge: nil, badgeColor: .clear, detail: p.subtitle, available: true,
                     rechecking: false, onRecheck: nil, onRemove: nil)
             }
+        }
+    }
+
+    private var codexComputerUseCard: some View {
+        let connected = state.isCodexComputerUseConnected()
+        return VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 10) {
+                Image(systemName: "macwindow.on.rectangle")
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(connected ? Color.lingHolo : Color.lingFg.opacity(0.5))
+                    .frame(width: 30, height: 30)
+                    .background(Color.lingFg.opacity(0.06), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Codex Computer Use")
+                        .font(.system(size: 13, weight: .bold))
+                        .foregroundStyle(Color.lingFg.opacity(0.92))
+                    Text(connected
+                         ? "已从 Codex 官方插件清单确认，可查看并操作 Mac App"
+                         : "复用本机 Codex 的官方能力；不复制组件，不绕过认证与授权")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(Color.lingFg.opacity(0.5))
+                }
+                Spacer()
+                Circle().fill(connected ? Color.green : Color.lingFg.opacity(0.25)).frame(width: 8, height: 8)
+                Text(connected ? "已接入" : "未接入")
+                    .font(.system(size: 10.5, weight: .bold))
+                    .foregroundStyle(connected ? Color.green : Color.lingFg.opacity(0.5))
+                Button {
+                    isConnectingComputerUse = true
+                    computerUseMessage = ""
+                    Task { @MainActor in
+                        computerUseMessage = await state.connectCodexComputerUse()
+                        isConnectingComputerUse = false
+                    }
+                } label: {
+                    HStack(spacing: 5) {
+                        if isConnectingComputerUse { ProgressView().controlSize(.mini) }
+                        else { Image(systemName: connected ? "arrow.clockwise" : "link.badge.plus") }
+                        Text(isConnectingComputerUse ? "检测中…" : (connected ? "重新检测" : "接入"))
+                    }
+                    .font(.system(size: 10.5, weight: .semibold))
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .disabled(isConnectingComputerUse)
+            }
+            if !computerUseMessage.isEmpty {
+                Text(computerUseMessage)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(state.isCodexComputerUseConnected() ? Color.lingHolo : Color.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(12)
+        .background(Color.lingFg.opacity(0.04), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(connected ? Color.lingHolo.opacity(0.3) : Color.lingFg.opacity(0.08))
         }
     }
 

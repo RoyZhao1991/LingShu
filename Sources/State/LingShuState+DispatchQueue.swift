@@ -68,13 +68,12 @@ extension LingShuState {
         }
     }
 
-    /// 当前正在执行的派发任务(任务线串行,至多 1 条)——供「进行中」长条自动定位。
-    /// 取 dispatchedTaskBubbles(活跃派发气泡集,完成/卡住即清)里**状态仍在推进**的那条;
-    /// 终态/待人的(已完成/已核验/部分完成/异常/失败/待用户)排除,防残留气泡误显示。
+    /// 当前正在执行的子线程——供「进行中」长条自动定位。
+    /// 运行态来自独立的子线程活动投影，不再依赖主对话是否恰好存在加载气泡。
     var runningDispatchedTask: LingShuTaskExecutionRecord? {
-        let active: Set<LingShuTaskExecutionStatus> = [.running, .dispatched, .analyzing, .acquiringCapability, .ready]
-        let activeRIDs = Set(dispatchedTaskBubbles.keys)
-        return taskExecutionRecordLookup.first { activeRIDs.contains($0.id) && active.contains($0.status) }
+        taskExecutionRecordLookup
+            .filter { activeTaskThreadRecordIDs.contains($0.id) }
+            .max { $0.updatedAt < $1.updatedAt }
     }
 
     /// 清掉不再占执行槽的派发气泡映射。旧版本/异常路径可能把 `waitingForUser`、`partial`、
@@ -125,11 +124,12 @@ extension LingShuState {
     /// 但编排器已无对应 drive(驱动早结束/异常退出却没置终态)→ 自动收口成 .partial、移除气泡、释放串行队列。
     /// 根因:currentlyExecutingTurn 把卡 .running 的派发气泡当"执行中"、prune 又只清终态 → 队列永久死锁。
     func reapOrphanedDispatchedTasks() async {
-        guard !dispatchedTaskBubbles.isEmpty else { return }
+        let trackedRecordIDs = activeTaskThreadRecordIDs.union(dispatchedTaskBubbles.keys)
+        guard !trackedRecordIDs.isEmpty else { return }
         let liveIDs = await agentOrchestrator.activeDriveIDs()
         let active: Set<LingShuTaskExecutionStatus> = [.running, .dispatched, .analyzing, .acquiringCapability, .ready]
         var reaped = false
-        for recordID in Array(dispatchedTaskBubbles.keys) {
+        for recordID in trackedRecordIDs {
             guard let status = taskExecutionRecords.first(where: { $0.id == recordID })?.status,
                   active.contains(status) else { continue }
             if livePipelineRecordIDs.contains(recordID) { continue }   // **角色管线正在驱动它**(直接 Task,不在 orchestrator drive 里)→ 不是孤儿,跳过
@@ -156,7 +156,7 @@ extension LingShuState {
     /// 停止所有活跃派发任务(供 lingshu_stop / 全局停止——原 lingshu_stop 只取消主线程调用、停不掉派发任务)。返回停了几条。
     @discardableResult
     func stopAllDispatchedTasks() -> Int {
-        let ids = Array(dispatchedTaskBubbles.keys)
+        let ids = Array(activeTaskThreadRecordIDs.union(dispatchedTaskBubbles.keys))
         for id in ids { stopDispatchedTask(recordID: id) }
         return ids.count
     }
@@ -196,7 +196,7 @@ extension LingShuState {
             // 每个编排器事件都触发一次 promote,两个并发 promote 都在 dispatch 前读到 running=0 → 双双 removeFirst+派发 →
             // 同时两条在跑(违反串行)。改后:capacity 的 await 之后到派发之间**无 await**,MainActor 串行执行使
             // 每个 promote 的"读计数→派发(计数+1)"原子完成,第二个 promote 读到已满 → 不再双派发。
-            guard self.dispatchedTaskBubbles.count < max(1, cap), !self.queuedDispatchTasks.isEmpty else { return }
+            guard self.activeTaskThreadRecordIDs.count < max(1, cap), !self.queuedDispatchTasks.isEmpty else { return }
             let next = self.queuedDispatchTasks.removeFirst()
             let rid = self.createTaskExecutionRecord(for: next.visiblePrompt)
             self.bindGoalSpec(next.goalSpec, to: rid)

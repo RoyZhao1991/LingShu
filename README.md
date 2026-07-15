@@ -1,57 +1,154 @@
-# 灵枢 (LingShu)
+<div align="center">
+  <img src="./lingshu-icon-preview.png" width="112" alt="LingShu app icon">
+  <h1>LingShu</h1>
+  <p><strong>A native macOS AI agent that turns goals into verified deliverables.</strong></p>
+  <p>Bring your own model. Keep the orchestration, tools, memory, and computer control on your Mac.</p>
 
-> 常驻在你 Mac 上的本地通用智能中枢 —— 你给目标，它自己判断、分派、推进到交付。
+  <p>
+    <a href="./README.md">English</a> |
+    <a href="./README.zh-CN.md">简体中文</a>
+  </p>
 
-灵枢不是一问一答的聊天机器人，而是一个能独立做事的「数字人」:**大脑**是它自己的推理(分析、规划、决策、纠错)，**四肢**是各项能力工具，由大脑按需调用、自由组合。底层模型可随时替换，与灵枢的身份无关。
+  <p>
+    <img alt="macOS 14+" src="https://img.shields.io/badge/macOS-14%2B-111111?logo=apple">
+    <img alt="Swift 6" src="https://img.shields.io/badge/Swift-6-F05138?logo=swift&logoColor=white">
+    <img alt="Apache-2.0" src="https://img.shields.io/badge/license-Apache--2.0-2C8C7F">
+    <img alt="Project status: alpha" src="https://img.shields.io/badge/status-alpha-E9A23B">
+    <img alt="1,525 discovered tests" src="https://img.shields.io/badge/tests-1%2C525%20discovered-2C8C7F">
+    <a href="https://github.com/RoyZhao1991/LingShu/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/RoyZhao1991/LingShu/actions/workflows/ci.yml/badge.svg"></a>
+  </p>
+</div>
 
-## 核心能力(四肢)
+> [!IMPORTANT]
+> LingShu is an alpha-stage project under active development. It can operate local files and apps after explicit macOS authorization. Review requested permissions and keep backups of important work.
 
-- **听 / 说**:语音输入(ASR)、TTS 发声;会议系统音频转写 + 实时应答(`meeting_converse`)。
-- **读 / 写**:读写本地文件、网页、屏幕;交付物(PPT / 文档 / 代码 / 脚本)**真落盘**并给出绝对路径,不只是嘴上说"做好了"。
-- **写代码 / 跑命令**:定位项目、读库、改代码、跑测试、提交 —— 自身即 AI 代码编辑器(代码任务验收门:**有测试且全绿**才算交付)。
-- **联网查证**:`web_search` 核对时效信息,不凭记忆瞎答。
-- **做产出物**:高质量 PPT 由自进化设计系统 **DesignKB** 驱动(多版式 + 配色库 + Lucide 图标 + 过程内审计 review_design)。
-- **演示**:打开 PPT / PDF / Word / Excel 逐页讲解、翻页、滚动,中途实时答疑。
-- **计算机操作**:授权后看屏(截图 / 取可点元素坐标)+ 操作(点击 / 输入 / 滚动)。
-- **自主运行**:给定目标 + 素材,用统一 agent 循环自主推进到达成(可暂停 / 继续 / 接管,带独立 verifier 验收)。
-- **记忆**:跨会话记住偏好、过往产出与未决事项;从任务窗口的纠正中蒸馏经验(dreaming)。
-- **任务窗口**:codex 式执行流(命令 / 结果 / 文件 diff)。开发任务右侧分「产出物 / 代码管理」两页(改动统计、分支、提交);非代码任务只有产出物。
-- **MCP 控制服务**:本机回环 `127.0.0.1:8917` HTTP JSON-RPC(`tools/list` / `tools/call`),可脚本化驱动与端到端取证(如 `lingshu_send_prompt` / `lingshu_clear_context` / `lingshu_task_detail`)。
+## Why LingShu
 
-## 隐私红线
+Most AI desktop apps stop at conversation. LingShu is an agent runtime designed to continue from intent to execution and verification:
 
-感知数据(音频 / 视频 / 图片)**云端零留存** —— 实时感知只做即时解析,不落盘、不归档。详见 [Docs/PERCEPTION_AUDIT.md](Docs/PERCEPTION_AUDIT.md)。
+- **Bring your own brain.** Use OpenAI, Anthropic, DeepSeek, MiniMax M3, or a custom compatible endpoint without coupling LingShu's identity to one model vendor.
+- **Delegate real work.** A main agent can plan work, dispatch isolated worker sessions, invoke tools, and hand results to an independent checker.
+- **Deliver files, not claims.** Documents, presentations, code, scripts, and reports are written to disk, tracked, previewable, and checked before completion.
+- **Use the Mac natively.** LingShu can read accessibility snapshots and operate authorized apps through native macOS APIs. This Computer Use path does not require Codex.
+- **Preserve context.** Task records, local artifacts, memories, and distilled child-task summaries remain available across sessions.
 
-## 构建与运行
+## What It Can Do
 
-需 macOS 14+、Xcode 命令行工具(Swift)。
+| Area | Current capability |
+| --- | --- |
+| Agent execution | Goal understanding, planning, tool loops, isolated child tasks, interruption, resume, and verification |
+| Computer Use | Native accessibility snapshots, indexed UI actions, screen fallback, and post-action verification |
+| Local work | Read/write files, run commands, edit code, execute tests, inspect Git changes, and register artifacts |
+| Deliverables | Create and preview documents, presentations, reports, code, scripts, and local media |
+| Model gateway | OpenAI Responses / Chat Completions, Anthropic Messages, streaming, and custom compatible endpoints |
+| Multimodal input | Try native model vision first; remember unsupported channels and fall back to image parsing |
+| Perception | Microphone, system audio, camera, screen, voice output, and pluggable sensory sources |
+| Memory | Local knowledge graph, preference recall, task history, and distilled experience |
+| Integrations | Local HTTP JSON-RPC control plane and registered external-agent capabilities |
+
+## How It Works
+
+```mermaid
+flowchart LR
+    U["User goal"] --> B["LingShu main agent"]
+    B --> G["Structured GoalSpec"]
+    G --> Q["Serial task queue"]
+    Q --> W1["Isolated worker"]
+    Q --> W2["Local tools"]
+    Q --> W3["Authorized Computer Use"]
+    W1 --> V["Independent verifier"]
+    W2 --> V
+    W3 --> V
+    V --> A["Artifacts + task record"]
+    A --> M["Local memory"]
+    M --> B
+```
+
+The main conversation remains serialized to protect context. Long-running or delegated work uses isolated sessions, then returns a distilled completion record to the main agent.
+
+## Quick Start
+
+### Requirements
+
+- macOS 14 or later
+- Xcode Command Line Tools with Swift 6
+- An API token for one supported model provider, or a compatible custom endpoint
+
+### Build From Source
 
 ```bash
-# 构建并打成 .app(用本机签名身份,可持久化 TCC 授权)
+git clone https://github.com/RoyZhao1991/LingShu.git
+cd LingShu
 bash Scripts/build-app.sh debug
-
-# 运行 —— 必须以 .app 包运行(裸二进制会丢图标 + 麦克风/隐私授权)
-open dist/灵枢.app
+open "dist/灵枢.app"
 ```
 
-可选:提供 notarytool 凭据公证内置 HAL 虚拟麦驱动 ——
-`LINGSHU_SIGN_IDENTITY="Developer ID Application: …" LINGSHU_NOTARY_PROFILE=<profile> bash Scripts/build-app.sh debug`。
+Run the packaged `.app`, not the bare Swift executable, so macOS can associate the correct icon, signing identity, and privacy permissions with LingShu.
 
-> 注:会议「把灵枢的声音送回会议里让对方听见」依赖自建 HAL 虚拟麦克风,目前驱动实现层仍在调试(设备尚未稳定出现);本机听 + 应答闭环可用。
+On first launch, LingShu checks whether a working brain channel exists. If not, the setup guide lets you choose a provider and enter its token. Custom providers additionally require an endpoint and model name.
 
-## 测试
+### Supported Brain Presets
+
+| Provider | What you enter | Protocol |
+| --- | --- | --- |
+| OpenAI | API token | OpenAI compatible |
+| Anthropic Claude | API token | Anthropic Messages |
+| DeepSeek | API token | OpenAI compatible |
+| MiniMax M3 | API token | OpenAI compatible |
+| Custom | Endpoint, token if required, model | OpenAI-compatible custom route |
+
+API credentials are local runtime configuration and must never be committed. See [runtime configuration notes](./Resources/RuntimeConfig/README.md).
+
+## Permissions and Safety
+
+LingShu requests macOS permissions only when a capability needs them. Computer control can require Accessibility and Screen Recording; voice and visual perception can require Microphone, Speech Recognition, and Camera access.
+
+- Sensory streams are processed in memory by LingShu and are not archived by default.
+- Content sent to a configured remote model or perception provider leaves the Mac and is governed by that provider's retention and privacy terms.
+- Secrets are redacted from task traces where supported and runtime credential files are ignored by Git.
+- High-risk, irreversible, account, authorization, or external-publication actions require explicit user confirmation.
+- Native Computer Use is permission-scoped and verifies the UI again after actions when possible.
+
+See [SECURITY.md](./SECURITY.md) and the [perception audit](./Docs/PERCEPTION_AUDIT.md) for the current boundaries.
+
+## Project Status
+
+LingShu is usable for development and controlled local workflows, but it is not yet a finished consumer product.
+
+| Area | Status |
+| --- | --- |
+| Native macOS app and agent loop | Active development |
+| Multi-provider model setup | Implemented |
+| Native Computer Use | Implemented; requires explicit macOS authorization |
+| Document/code artifact workflow | Implemented |
+| Live perception and voice | Available with environment-dependent fallbacks |
+| HAL virtual microphone | Experimental; device appearance is not yet stable |
+| Signed and notarized public release | Release pipeline exists; first public release pending |
+
+The repository currently contains more than 100,000 lines of source and test code, 185 Swift test files, and 1,525 tests discovered by SwiftPM. These numbers describe engineering depth, not a guarantee that every environment-dependent test passes on every Mac.
+
+## Development
 
 ```bash
-swift test                 # 单元 / 集成(脱网确定性:脚本化模型 + 真 executor 真读写真跑命令)
-bash Scripts/smoke-e2e.sh  # 真模型端到端冒烟(证明引擎从头跑通一个任务)
+swift test
+bash Scripts/smoke-e2e.sh
 ```
 
-## 架构文档
+For a signed, notarized website build, see [`Scripts/release-website.sh`](./Scripts/release-website.sh). Apple Developer credentials are intentionally supplied at release time and are never stored in the repository.
 
-- [Docs/架构速查手册.md](Docs/架构速查手册.md) —— **canonical 速查**:模块索引 + 关键决策 + 教训(开发前先查、改动后必更新)。
-- [Docs/ARCHITECTURE.md](Docs/ARCHITECTURE.md) —— 总体架构。
-- [Docs/ROADMAP.md](Docs/ROADMAP.md) —— 路线图。
+Architecture references:
 
----
+- [Architecture overview](./Docs/ARCHITECTURE.md)
+- [Canonical architecture field guide (Chinese)](./Docs/架构速查手册.md)
+- [Roadmap](./Docs/ROADMAP.md)
+- [Changelog](./CHANGELOG.md)
 
-由 **Roy Zhao** 独立开发。
+## Contributing
+
+Bug reports, focused pull requests, provider adapters, tests, documentation, and reproducible performance measurements are welcome. Start with [CONTRIBUTING.md](./CONTRIBUTING.md), follow the [Code of Conduct](./CODE_OF_CONDUCT.md), and report vulnerabilities privately as described in [SECURITY.md](./SECURITY.md).
+
+## License
+
+LingShu is licensed under the [Apache License 2.0](./LICENSE). Third-party components retain their own licenses; see [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md).
+
+Created and maintained by [Roy Zhao](https://github.com/RoyZhao1991).

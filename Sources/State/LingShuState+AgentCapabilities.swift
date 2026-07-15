@@ -54,7 +54,10 @@ extension LingShuState {
         appendTrace(kind: .route, actor: "声明式调用", title: "@agent·能力 直达", detail: "\(agent.displayName)·\(capName)")
         // **「用某能力」的定向只进 maker 的子任务指令,不冒充用户的"需求方"消息**:
         // 记录的 需求方/标题/GoalSpec 用**用户原话**(task),否则会显示成"请用你自带的…"让用户以为是自己说的(实测 bug)。
-        let makerInstruction = "请用你自带的「\(capName)」能力来做(这是你的专长插件,优先用它,别退化成通用代码硬画/硬凑):\n\(task)"
+        let makerInstruction = """
+        请用你自带的「\(capName)」能力来做(这是你的专长插件,优先使用其官方运行时,别退化成通用代码硬画/硬凑,也不要绕过该能力自身的认证、授权或安全确认):
+        \(task)
+        """
         // **确定的两角色管线:该 agent 当 maker(它才会被真·调用执行,而非靠灵枢的脑去 delegate)+ 灵枢当 checker**。
         // 不走 dispatchIsolatedTask(maker=外部 agent 时靠大脑自觉 run_agent,实测 DeepSeek 不 delegate、自己 Pillow 画);
         // 也不让大脑规划角色(单 agent 常返 <2 → 整条早退 + 留"记录不存在"弹窗)。给固定 steps 直接跑。

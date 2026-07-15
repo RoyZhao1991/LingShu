@@ -63,7 +63,8 @@
 
 ## 四、文件来源约束（不变）
 小媒体用 base64；大文件先上传到对象存储/文件服务再传可访问 URL；不要把大文件塞进 JSON。
-媒体只在内存流转，零留存（详见 [CLOUD_GATEWAY.md] 感知数据零留存章节）。
+灵枢客户端默认只在内存中处理媒体，不主动归档原始流。一旦调用远程感知接口，媒体已经离开本机；
+服务端是否留存取决于实际部署配置与服务条款，客户端无法单方面验证。详见 [PERCEPTION_AUDIT.md](PERCEPTION_AUDIT.md)。
 
 ## 五、灵枢代码待改项
 - `LingShuCloudPerceptionClient.analyzeImage/analyzeVideo`：增加 `detection_queries` 参数并默认带上常用对象词，否则目标检测不生效。

@@ -72,7 +72,7 @@ extension LingShuState {
     }
 
     /// 剪贴板粘贴进来的图片：落临时 PNG 后走与上传**完全相同**的解析管线
-    /// （图片 → 云视觉 → 文字描述 → 注入模型输入；零留存边界不变）。
+    /// （图片 → 云视觉 → 文字描述 → 注入模型输入；远程处理边界以对应服务商条款为准）。
     func ingestPastedImage(_ data: Data) {
         // 去重:一次 Cmd+V 可能多次触发(实测 performKeyEquivalent 命中 3 次→3 个附件)。同一张图在 1.5s 内重复进来只收一次。
         let fingerprint = data.count ^ (data.prefix(512).hashValue)

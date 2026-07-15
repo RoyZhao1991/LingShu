@@ -796,7 +796,7 @@ final class TaskCompletionGateTests: XCTestCase {
     }
 
     @MainActor
-    func testDeniedPrerequisiteClosesRecordWithoutResolvingGapOrHoldingDispatchSlot() {
+    func testDeniedPrerequisiteClosesRecordWithoutResolvingGapOrHoldingDispatchSlot() async {
         let state = LingShuState()
         let rid = state.createTaskExecutionRecord(for: "同步到外部系统")
         defer {
@@ -827,8 +827,17 @@ final class TaskCompletionGateTests: XCTestCase {
         state.chatMessages.append(pending)
         state.dispatchedTaskBubbles[rid] = pending.id
         state.blockedDispatchedRecordID = rid
+        state.prerequisitePauseReplyComposerOverride = { context in
+            XCTAssertEqual(context.userChoice, "暂不授权")
+            XCTAssertTrue(context.missingPrerequisites.joined().contains("外部系统"))
+            return "我已暂停外部系统同步，并保留当前结果。完成授权后，可从这条任务继续。"
+        }
 
         state.closeDispatchedTaskForDeniedPrerequisite(recordID: rid, answer: "暂不授权")
+        for _ in 0..<20 {
+            if state.chatMessages.first(where: { $0.id == pending.id })?.isLoading == false { break }
+            await Task.yield()
+        }
 
         let record = state.taskExecutionRecords.first { $0.id == rid }
         XCTAssertEqual(record?.status, .waitingForUser, "拒绝/暂停授权后记录应停在可续待用户态")
@@ -837,7 +846,22 @@ final class TaskCompletionGateTests: XCTestCase {
         XCTAssertNil(state.blockedDispatchedRecordID)
         let bubble = state.chatMessages.first { $0.id == pending.id }
         XCTAssertFalse(bubble?.isLoading ?? true, "原加载气泡必须被定稿,不能卡死")
-        XCTAssertTrue(bubble?.text.contains("停在这里") ?? false)
+        XCTAssertEqual(bubble?.text, "我已暂停外部系统同步，并保留当前结果。完成授权后，可从这条任务继续。")
+        XCTAssertEqual(record?.summary, bubble?.text, "面向用户的暂停说明应回写任务摘要")
+    }
+
+    func testPrerequisitePausePromptKeepsBrainInsideStateBoundary() {
+        let prompt = LingShuState.prerequisitePauseReplyPrompt(.init(
+            taskTitle: "同步资料",
+            originalRequest: "把资料同步到外部系统",
+            userChoice: "先停在这里",
+            missingPrerequisites: ["需要写入授权"],
+            existingArtifacts: ["草稿：/tmp/draft.md"]
+        ))
+        XCTAssertTrue(prompt.contains("只负责决定如何向用户解释"))
+        XCTAssertTrue(prompt.contains("不能继续执行任务"))
+        XCTAssertTrue(prompt.contains("需要写入授权"))
+        XCTAssertTrue(prompt.contains("/tmp/draft.md"))
     }
 
     func testNewStatusSemantics() {

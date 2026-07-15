@@ -313,17 +313,18 @@ final class LingShuGatewayAgentModel: LingShuAgentModel, @unchecked Sendable {
         )
     }
 
-    private static func toToolDefinition(_ tool: LingShuAgentTool) -> LingShuToolDefinition {
+    static func toToolDefinition(_ tool: LingShuAgentTool) -> LingShuToolDefinition {
         let (properties, required) = parseSchema(tool.parametersJSON)
         return LingShuToolDefinition(
             name: tool.name,
             description: tool.description,
             properties: properties,
-            required: required
+            required: required,
+            parametersJSON: tool.parametersJSON
         )
     }
 
-    /// 把工具的 JSON schema 字符串解析成网关需要的 (properties, required)。
+    /// 提取兼容旧调用方和预算估算所需的扁平摘要；原始 Schema 由 `parametersJSON` 完整保留。
     private static func parseSchema(_ json: String) -> ([LingShuToolDefinition.Property], [String]) {
         guard
             let data = json.data(using: .utf8),

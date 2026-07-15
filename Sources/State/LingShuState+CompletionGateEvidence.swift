@@ -175,7 +175,8 @@ extension LingShuState {
             "discover_devices", "recall_local", "search_local", "read_local", "read_file",
             "list_directory", "list_files", "fetch_url", "web_search", "browser_read",
             "screen_capture", "perceive", "list_capabilities", "self_inspect", "time",
-            "location", "list_credentials", "inspect_ui", "list_ui_elements"
+            "location", "list_credentials", "inspect_ui", "list_ui_elements",
+            "computer_list_apps", "computer_get_state"
         ]
         if exact.contains(t) { return true }
         return t.hasPrefix("read_") || t.hasPrefix("list_") || t.hasPrefix("search_")

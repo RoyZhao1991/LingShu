@@ -19,7 +19,8 @@ extension LingShuState {
             return LingShuAgentTool(
                 name: tool.name,
                 description: tool.description,
-                parametersJSON: tool.parametersJSON
+                parametersJSON: tool.parametersJSON,
+                metadata: tool.metadata
             ) { [weak self] args in
                 await MainActor.run { self?.setLoopPhase(phase) }
                 return await original(args)
@@ -31,7 +32,8 @@ extension LingShuState {
     static func loopPhase(forTool name: String) -> LingShuLoopPhase {
         let understanding: Set<String> = [
             "read_file", "list_directory", "preview_document_text", "open_preview", "preview_scroll",
-            "web_search", "screen_capture", "list_ui_elements", "recall_memory", "find_images",
+            "web_search", "screen_capture", "list_ui_elements", "computer_list_apps", "computer_get_state",
+            "recall_memory", "find_images",
             "list_credentials", "get_time", "time"
         ]
         let planning: Set<String> = ["update_plan", "discover_skill", "apply_skill", "review_design"]

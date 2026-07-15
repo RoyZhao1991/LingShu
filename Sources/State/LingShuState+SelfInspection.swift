@@ -23,7 +23,8 @@ extension LingShuState {
         let core = LingShuToolCatalog.coreToolNames.sorted().joined(separator: "、")
         capabilities.append(.init(title: "🛠 工具", items: [
             "核心(恒可用):\(core)",
-            "按需激活(search_tools):浏览器自动化、屏幕截屏点按、演示放映、会议纪要、定时调度、外设/家电控制、author_component 自造工具 等",
+            "原生 Computer Use:按应用读取 AX 语义快照、用元素索引操作、动作后回读验证；不依赖 Codex",
+            "按需激活(search_tools):浏览器自动化、坐标截屏兜底、演示放映、会议纪要、定时调度、外设/家电控制、author_component 自造工具 等",
         ]))
 
         // 已注册的 agent 插件(被告知本机有→注册)。自检展示的是**运行时状态**:
@@ -62,7 +63,7 @@ extension LingShuState {
         // 感知通道(可插拔)。
         capabilities.append(.init(title: "👁 感知通道", items: [
             "视觉:屏幕 / 摄像头;听觉:麦克风 / 系统声音;外接:可插拔传感汇聚",
-            "本地解析路由 + 云端零留存",
+            "实时流默认不归档;启用远程模型/感知服务时,数据处理遵循对应服务商条款",
         ]))
 
         // 自主 / 在岗 / 运行态。

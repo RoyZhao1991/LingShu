@@ -35,10 +35,12 @@ final class AgentFailureDiagnosisTests: XCTestCase {
     }
 
     func testSanitizesCommonSecretsBeforeModelFallback() {
-        let text = "Authorization: Bearer ghp_secrettoken123\napi_key=sk-secretabc1234567890\nout"
+        let githubToken = "ghp_" + "secrettoken123"
+        let apiToken = "sk-" + "secretabc1234567890"
+        let text = "Authorization: Bearer \(githubToken)\napi_key=\(apiToken)\nout"
         let sanitized = LingShuAgentFailureDiagnosis.sanitizedEvidence(text)
-        XCTAssertFalse(sanitized.contains("ghp_secrettoken123"))
-        XCTAssertFalse(sanitized.contains("sk-secretabc1234567890"))
+        XCTAssertFalse(sanitized.contains(githubToken))
+        XCTAssertFalse(sanitized.contains(apiToken))
         XCTAssertTrue(sanitized.contains("***"))
     }
 }

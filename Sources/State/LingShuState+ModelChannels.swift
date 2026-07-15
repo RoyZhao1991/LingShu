@@ -175,24 +175,15 @@ extension LingShuState {
         guard !k.isEmpty || keyless else {
             channelValidations[key] = .init(ok: false, detail: "未配置密钥", at: Date()); return
         }
-        let adapter = LingShuGatewayAgentModel(
-            client: remoteModelClient, provider: providerName, model: mdl, endpoint: ep,
-            protocolName: preset.protocolName, apiKey: k, temperature: 0, timeout: 20
+        let configuration = LingShuBrainSetupConfiguration(
+            providerID: preset.id,
+            providerName: providerName,
+            endpoint: ep,
+            model: mdl,
+            protocolName: preset.protocolName,
+            apiKey: keyless && k.isEmpty ? "local-keyless" : k
         )
-        let session = LingShuAgentSession(id: "vbrain-\(UUID().uuidString.prefix(4))", tools: [], model: adapter, maxTurns: 1)
-        let result = await session.send("只回复两个字:在的")
-        let ok: Bool; let detail: String
-        switch result {
-        case .completed(let text):
-            let clean = LingShuReasoningText.stripThinkTags(text).trimmingCharacters(in: .whitespacesAndNewlines)
-            ok = !clean.isEmpty
-            detail = ok ? "校验通过 · 模型有回复" : "无回复"
-        case .interrupted(let reason):
-            ok = false; detail = "连不上 · \(String(reason.prefix(36)))"
-        default:
-            ok = false; detail = "未通过"
-        }
-        channelValidations[key] = .init(ok: ok, detail: detail, at: Date())
+        channelValidations[key] = await probeBrainConfiguration(configuration, permitsKeyless: keyless)
     }
 
     // MARK: - 账号余额(按需查,按厂商适配,见 LingShuChannelBalance)

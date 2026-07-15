@@ -50,10 +50,7 @@ extension LingShuState {
             return
         }
         // **原地续跑**:复活成执行中(留全部历史),建可见气泡、打开记录窗口。
-        if let i = taskExecutionRecords.firstIndex(where: { $0.id == rid }) {
-            taskExecutionRecords[i].status = .running
-            taskExecutionRecords[i].updatedAt = Date()
-        }
+        beginTaskThreadRun(recordID: rid, summary: "中断续跑:接着上次进度继续执行。")
         livePipelineRecordIDs.insert(rid)
         defer { livePipelineRecordIDs.remove(rid) }
         let bubble = ChatMessage(speaker: "灵枢", text: "🔧 中断续跑:接着上次的进度把它做完…", isUser: false, isLoading: true, taskRecordID: rid)

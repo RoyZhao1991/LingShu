@@ -148,8 +148,8 @@ extension LingShuState {
     /// 把完成闸识别出的「需用户授权/前提」升级为真正的 human-in-the-loop UI 事件。
     ///
     /// 之前这类阻断只会进入 `honestDeliveryText` 变成一段普通回复,用户看到"需要授权"却没有弹框。
-    /// 这里不写任何设备/服务特例:只要 typed gap 判定为需用户参与,就统一转成 `ask_choice`
-    /// 授权卡。用户点选后由 `selectRouteChoice` 按同一条任务续跑,同时解除静态 gap,再由真实执行结果复判。
+    /// 授权选择卡严格跟随结构化 `OAuth` 标识；普通 blocking gap 不得自行升级为授权卡。
+    /// 用户点选后由 `selectRouteChoice` 按同一条任务续跑,同时解除静态 gap,再由真实执行结果复判。
     func userAuthorizationBlockIfNeeded(decision: LingShuCompletionDecision,
                                         result: LingShuAgentRunResult,
                                         taskRecordID: String?) -> LingShuAgentRunResult? {
@@ -163,23 +163,24 @@ extension LingShuState {
 
     /// 把结构化 OAuth / user_input 请求转成可点击选择卡。
     ///
-    /// 授权弹窗只读 typed JSON 字段 `ModelOutput.OAuth` / `GapAnalysis.OAuth`;为空或 required=false 时绝不弹窗。
-    /// 普通缺前提/澄清只读 `ModelOutput.user_input` 或结构化 `completion.needs_user`;不从 reply 文本扫关键词。
+    /// 授权弹窗只读取 typed JSON 字段 `ModelOutput.OAuth` / `GapAnalysis.OAuth`；为空或
+    /// `required == false` 时绝不生成授权卡。任务已有中间产物也不得屏蔽有效的 OAuth 请求。
+    /// 普通缺前提/澄清只读 `ModelOutput.user_input` 或结构化 `completion.needs_user`，并保留原有
+    /// “已有真实产物不再追问普通前提”的判断；不从 reply 文本扫关键词。
     /// 不再从回复文本里扫“授权/token/OAuth/登录/权限”等词,避免普通知识问答误伤。
     func userPrerequisiteChoicePromptIfNeeded(resultText: String, taskRecordID: String?) -> LingShuRouteChoicePrompt? {
         guard let recordID = taskRecordID else { return nil }
-        // **修1(2026-06-27):任务已产出真实产物 → 别再要授权。** 产物在 = 能力本来就够、活已干成。
-        // 实测:红黑树PPT已核验交付,却因 gap 残留"本地文件系统授权"又弹授权框、用户授权后还把整份重做了一遍。
-        if (taskExecutionRecords.first { $0.id == recordID }?.artifacts ?? [])
-            .contains(where: { FileManager.default.fileExists(atPath: $0.location) }) {
-            return nil
-        }
         let structured = LingShuStructuredModelOutput.parse(resultText)
         if let oauth = structured?.OAuth?.normalized ?? gapAnalysis(for: recordID)?.OAuth?.normalized {
             return LingShuRouteChoicePrompt(
                 question: oauth.question,
                 options: oauth.options.map { .init(label: $0.label, detail: $0.detail) }
             ).sanitized
+        }
+        // OAuth 授权卡已在上方优先处理；除此之外保持原流程：已有真实产物时不再弹普通前提卡。
+        if (taskExecutionRecords.first { $0.id == recordID }?.artifacts ?? [])
+            .contains(where: { FileManager.default.fileExists(atPath: $0.location) }) {
+            return nil
         }
         if let prompt = structured?.userInput?.choicePrompt { return prompt }
         if let completion = structured?.completion,
@@ -249,6 +250,7 @@ extension LingShuState {
     func closeDispatchedTaskForDeniedPrerequisite(recordID: String, answer: String, appendChatUser: Bool = true) {
         let text = answer.trimmingCharacters(in: .whitespacesAndNewlines)
         let activeBubbleID = dispatchedTaskBubbles[recordID]
+        let replyContext = prerequisitePauseReplyContext(recordID: recordID, answer: text)
         if recordID == blockedDispatchedRecordID { blockedDispatchedRecordID = nil }
         dispatchedTaskBubbles[recordID] = nil
         if let idx = chatMessages.firstIndex(where: { $0.awaitingInputForRecordID == recordID }) {
@@ -261,16 +263,32 @@ extension LingShuState {
             requestChatScrollToLatestForUserSend()
         }
         appendTaskRecordMessage(recordID, actor: "你", role: "选项答复", kind: .user, text: text.isEmpty ? "暂不授权" : text)
-        let summary = "已按你的选择停在这里:需要授权/凭据/物理前提的部分不再继续执行;已有的本地结果保留。之后你补齐前提或在任务记录里继续,我会接回这条任务。"
-        appendTaskRecordMessage(recordID, actor: "灵枢", role: "待用户", kind: .warning, text: summary)
+        let stateSummary = "用户选择暂停，任务已停止推进并保留现有结果，等待后续指令。"
+        appendTaskRecordMessage(recordID, actor: "灵枢", role: "状态机", kind: .warning, text: stateSummary)
+        finishTaskRecord(recordID, status: .waitingForUser, summary: stateSummary)
+
+        let replyBubbleID: UUID
         if let activeBubbleID, let idx = chatMessages.firstIndex(where: { $0.id == activeBubbleID }) {
-            chatMessages[idx].text = "⏸ \(summary)"
-            chatMessages[idx].isLoading = false
+            chatMessages[idx].text = "任务已暂停，正在整理当前状态…"
+            chatMessages[idx].isLoading = true
             chatMessages[idx].taskRecordID = recordID
+            replyBubbleID = activeBubbleID
         } else {
-            chatMessages.append(.init(speaker: "灵枢", text: "⏸ \(summary)", isUser: false, taskRecordID: recordID))
+            let bubble = ChatMessage(
+                speaker: "灵枢",
+                text: "任务已暂停，正在整理当前状态…",
+                isUser: false,
+                isLoading: true,
+                taskRecordID: recordID
+            )
+            chatMessages.append(bubble)
+            replyBubbleID = bubble.id
         }
-        finishTaskRecord(recordID, status: .waitingForUser, summary: summary)
+        composePrerequisitePauseReply(
+            context: replyContext,
+            recordID: recordID,
+            bubbleID: replyBubbleID
+        )
         pruneInactiveDispatchedTaskBubbles()
         promoteQueuedDispatchIfPossible()
     }

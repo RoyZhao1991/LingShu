@@ -156,8 +156,10 @@ struct LingShuMacApp: App {
                 LingShuControlServer.shared.start(state: state)
                 // 主线程卡死看门狗:独立后台探测 MainActor,卡死自动重启续作(不挂 MainActor,否则自身也被卡)。
                 LingShuMainActorWatchdog.shared.start(state: state)
-                // 后台预热主 agent 会话(含记忆蒸馏),消除首条消息的蒸馏延迟。
-                Task { _ = await state.mainAgentSession() }
+                // 先真实验证主脑；只有可用时才预热会话。无配置/失效时由首配引导接管，避免启动即发无效请求。
+                if await state.prepareBrainOnLaunch() {
+                    _ = await state.mainAgentSession()
+                }
                 // 常驻全局入口:⌥Space 唤起"问/找/做"快速面板(本机知识中枢)。
                 LingShuQuickAskController.shared.install(state: state)
                 // 本机知识 FSEvents 自动增量:opt-in 目录文件一变就增量重索引。
@@ -190,4 +192,3 @@ struct LingShuMacApp: App {
         }
     }
 }
-

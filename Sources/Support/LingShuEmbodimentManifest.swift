@@ -13,6 +13,8 @@ enum LingShuEmbodimentManifest {
     /// 对外暴露的具身能力工具名(通用 body 层:计算机控制 + 浏览器自动化 + 语音 + 外设)。
     static let exposedToolNames: Set<String> = [
         // 计算机直接操作(看屏 + 鼠标键盘)
+        "computer_list_apps", "computer_get_state", "computer_click_element", "computer_set_text",
+        "computer_press_key", "computer_scroll_element", "computer_drag_element", "computer_perform_action",
         "screen_capture", "list_ui_elements", "click", "double_click", "move_mouse", "type_text", "press_key", "scroll",
         // 内置浏览器自动化(开页/导航/多 tab/执行 JS 读 DOM/读全文/滚动/全屏/关)
         "browser_open", "browser_navigate", "browser_tab", "browser_eval", "browser_read", "browser_scroll", "browser_fullscreen", "browser_close",

@@ -28,8 +28,17 @@ final class FullStackE2E200Tests: XCTestCase {
         let defaults = UserDefaults.standard
         let experienceBackup = defaults.data(forKey: "lingshu.goal.experiences")
         let acquiredBackup = defaults.data(forKey: "lingshu.capability.acquired")
+        let worldModelBackup = defaults.data(forKey: "lingshu.worldModel.snapshot")
+        let taskRecordsBackup = defaults.data(forKey: "lingshu.task-execution.records")
+        let taskArchiveBackup = defaults.data(forKey: "lingshu.task-execution.records.archive")
         defaults.removeObject(forKey: "lingshu.goal.experiences")
         defaults.removeObject(forKey: "lingshu.capability.acquired")
+        // Keep this 220-case suite hermetic. Loading a real user's accumulated
+        // world model makes every event re-encode unrelated production data,
+        // turning a deterministic test into an O(existing-state) stress run.
+        defaults.removeObject(forKey: "lingshu.worldModel.snapshot")
+        defaults.removeObject(forKey: "lingshu.task-execution.records")
+        defaults.removeObject(forKey: "lingshu.task-execution.records.archive")
         defer {
             if let experienceBackup {
                 defaults.set(experienceBackup, forKey: "lingshu.goal.experiences")
@@ -40,6 +49,21 @@ final class FullStackE2E200Tests: XCTestCase {
                 defaults.set(acquiredBackup, forKey: "lingshu.capability.acquired")
             } else {
                 defaults.removeObject(forKey: "lingshu.capability.acquired")
+            }
+            if let worldModelBackup {
+                defaults.set(worldModelBackup, forKey: "lingshu.worldModel.snapshot")
+            } else {
+                defaults.removeObject(forKey: "lingshu.worldModel.snapshot")
+            }
+            if let taskRecordsBackup {
+                defaults.set(taskRecordsBackup, forKey: "lingshu.task-execution.records")
+            } else {
+                defaults.removeObject(forKey: "lingshu.task-execution.records")
+            }
+            if let taskArchiveBackup {
+                defaults.set(taskArchiveBackup, forKey: "lingshu.task-execution.records.archive")
+            } else {
+                defaults.removeObject(forKey: "lingshu.task-execution.records.archive")
             }
         }
 

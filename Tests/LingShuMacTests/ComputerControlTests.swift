@@ -52,5 +52,105 @@ final class ComputerControlTests: XCTestCase {
         // toolDisplayName 应能回退到计算机操作工具名(供进展气泡)。
         XCTAssertEqual(LingShuState.toolDisplayName("type_text"), "键入文本")
         XCTAssertEqual(LingShuState.toolDisplayName("scroll"), "滚动")
+        XCTAssertEqual(LingShuState.toolDisplayName("computer_get_state"), "读取应用状态")
+        XCTAssertEqual(LingShuState.toolDisplayName("computer_click_element"), "点击界面元素")
+    }
+
+    func testNativeComputerUseMatchesAppWithoutModelSpecificRules() {
+        let apps = [
+            LingShuComputerAppSummary(pid: 10, name: "Safari", bundleIdentifier: "com.apple.Safari", executablePath: "/Applications/Safari.app", isActive: false),
+            LingShuComputerAppSummary(pid: 11, name: "备忘录", bundleIdentifier: "com.apple.Notes", executablePath: "/System/Applications/Notes.app", isActive: true),
+        ]
+        XCTAssertEqual(LingShuNativeComputerUsePolicy.matchApp(query: "frontmost", candidates: apps)?.pid, 11)
+        XCTAssertEqual(LingShuNativeComputerUsePolicy.matchApp(query: "com.apple.Safari", candidates: apps)?.pid, 10)
+        XCTAssertEqual(LingShuNativeComputerUsePolicy.matchApp(query: "safari", candidates: apps)?.pid, 10)
+        XCTAssertEqual(LingShuNativeComputerUsePolicy.matchApp(query: "11", candidates: apps)?.pid, 11)
+        XCTAssertNil(LingShuNativeComputerUsePolicy.matchApp(query: "不存在", candidates: apps))
+    }
+
+    func testNativeComputerUseDiffReportsSemanticChange() {
+        let before = nativeNode(index: 1, role: "AXButton", title: "保存", value: "")
+        let unchanged = LingShuNativeComputerUsePolicy.diff(
+            previousSnapshotID: "cu-old",
+            previous: [before],
+            current: [before]
+        )
+        XCTAssertFalse(unchanged.changed)
+
+        let after = nativeNode(index: 1, role: "AXButton", title: "已保存", value: "")
+        let changed = LingShuNativeComputerUsePolicy.diff(
+            previousSnapshotID: "cu-old",
+            previous: [before],
+            current: [after]
+        )
+        XCTAssertTrue(changed.changed)
+        XCTAssertTrue(changed.added.contains { $0.contains("已保存") })
+        XCTAssertTrue(changed.removed.contains { $0.contains("保存") })
+    }
+
+    func testNativeComputerUseRequiresConfirmationForIrreversibleTargets() {
+        XCTAssertTrue(LingShuNativeComputerUsePolicy.requiresExplicitConfirmation(label: "确认付款", action: "AXPress"))
+        XCTAssertTrue(LingShuNativeComputerUsePolicy.requiresExplicitConfirmation(label: "Delete permanently", action: "click"))
+        XCTAssertTrue(LingShuNativeComputerUsePolicy.requiresExplicitConfirmation(label: "发送消息", action: "return"))
+        XCTAssertFalse(LingShuNativeComputerUsePolicy.requiresExplicitConfirmation(label: "打开设置", action: "AXPress"))
+    }
+
+    func testNativeComputerUseRedactsSensitiveInputValues() {
+        XCTAssertEqual(
+            LingShuNativeComputerUsePolicy.redactedValue(
+                role: "AXTextField",
+                subrole: "AXSecureTextField",
+                title: "密码",
+                help: "",
+                identifier: "password",
+                value: "never-send-this"
+            ),
+            "（敏感内容已隐藏）"
+        )
+        XCTAssertEqual(
+            LingShuNativeComputerUsePolicy.redactedValue(
+                role: "AXTextField",
+                subrole: "",
+                title: "DeepSeek API Token",
+                help: "",
+                identifier: "brain-token",
+                value: "sk-secret"
+            ),
+            "（敏感内容已隐藏）"
+        )
+        XCTAssertEqual(
+            LingShuNativeComputerUsePolicy.redactedValue(
+                role: "AXTextField",
+                subrole: "",
+                title: "搜索",
+                help: "",
+                identifier: "search",
+                value: "灵枢"
+            ),
+            "灵枢"
+        )
+    }
+
+    func testNativeComputerUseToolsHaveCorrectEffects() {
+        XCTAssertEqual(LingShuToolMetadata.inferred(name: "computer_get_state", parametersJSON: "{}").effect, .readOnly)
+        XCTAssertEqual(LingShuToolMetadata.inferred(name: "computer_click_element", parametersJSON: "{}").effect, .control)
+        XCTAssertEqual(LingShuToolMetadata.inferred(name: "click", parametersJSON: "{}").parallelPolicy, .serial)
+    }
+
+    private func nativeNode(index: Int, role: String, title: String, value: String) -> LingShuComputerStateNode {
+        LingShuComputerStateNode(
+            index: index,
+            role: role,
+            subrole: "",
+            title: title,
+            value: value,
+            help: "",
+            identifier: "",
+            enabled: true,
+            focused: false,
+            valueSettable: false,
+            frame: CGRect(x: 10, y: 20, width: 80, height: 30),
+            actions: ["AXPress"]
+        )
     }
 }

@@ -1,6 +1,6 @@
 import Foundation
 
-/// 原生 function-calling 的工具定义（OpenAI `tools` 格式，MiniMax M3 / GLM 等 chat/completions 端点通用）。
+/// 原生 function-calling 的工具定义。完整参数 Schema 在所有受支持协议间原样复用。
 ///
 /// 取代脆弱的文本 `【工具】{json}` 协议：把工具以结构化 schema 随请求下发，模型用 `tool_calls`
 /// 结构化字段返回调用——不再从自由文本里正则抠 JSON，坏命令/坏 JSON 大幅减少。
@@ -10,6 +10,9 @@ struct LingShuToolDefinition: Equatable, Sendable {
     /// 参数属性：名字 → (JSON 类型, 说明)。
     var properties: [Property]
     var required: [String]
+    /// Agent 工具提供的完整 JSON Schema。存在时优先透传 enum/items/嵌套对象等约束；
+    /// 旧调用方没有提供时，继续由 properties + required 生成兼容 Schema。
+    var parametersJSON: String?
 
     struct Property: Equatable, Sendable {
         var name: String
@@ -17,22 +20,45 @@ struct LingShuToolDefinition: Equatable, Sendable {
         var description: String
     }
 
-    /// 编码成 OpenAI `tools` 数组里的一项。
-    func wireObject() -> [String: Any] {
+    init(
+        name: String,
+        description: String,
+        properties: [Property],
+        required: [String],
+        parametersJSON: String? = nil
+    ) {
+        self.name = name
+        self.description = description
+        self.properties = properties
+        self.required = required
+        self.parametersJSON = parametersJSON
+    }
+
+    func parameterSchemaObject() -> [String: Any] {
+        if let parametersJSON,
+           let data = parametersJSON.data(using: .utf8),
+           let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            return object
+        }
         var props: [String: Any] = [:]
         for property in properties {
             props[property.name] = ["type": property.type, "description": property.description]
         }
         return [
+            "type": "object",
+            "properties": props,
+            "required": required
+        ]
+    }
+
+    /// 编码成 OpenAI `tools` 数组里的一项。
+    func wireObject() -> [String: Any] {
+        return [
             "type": "function",
             "function": [
                 "name": name,
                 "description": description,
-                "parameters": [
-                    "type": "object",
-                    "properties": props,
-                    "required": required
-                ]
+                "parameters": parameterSchemaObject()
             ]
         ]
     }

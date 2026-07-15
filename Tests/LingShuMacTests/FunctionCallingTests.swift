@@ -42,6 +42,22 @@ final class FunctionCallingTests: XCTestCase {
         XCTAssertEqual(runCommand["type"] as? String, "function")
     }
 
+    func testAgentToolPreservesCompleteJSONSchemaAcrossGatewayBoundary() throws {
+        let box = LingShuGoalSpecSubmissionBox(allowUnresolvedReference: false)
+        let agentTool = LingShuGoalSpecToolContract.makeTool(box: box)
+        let definition = LingShuGatewayAgentModel.toToolDefinition(agentTool)
+        let wire = definition.wireObject()
+        let function = try XCTUnwrap(wire["function"] as? [String: Any])
+        let parameters = try XCTUnwrap(function["parameters"] as? [String: Any])
+        let properties = try XCTUnwrap(parameters["properties"] as? [String: Any])
+        let kind = try XCTUnwrap(properties["kind"] as? [String: Any])
+        let evidence = try XCTUnwrap(properties["reference_evidence"] as? [String: Any])
+
+        XCTAssertEqual(kind["enum"] as? [String], ["task", "interaction", "question"])
+        XCTAssertEqual((evidence["items"] as? [String: Any])?["type"] as? String, "string")
+        XCTAssertEqual((parameters["required"] as? [String])?.count, 12)
+    }
+
     func testNonToolBodyStaysCleanWithoutToolKeys() throws {
         let object = try body(forTools: [])
         XCTAssertNil(object["tools"], "无工具请求不应带 tools 字段")

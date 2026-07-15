@@ -1,0 +1,29 @@
+changelog:
+  exclude:
+    labels:
+      - duplicate
+      - invalid
+      - wontfix
+  categories:
+    - title: Agent orchestration
+      labels:
+        - "area: orchestration"
+    - title: Computer Use
+      labels:
+        - "area: computer-use"
+    - title: Model gateway
+      labels:
+        - "area: model-gateway"
+    - title: Perception and memory
+      labels:
+        - "area: perception"
+        - "area: memory"
+    - title: Deliverables
+      labels:
+        - "area: deliverables"
+    - title: Documentation
+      labels:
+        - documentation
+    - title: Other changes
+      labels:
+        - "*"

@@ -64,17 +64,7 @@ extension LingShuState {
         if appendUserMessage {   // 干预 fallback 进来时,纠正已作为「纠正」贴过,不重复贴
             appendTaskRecordMessage(recordID, actor: "你", role: "追问", kind: .user, text: display)
         }
-        if let record = taskExecutionRecords.first(where: { $0.id == recordID }),
-           record.status.isTerminal {
-            commitTaskThreadState(
-                recordID: recordID,
-                status: .running,
-                phase: .planning,
-                summary: "收到后续指令,正在接续原任务线程。",
-                persist: false,
-                trace: true
-            )
-        }
+        beginTaskThreadRun(recordID: recordID, summary: "收到后续指令,正在接续原任务线程。")
         captureDesignFeedbackForDreaming(trimmed, recordID: recordID)   // 设计任务的追问/改进→dreaming 固化
         clearAttachments()
         // 这条记录若属于**隔离子任务**(派发/spawn 出来的并行任务)→ 续跑**那条隔离会话本身**(它才有真上下文),
@@ -137,6 +127,7 @@ extension LingShuState {
         }
         let display = trimmed.isEmpty ? "[上传了 \(pendingAttachments.count) 个文件]" : trimmed
         appendTaskRecordMessage(recordID, actor: "你", role: "续", kind: .user, text: display)
+        beginTaskThreadRun(recordID: recordID, summary: "收到线程内回复,正在继续执行。")
         captureDesignFeedbackForDreaming(trimmed, recordID: recordID)
         clearAttachments()
         let subID = agentSubTaskRecords.first(where: { $0.value == recordID })?.key
@@ -218,6 +209,7 @@ extension LingShuState {
     /// 任务窗口里的记录是否还可被用户停止。
     /// 子任务窗口看到的是 record,不一定等同于主线程 `hasActiveModelCall`,所以这里按记录状态 + 编排器映射判断。
     func canStopTaskWindowRecord(_ recordID: String) -> Bool {
+        if activeTaskThreadRecordIDs.contains(recordID) { return true }
         guard let record = taskExecutionRecords.first(where: { $0.id == recordID }) else {
             return agentSubTaskRecords.values.contains(recordID) || dispatchedTaskBubbles[recordID] != nil
         }

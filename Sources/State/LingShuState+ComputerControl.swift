@@ -57,8 +57,9 @@ extension LingShuState {
 
     /// 全部计算机操作工具。始终挂在会话上(授权在 call-time 判,开关即时生效),纯对话/只读模式不挂。
     func computerControlTools() -> [LingShuAgentTool] {
-        [screenCaptureTool(), listUIElementsTool(), clickTool(), doubleClickTool(),
-         moveMouseTool(), typeTextTool(), pressKeyTool(), scrollTool()]
+        nativeComputerUseTools()
+            + [screenCaptureTool(), listUIElementsTool(), clickTool(), doubleClickTool(),
+               moveMouseTool(), typeTextTool(), pressKeyTool(), scrollTool()]
     }
 
     private func screenCaptureTool() -> LingShuAgentTool {
@@ -274,6 +275,14 @@ extension LingShuState {
     /// 计算机操作工具显示名(任务窗口/气泡进展用)。
     nonisolated static func computerToolDisplayName(_ tool: String) -> String? {
         switch tool {
+        case "computer_list_apps": return "列出可控应用"
+        case "computer_get_state": return "读取应用状态"
+        case "computer_click_element": return "点击界面元素"
+        case "computer_set_text": return "填写界面文本"
+        case "computer_press_key": return "在应用中按键"
+        case "computer_scroll_element": return "滚动应用界面"
+        case "computer_drag_element": return "拖拽界面元素"
+        case "computer_perform_action": return "执行界面动作"
         case "screen_capture": return "截屏看屏"
         case "list_ui_elements": return "列界面元素"
         case "click": return "点击"

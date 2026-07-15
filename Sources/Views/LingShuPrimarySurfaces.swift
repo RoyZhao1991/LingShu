@@ -65,6 +65,14 @@ struct LingShuRootView: View {
         }
         .background(LingShuPreviewHost(controller: state.previewController, presentation: state.presentationController))   // 大脑 open_preview → 弹出预览(含「演示与答疑」进度条)
         .background(LingShuBrowserHost(controller: state.browserController))   // 大脑 browser_open → 弹出内置浏览器
+        .sheet(isPresented: Binding(
+            get: { state.brainSetupPhase.shouldPresentWizard },
+            set: { _ in }
+        )) {
+            LingShuBrainSetupView(state: state)
+                .frame(minWidth: 640, minHeight: 590)
+                .interactiveDismissDisabled()
+        }
         .sheet(item: $state.pendingShellApproval) { pending in
             LingShuPermissionApprovalView(pending: pending) { decision in
                 state.resolveShellApproval(decision)
@@ -307,22 +315,28 @@ struct LingShuStableTopBar: View {
                     Button {
                         state.selectedSurface = surface
                     } label: {
-                        VStack(spacing: 5) {
-                            Group {
-                                if compact {
-                                    Image(systemName: surface.icon)
-                                } else {
-                                    Label(state.loc(surface.rawValue, surface.englishName), systemImage: surface.icon)
+                        ZStack(alignment: .topTrailing) {
+                            VStack(spacing: 5) {
+                                Group {
+                                    if compact {
+                                        Image(systemName: surface.icon)
+                                    } else {
+                                        Label(state.loc(surface.rawValue, surface.englishName), systemImage: surface.icon)
+                                    }
                                 }
+                                .font(.system(size: compact ? 15 : 12.5, weight: .semibold))
+                                .lineLimit(1)
+                                .fixedSize(horizontal: true, vertical: false)   // 标签(如"线程")不换行:按自然宽度排,别被宽图标挤成两行
+                                .foregroundStyle(isSelected ? Color.lingHolo : Color.lingFg.opacity(0.6))
+                                Rectangle()
+                                    .fill(isSelected ? Color.lingHolo : .clear)
+                                    .frame(height: 2)
+                                    .shadow(color: isSelected ? Color.lingHolo.opacity(0.8) : .clear, radius: 4)
                             }
-                            .font(.system(size: compact ? 15 : 12.5, weight: .semibold))
-                            .lineLimit(1)
-                            .fixedSize(horizontal: true, vertical: false)   // 标签(如"线程")不换行:按自然宽度排,别被宽图标挤成两行
-                            .foregroundStyle(isSelected ? Color.lingHolo : Color.lingFg.opacity(0.6))
-                            Rectangle()
-                                .fill(isSelected ? Color.lingHolo : .clear)
-                                .frame(height: 2)
-                                .shadow(color: isSelected ? Color.lingHolo.opacity(0.8) : .clear, radius: 4)
+                            if surface == .taskPool, state.unreadTaskThreadCount > 0 {
+                                LingShuUnreadCountBadge(count: state.unreadTaskThreadCount)
+                                    .offset(x: 9, y: -5)
+                            }
                         }
                         .padding(.horizontal, 13)
                         .padding(.top, 9)
@@ -380,6 +394,21 @@ struct LingShuStableTopBar: View {
             )
             .frame(height: 1)
         }
+    }
+}
+
+private struct LingShuUnreadCountBadge: View {
+    let count: Int
+
+    var body: some View {
+        Text(count > 99 ? "99+" : "\(count)")
+            .font(.system(size: 8.5, weight: .bold, design: .rounded))
+            .foregroundStyle(.white)
+            .padding(.horizontal, count > 9 ? 5 : 4)
+            .frame(minWidth: 16, minHeight: 16)
+            .background(Color.red.opacity(0.92), in: Capsule())
+            .overlay(Capsule().stroke(Color.lingBar, lineWidth: 1.5))
+            .accessibilityLabel("\(count) 个子线程有新结果")
     }
 }
 

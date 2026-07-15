@@ -196,8 +196,8 @@ extension LingShuState {
                 risk: .high,
                 source: "builtin",
                 status: .needsAuth,
-                verificationProbe: .init(kind: .toolCall, summary: "读取屏幕和列 UI 元素;高风险动作需授权"),
-                description: "授权后可截屏、列 UI、点击、输入、滚动"
+                verificationProbe: .init(kind: .toolCall, summary: "按应用读取 AX 快照并通过元素索引操作;高风险动作需授权"),
+                description: "授权后可按应用观察原生 UI、用元素索引点击/输入/滚动，并在动作后回读验证；坐标操作仅作兜底"
             )
         ]
     }

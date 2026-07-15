@@ -25,6 +25,7 @@ extension LingShuState {
 
     func openTaskRecord(_ recordID: String?) {
         guard let recordID, canOpenTaskRecord(recordID) else { return }
+        markTaskThreadRead(recordID)
         selectedTaskRecordID = recordID
         isTaskRecordPresented = true
     }
@@ -144,6 +145,7 @@ extension LingShuState {
         let finalSummary = visibleSummary.isEmpty ? summary : visibleSummary
 
         taskExecutionRecords[index].finish(status: status, summary: finalSummary)
+        endTaskThreadRun(recordID: recordID)
         _ = reconcileTaskRecordArtifactsFromMentionedExistingFiles(recordID: recordID)
         commitTaskThreadState(
             recordID: recordID,
@@ -177,6 +179,7 @@ extension LingShuState {
             captureCodeChanges(recordID: recordID)   // 代码任务:抓分支+未提交改动文件,落进记录供右侧面板展示
             DispatchQueue.main.async { [weak self] in
                 self?.startNextQueuedTaskIfAvailable()
+                self?.drainSerialInputsIfIdle()
             }
             // 任务收尾 → 触发 dreaming 离线固化(内部有空闲守卫 + 1h 节流,不打扰当前流程)。
             scheduleDreamingConsolidationIfIdle()

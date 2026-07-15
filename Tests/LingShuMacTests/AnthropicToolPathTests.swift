@@ -49,6 +49,31 @@ final class AnthropicToolPathTests: XCTestCase {
         XCTAssertNotNil(result.last?["cache_control"], "最后一条消息最后一个 block 应打缓存断点")
     }
 
+    func testAnthropicToolInputSchemaPreservesNestedConstraints() throws {
+        let schema = #"{"type":"object","properties":{"mode":{"type":"string","enum":["fast","full"]},"items":{"type":"array","items":{"type":"string"}}},"required":["mode","items"]}"#
+        let tool = LingShuToolDefinition(
+            name: "submit",
+            description: "提交",
+            properties: [],
+            required: ["mode", "items"],
+            parametersJSON: schema
+        )
+        let body = obj(try LingShuModelGateway.anthropicMessagesBody(
+            model: "test-model",
+            systemPrompt: "",
+            messages: [LingShuModelMessage(role: "user", content: "提交")],
+            temperature: 0.1,
+            stream: false,
+            cache: .unsupported,
+            tools: [tool]
+        ))
+        let inputSchema = try XCTUnwrap((body["tools"] as? [[String: Any]])?.first?["input_schema"] as? [String: Any])
+        let properties = try XCTUnwrap(inputSchema["properties"] as? [String: Any])
+
+        XCTAssertEqual((properties["mode"] as? [String: Any])?["enum"] as? [String], ["fast", "full"])
+        XCTAssertEqual(((properties["items"] as? [String: Any])?["items"] as? [String: Any])?["type"] as? String, "string")
+    }
+
     /// 一轮多个工具结果应合并进**同一条** user 消息(Anthropic 要求)。
     func testConsecutiveToolResultsMergedIntoOneUserMessage() throws {
         let msgs = [

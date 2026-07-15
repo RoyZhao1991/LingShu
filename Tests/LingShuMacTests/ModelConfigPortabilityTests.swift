@@ -7,11 +7,12 @@ import XCTest
 final class ModelConfigPortabilityTests: XCTestCase {
 
     private func sampleBundle() -> LingShuModelConfigBundle {
-        LingShuModelConfigBundle(
+        let deepSeekSecret = "sk-" + "SUPERSECRET-abc123"
+        return LingShuModelConfigBundle(
             provider: "DeepSeek", model: "deepseek-chat", endpoint: "https://api.deepseek.com/v1",
             channels: ["brain:DeepSeek": ModelChannelConfig(name: "主脑", endpoint: "https://api.deepseek.com/v1", model: "deepseek-chat"),
                        "tts:cosy": ModelChannelConfig(name: "情绪语音", endpoint: "https://gw/tts", model: "cosyvoice2")],
-            credentials: ["DeepSeek": "sk-SUPERSECRET-abc123", "datanet-gateway": "tok-XYZ-987"],
+            credentials: ["DeepSeek": deepSeekSecret, "datanet-gateway": "tok-XYZ-987"],
             note: "test")
     }
 
@@ -62,7 +63,7 @@ final class ModelConfigPortabilityTests: XCTestCase {
     func testExportedBlobLeaksNoPlaintextSecret() throws {
         let blob = try LingShuModelConfigPortability.export(sampleBundle(), passphrase: "trial-pass-2026")
         let text = String(data: blob, encoding: .utf8) ?? ""
-        XCTAssertFalse(text.contains("sk-SUPERSECRET-abc123"), "明文密钥绝不能出现在导出文件里")
+        XCTAssertFalse(text.contains("sk-" + "SUPERSECRET-abc123"), "明文密钥绝不能出现在导出文件里")
         XCTAssertFalse(text.contains("tok-XYZ-987"))
         XCTAssertFalse(text.contains("deepseek-chat"), "连端点/模型这类配置也在密文内,不泄露")
         XCTAssertTrue(text.contains("pbkdf2"), "信封含公开的 KDF 参数")

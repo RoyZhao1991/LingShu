@@ -56,7 +56,7 @@ extension LingShuState {
         if activeAgentTurnTask != nil { return true }    // 问答 worker 在跑(executingChatTurnID 可能尚未同步置)
         if !pendingChatTurnIDs.isEmpty { return true }   // 问答线还有未跑完的(理论上被闸门拦,兜底)
         pruneInactiveDispatchedTaskBubbles()             // 清掉 waiting/终态的残留映射
-        return !dispatchedTaskBubbles.isEmpty            // 任务子线程在执行
+        return !activeTaskThreadRecordIDs.isEmpty        // 任务子线程在执行(与主对话气泡解耦)
     }
 
     /// 有回合在跑 → 把这条新输入放进串行队列,显示"已排队"气泡,等当前回合完全返回后自动接着处理。

@@ -1,0 +1,56 @@
+name: Feature request
+description: Propose a focused improvement to LingShu
+title: "[Feature]: "
+labels:
+  - enhancement
+body:
+  - type: checkboxes
+    attributes:
+      label: Preflight
+      options:
+        - label: I searched existing issues and roadmap items first.
+          required: true
+  - type: textarea
+    attributes:
+      label: Problem
+      description: Describe the user problem before proposing implementation details.
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Proposed outcome
+      description: What should a user be able to do after this change?
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Example workflow
+      placeholder: |
+        Given...
+        When...
+        Then...
+    validations:
+      required: true
+  - type: dropdown
+    attributes:
+      label: Primary area
+      options:
+        - Agent orchestration
+        - Computer Use
+        - Model gateway
+        - Perception and voice
+        - Memory and knowledge
+        - Deliverables and previews
+        - Plugins and integrations
+        - Developer experience
+        - Documentation
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Alternatives considered
+  - type: textarea
+    attributes:
+      label: Risks and permissions
+      description: Note any privacy, external publication, irreversible action, credential, or macOS permission implications.

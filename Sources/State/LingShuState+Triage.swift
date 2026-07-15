@@ -189,6 +189,7 @@ extension LingShuState {
                               checkerAgentID: String? = nil, checkerName: String? = nil,
                               extraCheckerAgentIDs: [String] = [], imageDataURLs: [String]? = nil) -> String {
         installAgentEventSinkIfNeeded()
+        beginTaskThreadRun(recordID: taskRecordID, summary: "子线程已接单,正在执行。")
         // **附件直接入脑·覆盖派发任务**(2026-06-28 修):复杂任务都走这条隔离路,以前只把附件 VL→文字塞进 objective、
         // 原图没进多模态脑(实测:改 PPT 任务只拿到"图片内容摘要"、看不见红框、改错了箭头)。这里把原图随首轮目标直发大脑。
         // 即时派发从 pending 消费;排队后派发由调用方把当时暂存的图传进来(pending 那会儿已被清/被后续覆盖)。
@@ -350,8 +351,12 @@ extension LingShuState {
                 if await orchestrator.spawnDetached(id: subID, objective: prompt, session: sub, imageDataURLs: directImages) { return }   // 轮到了,编排器事件接管 bubble
             }
             guard let self else { return }
-            self.fillDispatchedBubble(taskRecordID, text: "前面任务排队较久仍没轮到,先没派出去——稍后重发即可。")
+            let timeoutSummary = "前面任务排队较久仍没轮到,本轮未派出；可以稍后从原线程继续。"
+            self.fillDispatchedBubble(taskRecordID, text: timeoutSummary)
+            self.appendTaskRecordMessage(taskRecordID, actor: "派发队列", role: "排队超时", kind: .warning, text: timeoutSummary)
+            self.finishTaskRecord(taskRecordID, status: .partial, summary: timeoutSummary)
             self.agentSubTaskRecords[subID] = nil
+            self.promoteQueuedDispatchIfPossible()
         }
         return intake
     }

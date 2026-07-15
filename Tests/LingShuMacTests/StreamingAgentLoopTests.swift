@@ -170,6 +170,52 @@ final class StreamingAgentLoopTests: XCTestCase {
         XCTAssertFalse(visible.contains("\\n"))
     }
 
+    func testCompleteStructuredReplyWithEscapedQuotesAndElapsedSuffixRendersWholeReply() {
+        let raw = """
+        {
+          "reply": "两者都不是，或者说——两者都有，但都不是全部。\\n\\n**生成式 AI** 是我的底层能力之一。但如果我只是个\\\"生成机器\\\"，那和普通聊天机器人没什么区别。\\n\\n**分析 AI** 也是我的一部分。但如果我只是个\\\"分析工具\\\"，那我就是个高级计算器。",
+          "completion": {"status": "ok", "reason": "直接回答定位问题", "needs_user": false},
+          "user_input": null,
+          "inability": null,
+          "OAuth": null
+        }
+
+        ⏱ 总用时 27秒
+        """
+
+        let visible = LingShuVisibleModelText.clean(raw)
+
+        XCTAssertTrue(visible.contains("如果我只是个\"生成机器\""))
+        XCTAssertTrue(visible.contains("如果我只是个\"分析工具\""))
+        XCTAssertTrue(visible.hasSuffix("那我就是个高级计算器。"))
+        XCTAssertFalse(visible.contains("\"completion\""))
+        XCTAssertFalse(visible.contains("总用时"))
+    }
+
+    func testMalformedStructuredReplyWithUnescapedInnerQuotesStillRendersWholeReply() {
+        let raw = """
+        {
+          "reply": "两者都不是，或者说——两者都有，但都不是全部。\\n\\n**生成式 AI** 是我的底层能力之一。但如果我只是个"生成机器"，那和普通聊天机器人没什么区别。\\n\\n**分析 AI** 也是我的一部分。但如果我只是个"分析工具"，那我就是个高级计算器。",
+          "completion": {"status": "ok", "reason": "直接回答定位问题", "needs_user": false},
+          "user_input": null,
+          "inability": null,
+          "OAuth": null
+        }
+
+        ⏱ 总用时 27秒
+        """
+
+        XCTAssertNil(LingShuStructuredModelOutput.parse(raw), "内层未转义引号使协议 JSON 无效，不能驱动流程状态")
+        let visible = LingShuVisibleModelText.clean(raw)
+
+        XCTAssertTrue(visible.contains("如果我只是个\"生成机器\""))
+        XCTAssertTrue(visible.contains("如果我只是个\"分析工具\""))
+        XCTAssertTrue(visible.contains("普通聊天机器人没什么区别"))
+        XCTAssertTrue(visible.hasSuffix("那我就是个高级计算器。"))
+        XCTAssertFalse(visible.contains("\"completion\""))
+        XCTAssertFalse(visible.contains("总用时"))
+    }
+
     func testLegacyRolePipelineProtocolTailIsHiddenAtRenderTime() {
         let legacy = """
         🔧 已规划角色管线:工程执行专家(Codex) → 评审官(灵枢)

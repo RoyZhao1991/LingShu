@@ -299,8 +299,8 @@ struct LingShuModelGatewaySurface: View {
         .padding(.leading, 18)
     }
 
-    /// 附件入脑策略(**自动按脑能力,无手动开关** 2026-06-28 用户定调):多模态脑→对话附件原图直发它;非多模态脑→VL 抽成文字(零留存)。
-    /// 态势感知(环境感知)不在此列——一律强制 VL/零留存。这里只做**状态展示**(让用户知道附件会怎么处理),不再是可切换的控制。
+    /// 附件入脑策略(**自动按脑能力,无手动开关** 2026-06-28 用户定调):多模态脑→对话附件原图直发它;非多模态脑→VL 抽成文字。
+    /// 态势感知(环境感知)不在此列——一律强制 VL;远程数据边界由对应服务商条款决定。这里只做**状态展示**(让用户知道附件会怎么处理),不再是可切换的控制。
     private var directToBrainStatus: some View {
         let vision = state.shouldAttemptNativeMultimodalForCurrentModel()
         let downgraded = state.isCurrentModelMarkedNativeMultimodalUnsupported()

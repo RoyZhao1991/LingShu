@@ -118,6 +118,10 @@ extension LingShuState {
             return "本地命令执行 / shell"
         case "recall_local", "index_local_knowledge":  return "本机知识检索"
         case "fetch_url", "web_search":                return "联网访问"
+        case "computer_list_apps", "computer_get_state", "computer_click_element", "computer_set_text",
+             "computer_press_key", "computer_scroll_element", "computer_drag_element", "computer_perform_action",
+             "screen_capture", "list_ui_elements", "click", "double_click", "move_mouse", "type_text", "press_key", "scroll":
+            return "本机界面感知与操作"
         default:                                       return nil
         }
     }

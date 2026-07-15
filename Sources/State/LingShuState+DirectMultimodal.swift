@@ -2,7 +2,7 @@ import Foundation
 
 /// 「附件入脑」(多模态)接线集中处:**当前脑能看图时**,把待发图片/PDF **直发大脑原生视觉**(而非 VL→文字);
 /// 纯文本脑则回退 VL→文字管线。**自动按脑能力判、无手动开关**(2026-06-28 用户定调:能自动判多模态就不需要开关了)。
-/// 边界:这条只管**显式附件**;**态势感知(环境感知)另走 `perceptionVLTask`、一律强制 VL/零留存**,不经此路。见 [[LingShuMultimodal]]。
+/// 边界:这条只管**显式附件**;**态势感知(环境感知)另走 `perceptionVLTask`、一律强制 VL**,不经此路。远程数据边界以对应服务商条款为准。见 [[LingShuMultimodal]]。
 @MainActor
 extension LingShuState {
     func configureNativeMultimodalGate(on adapter: LingShuGatewayAgentModel) {

@@ -163,9 +163,10 @@ struct LingShuGoalSpec: Codable, Sendable, Equatable {
 }
 
 enum LingShuGoalSpecParser {
-    /// 给模型的解析指令:只输出一个 JSON 目标规格(无解释、无 markdown 围栏)。
+    /// 给模型的解析指令。具体输出载体由调用方决定：有 submit_goal_spec 就工具提交，
+    /// 没有则输出纯 JSON；两者共用同一字段契约。
     static let systemPrompt = """
-    你是目标解析器。把用户这条请求解析成一个 JSON 目标规格,**只输出 JSON 本身**(不要解释、不要 markdown 围栏)。字段:
+    你是目标解析器。把用户这条请求解析成一个完整目标规格。若本轮提供 submit_goal_spec 工具，必须通过该工具提交；否则只输出 JSON 本身（不要解释、不要 markdown 围栏）。字段:
     - objective: 一句话重述用户真正想要的结果(不是复述原话,是抓住意图)
     - kind: 三选一 —— "task"(要你做出交付物/真实动作)、"interaction"(演示/答疑/陪聊,无交付物)、"question"(纯信息提问)
     - output_mode: 四选一 —— "chat_reply"(最终只需要聊天回复)、"artifact"(需要落文件/产物)、"visible_interaction"(需要打开/演示/讲解/播报等可感知交互)、"external_action"(需要改变外部系统/设备/网络/账号状态)
@@ -218,14 +219,19 @@ enum LingShuGoalSpecParser {
 
     /// 新任务真正开始前的最小结构契约。解析成 JSON 不等于 GoalSpec 已经可执行;
     /// 缺少类型、输出形态或验收标准时应重新生成,不能让下游自行猜测。
-    static func executionReadinessIssue(_ spec: LingShuGoalSpec) -> String? {
+    static func executionReadinessIssue(
+        _ spec: LingShuGoalSpec,
+        allowUnresolvedReference: Bool = false
+    ) -> String? {
         if spec.objective.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             return "objective 为空"
         }
         if spec.kind == .unknown { return "kind 未明确" }
         if spec.outputMode == .unspecified { return "output_mode 未明确" }
-        if spec.referenceScope == .unknown { return "reference_scope 未明确" }
-        if spec.referenceConfidence == .unknown { return "reference_confidence 未明确" }
+        // active turn 可以先明确承认“引用对象尚未确定”，随后进入历史检索模型回合；
+        // 非 active turn 没有该检索阶段，仍必须在这里给出确定引用。
+        if !allowUnresolvedReference, spec.referenceScope == .unknown { return "reference_scope 未明确" }
+        if !allowUnresolvedReference, spec.referenceConfidence == .unknown { return "reference_confidence 未明确" }
         if (spec.kind == .task || spec.kind == .interaction), spec.successCriteria.isEmpty {
             return "task/interaction 缺少 success_criteria"
         }

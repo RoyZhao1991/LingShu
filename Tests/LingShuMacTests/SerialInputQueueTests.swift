@@ -21,10 +21,8 @@ final class SerialInputQueueTests: XCTestCase {
     func testRunningDispatchedTaskCountsAsExecuting() {
         let state = LingShuState()
         let rid = state.createTaskExecutionRecord(for: "派发任务X")
-        if let idx = state.taskExecutionRecords.firstIndex(where: { $0.id == rid }) {
-            state.taskExecutionRecords[idx].status = .running
-        }
         state.dispatchedTaskBubbles[rid] = UUID()
+        state.beginTaskThreadRun(recordID: rid)
         XCTAssertTrue(state.currentlyExecutingTurn(), "派发子线程在执行 → 视为在跑")
     }
 

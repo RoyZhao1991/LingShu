@@ -36,6 +36,13 @@ enum LingShuTaskExecutionStatus: String, Codable, Equatable, Sendable {
         default: return false
         }
     }
+
+    var isSuccessfulCompletion: Bool {
+        switch self {
+        case .completed, .answered, .verified: return true
+        default: return false
+        }
+    }
 }
 
 enum LingShuTaskExecutionMessageKind: String, Codable, Equatable, Sendable {

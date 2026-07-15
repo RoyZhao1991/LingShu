@@ -30,21 +30,7 @@ enum LingShuVisibleModelText {
         ), candidate.distance(from: candidate.startIndex, to: keyRange.lowerBound) < 80 else { return nil }
 
         let valueStart = keyRange.upperBound
-        var cursor = valueStart
-        var escaped = false
-        var valueEnd = candidate.endIndex
-        while cursor < candidate.endIndex {
-            let character = candidate[cursor]
-            if escaped {
-                escaped = false
-            } else if character == "\\" {
-                escaped = true
-            } else if character == "\"" {
-                valueEnd = cursor
-                break
-            }
-            cursor = candidate.index(after: cursor)
-        }
+        let valueEnd = bestEffortReplyValueEnd(in: candidate, from: valueStart)
 
         var encodedBody = String(candidate[valueStart..<valueEnd])
         if encodedBody.hasSuffix("\\") { encodedBody.removeLast() }
@@ -62,6 +48,47 @@ enum LingShuVisibleModelText {
             .replacingOccurrences(of: "\\\"", with: "\"")
             .replacingOccurrences(of: "\\\\", with: "\\")
             .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// 部分兼容模型会把 reply 正文中的中文引号内容直接写成 `"示例"`，却忘记在 JSON
+    /// 字符串里转义，导致整个对象无效。此时不能把正文遇到的第一个 `"` 当作结束；只有
+    /// 后面确实接着结构协议字段或对象结束时，才认定它是 reply 的闭合引号。
+    private static func bestEffortReplyValueEnd(in text: String, from start: String.Index) -> String.Index {
+        var cursor = start
+        var escaped = false
+        while cursor < text.endIndex {
+            let character = text[cursor]
+            if escaped {
+                escaped = false
+            } else if character == "\\" {
+                escaped = true
+            } else if character == "\"", closesReplyValue(at: cursor, in: text) {
+                return cursor
+            }
+            cursor = text.index(after: cursor)
+        }
+        return text.endIndex
+    }
+
+    private static func closesReplyValue(at quote: String.Index, in text: String) -> Bool {
+        var cursor = text.index(after: quote)
+        while cursor < text.endIndex, text[cursor].isWhitespace {
+            cursor = text.index(after: cursor)
+        }
+        guard cursor < text.endIndex else { return true }
+        if text[cursor] == "}" { return true }
+        guard text[cursor] == "," else { return false }
+
+        cursor = text.index(after: cursor)
+        while cursor < text.endIndex, text[cursor].isWhitespace {
+            cursor = text.index(after: cursor)
+        }
+        let tail = text[cursor...]
+        let protocolKeys = [
+            "\"completion\"", "\"user_input\"", "\"userInput\"",
+            "\"inability\"", "\"OAuth\"", "\"oauth\""
+        ]
+        return protocolKeys.contains { tail.hasPrefix($0) }
     }
 
     /// 旧版本曾把管线内部结果的末尾 500 字符直接塞进主气泡,留下从中间截断的 checker JSON。

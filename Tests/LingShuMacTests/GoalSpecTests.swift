@@ -110,9 +110,99 @@ final class GoalSpecTests: XCTestCase {
         )
     }
 
-    func testGoalSpecUsesBoundedIncreasingRegenerationTimeouts() {
-        XCTAssertEqual(LingShuControlPlaneRole.goalSpec.generationTimeouts, [8, 16, 30])
-        XCTAssertEqual(LingShuControlPlaneRole.triage.generationTimeouts, [6])
+    func testGoalSpecUsesPayloadAdaptiveBoundedTimeouts() {
+        let small = LingShuGoalSpecGenerationPolicy.timeouts(for: "短请求")
+        let large = LingShuGoalSpecGenerationPolicy.timeouts(for: String(repeating: "完整上下文", count: 4_000))
+
+        XCTAssertEqual(small.count, LingShuGoalSpecGenerationPolicy.maximumAttempts)
+        XCTAssertTrue(zip(small, small.dropFirst()).allSatisfy { $0 < $1 })
+        XCTAssertTrue(zip(large, large.dropFirst()).allSatisfy { $0 < $1 })
+        XCTAssertGreaterThan(large[0], small[0], "超时应由载荷规模决定，不能写死为某个模型的常数")
+        XCTAssertLessThanOrEqual(large.last!, 180)
+    }
+
+    func testActiveTurnCanCarryExplicitlyUnresolvedReferenceIntoHistoryResolution() {
+        let unresolved = LingShuGoalSpec(
+            objective: "找到用户所指的旧材料并继续处理",
+            kind: .task,
+            successCriteria: ["找到有证据支持的目标材料"],
+            outputMode: .artifact,
+            referenceScope: .unknown,
+            referenceConfidence: .unknown
+        )
+
+        XCTAssertNotNil(LingShuGoalSpecParser.executionReadinessIssue(unresolved))
+        XCTAssertNil(
+            LingShuGoalSpecParser.executionReadinessIssue(unresolved, allowUnresolvedReference: true),
+            "active turn 应先进入历史检索，而不是在检索前被 unknown 自相矛盾地拦死"
+        )
+    }
+
+    func testGoalSpecToolContractCapturesSchemaValidatedSubmission() async {
+        let box = LingShuGoalSpecSubmissionBox(allowUnresolvedReference: false)
+        let tool = LingShuGoalSpecToolContract.makeTool(box: box)
+        let arguments = #"{"objective":"生成逐页演讲稿","kind":"task","output_mode":"artifact","reference_scope":"current_input","reference_explicit":false,"reference_confidence":"high","reference_evidence":["demo.pptx"],"constraints":["约3分钟"],"boundaries":[],"risks":[],"success_criteria":["每页有对应讲稿"],"open_questions":[]}"#
+        let model = LingShuScriptedAgentModel([
+            .toolCalls([.init(id: "call-1", name: tool.name, argumentsJSON: arguments)])
+        ])
+        let session = LingShuAgentSession(
+            id: "goalspec-tool-contract-test",
+            system: "提交 GoalSpec",
+            tools: [tool],
+            model: model,
+            maxTurns: 1
+        )
+
+        _ = await session.send("生成目标")
+        let snapshot = await box.snapshot()
+        XCTAssertEqual(snapshot.accepted?.objective, "生成逐页演讲稿")
+        XCTAssertNil(snapshot.issue)
+    }
+
+    func testStructuredGoalSpecCapabilityIsKeyedPerChannelAndExpires() {
+        let suiteName = "GoalSpecCapabilityTests-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let now = Date(timeIntervalSince1970: 10_000_000)
+
+        LingShuStructuredGoalSpecCapability.markToolSubmissionUnsupported(
+            provider: "Provider A", model: "model-alpha", endpoint: "https://example.test/v1",
+            protocolName: "OpenAI compatible", defaults: defaults, now: now
+        )
+
+        XCTAssertFalse(LingShuStructuredGoalSpecCapability.shouldAttemptToolSubmission(
+            provider: "Provider A", model: "model-alpha", endpoint: "https://example.test/v1",
+            protocolName: "OpenAI compatible", format: .chatCompletions, defaults: defaults, now: now
+        ))
+        XCTAssertTrue(LingShuStructuredGoalSpecCapability.shouldAttemptToolSubmission(
+            provider: "Provider A", model: "model-beta", endpoint: "https://example.test/v1",
+            protocolName: "OpenAI compatible", format: .chatCompletions, defaults: defaults, now: now
+        ), "切换模型必须使用新能力键重新探测")
+        XCTAssertTrue(LingShuStructuredGoalSpecCapability.shouldAttemptToolSubmission(
+            provider: "Provider A", model: "model-alpha", endpoint: "https://example.test/v1",
+            protocolName: "OpenAI compatible", format: .chatCompletions, defaults: defaults,
+            now: now.addingTimeInterval(8 * 24 * 60 * 60)
+        ), "过期后要重新探测，不能永久锁死能力")
+        XCTAssertFalse(LingShuStructuredGoalSpecCapability.shouldAttemptToolSubmission(
+            provider: "Provider A", model: "model-alpha", endpoint: "https://example.test/v1/responses",
+            protocolName: "Responses", format: .responses, defaults: defaults, now: now
+        ), "尚未接线工具的协议走纯 JSON，不应伪装成模型不支持")
+    }
+
+    func testOnlyExplicitToolProtocolRejectionCreatesCapabilityConclusion() {
+        let explicit = LingShuModelServiceFailure(
+            kind: .requestInvalid,
+            statusCode: 400,
+            detail: "unknown field tools: function calling is not supported"
+        ).encodedReason
+        let unrelated = LingShuModelServiceFailure(
+            kind: .requestInvalid,
+            statusCode: 400,
+            detail: "temperature is out of range"
+        ).encodedReason
+
+        XCTAssertTrue(LingShuStructuredGoalSpecCapability.explicitlyRejectsToolSubmission(explicit))
+        XCTAssertFalse(LingShuStructuredGoalSpecCapability.explicitlyRejectsToolSubmission(unrelated))
     }
 
     func testMissingGoalSpecBlocksOnlyNewActiveTurnWhenEnabled() {
@@ -236,6 +326,30 @@ final class GoalSpecTests: XCTestCase {
         XCTAssertFalse(context.contains { ($0["text"] as? String)?.isEmpty == true },
                        "loading 空占位不能进入完整上下文")
         XCTAssertEqual(request.components(separatedBy: "用户: 继续").count - 1, 0, "当前裸输入不能在历史前景里重复出现")
+    }
+
+    @MainActor
+    func testActiveTurnGoalSpecRequestKeepsCurrentAttachmentResources() {
+        let state = LingShuState()
+        state.chatMessages = [
+            .init(
+                speaker: "你",
+                text: "理解这个 PPT 并生成逐页讲稿",
+                isUser: true,
+                attachmentNames: ["demo.pptx"],
+                attachmentPaths: ["/tmp/demo.pptx"]
+            ),
+            .init(speaker: "灵枢", text: "", isUser: false, isLoading: true)
+        ]
+
+        let request = state.activeTurnGoalSpecRequest(for: "理解这个 PPT 并生成逐页讲稿")
+        let data = try! XCTUnwrap(request.data(using: .utf8))
+        let json = try! XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let resources = try! XCTUnwrap(json["current_input_resources"] as? [[String: Any]])
+
+        XCTAssertEqual(resources.first?["name"] as? String, "demo.pptx")
+        XCTAssertEqual(resources.first?["path"] as? String, "/tmp/demo.pptx")
+        XCTAssertEqual(resources.first?["extension"] as? String, "pptx")
     }
 
     @MainActor

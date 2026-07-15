@@ -403,7 +403,7 @@ struct LingShuRunningTaskBar: View {
         if let rec = state.runningDispatchedTask {
             HStack(spacing: 9) {
                 LingShuPulseDot()
-                Text("进行中")
+                Text(state.activeTaskThreadCount > 1 ? "进行中 \(state.activeTaskThreadCount)" : "进行中")
                     .font(.system(size: 9.5, weight: .bold, design: .monospaced))
                     .foregroundStyle(Color.lingHolo)
                 Text(rec.title.isEmpty ? rec.prompt : rec.title)
@@ -427,6 +427,51 @@ struct LingShuRunningTaskBar: View {
             .padding(.horizontal, 11)
             .padding(.vertical, 7)
             .lingShuHUDPanel(cornerLength: 6, fillOpacity: 0.08)
+        }
+    }
+}
+
+/// 子线程完成提示只读本地任务状态，不写入主聊天消息，也不进入模型上下文。
+struct LingShuTaskThreadCompletionNoticeBar: View {
+    @ObservedObject var state: LingShuState
+
+    var body: some View {
+        if let latest = state.latestUnreadTaskThreadRecord {
+            let allCompleted = state.unreadTaskThreadRecordIDs.allSatisfy { recordID in
+                state.taskExecutionRecordLookup.first(where: { $0.id == recordID })?.status.isSuccessfulCompletion == true
+            }
+            HStack(spacing: 9) {
+                Image(systemName: allCompleted ? "checkmark.circle.fill" : "bell.badge.fill")
+                    .font(.system(size: 13, weight: .bold))
+                    .foregroundStyle(allCompleted ? Color.green : Color.orange)
+                Text(state.unreadTaskThreadCount == 1
+                     ? (allCompleted ? "子线程已完成" : "子线程有新结果")
+                     : "\(state.unreadTaskThreadCount) 个子线程有新结果")
+                    .font(.system(size: 10.5, weight: .bold))
+                    .foregroundStyle(Color.lingFg.opacity(0.82))
+                Text(latest.title)
+                    .font(.system(size: 11.5, weight: .semibold))
+                    .foregroundStyle(Color.lingFg.opacity(0.92))
+                    .lineLimit(1)
+                Spacer(minLength: 6)
+                Button { state.openLatestUnreadTaskThread() } label: {
+                    Label("查看", systemImage: "arrow.up.right.square")
+                        .font(.system(size: 10.5, weight: .semibold))
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                Button { state.markAllTaskThreadsRead() } label: {
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 10.5, weight: .bold))
+                        .frame(width: 24, height: 24)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(Color.lingFg.opacity(0.48))
+                .help("全部标为已读")
+            }
+            .padding(.horizontal, 11)
+            .padding(.vertical, 7)
+            .lingShuHUDPanel(accent: allCompleted ? .green : .orange, cornerLength: 6, fillOpacity: 0.08)
         }
     }
 }
@@ -613,6 +658,7 @@ struct LingShuInputDock: View {
             minInterval: 0.25
         )
         VStack(spacing: 10) {
+            LingShuTaskThreadCompletionNoticeBar(state: state)
             LingShuRunningTaskBar(state: state)
             if !state.pendingSerialInputs.isEmpty {
                 LingShuSerialInputTray(state: state)

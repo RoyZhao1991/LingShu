@@ -51,6 +51,7 @@ extension LingShuState {
             let preMapped = agentSubTaskRecords[id]
             let recordID = preMapped ?? createTaskExecutionRecord(for: objective)
             agentSubTaskRecords[id] = recordID
+            beginTaskThreadRun(recordID: recordID, summary: "子线程正在执行。")
             appendTaskRecordMessage(recordID, actor: "灵枢", role: "派生子任务", kind: .router, text: "派生并行子任务:\(objective)")
             // 兜底入口:正常 spawn_task 已在派生前预建记录并绑定 GoalSpec;这里仅防未来外部直接走 orchestrator。
             if preMapped == nil, goalSpecEnabled, goalSpec(for: recordID) == nil {
@@ -117,6 +118,7 @@ extension LingShuState {
                     blockingReason: cleanQuestion,
                     requiredUserAction: cleanQuestion
                 )
+                endTaskThreadRun(recordID: recordID)
             }
             // **气泡内待输入(2026-06-23,监工"卡住的任务被聊天淹没、回复对不上"修)**:把这条任务的气泡标成「待你输入」,
             // 渲染气泡内回复控件(选项/追加信息),答复直达该隔离会话——不再靠分诊在历史里找回它。
@@ -215,12 +217,7 @@ extension LingShuState {
                 // **不写死"网络恢复"(2026-06-30)**:`.resumed` 既用于断网重连、也用于手动「继续」续接——
                 // 手动续接说"网络恢复"是误导(用户实测点继续却显示网络恢复)。改中性;断网那条另有"网络恢复"trace(见下方 resumeAfterReconnect)。
                 appendTaskRecordMessage(recordID, actor: "灵枢", role: "续跑", kind: .router, text: "接着上次进度续跑。")
-                commitTaskThreadState(
-                    recordID: recordID,
-                    status: .running,
-                    phase: .executing,
-                    summary: "接着上次进度续跑。"
-                )
+                beginTaskThreadRun(recordID: recordID, summary: "接着上次进度续跑。")
             }
             _ = objective
         }

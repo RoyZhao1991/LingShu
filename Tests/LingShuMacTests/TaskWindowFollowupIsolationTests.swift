@@ -75,7 +75,11 @@ final class TaskWindowFollowupIsolationTests: XCTestCase {
 
     func testFollowupOnRecordWithSubSessionStaysIsolated() {
         let state = LingShuState()
+        state.markAllTaskThreadsRead()
         let rid = state.createTaskExecutionRecord(for: "派发任务Y")
+        if let index = state.taskExecutionRecords.firstIndex(where: { $0.id == rid }) {
+            state.taskExecutionRecords[index].status = .partial
+        }
         // 有现存隔离子会话映射 → 走 resume 分支,续同一条隔离会话。
         state.agentSubTaskRecords["task-abc123"] = rid
 
@@ -83,6 +87,10 @@ final class TaskWindowFollowupIsolationTests: XCTestCase {
 
         // 走隔离 resume:追问落进这条记录(窗口),不进主会话问答线、不另起主回合。
         XCTAssertTrue(state.pendingChatTurnIDs.isEmpty, "有隔离子会话时追问 resume 那条会话,绝不落主会话")
+        XCTAssertEqual(state.taskExecutionRecords.first { $0.id == rid }?.status, .running,
+                       "终态线程续跑应立即恢复本记录的执行中状态")
+        XCTAssertTrue(state.activeTaskThreadRecordIDs.contains(rid), "续跑应登记独立子线程运行态")
+        XCTAssertNil(state.dispatchedTaskBubbles[rid], "线程内续跑不应制造主对话占位气泡")
         let rec = state.taskExecutionRecords.first { $0.id == rid }
         XCTAssertTrue(rec?.messages.contains { $0.text.contains("继续推进") } ?? false,
                       "追问应记进这条任务自己的记录(窗口可见)")

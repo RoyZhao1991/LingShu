@@ -1,0 +1,72 @@
+name: Bug report
+description: Report a reproducible problem in LingShu
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for helping improve LingShu. Remove API tokens, private file contents, account data, and personal information before submitting logs or screenshots.
+  - type: checkboxes
+    attributes:
+      label: Preflight
+      options:
+        - label: I searched existing issues and did not find the same problem.
+          required: true
+        - label: I removed credentials and private data from this report.
+          required: true
+        - label: This is not a security vulnerability. I will use private vulnerability reporting for security issues.
+          required: true
+  - type: input
+    attributes:
+      label: LingShu version or commit
+      placeholder: v0.1.0-alpha or 0123abc
+    validations:
+      required: true
+  - type: dropdown
+    attributes:
+      label: Mac architecture
+      options:
+        - Apple silicon
+        - Intel
+        - Unknown
+    validations:
+      required: true
+  - type: input
+    attributes:
+      label: macOS version
+      placeholder: macOS 15.5
+    validations:
+      required: true
+  - type: input
+    attributes:
+      label: Model provider and protocol
+      description: Do not include the token.
+      placeholder: Anthropic Messages, OpenAI-compatible DeepSeek, local model, etc.
+  - type: textarea
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Launch LingShu...
+        2. Send...
+        3. Observe...
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Redacted logs or screenshots
+      description: Drag files here only after removing secrets and personal information.
+  - type: textarea
+    attributes:
+      label: Additional context

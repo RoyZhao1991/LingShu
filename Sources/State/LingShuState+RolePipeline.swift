@@ -38,6 +38,7 @@ extension LingShuState {
             ? preflightGoalSpec!.objective
             : task
         let rid = createTaskExecutionRecord(for: displayTask)
+        beginTaskThreadRun(recordID: rid, summary: "正在理解任务并规划角色管线。")
         let subID = "pipe-\(rid.suffix(8))"
         agentSubTaskRecords[subID] = rid
         // **持有"管线驱动中"标记**:角色管线是直接 Task、不在 orchestrator 的 driveTasks 里,孤儿看门狗据此跳过(否则 ~20s 就把还在跑的它误收口成 .partial)。
@@ -90,6 +91,7 @@ extension LingShuState {
         if let fixedSteps { steps = fixedSteps } else { steps = await planRolePipeline(task: executionTask, agents: agents) }
         guard steps.count >= 2 else {
             // 没规划出多角色 → 清理这条预建记录/气泡,返回 false 让调用方回退 maker/checker(干净重来)。
+            endTaskThreadRun(recordID: rid, notifyWhenHidden: false)
             agentSubTaskRecords[subID] = nil
             dispatchedTaskBubbles[rid] = nil
             taskExecutionRecords.removeAll { $0.id == rid }; persistTaskExecutionRecords()

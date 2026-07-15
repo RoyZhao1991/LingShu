@@ -73,6 +73,30 @@ final class ArchitectureGuardTests: XCTestCase {
         }
     }
 
+    func testGoalSpecGenerationNeverBranchesOnModelOrProviderIdentity() throws {
+        let files = [
+            "Sources/State/LingShuState+GoalSpec.swift",
+            "Sources/State/LingShuState+GoalSpecGeneration.swift",
+            "Sources/State/LingShuState+GoalSpecHistoryResolution.swift",
+            "Sources/Support/LingShuGoalSpecGenerationPolicy.swift"
+        ]
+        let forbiddenPatterns = [
+            #"\b(if|guard|while)\b[^\{\n]{0,320}\b(modelName|modelProvider)\b"#,
+            #"\bswitch\s+(self\.)?(modelName|modelProvider)\b"#,
+            #"\b(modelName|modelProvider)\s*\.\s*(lowercased|uppercased|contains|hasPrefix|hasSuffix)\b"#
+        ]
+
+        for relativePath in files {
+            let source = try readText(relativePath)
+            for pattern in forbiddenPatterns {
+                XCTAssertNil(
+                    source.range(of: pattern, options: .regularExpression),
+                    "\(relativePath) must negotiate GoalSpec behavior by protocol/capability response, never by model or provider identity"
+                )
+            }
+        }
+    }
+
     func testVoiceServiceFilesStayBelowHardSplitThreshold() throws {
         let voiceFiles = try swiftFiles(under: "Sources/Services/Voice")
             + [projectRoot.appendingPathComponent("Sources/Services/VoiceIOManager.swift")]

@@ -16,10 +16,10 @@ struct LingShuTaskPoolView: View {
         (includeArchived ? hot + cold : hot).sorted { $0.updatedAt > $1.updatedAt }
     }
     private var ongoing: [LingShuTaskExecutionRecord] {
-        pool.filter { [.queued, .running, .dispatched, .needsRevision, .blocked].contains($0.status) }
+        pool.filter { !$0.status.isSuccessfulCompletion }
     }
     private var done: [LingShuTaskExecutionRecord] {
-        pool.filter { [.completed, .answered].contains($0.status) }
+        pool.filter { $0.status.isSuccessfulCompletion }
     }
 
     var body: some View {
@@ -30,7 +30,7 @@ struct LingShuTaskPoolView: View {
                     if pool.isEmpty {
                         emptyState
                     } else {
-                        if !ongoing.isEmpty { section("进行中 / 待办", ongoing) }
+                        if !ongoing.isEmpty { section("进行中 / 待处理", ongoing) }
                         if !done.isEmpty { section("已完成", done) }
                     }
                 }
@@ -86,9 +86,19 @@ struct LingShuTaskPoolView: View {
             state.openTaskRecord(record.id)
         } label: {
             HStack(spacing: 12) {
-                Circle()
-                    .fill(statusColor(record.status))
-                    .frame(width: 8, height: 8)
+                ZStack(alignment: .topTrailing) {
+                    Circle()
+                        .fill(statusColor(record.status))
+                        .frame(width: 8, height: 8)
+                    if state.isTaskThreadUnread(record.id) {
+                        Circle()
+                            .fill(Color.red.opacity(0.94))
+                            .frame(width: 6, height: 6)
+                            .overlay(Circle().stroke(Color.lingVoid, lineWidth: 1))
+                            .offset(x: 4, y: -4)
+                    }
+                }
+                .frame(width: 12, height: 12)
                 VStack(alignment: .leading, spacing: 3) {
                     Text(record.title)
                         .font(.system(size: 13.5, weight: .medium))

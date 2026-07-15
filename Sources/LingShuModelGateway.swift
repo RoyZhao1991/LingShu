@@ -286,7 +286,8 @@ struct LingShuModelGateway {
         }
         for t in tools {
             chars += t.name.count + t.description.count
-            chars += t.properties.reduce(0) { $0 + $1.name.count + $1.description.count }
+            chars += t.parametersJSON?.count
+                ?? t.properties.reduce(0) { $0 + $1.name.count + $1.description.count }
         }
         return chars
     }
@@ -325,10 +326,8 @@ struct LingShuModelGateway {
         // tools:OpenAI schema → Anthropic `input_schema`;最后一个工具打缓存断点（工具集大且跨轮稳定，缓存它最省）。
         if !tools.isEmpty {
             var toolObjs = tools.map { td -> [String: Any] in
-                var props: [String: Any] = [:]
-                for p in td.properties { props[p.name] = ["type": p.type, "description": p.description] }
                 return ["name": td.name, "description": td.description,
-                        "input_schema": ["type": "object", "properties": props, "required": td.required]]
+                        "input_schema": td.parameterSchemaObject()]
             }
             if explicit { toolObjs[toolObjs.count - 1]["cache_control"] = LingShuPrefixCache.anthropicCacheControl }
             payload["tools"] = toolObjs

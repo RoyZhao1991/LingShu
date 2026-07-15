@@ -10,10 +10,14 @@ extension LingShuState {
                 .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
                 .filter { !$0.isEmpty }
                 .joined(separator: " ")
-            if !detail.isEmpty { return detail }
+            if !detail.isEmpty {
+                return LingShuAgentFailureDiagnosis.sanitizedEvidence(detail, maxLength: 600)
+            }
         }
         return (gap?.blockingGaps.filter { Self.isActionableUserGap($0) } ?? [])
-            .map { Self.humanizeGapAsk($0) }.joined(separator: ";")
+            .map { Self.humanizeGapAsk($0) }
+            .map { LingShuAgentFailureDiagnosis.sanitizedEvidence($0, maxLength: 240) }
+            .joined(separator: ";")
     }
 
     /// 判断一个「需要用户」缺口是否真是可执行边界。

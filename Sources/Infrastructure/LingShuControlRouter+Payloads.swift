@@ -76,7 +76,8 @@ extension LingShuControlRouter {
             "chatCount": state.chatMessages.count,
             "taskRecordCount": state.taskExecutionRecords.count,
             "queuedDispatchCount": state.queuedDispatchTasks.count,   // 信息池(可见任务队列)等待条数——任务线串行的可见溢出
-            "activeDispatchedCount": state.dispatchedTaskBubbles.count,   // 当前在跑/在途的派发任务气泡数
+            "activeDispatchedCount": state.activeTaskThreadRecordIDs.count,   // 当前在跑/在途的子线程数(与主对话气泡解耦)
+            "unreadTaskThreadCount": state.unreadTaskThreadRecordIDs.count,
             "pendingChatTurnCount": state.pendingChatTurnIDs.count,   // 问答线已排队的问答数(等待中可删)
             "globalTaskThreadLedger": state.globalTaskThreadLedgerPayload(limit: 10),
             "recentTaskRecords": state.taskExecutionRecords.prefix(8).map { record in

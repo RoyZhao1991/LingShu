@@ -14,6 +14,7 @@ final class EmbodimentManifestTests: XCTestCase {
     private func mixedTools() -> [LingShuAgentTool] {
         [
             tool("screen_capture", "截屏看屏"),
+            tool("computer_get_state", "读取应用状态"),
             tool("browser_eval", "网页执行JS", schema: "{\"type\":\"object\",\"properties\":{\"js\":{\"type\":\"string\"}},\"required\":[\"js\"]}"),
             tool("speak", "念出"),
             tool("peripherals", "外设列表"),
@@ -31,7 +32,7 @@ final class EmbodimentManifestTests: XCTestCase {
     func testFilterKeepsOnlyEmbodied() {
         let body = LingShuEmbodimentManifest.filter(mixedTools())
         let names = Set(body.map(\.name))
-        XCTAssertEqual(names, ["screen_capture", "browser_eval", "speak", "peripherals"])
+        XCTAssertEqual(names, ["screen_capture", "computer_get_state", "browser_eval", "speak", "peripherals"])
         XCTAssertFalse(names.contains("read_file"))
         XCTAssertFalse(names.contains("spawn_task"))
         XCTAssertFalse(names.contains("ask_user"))
@@ -39,7 +40,7 @@ final class EmbodimentManifestTests: XCTestCase {
 
     func testDescriptorsWellFormed() {
         let descs = LingShuEmbodimentManifest.descriptors(from: mixedTools())
-        XCTAssertEqual(descs.count, 4)
+        XCTAssertEqual(descs.count, 5)
         guard let evalDesc = descs.first(where: { ($0["name"] as? String) == "browser_eval" }) else {
             return XCTFail("应含 browser_eval 描述符")
         }

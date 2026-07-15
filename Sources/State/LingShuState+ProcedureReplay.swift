@@ -1,7 +1,7 @@
 import Foundation
 
 /// **Record & Replay — replay 执行器(③)**:用户「用某技能 + 新参数」→ 确定性匹配技能、抽参,
-/// 把步骤里的 {{参数}} 填好,再用**计算机控制四肢**(screen_capture/list_ui_elements/click/type_text…)**按意图逐步执行**
+/// 把步骤里的 {{参数}} 填好,再用**原生 Computer Use**按应用快照和元素索引逐步执行
 /// (找元素不靠坐标,UI 改版也能干)。碰钱/不可逆先停下问。限时,绝不无限挂。
 @MainActor
 extension LingShuState {
@@ -18,7 +18,7 @@ extension LingShuState {
         let appLine = skill.appHint.map { "主要在「\($0)」里操作。" } ?? ""
         let objective = """
         你现在用计算机控制四肢,**严格按下面步骤逐步操作一个已学会的技能**(不是写代码,是真在界面上点/填)。\(appLine)
-        每一步的可靠做法:**优先用 `list_ui_elements` 直接拿到元素和它的中心坐标**(它会给「按钮'提交' @ (640,480)」这种,比截图猜坐标可靠得多),按意图认出要操作的那个,**直接 click 它的中心 / type_text 输入**。`list_ui_elements` 列不到再 screen_capture 看屏。**别反复截屏不动手——看清一次就动手点/键入,推进下一步。**
+        每一步的可靠做法:先 `computer_list_apps` 定位目标应用,再 `computer_get_state` 获取 snapshot_id 和元素 #index,用 `computer_click_element` / `computer_set_text` / `computer_press_key` / `computer_scroll_element` 操作。**每次动作后必须使用返回的新快照继续,并检查回读验证,不要把“已发出”当成成功。**只有目标应用不暴露辅助功能元素时才退回 screen_capture + 坐标工具。别反复观察不动手——看清后就推进下一步。
         **安全红线**:碰到要花钱、提交订单/付款、删除、发送对外消息、任何不可逆动作,**先停下用 ask_user 跟我确认再做**,绝不擅自提交。
         每步操作前用一句话说你在做什么。全部做完,简短回一句结果(成功/卡在哪)。
 

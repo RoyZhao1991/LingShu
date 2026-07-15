@@ -30,11 +30,25 @@ struct LingShuRouteChoicePrompt: Codable, Equatable, Sendable {
     var question: String
     var options: [LingShuRouteChoiceOption]
 
-    /// 过滤掉空标签，至少要有 2 个有效选项才算合法选择卡片。
+    /// 过滤空标签并统一脱敏，至少要有 2 个有效选项才算合法选择卡片。
     var sanitized: LingShuRouteChoicePrompt? {
-        let valid = options.filter { !$0.label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        let safeQuestion = LingShuAgentFailureDiagnosis
+            .sanitizedEvidence(question, maxLength: 800)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let valid = options.compactMap { option -> LingShuRouteChoiceOption? in
+            let label = LingShuAgentFailureDiagnosis
+                .sanitizedEvidence(option.label, maxLength: 120)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !label.isEmpty else { return nil }
+            let detail = option.detail.map {
+                LingShuAgentFailureDiagnosis
+                    .sanitizedEvidence($0, maxLength: 260)
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+            return .init(label: label, detail: detail, action: option.action)
+        }
         guard valid.count >= 2 else { return nil }
-        return LingShuRouteChoicePrompt(question: question, options: valid)
+        return LingShuRouteChoicePrompt(question: safeQuestion, options: valid)
     }
 }
 

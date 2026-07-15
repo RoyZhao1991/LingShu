@@ -98,6 +98,8 @@ final class LingShuState: ObservableObject {
     var executionElapsedSeconds = 0
     var modelHeartbeatIdleSeconds = 0
     @Published var modelHeartbeatSource = "待机"
+    /// 首次启动/凭据失效时的主脑接入状态；只在真实不可用时驱动首配引导。
+    @Published var brainSetupPhase: LingShuBrainSetupPhase = .unchecked
     @Published var mainMemoryStatus = "热记忆待检索"
     @Published var coldMemoryStatus = "冷备待检索"
     @Published var mainThreadSessionStatus = "主线程初始化中"
@@ -254,6 +256,11 @@ final class LingShuState: ObservableObject {
     @Published var activeTaskThread: LingShuTaskThread?
     @Published var taskThreads: [LingShuTaskThread] = []
     @Published var taskExecutionRecords: [LingShuTaskExecutionRecord] = []
+    /// 子线程自己的运行投影。它不代表主会话模型是否在飞，也不承载聊天气泡；
+    /// 主线程与子线程可同时运行，界面分别读取各自状态。
+    @Published var activeTaskThreadRecordIDs: Set<String> = []
+    /// 已产生新结果、但用户尚未打开查看的子线程记录。
+    @Published var unreadTaskThreadRecordIDs: Set<String> = []
     @Published var selectedTaskRecordID: String?
     @Published var isTaskRecordPresented = false
     /// 任务窗口的用户反馈:recordID → 👍true/👎false(持久 UserDefaults)。👎 的任务不进 dreaming 固化样本。
@@ -657,6 +664,8 @@ final class LingShuState: ObservableObject {
     var livePerceptionContextProvider: (() -> String)?
     /// 对话发生时按需刷新云端场景理解（根视图注册到感知网关）。
     var perceptionSceneRefreshTrigger: (() -> Void)?
+    /// 测试/诊断注入点。生产环境为 nil 时，暂停说明统一交给当前启用主脑生成。
+    var prerequisitePauseReplyComposerOverride: ((LingShuPrerequisitePauseReplyContext) async -> String?)?
 
     init() {
         chatStore.onMessagesChanged = { [weak self] messages in
@@ -737,6 +746,7 @@ final class LingShuState: ObservableObject {
         if !rolePipelineOrphans.isEmpty { resumeOrphanedRolePipelinesOnLaunch(rolePipelineOrphans) }
         taskRecordFeedback = (UserDefaults.standard.dictionary(forKey: "lingshu.taskFeedback") as? [String: Bool]) ?? [:]
         archivedTaskExecutionRecords = taskExecutionJournal.loadArchivedRecords()
+        restoreUnreadTaskThreadRecordIDs()
         let repairedExperience = reconcileExperienceArtifactsFromRecords()
         if repairedExperience.goalExperiencesAdded > 0 || repairedExperience.rulesAdded > 0 {
             appendTrace(
@@ -1819,7 +1829,7 @@ final class LingShuState: ObservableObject {
                 // dispatchedTaskBubbles 派发时同步置、收尾时同步清(见 Triage),正是无竞态的活跃派发计数。capacity 是常量,先读不影响。
                 let cap = await self.agentOrchestrator.capacity()
                 self.pruneInactiveDispatchedTaskBubbles()
-                let active = self.dispatchedTaskBubbles.count + self.queuedDispatchTasks.count
+                let active = self.activeTaskThreadRecordIDs.count + self.queuedDispatchTasks.count
                 if Self.shouldQueueDispatch(running: active, capacity: cap) {
                     self.enqueueDispatchTask(prompt: trimmedPrompt, visiblePrompt: userFacingPrompt,
                                              goal: triage.goal, goalSpec: goalSpec, gap: gap,
