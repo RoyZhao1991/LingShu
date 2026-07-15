@@ -14,7 +14,7 @@
     <img alt="Swift 6" src="https://img.shields.io/badge/Swift-6-F05138?logo=swift&logoColor=white">
     <img alt="Apache-2.0" src="https://img.shields.io/badge/license-Apache--2.0-2C8C7F">
     <img alt="Project status: alpha" src="https://img.shields.io/badge/status-alpha-E9A23B">
-    <img alt="1,525 discovered tests" src="https://img.shields.io/badge/tests-1%2C525%20discovered-2C8C7F">
+    <img alt="1,526 discovered tests" src="https://img.shields.io/badge/tests-1%2C526%20discovered-2C8C7F">
     <a href="https://github.com/RoyZhao1991/LingShu/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/RoyZhao1991/LingShu/actions/workflows/ci.yml/badge.svg"></a>
   </p>
 </div>
@@ -130,7 +130,7 @@ LingShu is usable for development and controlled local workflows, but it is not 
 | HAL virtual microphone | Experimental; device appearance is not yet stable |
 | Signed and notarized public release | Release pipeline exists; first public release pending |
 
-The repository currently contains more than 100,000 lines of source and test code, 185 Swift test files, and 1,525 tests discovered by SwiftPM. These numbers describe engineering depth, not a guarantee that every environment-dependent test passes on every Mac.
+The repository currently contains more than 100,000 lines of source and test code, 185 Swift test files, and 1,526 tests discovered by SwiftPM. These numbers describe engineering depth, not a guarantee that every environment-dependent test passes on every Mac.
 
 ## Development
 

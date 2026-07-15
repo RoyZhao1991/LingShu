@@ -68,7 +68,7 @@ These candidates create concrete contribution paths before the repository become
 
 **Labels:** `enhancement`, `help wanted`
 
-### 5. Split CI into fast pull-request checks and the complete 1,525-test suite
+### 5. Split CI into fast pull-request checks and the complete 1,526-test suite
 
 **Goal:** Keep pull-request feedback fast while preserving the complete suite as a mandatory main-branch, scheduled, or manually triggered verification path.
 
@@ -79,7 +79,7 @@ These candidates create concrete contribution paths before the repository become
 - Neither lane silently converts failures into skips or success.
 - CI documentation explains when each lane runs.
 
-**中文摘要：**拆分 PR 快速门和完整测试门；快速门覆盖关键内核，完整门保留全部 1,525 项测试，任何失败都不能静默跳过。
+**中文摘要：**拆分 PR 快速门和完整测试门；快速门覆盖关键内核，完整门保留全部 1,526 项测试，任何失败都不能静默跳过。
 
 **Labels:** `enhancement`, `help wanted`
 

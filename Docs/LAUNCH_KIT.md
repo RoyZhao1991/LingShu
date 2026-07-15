@@ -68,7 +68,7 @@ Body:
 >
 > This is an alpha, not a claim of hands-off autonomy. It can operate files and authorized apps, so the release documents its permission and provider boundaries and asks users to review high-impact actions.
 >
-> The repository includes the app, 1,525 tests, architecture notes, a signed and notarized Universal DMG, and a set of scoped starter issues. I would especially value reproducible feedback on first-run setup, model compatibility, macOS permissions, and task verification.
+> The repository includes the app, 1,526 tests, architecture notes, a signed and notarized Universal DMG, and a set of scoped starter issues. I would especially value reproducible feedback on first-run setup, model compatibility, macOS permissions, and task verification.
 >
 > Repository: https://github.com/RoyZhao1991/LingShu
 
@@ -92,7 +92,7 @@ Body:
 >
 > 这仍是 Alpha，不是“完全无人值守”的宣传。灵枢能够操作文件和已授权应用，因此仓库明确写出了权限、远程模型和高影响操作边界，并要求用户检查关键动作与交付结果。
 >
-> 首个版本提供源码、架构文档、1,525 项测试、签名公证的 Universal DMG，以及一批可以直接参与的 Issue。我最希望收到的是可复现反馈：首次配置是否顺畅、不同模型是否兼容、macOS 权限是否清晰、验收机制是否真的减少了“嘴上完成”。
+> 首个版本提供源码、架构文档、1,526 项测试、签名公证的 Universal DMG，以及一批可以直接参与的 Issue。我最希望收到的是可复现反馈：首次配置是否顺畅、不同模型是否兼容、macOS 权限是否清晰、验收机制是否真的减少了“嘴上完成”。
 >
 > 项目地址：https://github.com/RoyZhao1991/LingShu
 

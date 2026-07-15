@@ -14,7 +14,7 @@
     <img alt="Swift 6" src="https://img.shields.io/badge/Swift-6-F05138?logo=swift&logoColor=white">
     <img alt="Apache-2.0" src="https://img.shields.io/badge/license-Apache--2.0-2C8C7F">
     <img alt="项目阶段 Alpha" src="https://img.shields.io/badge/status-alpha-E9A23B">
-    <img alt="发现 1,525 项测试" src="https://img.shields.io/badge/tests-1%2C525%20discovered-2C8C7F">
+    <img alt="发现 1,526 项测试" src="https://img.shields.io/badge/tests-1%2C526%20discovered-2C8C7F">
     <a href="https://github.com/RoyZhao1991/LingShu/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/RoyZhao1991/LingShu/actions/workflows/ci.yml/badge.svg"></a>
   </p>
 </div>
@@ -130,7 +130,7 @@ API 凭据只属于本地运行配置，禁止提交到仓库。详见[运行配
 | HAL 虚拟麦克风 | 实验性；设备出现仍不稳定 |
 | 官网签名与公证发布 | 发布脚本已具备；首个公开 Release 待发布 |
 
-仓库当前包含超过 10 万行源码与测试代码、185 个 Swift 测试文件，以及 SwiftPM 发现的 1,525 项测试。这些数字用于说明工程深度，并不等于所有依赖外部环境的测试都能在每一台 Mac 上通过。
+仓库当前包含超过 10 万行源码与测试代码、185 个 Swift 测试文件，以及 SwiftPM 发现的 1,526 项测试。这些数字用于说明工程深度，并不等于所有依赖外部环境的测试都能在每一台 Mac 上通过。
 
 ## 开发与测试
 
