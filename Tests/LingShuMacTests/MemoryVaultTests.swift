@@ -4,13 +4,9 @@ import XCTest
 /// Vault 磁盘 IO + 门面(LingShuKnowledgeGraph)活体测试:存盘/加载/归档/跨实例持久/召回/并入/维护。
 @MainActor
 final class MemoryVaultTests: XCTestCase {
-    private var root: URL!
+    private let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("lingshu-vault-test-\(UUID().uuidString)", isDirectory: true)
 
-    override func setUp() {
-        super.setUp()
-        root = FileManager.default.temporaryDirectory
-            .appendingPathComponent("lingshu-vault-test-\(UUID().uuidString)", isDirectory: true)
-    }
     override func tearDown() {
         try? FileManager.default.removeItem(at: root)
         super.tearDown()

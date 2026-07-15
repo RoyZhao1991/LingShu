@@ -214,7 +214,7 @@ struct LingShuWorkspaceDiffView: View {
     }
 
     /// 解析 unified diff 文本为可渲染行(纯函数,可测)。
-    static func parseDiff(_ raw: String) -> [LingShuDiffLine] {
+    nonisolated static func parseDiff(_ raw: String) -> [LingShuDiffLine] {
         var out: [LingShuDiffLine] = []
         for line in raw.components(separatedBy: "\n") {
             if line.isEmpty { continue }   // 空行=尾随换行/非 hunk 空白的切分残渣;hunk 内空行是 " "(空格前缀)不受影响
