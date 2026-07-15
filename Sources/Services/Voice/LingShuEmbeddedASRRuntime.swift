@@ -90,8 +90,15 @@ enum LingShuEmbeddedASRRuntimeLocator {
             roots.append(lingShuSupport.appendingPathComponent("ASR/SenseVoice", isDirectory: true))
         }
 
-        roots.append(URL(fileURLWithPath: "/Users/example/app/LingShuMac/Models/SenseVoice", isDirectory: true))
-        roots.append(URL(fileURLWithPath: "/Users/example/app/LingShuMac/Models/sensevoice-sherpa-onnx", isDirectory: true))
+        let sourceRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        for root in [URL(fileURLWithPath: fileManager.currentDirectoryPath, isDirectory: true), sourceRoot] {
+            roots.append(root.appendingPathComponent("Models/SenseVoice", isDirectory: true))
+            roots.append(root.appendingPathComponent("Models/sensevoice-sherpa-onnx", isDirectory: true))
+        }
 
         return roots
     }
@@ -215,4 +222,3 @@ enum LingShuEmbeddedASRRuntimeLocator {
         return "把 sherpa-onnx macOS runtime 和 SenseVoice ONNX 模型放入 \(rootPath)。"
     }
 }
-

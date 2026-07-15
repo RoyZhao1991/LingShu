@@ -15,7 +15,17 @@ enum LingShuDesignKB {
         if let resourceURL = bundle.resourceURL {
             roots.append(resourceURL.appendingPathComponent(directoryName, isDirectory: true))
         }
-        roots.append(URL(fileURLWithPath: "/Users/example/app/LingShuMac/Resources/\(directoryName)", isDirectory: true))
+        roots.append(
+            URL(fileURLWithPath: fileManager.currentDirectoryPath, isDirectory: true)
+                .appendingPathComponent("Resources/\(directoryName)", isDirectory: true)
+        )
+        roots.append(
+            URL(fileURLWithPath: #filePath)
+                .deletingLastPathComponent()
+                .deletingLastPathComponent()
+                .deletingLastPathComponent()
+                .appendingPathComponent("Resources/\(directoryName)", isDirectory: true)
+        )
         return roots.first { fileManager.fileExists(atPath: $0.path) }
     }
 

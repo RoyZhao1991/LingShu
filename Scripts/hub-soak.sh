@@ -20,7 +20,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PORT="${LINGSHU_MCP_PORT:-8917}"
 MINUTES="${LINGSHU_HUB_SOAK_MINUTES:-300}"
 CYCLES="${LINGSHU_HUB_SOAK_CYCLES:-100000}"
-PROBE_DIR="/Users/example/app/.lingshu-hub-soak-$(date +%s)"
+PROBE_DIR="$(mktemp -d "${TMPDIR:-/tmp}/lingshu-hub-soak.XXXXXX")"
 SUP="$HOME/Library/Application Support/LingShu"
 SNAP="/tmp/lingshu-hub-soak-snap-$(date +%s)"
 

@@ -196,12 +196,16 @@ final class LingShuEventKitSensorySource: NSObject, LingShuExternalSensorySource
     /// 把日期格式化成简短自然语言（如"今天 14:30"/"明天 09:00"/"6/20 10:00"）。
     nonisolated static func dueDescription(_ date: Date, now: Date = Date(), calendar: Calendar = .current) -> String {
         let timeFormatter = DateFormatter()
+        timeFormatter.calendar = calendar
+        timeFormatter.timeZone = calendar.timeZone
         timeFormatter.dateFormat = "HH:mm"
         let time = timeFormatter.string(from: date)
         if calendar.isDate(date, inSameDayAs: now) { return "今天 \(time)" }
         if let tomorrow = calendar.date(byAdding: .day, value: 1, to: now),
            calendar.isDate(date, inSameDayAs: tomorrow) { return "明天 \(time)" }
         let dayFormatter = DateFormatter()
+        dayFormatter.calendar = calendar
+        dayFormatter.timeZone = calendar.timeZone
         dayFormatter.dateFormat = "M/d HH:mm"
         return dayFormatter.string(from: date)
     }

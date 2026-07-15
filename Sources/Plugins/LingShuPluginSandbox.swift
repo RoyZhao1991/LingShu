@@ -15,7 +15,8 @@ enum LingShuPluginSandbox {
             "(allow process-exec)",
             "(allow sysctl-read)",
             "(allow mach-lookup)",
-            "(allow file-read*)"          // 读放宽:跑解释器/加载库/读输入都要
+            "(allow file-read*)",         // 读放宽:跑解释器/加载库/读输入都要
+            "(allow file-write* (literal \"/dev/null\"))"
         ]
         if permissions.fileWrite.contains("*") {
             lines.append("(allow file-write*)")

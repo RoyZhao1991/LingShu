@@ -92,8 +92,15 @@ enum LingShuEmbeddedTTSRuntimeLocator {
             roots.append(lingShuSupport.appendingPathComponent("TTS/SherpaONNX", isDirectory: true))
         }
 
-        roots.append(URL(fileURLWithPath: "/Users/example/app/LingShuMac/Models/SpeechOutput", isDirectory: true))
-        roots.append(URL(fileURLWithPath: "/Users/example/app/LingShuMac/Models/sherpa-onnx-tts", isDirectory: true))
+        let sourceRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        for root in [URL(fileURLWithPath: fileManager.currentDirectoryPath, isDirectory: true), sourceRoot] {
+            roots.append(root.appendingPathComponent("Models/SpeechOutput", isDirectory: true))
+            roots.append(root.appendingPathComponent("Models/sherpa-onnx-tts", isDirectory: true))
+        }
 
         return roots
     }
@@ -231,4 +238,3 @@ enum LingShuEmbeddedTTSRuntimeLocator {
         return "把 sherpa-onnx TTS runtime 和中文 VITS 模型放入 \(rootPath)。"
     }
 }
-

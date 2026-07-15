@@ -22,7 +22,7 @@ CYCLES="${JARVIS_SOAK_CYCLES:-100000}"
 RESTART="${JARVIS_SOAK_RESTART:-1}"
 SUP="$HOME/Library/Application Support/LingShu"
 SNAP="/tmp/lingshu-jarvis-snap-$(date +%s)"
-PROBE="/Users/example/app/.lingshu-jarvis-soak-$(date +%s)"
+PROBE="$(mktemp -d "${TMPDIR:-/tmp}/lingshu-jarvis-soak.XXXXXX")"
 
 snapshot() {
   mkdir -p "$SNAP" "$PROBE"

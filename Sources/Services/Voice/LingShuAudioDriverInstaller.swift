@@ -44,8 +44,18 @@ enum LingShuAudioDriverInstaller {
         if let res = Bundle.main.resourceURL?.appendingPathComponent(driverBundleName).path,
            FileManager.default.fileExists(atPath: res) { return res }
         // 开发期回退:源码树编译产物。
-        let dev = "/Users/example/app/LingShuMac/Drivers/LingShuAudioDriver/build/" + driverBundleName
-        return FileManager.default.fileExists(atPath: dev) ? dev : nil
+        let sourceRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let roots = [
+            URL(fileURLWithPath: FileManager.default.currentDirectoryPath, isDirectory: true),
+            sourceRoot
+        ]
+        return roots
+            .map { $0.appendingPathComponent("Drivers/LingShuAudioDriver/build/\(driverBundleName)").path }
+            .first { FileManager.default.fileExists(atPath: $0) }
     }
 
     /// 没装(或已装但与随包驱动不一致,如签名升级)就装(一次管理员授权);**主线程外调用**(会弹系统授权框、可能阻塞)。

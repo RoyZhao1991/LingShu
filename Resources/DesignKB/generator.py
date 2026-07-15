@@ -451,7 +451,7 @@ def L_compare(s, d, **k):
             cell.margin_top = cell.margin_bottom = Inches(0.02)
 
 def _clean_contact(c):
-    """收尾页联系信息防泄露:绝不渲染绝对文件路径/工作目录(曾把 /Users/example/app 当 contact 印上去)。"""
+    """收尾页联系信息防泄露:绝不渲染绝对文件路径/工作目录(例如 /Users/example/workspace)。"""
     c = str(c or '').strip()
     if not c:
         return ''

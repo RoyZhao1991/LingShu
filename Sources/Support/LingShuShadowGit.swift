@@ -116,7 +116,7 @@ enum LingShuShadowGit {
     }
 
     /// 若目标目录隶属某 git 仓库,让影子对象库 alternates 指向真仓库 objects:**已提交内容不重复存**——
-    /// 大目录基线从"重存全树/十几秒"降到"秒级/几百KB"(实测 `/Users/example/app`:13.3s/310MB → 2.6s/420KB)。
+    /// 大目录基线从"重存全树/十几秒"降到"秒级/几百KB"(实测大型工作区:13.3s/310MB → 2.6s/420KB)。
     /// 纯**只读复用**真仓库对象,绝不写真仓库(影子的新对象进影子自己的库),零污染。目标不在仓库则跳过、影子自存。
     private static func setupAlternates(shadow: String, workDir: String) {
         let r = exec(["-C", workDir, "rev-parse", "--absolute-git-dir"])

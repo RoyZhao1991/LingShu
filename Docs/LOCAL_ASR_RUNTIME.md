@@ -14,7 +14,7 @@ The app searches these roots:
 
 - `LingShu.app/Contents/Resources/Models/SenseVoice`
 - `~/Library/Application Support/LingShu/Models/SenseVoice`
-- `/Users/example/app/LingShuMac/Models/SenseVoice`
+- `<repository-root>/Models/SenseVoice`
 
 Required files:
 
@@ -73,7 +73,7 @@ Previous local roots:
 
 - `LingShu.app/Contents/Resources/Models/SpeechOutput`
 - `~/Library/Application Support/LingShu/Models/SpeechOutput`
-- `/Users/example/app/LingShuMac/Models/SpeechOutput`
+- `<repository-root>/Models/SpeechOutput`
 
 Retired development layout:
 

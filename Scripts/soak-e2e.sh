@@ -15,7 +15,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PORT="${LINGSHU_MCP_PORT:-8917}"
 TASKS="${LINGSHU_SOAK_TASKS:-60}"
 MINUTES="${LINGSHU_SOAK_MINUTES:-300}"
-PROBE_DIR="/Users/example/app/.lingshu-soak-$(date +%s)"
+PROBE_DIR="$(mktemp -d "${TMPDIR:-/tmp}/lingshu-soak.XXXXXX")"
 cleanup() { rm -rf "$PROBE_DIR" 2>/dev/null; }
 trap cleanup EXIT
 

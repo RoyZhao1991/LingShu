@@ -41,7 +41,17 @@ struct LingShuBundledRuntimeConfig {
             roots.append(resourceURL.appendingPathComponent(Self.directoryName, isDirectory: true))
         }
         roots.append(contentsOf: extraRoots)
-        roots.append(URL(fileURLWithPath: "/Users/example/app/LingShuMac/Resources/\(Self.directoryName)", isDirectory: true))
+        roots.append(
+            URL(fileURLWithPath: fileManager.currentDirectoryPath, isDirectory: true)
+                .appendingPathComponent("Resources/\(Self.directoryName)", isDirectory: true)
+        )
+        roots.append(
+            URL(fileURLWithPath: #filePath)
+                .deletingLastPathComponent()
+                .deletingLastPathComponent()
+                .deletingLastPathComponent()
+                .appendingPathComponent("Resources/\(Self.directoryName)", isDirectory: true)
+        )
 
         var seen: Set<String> = []
         return roots.filter { root in
