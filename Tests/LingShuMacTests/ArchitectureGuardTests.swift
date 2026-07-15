@@ -232,13 +232,14 @@ final class ArchitectureGuardTests: XCTestCase {
 
     func testValidationArtifactsStayIgnoredAndUntracked() throws {
         let gitignore = try readText(".gitignore")
-        for pattern in [".lingshu-e2e-output/", "验收结果.*", "Resources/RuntimeConfig/*.token"] {
+        for pattern in ["ValidationArtifacts/", ".lingshu-e2e-output/", "验收结果.*", "Resources/RuntimeConfig/*.token"] {
             XCTAssertTrue(gitignore.contains(pattern), ".gitignore must keep local artifact/credential pattern: \(pattern)")
         }
 
         guard FileManager.default.isExecutableFile(atPath: "/usr/bin/git") else { throw XCTSkip("无 git") }
         let tracked = try gitOutput([
             "ls-files",
+            "ValidationArtifacts",
             ".lingshu-e2e-output",
             "验收结果.pdf",
             "验收结果.txt"

@@ -17,11 +17,7 @@ xcuserdata/
 .DS_Store
 
 # Test-generated validation artifacts
-ValidationArtifacts/artifact-manifest-*
-ValidationArtifacts/presentation-*
-ValidationArtifacts/crawler-*
-ValidationArtifacts/software-*
-ValidationArtifacts/document-local-*
+ValidationArtifacts/
 .lingshu-e2e-output/
 outputs/
 验收结果.*
