@@ -4,9 +4,9 @@
 
 ## 当前进度（2026-07-15）
 
-已完成：中英文首页、Apache-2.0、社区与安全文档、Issue/PR 模板、CI、仓库双语描述、12 个 Topics、贡献区域标签、当前文件与可达历史的高置信度密钥扫描，以及本机完整测试（1,525 项，0 失败，3 跳过）。
+已完成：中英文首页、真实界面截图、Apache-2.0、社区与安全文档、Issue/PR 模板、CI、仓库双语描述、12 个 Topics、贡献区域标签、GitHub Discussions、当前文件与可达历史的高置信度密钥扫描，以及本机完整测试（1,525 项，0 失败，3 跳过）。本机还已跑通 Universal DMG、Developer ID 签名、Apple 公证、票据装订与 SHA-256 校验，并建立了保持私有的首个草稿 Release。
 
-尚未完成：隐私安全的产品截图和演示视频、干净 Mac 安装验证、首个签名公证 Release、GitHub Discussions 与私密漏洞报告开关、仓库公开。仓库在这些闸门通过前继续保持私有。
+尚未完成：从最终绿色提交重建发布候选包、干净 Mac 安装验证、60-90 秒演示视频、补足 3-5 张公开素材、确认私密漏洞报告开关、更新并发布首个 Release，以及仓库公开。仓库在这些闸门通过前继续保持私有。
 
 ## 一、当前判断
 
@@ -19,12 +19,14 @@
 - [x] Git 历史通过密钥扫描，确认没有 API Token、Apple 凭据或私人文件。
 - [x] Apache-2.0、第三方声明、贡献指南、安全策略和行为准则齐备。
 - [x] README 中英文内容与当前代码一致，没有把实验能力写成稳定能力。
+- [x] README 使用隔离演示数据的真实产品截图，不含用户历史、凭据或私人文件。
+- [x] GitHub Discussions、双语描述、Topics、标签与贡献入口已配置。
 - [ ] 在一台干净 Mac 上按 README 从源码构建成功。
-- [ ] 产出 Universal DMG，完成 Developer ID 签名、Apple 公证和 SHA-256 校验。
+- [ ] 从最终绿色提交产出 Universal DMG，完成 Developer ID 签名、Apple 公证和 SHA-256 校验（同流程的 build 1 已在本机跑通）。
 - [ ] 用全新用户目录完成首次主脑配置和最小任务闭环。
 - [ ] 准备 60-90 秒真实演示视频和 3-5 张不含私人数据的产品截图。
-- [ ] 建立首个 Release、版本说明、已知限制和回滚下载入口。
-- [ ] 开启 GitHub Discussions、Private vulnerability reporting，并配置仓库描述和 Topics。
+- [ ] 更新首个草稿 Release 的最终安装包、版本说明、已知限制和回滚下载入口。
+- [ ] 确认 Private vulnerability reporting 已开启。
 
 ## 三、首发叙事
 
