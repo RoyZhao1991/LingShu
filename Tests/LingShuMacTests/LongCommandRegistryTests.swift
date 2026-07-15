@@ -8,7 +8,6 @@ final class LongCommandRegistryTests: XCTestCase {
     private var registry: LingShuLongCommandRegistry!
 
     override func setUp() async throws {
-        try await super.setUp()
         tempDir = FileManager.default.temporaryDirectory.appendingPathComponent("lingshu-longcmd-\(UUID().uuidString)", isDirectory: true)
         logDir = tempDir.appendingPathComponent("logs", isDirectory: true)
         try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
@@ -18,7 +17,6 @@ final class LongCommandRegistryTests: XCTestCase {
     override func tearDown() async throws {
         try? FileManager.default.removeItem(at: tempDir)
         registry = nil
-        try await super.tearDown()
     }
 
     func testLongCommandCompletesAndKeepsLogTail() async {
