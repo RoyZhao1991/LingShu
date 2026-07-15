@@ -1,69 +1,161 @@
-# 首批公开 Issue 候选
+# First Public Issues / 首批公开 Issue 候选
+
+These candidates create concrete contribution paths before the repository becomes public. Recheck the current code before opening an issue so completed work is not requested again.
 
 这些候选用于仓库公开前建立真实、可贡献的工作入口。创建 Issue 前应再次核对现状，不把已经完成的内容重复发布。
 
-## Good first issue
+## Good First Issues
 
 ### 1. Add an English troubleshooting page for first-run macOS permissions
 
-说明辅助功能、屏幕录制、麦克风、语音识别和摄像头权限的触发时机、失败表现与恢复方式。不得建议绕过系统权限。
+**Goal:** Document when Accessibility, Screen Recording, Microphone, Speech Recognition, and Camera permissions are requested, how a denied permission appears, and how to recover through macOS settings.
 
-标签：`documentation`, `good first issue`
+**Acceptance:**
+
+- Covers every permission currently requested by the app.
+- Links each permission to the capability that needs it.
+- Includes safe recovery steps without suggesting any permission bypass.
+- Uses screenshots or labels that match the current macOS version where practical.
+
+**中文摘要：**补充英文首次权限排障页，说明权限触发时机、失败表现和安全恢复方式，不得建议绕过系统权限。
+
+**Labels:** `documentation`, `good first issue`
 
 ### 2. Add a provider-neutral model configuration diagnostics export
 
-导出端点可达性、协议类型、模型名和脱敏错误，不得包含 Token。输出需同时适用于 OpenAI 兼容和 Anthropic Messages 通道。
+**Goal:** Export a small diagnostics report covering endpoint reachability, protocol family, selected model, capability state, and redacted errors for both OpenAI-compatible and Anthropic Messages channels.
 
-标签：`enhancement`, `good first issue`, `area: model-gateway`
+**Acceptance:**
+
+- Never exports API tokens, authorization headers, or unredacted request bodies.
+- Works without branching on a provider or model name.
+- Distinguishes connection, authentication, protocol, model, and capability failures.
+- Includes focused tests using synthetic credentials and offline fixtures.
+
+**中文摘要：**增加服务商无关的模型配置诊断导出，覆盖端点、协议、模型和脱敏错误，不能包含 Token，也不能按模型名称硬编码。
+
+**Labels:** `enhancement`, `good first issue`, `area: model-gateway`
 
 ### 3. Improve third-party notice discovery during release builds
 
-增加确定性检查，确保新增资源目录中的 LICENSE/NOTICE 被收集或明确审阅；缺失声明时让 Release 检查失败。
+**Goal:** Add a deterministic release check that identifies new bundled resource directories and requires their license or notice status to be explicitly reviewed.
 
-标签：`documentation`, `good first issue`
+**Acceptance:**
 
-## Help wanted
+- Fails with an actionable message when a bundled third-party resource lacks attribution.
+- Allows original project assets to be declared without pretending they are third-party packages.
+- Keeps the existing Lucide ISC/MIT notice intact.
+- Runs locally without network access.
+
+**中文摘要：**让发布检查确定性发现新增资源的 LICENSE/NOTICE 缺口；缺失归属时发布失败，且保留现有 Lucide 声明。
+
+**Labels:** `documentation`, `good first issue`
+
+## Help Wanted
 
 ### 4. Create a privacy-safe demo profile and screenshot capture workflow
 
-提供不读取真实聊天、任务、记忆或用户目录的演示数据模式，用于生成 README 截图和发布视频。演示数据必须明确标记为样例。
+**Goal:** Add a demo-data mode that can produce README screenshots and release videos without reading real chat, task, memory, account, or user-directory data.
 
-标签：`enhancement`, `help wanted`
+**Acceptance:**
+
+- Demo records are clearly marked as samples in the UI or fixture source.
+- Starting demo mode does not load existing user history.
+- Resetting demo mode removes only demo data.
+- The workflow documents how to verify screenshots before publication.
+
+**中文摘要：**提供隔离的演示数据模式和截图流程，不能读取真实聊天、任务、记忆、账户或用户目录数据。
+
+**Labels:** `enhancement`, `help wanted`
 
 ### 5. Split CI into fast pull-request checks and the complete 1,525-test suite
 
-快速门应覆盖架构守卫、模型协议、任务生命周期、权限与验收；全量套件在 main、定时或手动触发。两条路径都不能静默跳过失败。
+**Goal:** Keep pull-request feedback fast while preserving the complete suite as a mandatory main-branch, scheduled, or manually triggered verification path.
 
-标签：`enhancement`, `help wanted`
+**Acceptance:**
+
+- The fast lane covers architecture guards, model protocols, task lifecycle, permissions, and acceptance gates.
+- The complete lane discovers and executes the full SwiftPM suite.
+- Neither lane silently converts failures into skips or success.
+- CI documentation explains when each lane runs.
+
+**中文摘要：**拆分 PR 快速门和完整测试门；快速门覆盖关键内核，完整门保留全部 1,525 项测试，任何失败都不能静默跳过。
+
+**Labels:** `enhancement`, `help wanted`
 
 ### 6. Add clean-machine installation smoke automation
 
-验证从源码构建、首次启动、主脑引导、权限未授予状态和最小直答任务。不得依赖维护者个人目录或凭据。
+**Goal:** Automate a repeatable smoke path for source build, first launch, missing-brain onboarding, denied-permission behavior, and one minimal direct-answer task.
 
-标签：`enhancement`, `help wanted`
+**Acceptance:**
+
+- Does not depend on a maintainer path, account, or credential.
+- Separates offline checks from tests that require an explicitly supplied model token.
+- Cleans up temporary application data created by the smoke run.
+- Produces a concise failure report suitable for an issue attachment.
+
+**中文摘要：**增加干净环境安装冒烟，覆盖源码构建、首次启动、主脑引导、未授权状态和最小直答，不依赖维护者个人环境。
+
+**Labels:** `enhancement`, `help wanted`
 
 ### 7. Add protocol contract fixtures for model providers
 
-为 OpenAI Responses、Chat Completions、Anthropic Messages、流式、多模态尝试与降级建立脱网 fixture，禁止通过模型名称硬编码能力。
+**Goal:** Expand offline contract fixtures for OpenAI Responses, Chat Completions, Anthropic Messages, streaming, multimodal trial, and remembered capability fallback.
 
-标签：`enhancement`, `help wanted`, `area: model-gateway`
+**Acceptance:**
+
+- Uses recorded or synthetic protocol fixtures with no live secret.
+- Tests native multimodal trial before fallback and remembered unsupported capability state.
+- Never decides capability support from a model-name allowlist or denylist.
+- Covers malformed and partial streaming responses.
+
+**中文摘要：**为各协议、流式和多模态尝试/降级补充脱网契约测试，禁止按模型名称判断能力。
+
+**Labels:** `enhancement`, `help wanted`, `area: model-gateway`
 
 ### 8. Benchmark native Computer Use on a reproducible app set
 
-设计可公开复现的 Finder、TextEdit、Safari 或测试宿主场景，记录语义定位成功率、动作验证率、回退次数和延迟。
+**Goal:** Define a public benchmark across Finder, TextEdit, Safari, or a purpose-built test host and report semantic targeting success, action verification, fallback count, and latency.
 
-标签：`enhancement`, `help wanted`, `area: computer-use`
+**Acceptance:**
 
-## Maintainer-owned launch blockers
+- Uses tasks that another contributor can reproduce on a clean Mac.
+- Separates Accessibility-tree targeting from screen-based fallback.
+- Records failures and permission state instead of reporting only successful runs.
+- Publishes the benchmark environment and raw result schema.
+
+**中文摘要：**为原生 Computer Use 建立可复现基准，分别记录语义定位、动作验证、视觉回退、失败和延迟。
+
+**Labels:** `enhancement`, `help wanted`, `area: computer-use`
+
+## Maintainer-Owned Launch Blockers
 
 ### 9. Publish the first signed and notarized Universal DMG
 
-按发布脚本完成 Developer ID 签名、Apple 公证、DMG staple、SHA-256、安装与回滚验证。
+**Goal:** Produce the public website-distribution package from the final green commit.
 
-标签：`alpha feedback`
+**Acceptance:**
+
+- Developer ID signature validates for the app and DMG contents.
+- Apple notarization succeeds and the ticket is stapled.
+- SHA-256 checksum is published next to the DMG.
+- Installation and rollback are verified outside the development checkout.
+
+**中文摘要：**从最终绿色提交生成 Universal DMG，完成 Developer ID 签名、Apple 公证、票据装订、校验和及安装回滚验证。
+
+**Labels:** `alpha feedback`
 
 ### 10. Produce a 60-90 second end-to-end launch demo
 
-用一条真实、可复现、无私人数据的目标展示：配置主脑、生成 GoalSpec、调用工具或 Computer Use、登记产物、独立验收和最终预览。
+**Goal:** Record one real, reproducible, privacy-safe task from request to verified artifact.
 
-标签：`documentation`, `alpha feedback`
+**Acceptance:**
+
+- Shows brain setup only if no token or account data is visible.
+- Shows GoalSpec, execution or Computer Use, artifact registration, independent verification, and final preview.
+- Uses isolated demo data and contains no private notification, path, credential, or account detail.
+- Provides English and Chinese subtitles from the same source recording.
+
+**中文摘要：**用一条真实任务展示目标、执行、产物、独立验收和预览，使用隔离数据并提供中英文字幕。
+
+**Labels:** `documentation`, `alpha feedback`
