@@ -98,26 +98,45 @@ private struct MiniOrbSignalDots: View {
 
     var body: some View {
         GeometryReader { proxy in
-            let size = min(proxy.size.width, proxy.size.height)
-            let radius = size * 0.46
-            let center = CGPoint(x: proxy.size.width / 2, y: proxy.size.height / 2)
-
             ForEach(LingShuDigitalHumanSignal.allCases) { signal in
-                let index = LingShuDigitalHumanSignal.allCases.firstIndex(of: signal) ?? 0
-                let angle = Double(index) / Double(LingShuDigitalHumanSignal.allCases.count) * 2 * .pi - .pi / 2
-                let active = snapshot.signalIsActive(signal)
-
-                Circle()
-                    .fill(active ? snapshot.accent : Color.lingFg.opacity(0.18))
-                    .frame(width: active ? 4.5 : 3.2, height: active ? 4.5 : 3.2)
-                    .shadow(color: active ? snapshot.accent.opacity(0.8) : .clear, radius: 4)
-                    .position(
-                        x: center.x + CGFloat(cos(angle)) * radius,
-                        y: center.y + CGFloat(sin(angle)) * radius
-                    )
+                MiniOrbSignalDot(snapshot: snapshot, signal: signal, availableSize: proxy.size)
             }
         }
         .allowsHitTesting(false)
+    }
+}
+
+private struct MiniOrbSignalDot: View {
+    let snapshot: LingShuDigitalHumanSnapshot
+    let signal: LingShuDigitalHumanSignal
+    let availableSize: CGSize
+
+    private var isActive: Bool {
+        snapshot.signalIsActive(signal)
+    }
+
+    private var diameter: CGFloat {
+        isActive ? 4.5 : 3.2
+    }
+
+    private var dotPosition: CGPoint {
+        let signals = LingShuDigitalHumanSignal.allCases
+        let index = signals.firstIndex(of: signal) ?? 0
+        let angle = Double(index) / Double(signals.count) * 2 * .pi - .pi / 2
+        let radius = min(availableSize.width, availableSize.height) * 0.46
+        let center = CGPoint(x: availableSize.width / 2, y: availableSize.height / 2)
+        return CGPoint(
+            x: center.x + CGFloat(cos(angle)) * radius,
+            y: center.y + CGFloat(sin(angle)) * radius
+        )
+    }
+
+    var body: some View {
+        Circle()
+            .fill(isActive ? snapshot.accent : Color.lingFg.opacity(0.18))
+            .frame(width: diameter, height: diameter)
+            .shadow(color: isActive ? snapshot.accent.opacity(0.8) : .clear, radius: 4)
+            .position(dotPosition)
     }
 }
 
@@ -127,27 +146,48 @@ private struct MiniOrbAudioPulse: View {
 
     var body: some View {
         TimelineView(.animation(minimumInterval: 1.0 / 24.0)) { timeline in
-            Canvas { context, size in
-                let t = timeline.date.timeIntervalSinceReferenceDate
-                let center = CGPoint(x: size.width / 2, y: size.height / 2)
-                let radius = min(size.width, size.height) * 0.43
-                let lvl = min(max(level, 0), 1)
-                let amp = 0.05 + 0.16 * lvl   // 振幅随电平
-                let bars = 18
-
-                for index in 0..<bars {
-                    let angle = Double(index) / Double(bars) * 2 * .pi - .pi / 2
-                    let wave = 0.45 + 0.55 * abs(sin(t * 10 + Double(index) * 0.72))
-                    let inner = radius * (0.76 + 0.03 * wave)
-                    let outer = radius * (0.84 + amp * wave)
-                    var path = Path()
-                    path.move(to: CGPoint(x: center.x + cos(angle) * inner, y: center.y + sin(angle) * inner))
-                    path.addLine(to: CGPoint(x: center.x + cos(angle) * outer, y: center.y + sin(angle) * outer))
-                    context.stroke(path, with: .color(accent.opacity(0.18 + 0.5 * lvl * wave)), lineWidth: 1.1)
-                }
-            }
+            MiniOrbAudioPulseFrame(
+                accent: accent,
+                level: level,
+                time: timeline.date.timeIntervalSinceReferenceDate
+            )
         }
         .allowsHitTesting(false)
+    }
+}
+
+private struct MiniOrbAudioPulseFrame: View {
+    let accent: Color
+    let level: Double
+    let time: TimeInterval
+
+    var body: some View {
+        Canvas { context, size in
+            drawPulse(context, size: size)
+        }
+    }
+
+    private func drawPulse(_ context: GraphicsContext, size: CGSize) {
+        let center = CGPoint(x: size.width / 2, y: size.height / 2)
+        let radius = min(size.width, size.height) * 0.43
+        let normalizedLevel = min(max(level, 0), 1)
+        let amplitude = CGFloat(0.05 + 0.16 * normalizedLevel)
+        let barCount = 18
+
+        for index in 0..<barCount {
+            let angle = Double(index) / Double(barCount) * 2 * .pi - .pi / 2
+            let wave = 0.45 + 0.55 * abs(sin(time * 10 + Double(index) * 0.72))
+            let waveLength = CGFloat(wave)
+            let cosine = CGFloat(cos(angle))
+            let sine = CGFloat(sin(angle))
+            let inner = radius * (0.76 + 0.03 * waveLength)
+            let outer = radius * (0.84 + amplitude * waveLength)
+            let opacity = 0.18 + 0.5 * normalizedLevel * wave
+            var path = Path()
+            path.move(to: CGPoint(x: center.x + cosine * inner, y: center.y + sine * inner))
+            path.addLine(to: CGPoint(x: center.x + cosine * outer, y: center.y + sine * outer))
+            context.stroke(path, with: .color(accent.opacity(opacity)), lineWidth: 1.1)
+        }
     }
 }
 
