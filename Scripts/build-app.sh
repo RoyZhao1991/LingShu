@@ -3,6 +3,14 @@
 # 裸可执行文件没有 bundle：TCC 不认隐私用途说明、Dock 也没有图标。必须打成 .app 运行。
 set -euo pipefail
 
+# Keep ordinary developer builds flexible, but make direct distribution builds
+# inherit the same trusted tool boundary as the website release script.
+if [ "${LINGSHU_REQUIRE_DISTRIBUTION_SIGNING:-0}" = "1" ]; then
+  PATH="/usr/bin:/bin:/usr/sbin:/sbin"
+  export PATH
+  hash -r
+fi
+
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT_DIR"
 

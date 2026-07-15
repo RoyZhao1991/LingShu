@@ -3,6 +3,13 @@
 # Apple notarization, stapled DMG, checksum and machine-readable manifest.
 set -euo pipefail
 
+# Public release builds use only the Apple/system toolchain. This prevents a
+# writable package-manager or user PATH entry from shadowing signing, Git,
+# archive, checksum, or notarization commands.
+PATH="/usr/bin:/bin:/usr/sbin:/sbin"
+export PATH
+hash -r
+
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT_DIR"
 

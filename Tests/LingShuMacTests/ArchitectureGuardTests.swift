@@ -247,6 +247,25 @@ final class ArchitectureGuardTests: XCTestCase {
         XCTAssertTrue(tracked.isEmpty, "local E2E/probe artifacts must not be tracked:\n\(tracked)")
     }
 
+    func testDistributionScriptsPinTrustedSystemPath() throws {
+        let trustedPath = #"PATH="/usr/bin:/bin:/usr/sbin:/sbin""#
+        let releaseScript = try readText("Scripts/release-website.sh")
+        let buildScript = try readText("Scripts/build-app.sh")
+
+        guard
+            let releasePath = releaseScript.range(of: trustedPath),
+            let releaseRoot = releaseScript.range(of: "ROOT_DIR=")
+        else {
+            return XCTFail("website release script must pin the Apple/system PATH before resolving the checkout")
+        }
+
+        XCTAssertLessThan(releasePath.lowerBound, releaseRoot.lowerBound)
+        XCTAssertFalse(releaseScript.contains("/opt/homebrew"))
+        XCTAssertFalse(releaseScript.contains("/usr/local/bin"))
+        XCTAssertTrue(buildScript.contains(#"if [ "${LINGSHU_REQUIRE_DISTRIBUTION_SIGNING:-0}" = "1" ]"#))
+        XCTAssertTrue(buildScript.contains(trustedPath))
+    }
+
     func testArchitectureQuickReferenceStatesCurrentCodeReality() throws {
         let document = try readText("Docs/架构速查手册.md")
         let requiredMarkers = [
