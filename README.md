@@ -19,6 +19,11 @@
   </p>
 </div>
 
+<p align="center">
+  <img src="./Docs/media/lingshu-overview.jpg" width="1120" alt="LingShu turning a software goal into an implemented, tested, independently verified macOS release">
+</p>
+<p align="center"><sub>Real LingShu interface with isolated demo content. No user history, credentials, or private files are included.</sub></p>
+
 > [!IMPORTANT]
 > LingShu is an alpha-stage project under active development. It can operate local files and apps after explicit macOS authorization. Review requested permissions and keep backups of important work.
 

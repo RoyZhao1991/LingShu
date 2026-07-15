@@ -19,6 +19,11 @@
   </p>
 </div>
 
+<p align="center">
+  <img src="./Docs/media/lingshu-overview.jpg" width="1120" alt="灵枢把软件目标推进为已实现、已测试并经过独立验收的 macOS 发布产物">
+</p>
+<p align="center"><sub>真实灵枢界面，使用隔离的演示数据；不包含用户历史、凭据或私有文件。</sub></p>
+
 > [!IMPORTANT]
 > 灵枢仍处于 Alpha 阶段并在快速迭代。它会在获得明确的 macOS 授权后操作本地文件与应用。请确认权限范围，并为重要工作保留备份。
 
