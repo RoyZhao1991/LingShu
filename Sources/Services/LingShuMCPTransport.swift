@@ -74,12 +74,11 @@ actor LingShuMCPStdioTransport: LingShuMCPTransport {
         // 等每个业务 id 的响应(有界超时);任一缺失即判失败→拆连自愈。
         var lines: [String] = []
         for id in businessIDs {
-            guard let obj = await live.awaitObject(id: id, timeout: timeout),
-                  let s = LingShuMCPFraming.compact(obj) else {
+            guard let line = await live.awaitLine(id: id, timeout: timeout) else {
                 await tearDown()
                 return lines.isEmpty ? nil : lines.joined(separator: "\n").data(using: .utf8)
             }
-            lines.append(s)
+            lines.append(line)
         }
         if !persistent { await tearDown() }
         return lines.isEmpty ? nil : lines.joined(separator: "\n").data(using: .utf8)
@@ -96,7 +95,7 @@ actor LingShuMCPStdioTransport: LingShuMCPTransport {
         // 握手:发 initialize(id 1)+ initialized 通知,等 id 1 响应。
         let initFrames = Self.initializeFrames()
         for f in initFrames { if let line = LingShuMCPFraming.compact(f) { s.write(line) } }
-        guard await s.awaitObject(id: 1, timeout: timeout) != nil else { s.stop(); return nil }
+        guard await s.awaitLine(id: 1, timeout: timeout) != nil else { s.stop(); return nil }
         session = s
         return s
     }
@@ -109,12 +108,17 @@ actor LingShuMCPStdioTransport: LingShuMCPTransport {
 
 /// 常驻 stdio 会话:长生命进程 + 行缓冲读取器 + 按 id 取响应(轮询有界)。lock 保护跨并发。
 final class LingShuStdioSession: @unchecked Sendable {
+    private struct ParsedFrame: Sendable {
+        let id: Int
+        let compactJSON: String
+    }
+
     private let process = Process()
     private let stdin = Pipe()
     private let stdout = Pipe()
     private let lock = NSLock()
     private var buffer = Data()
-    private var parsed: [[String: Any]] = []   // 已解析、待按 id 消费的完整 JSON 对象(有上限)
+    private var parsed: [ParsedFrame] = []   // 已解析、待按 id 消费的可发送 JSON 帧(有上限)
     private var started = false
 
     var isAlive: Bool { lock.lock(); defer { lock.unlock() }; return started && process.isRunning }
@@ -144,8 +148,10 @@ final class LingShuStdioSession: @unchecked Sendable {
             let lineData = buffer.subdata(in: buffer.startIndex..<nl)
             buffer.removeSubrange(buffer.startIndex...nl)
             guard !lineData.isEmpty,
-                  let obj = try? JSONSerialization.jsonObject(with: lineData) as? [String: Any] else { continue }
-            parsed.append(obj)
+                  let object = try? JSONSerialization.jsonObject(with: lineData) as? [String: Any],
+                  let id = object["id"] as? Int,
+                  let compactJSON = LingShuMCPFraming.compact(object) else { continue }
+            parsed.append(.init(id: id, compactJSON: compactJSON))
             if parsed.count > 256 { parsed.removeFirst(parsed.count - 256) }
         }
     }
@@ -155,18 +161,18 @@ final class LingShuStdioSession: @unchecked Sendable {
         stdin.fileHandleForWriting.write(data)
     }
 
-    /// 同步取一条 id 匹配的响应(加锁临界区;无则 nil)。async 轮询调它,锁不跨 await。
-    private func takeObject(id: Int) -> [String: Any]? {
+    /// 同步取一条 id 匹配的响应文本(加锁临界区;无则 nil)。async 轮询调它,锁不跨 await。
+    private func takeLine(id: Int) -> String? {
         lock.lock(); defer { lock.unlock() }
-        guard let idx = parsed.firstIndex(where: { ($0["id"] as? Int) == id }) else { return nil }
-        return parsed.remove(at: idx)
+        guard let index = parsed.firstIndex(where: { $0.id == id }) else { return nil }
+        return parsed.remove(at: index).compactJSON
     }
 
     /// 轮询取一条 id 匹配的响应(有界超时,自带让步)。找到即从队列移除返回。
-    func awaitObject(id: Int, timeout: TimeInterval) async -> [String: Any]? {
+    func awaitLine(id: Int, timeout: TimeInterval) async -> String? {
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
-            if let obj = takeObject(id: id) { return obj }
+            if let line = takeLine(id: id) { return line }
             if !isAlive { return nil }
             try? await Task.sleep(nanoseconds: 15_000_000)   // 15ms 让步
         }

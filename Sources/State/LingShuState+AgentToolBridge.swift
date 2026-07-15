@@ -168,23 +168,29 @@ extension LingShuState {
 
     /// 主动出声工具:用于演示/汇报/会议里逐句讲、实时应答。
     func speakTool() -> LingShuAgentTool {
-        LingShuAgentTool(
+        let handler: @Sendable (String) async -> String = { [weak self] argumentsJSON in
+            guard let self else { return "语音未就绪(UI 未注入),本次无法出声。" }
+            return await self.executeSpeak(argumentsJSON: argumentsJSON)
+        }
+        return LingShuAgentTool(
             name: "speak",
             description: "出声说一句话(TTS 播报,这是你的'嘴')。**这句念完才会返回**——讲 PPT/演示时,先 speak 把本页讲完、它返回后你再 next 翻页,逐页自然停顿、不会抢拍(别在一句还没念完就连着翻页)。做演示/讲 PPT/会议应答都用它一句句讲;纯文字任务不必用。",
-            parametersJSON: "{\"type\":\"object\",\"properties\":{\"text\":{\"type\":\"string\",\"description\":\"要说出口的话(一句或一段)\"}},\"required\":[\"text\"]}"
-        ) { [weak self] argumentsJSON in
-            let text = (Self.jsonField(argumentsJSON, "text") ?? argumentsJSON).trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !text.isEmpty else { return "(没有要说的内容)" }
-            let voice: VoiceIOManager? = await MainActor.run { self?.voiceManager }
-            guard let voice else { return "语音未就绪(UI 未注入),本次无法出声。" }
-            await MainActor.run {
-                lingShuControlLog("TTS来源①: speak工具(模型主动) 文本「\(text.prefix(40))」")
-                voice.speak(text)
-                self?.recordSpokenLine(text)
-            }
-            await voice.awaitPlaybackDone()
-            return "(已说完:\(text.prefix(40)))"
-        }
+            parametersJSON: "{\"type\":\"object\",\"properties\":{\"text\":{\"type\":\"string\",\"description\":\"要说出口的话(一句或一段)\"}},\"required\":[\"text\"]}",
+            handler: handler
+        )
+    }
+
+    private func executeSpeak(argumentsJSON: String) async -> String {
+        let text = (Self.jsonField(argumentsJSON, "text") ?? argumentsJSON)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return "(没有要说的内容)" }
+        guard let voiceManager else { return "语音未就绪(UI 未注入),本次无法出声。" }
+
+        lingShuControlLog("TTS来源①: speak工具(模型主动) 文本「\(text.prefix(40))」")
+        voiceManager.speak(text)
+        recordSpokenLine(text)
+        await voiceManager.awaitPlaybackDone()
+        return "(已说完:\(text.prefix(40)))"
     }
 
     /// 从一段 JSON 里取某个字段的**字符串形式**。

@@ -81,15 +81,22 @@ extension VoiceIOManager {
         outputLevel = 0
     }
 
-    nonisolated func makeRecognitionAudioTap(
+    func makeRecognitionAudioTap(
         box: RecognitionRequestBox,
         onAudioChunk: (@MainActor (LingShuAudioStreamPacket) -> Void)?
     ) -> AVAudioNodeTapBlock {
+        let updateInputState: @MainActor @Sendable (Float, Date) -> Void = { [weak self] level, now in
+            self?.inputLevel = level
+            self?.lastInputBufferAt = now   // 看门狗据此判断麦克风是否真在进音
+            self?.micSilentWarning = nil     // 进音了→清掉"没进音"告警
+            if let self, level >= self.loudInputThreshold { self.lastLoudInputAt = now }
+            self?.evaluateUtteranceSilence(now: now)
+        }
         // 节流：音频 tap 每个缓冲（~40/s）都跳主线程的话，会让主线程满负荷跑声纹/认主 DSP
         // 把 UI 卡死。电平最多 ~20Hz 刷新（够波形流畅）；音频块最多 ~5Hz 转发（感知/声纹处理本就
         // 不需要每缓冲一次）。真正的根治是把 DSP 移出主线程，这里先把洪泛掐掉。
         let throttle = AudioTapEmitThrottle()
-        return { [weak self] buffer, _ in
+        return { buffer, _ in
             // SFSpeech 只认单声道:开 VPIO 后,输入是 macOS 拼的多声道聚合设备(VPAUAggregateAudioDevice,实测 9 声道,
             // 含麦克风+扬声器回路+其它虚拟设备),直接灌 9 声道缓冲它一个字都识别不出(实测 buffers 正常但零转写)。
             // 取第 0 道(=AEC 处理后的麦克风)降成单声道再喂识别器;单声道时零开销原样灌。
@@ -105,11 +112,7 @@ extension VoiceIOManager {
 
             if throttle.shouldEmitLevel(at: now) {
                 Task { @MainActor [level] in
-                    self?.inputLevel = level
-                    self?.lastInputBufferAt = now   // 看门狗据此判断麦克风是否真在进音
-                    self?.micSilentWarning = nil     // 进音了→清掉"没进音"告警
-                    if let self, level >= self.loudInputThreshold { self.lastLoudInputAt = now }   // 主人在出声→记一笔(音频静默收口判据)
-                    self?.evaluateUtteranceSilence(now: now)   // 转写稳定 或 主人停止出声 → 强制收口(不傻等 isFinal,且不被噪音 partial 拖住)
+                    updateInputState(level, now)
                 }
             }
 

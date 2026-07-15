@@ -160,8 +160,9 @@ final class VisionFrameAnalyzer: NSObject, AVCaptureVideoDataOutputSampleBufferD
 
     private var previousBrightness: Double?
     private var lastFrameAt = Date.distantPast
-    private static let ciContext = CIContext()
-    private static let colorSpace = CGColorSpaceCreateDeviceRGB()
+    /// 视频帧委托固定在 `frameQueue` 串行执行;上下文随分析器实例持有,不作为跨线程全局共享状态。
+    private let ciContext = CIContext()
+    private let colorSpace = CGColorSpaceCreateDeviceRGB()
 
     func captureOutput(
         _ output: AVCaptureOutput,
@@ -182,7 +183,7 @@ final class VisionFrameAnalyzer: NSObject, AVCaptureVideoDataOutputSampleBufferD
 
         let faceAnalysis = Self.analyzeFaces(in: pixelBuffer)
         let recognizedText = Self.recognizeText(in: pixelBuffer)
-        let framePacket = Self.makeJPEGFramePacket(
+        let framePacket = makeJPEGFramePacket(
             from: pixelBuffer,
             timestamp: now,
             width: width,
@@ -328,7 +329,7 @@ final class VisionFrameAnalyzer: NSObject, AVCaptureVideoDataOutputSampleBufferD
         return fragments.joined(separator: " / ")
     }
 
-    private static func makeJPEGFramePacket(
+    private func makeJPEGFramePacket(
         from pixelBuffer: CVPixelBuffer,
         timestamp: Date,
         width: Int,
