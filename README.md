@@ -2,6 +2,7 @@
   <img src="./lingshu-icon-preview.png" width="112" alt="LingShu app icon">
   <h1>LingShu</h1>
   <p><strong>A native macOS AI agent that turns goals into verified deliverables.</strong></p>
+  <p><strong>Flagship workflow: complete editable presentations and document reports end to end—not just outlines or chat answers.</strong></p>
   <p>Bring your own model. Keep the orchestration, tools, memory, and computer control on your Mac.</p>
 
   <p>
@@ -31,11 +32,24 @@
 
 Most AI desktop apps stop at conversation. LingShu is an agent runtime designed to continue from intent to execution and verification:
 
+- **Finish the report, not just the outline.** From one brief, LingShu can structure the narrative, create a real editable presentation or document, register and preview the file, iterate on it, and send it to an independent checker.
 - **Bring your own brain.** Use OpenAI, Anthropic, DeepSeek, MiniMax M3, or a custom compatible endpoint without coupling LingShu's identity to one model vendor.
 - **Delegate real work.** A main agent can plan work, dispatch isolated worker sessions, invoke tools, and hand results to an independent checker.
 - **Deliver files, not claims.** Documents, presentations, code, scripts, and reports are written to disk, tracked, previewable, and checked before completion.
 - **Use the Mac natively.** LingShu can read accessibility snapshots and operate authorized apps through native macOS APIs. This Computer Use path does not require Codex.
 - **Preserve context.** Task records, local artifacts, memories, and distilled child-task summaries remain available across sessions.
+
+## Flagship Workflow: Complete Reports
+
+LingShu does not stop at “here is a slide outline.” A presentation or document request can run as one traceable delivery loop:
+
+1. Understand the brief and source material, then define the expected deliverable and acceptance criteria.
+2. Structure the story, content, and layout; create a real `.pptx`, `.docx`, or other requested report format with local tools.
+3. Register the file in the task artifact ledger, open it in the built-in preview, and revise the actual output.
+4. Hand the result to an independent checker before declaring the task complete.
+5. For presentations, optionally build a narration queue, present the deck, and answer questions against its content.
+
+The result is a local file that remains openable, editable, previewable, and available to later tasks—not a filename invented in chat. Output quality still depends on the configured model, source material, and local toolchain, so important reports should be reviewed before external use.
 
 ## What It Can Do
 
@@ -44,7 +58,7 @@ Most AI desktop apps stop at conversation. LingShu is an agent runtime designed 
 | Agent execution | Goal understanding, planning, tool loops, isolated child tasks, interruption, resume, and verification |
 | Computer Use | Native accessibility snapshots, indexed UI actions, screen fallback, and post-action verification |
 | Local work | Read/write files, run commands, edit code, execute tests, inspect Git changes, and register artifacts |
-| Deliverables | Create and preview documents, presentations, reports, code, scripts, and local media |
+| Deliverables | Create, register, preview, revise, and verify real PPTX, DOCX, PDF, Markdown, code, scripts, and local media |
 | Model gateway | OpenAI Responses / Chat Completions, Anthropic Messages, streaming, and custom compatible endpoints |
 | Multimodal input | Try native model vision first; remember unsupported channels and fall back to image parsing |
 | Perception | Microphone, system audio, camera, screen, voice output, and pluggable sensory sources |
@@ -125,7 +139,7 @@ LingShu is usable for development and controlled local workflows, but it is not 
 | Native macOS app and agent loop | Active development |
 | Multi-provider model setup | Implemented |
 | Native Computer Use | Implemented; requires explicit macOS authorization |
-| Document/code artifact workflow | Implemented |
+| End-to-end presentation, document, and code artifact workflow | Implemented |
 | Live perception and voice | Available with environment-dependent fallbacks |
 | HAL virtual microphone | Experimental; device appearance is not yet stable |
 | Signed and notarized public release | Release pipeline exists; first public release pending |

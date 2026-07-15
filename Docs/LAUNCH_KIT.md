@@ -12,12 +12,21 @@ English:
 
 > 灵枢是一款原生 macOS AI Agent：主脑可替换，编排与执行留在本机，并把用户目标推进为经过验收的真实产物。
 
-The launch should repeatedly prove four things:
+Flagship proof:
 
-1. It acts beyond chat: a request becomes a structured goal, execution plan, tool work, and a completion decision.
-2. It delivers real files: artifacts are written to disk, registered, previewable, and revisitable.
-3. It separates execution from verification: isolated workers can hand results to a checker before completion.
-4. It is not tied to one model vendor: OpenAI, Anthropic, DeepSeek, MiniMax M3, and compatible custom endpoints share the same agent layer.
+> One brief becomes a complete, editable presentation or document report: the real file is created locally, registered, previewed, revised, and independently checked.
+
+> 一条需求可以被推进为完整、可编辑的 PPT 或文档汇报：真实文件在本地生成、登记、预览、修改并经过独立验收。
+
+The launch should repeatedly prove five things:
+
+1. It completes report delivery, not just report copy: a brief can become an editable presentation or document, a registered artifact, a preview, and a verification result.
+2. It acts beyond chat: a request becomes a structured goal, execution plan, tool work, and a completion decision.
+3. It delivers real files: artifacts are written to disk, registered, previewable, and revisitable.
+4. It separates execution from verification: isolated workers can hand results to a checker before completion.
+5. It is not tied to one model vendor: OpenAI, Anthropic, DeepSeek, MiniMax M3, and compatible custom endpoints share the same agent layer.
+
+Do not claim that LingShu is the only agent capable of creating presentations or documents: current products can also create or edit office files. Prove the narrower and defensible difference instead—LingShu treats a report as a local, traceable, artifact-registered, independently checked workflow across replaceable model providers.
 
 Do not claim that LingShu is production-ready, fully autonomous, fully local, or guaranteed safe. It is an alpha that can operate authorized local resources and can send selected context to the model provider configured by the user.
 
@@ -36,10 +45,10 @@ Record one continuous, reproducible workflow. Use a fresh macOS user or isolated
 
 | Time | Screen action | Narration / subtitle | Proof shown |
 | --- | --- | --- | --- |
-| 0-7s | Show the installed LingShu app and enter one concrete request that produces a small document or code artifact. | "Most AI desktop apps stop at an answer. LingShu continues to a deliverable." | Native app, real input |
+| 0-7s | Show the installed LingShu app and request a concise project-report deck plus a one-page written summary. | "Most AI desktop apps stop at an outline. LingShu continues to the finished report files." | Native app, concrete report brief |
 | 7-17s | Show the structured goal and plan appearing. | "The request becomes an explicit goal with acceptance criteria." | GoalSpec and plan |
 | 17-34s | Open the task record while an isolated worker uses tools. | "Execution runs in a traceable task session instead of disappearing behind a spinner." | Live task state and tool trace |
-| 34-48s | Show a file being created and registered in the artifact list. | "The output is a real file on disk, not a claim in chat." | Artifact registration |
+| 34-48s | Show the PPTX and document being created and registered in the artifact list. | "The outputs are real editable files on disk, not filenames claimed in chat." | PPTX/document artifact registration |
 | 48-61s | Show independent verification and its result. | "A checker evaluates the result before the task is closed." | Verification state |
 | 61-70s | Preview the generated file from LingShu. | "The deliverable remains previewable and available to later tasks." | Built-in preview |
 | 70-75s | End on the repository URL and release name. | "Native macOS. Bring your own model. Apache-2.0." | Clear next action |
@@ -64,6 +73,8 @@ Body:
 
 > I built LingShu because I wanted a desktop agent that did more than produce a plausible answer. A request becomes a structured goal, runs through local tools or isolated workers, produces real files, and can be checked before completion.
 >
+> Its flagship workflow is complete report delivery: one brief can become an editable presentation or document, registered on disk, previewed in the app, revised against the real output, and handed to an independent checker. The goal is not another slide-outline generator; it is a traceable path to the files you actually deliver.
+>
 > LingShu is written in Swift for macOS. The orchestration, task records, artifacts, memory, and permission-aware Computer Use runtime live on the Mac. You bring the model: the first alpha supports OpenAI, Anthropic, DeepSeek, MiniMax M3, and compatible custom endpoints.
 >
 > This is an alpha, not a claim of hands-off autonomy. It can operate files and authorized apps, so the release documents its permission and provider boundaries and asks users to review high-impact actions.
@@ -74,7 +85,7 @@ Body:
 
 ### Short Social Post
 
-> I open-sourced LingShu, a native macOS AI agent that turns goals into verified deliverables. It can plan, dispatch isolated workers, use local tools and authorized Mac apps, register real artifacts, and verify results before completion. Bring your own OpenAI, Anthropic, DeepSeek, MiniMax, or compatible model. Apache-2.0. https://github.com/RoyZhao1991/LingShu
+> I open-sourced LingShu, a native macOS AI agent that can take a report brief all the way to real, editable presentation and document files—registered, previewed, and independently checked. It also plans, dispatches isolated workers, and operates authorized Mac apps. Bring your own OpenAI, Anthropic, DeepSeek, MiniMax, or compatible model. Apache-2.0. https://github.com/RoyZhao1991/LingShu
 
 ## 中文首发文案
 
@@ -88,6 +99,8 @@ Body:
 
 > 我做灵枢，是因为现有桌面 AI 经常停在“给出一个看起来合理的回答”。我希望一次请求能够继续变成明确目标、执行计划、工具调用、真实文件和可检查的完成结论。
 >
+> 灵枢最值得展示的场景是完整汇报交付：一条需求可以继续变成可编辑的 PPT 或文档，在本地真实落盘并登记，在应用内预览和修改，再交给独立 checker 验收。它要解决的不是“帮我写一份 PPT 提纲”，而是把最终需要提交的文件真正做出来。
+>
 > 灵枢使用 Swift 原生开发。任务编排、执行记录、产物登记、记忆和基于 macOS 权限的 Computer Use 都运行在本机；主脑可以自行选择，目前支持 OpenAI、Anthropic Claude、DeepSeek、MiniMax M3 和自定义兼容端点。
 >
 > 这仍是 Alpha，不是“完全无人值守”的宣传。灵枢能够操作文件和已授权应用，因此仓库明确写出了权限、远程模型和高影响操作边界，并要求用户检查关键动作与交付结果。
@@ -98,7 +111,7 @@ Body:
 
 ### 中文短帖
 
-> 灵枢开源了：原生 macOS AI Agent，主脑可替换，编排与执行留在本机，把请求推进为经过验收的真实文件和任务结果。支持 OpenAI、Claude、DeepSeek、MiniMax 与兼容端点，Apache-2.0。https://github.com/RoyZhao1991/LingShu
+> 灵枢开源了：原生 macOS AI Agent，可以把一条汇报需求端到端推进为真实可编辑的 PPT/文档，自动落盘登记、预览修改并独立验收；主脑可替换，支持 OpenAI、Claude、DeepSeek、MiniMax 与兼容端点。Apache-2.0。https://github.com/RoyZhao1991/LingShu
 
 ## Launch Sequence
 

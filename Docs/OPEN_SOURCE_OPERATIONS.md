@@ -10,7 +10,7 @@
 
 ## 一、当前判断
 
-灵枢具备形成独立开源品类的素材：原生 macOS、可换主脑、隔离任务编排、验收式交付、感知、记忆，以及不依赖 Codex 的原生 Computer Use。风险不在“代码量不够”，而在首次公开时用户能否在几分钟内完成信任判断。
+灵枢具备形成独立开源品类的素材：端到端完成 PPT/文档汇报、原生 macOS、可换主脑、隔离任务编排、验收式交付、感知、记忆，以及不依赖 Codex 的原生 Computer Use。风险不在“代码量不够”，而在首次公开时用户能否在几分钟内看懂这条完整交付链并完成信任判断。
 
 高 Star 不能被承诺，只能通过产品价值、安装成功率、演示传播力和持续维护共同提高概率。禁止购买 Star、互刷、批量私信或用无法复现的演示换取关注。
 
@@ -38,12 +38,13 @@
 
 > LingShu is a native macOS AI agent that turns goals into verified deliverables, with a replaceable model brain and local orchestration.
 
-四个传播支柱：
+五个传播支柱：
 
-1. **不是另一个聊天壳**：从 GoalSpec 到工具执行、隔离子任务、checker 和真实产物。
-2. **不被单一模型锁定**：OpenAI、Claude、DeepSeek、MiniMax 与自定义兼容端点共用能力层。
-3. **原生 Mac 执行体**：通过 macOS AX 语义树进行 Computer Use，不依赖 Codex 才能操作电脑。
-4. **可检查的真实交付**：文件落盘、Git 登记、预览、测试和验收状态都能追踪。
+1. **完整汇报交付**：一条需求端到端推进为可编辑 PPT/文档，而不是只返回提纲或正文。
+2. **不是另一个聊天壳**：从 GoalSpec 到工具执行、隔离子任务、checker 和真实产物。
+3. **不被单一模型锁定**：OpenAI、Claude、DeepSeek、MiniMax 与自定义兼容端点共用能力层。
+4. **原生 Mac 执行体**：通过 macOS AX 语义树进行 Computer Use，不依赖 Codex 才能操作电脑。
+5. **可检查的真实交付**：文件落盘、Git 登记、预览、测试和验收状态都能追踪。
 
 ## 四、首个 30 天节奏
 
@@ -61,7 +62,7 @@
 
 ### 第 2 周：证明可复现
 
-- 发布三篇短案例：原生 Computer Use、跨模型 maker/checker、文档或代码交付。
+- 发布三篇短案例：完整 PPT/文档汇报交付、原生 Computer Use、跨模型 maker/checker。
 - 每个案例提供输入、环境、产物和已知限制，不只放结果截图。
 - 整理高频问题并回写 README/FAQ，减少重复支持成本。
 
