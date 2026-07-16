@@ -12,28 +12,30 @@ struct LingShuPerceptionPanel: View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 8) {
                 PerceptionStatusPill(
-                    title: "耳朵",
-                    value: voice.isRecording ? "正在听" : "待机",
+                    title: state.loc("耳朵", "Audio In"),
+                    value: voice.isRecording ? state.loc("正在听", "Listening") : state.loc("待机", "Idle"),
                     icon: voice.isRecording ? "waveform" : "ear",
                     color: voice.isRecording ? .red : .lingHolo
                 )
 
                 PerceptionStatusPill(
-                    title: "嘴巴",
-                    value: state.voiceOutputEnabled ? (voice.isSpeaking ? "发声中" : "可发声") : "静音",
+                    title: state.loc("嘴巴", "Audio Out"),
+                    value: state.voiceOutputEnabled
+                        ? (voice.isSpeaking ? state.loc("发声中", "Speaking") : state.loc("可发声", "Ready"))
+                        : state.loc("静音", "Muted"),
                     icon: state.voiceOutputEnabled ? "speaker.wave.2.fill" : "speaker.slash.fill",
                     color: state.voiceOutputEnabled ? .lingHolo : Color.lingFg.opacity(0.46)
                 )
 
                 PerceptionStatusPill(
-                    title: "眼睛",
-                    value: vision.isCameraRunning ? "视觉在线" : "待机",
+                    title: state.loc("眼睛", "Vision"),
+                    value: vision.isCameraRunning ? state.loc("视觉在线", "Online") : state.loc("待机", "Idle"),
                     icon: vision.isCameraRunning ? "eye.fill" : "eye",
                     color: vision.isCameraRunning ? .cyan : .lingHolo
                 )
 
                 PerceptionStatusPill(
-                    title: "解析",
+                    title: state.loc("解析", "Analysis"),
                     value: perceptionGateway.activeRoute.displayName,
                     icon: perceptionGateway.isRemoteRouteActive ? "network" : "cpu",
                     color: perceptionGateway.isRemoteRouteActive ? .cyan : .lingHolo
@@ -44,7 +46,7 @@ struct LingShuPerceptionPanel: View {
                 Button {
                     runSelfTest()
                 } label: {
-                    Label(isRunningSelfTest ? "自检中…" : "感知自检", systemImage: "stethoscope")
+                    Label(isRunningSelfTest ? state.loc("自检中…", "Testing…") : state.loc("感知自检", "Perception Test"), systemImage: "stethoscope")
                         .font(.system(size: 11.5, weight: .semibold))
                         .foregroundStyle(Color.lingHolo)
                         .padding(.horizontal, 9)
@@ -53,13 +55,13 @@ struct LingShuPerceptionPanel: View {
                 }
                 .buttonStyle(.plain)
                 .disabled(isRunningSelfTest)
-                .help("逐项实测麦克风、识别、合成、摄像头、视觉解析、云感知与身份锁")
+                .help(state.loc("逐项实测麦克风、识别、合成、摄像头、视觉解析、云感知与身份锁", "Test microphone, speech recognition, synthesis, camera, vision analysis, cloud perception, and owner identity"))
 
                 if let observation = vision.latestObservation {
                     Button {
                         appendVisionContext(observation)
                     } label: {
-                        Label("交给灵枢", systemImage: "arrow.turn.down.left")
+                        Label(state.loc("交给灵枢", "Send to LingShu"), systemImage: "arrow.turn.down.left")
                             .font(.system(size: 11.5, weight: .semibold))
                             .foregroundStyle(Color.lingVoid)
                             .padding(.horizontal, 9)
@@ -67,7 +69,7 @@ struct LingShuPerceptionPanel: View {
                             .background(Color.lingHolo, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
                     }
                     .buttonStyle(.plain)
-                    .help("把当前视觉观测写入输入框")
+                    .help(state.loc("把当前视觉观测写入输入框", "Insert the current visual observation into the prompt"))
                 }
             }
 
@@ -93,7 +95,7 @@ struct LingShuPerceptionPanel: View {
                             HStack(spacing: 10) {
                                 Label("\(observation.faceCount)", systemImage: "person.crop.circle")
                                 Label("\(observation.frameWidth)x\(observation.frameHeight)", systemImage: "rectangle.dashed")
-                                Label(observation.recognizedText.isEmpty ? "无文字" : "有文字", systemImage: "text.viewfinder")
+                                Label(observation.recognizedText.isEmpty ? state.loc("无文字", "No Text") : state.loc("有文字", "Text Found"), systemImage: "text.viewfinder")
                             }
                             .font(.system(size: 10.5, weight: .semibold, design: .monospaced))
                             .foregroundStyle(Color.lingFg.opacity(0.46))
@@ -151,11 +153,11 @@ struct LingShuPerceptionPanel: View {
             )
             selfTestReport = report
             isRunningSelfTest = false
-            state.appendTrace(kind: .system, actor: "感知自检", title: "自检完成", detail: report.summaryLine)
+            state.appendTrace(kind: .system, actor: state.loc("感知自检", "Perception Test"), title: state.loc("自检完成", "Test Complete"), detail: report.summaryLine)
             for item in report.items {
                 state.appendTrace(
                     kind: item.verdict == .fail ? .warning : .system,
-                    actor: "感知自检",
+                    actor: state.loc("感知自检", "Perception Test"),
                     title: "\(item.name)：\(item.verdict.label)",
                     detail: item.latencyMillis.map { "\(item.detail)（\($0)ms）" } ?? item.detail
                 )
@@ -189,7 +191,7 @@ struct PerceptionSelfTestReportSheet: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
-                Label("感知自检报告", systemImage: "stethoscope")
+                Label(LingShuLanguagePreferenceStore.localized("感知自检报告", "Perception Test Report"), systemImage: "stethoscope")
                     .font(.system(size: 15, weight: .bold))
                     .foregroundStyle(Color.lingFg)
                 Spacer()

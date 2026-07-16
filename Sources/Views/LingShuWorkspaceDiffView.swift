@@ -55,10 +55,12 @@ struct LingShuWorkspaceDiffView: View {
     private func artifactSectionHeader(count: Int, alongsideGit: Bool) -> some View {
         HStack(spacing: 8) {
             Image(systemName: "doc.badge.plus").foregroundStyle(.green)
-            Text(alongsideGit ? "新增文件（非 git 跟踪）" : "本任务产出的代码文件")
+            Text(alongsideGit
+                 ? LingShuLanguagePreferenceStore.localized("新增文件（非 git 跟踪）", "New Files (Not Tracked by Git)")
+                 : LingShuLanguagePreferenceStore.localized("本任务产出的代码文件", "Code Files Produced by This Task"))
                 .font(.system(size: 12.5, weight: .bold)).foregroundStyle(Color.lingFg.opacity(0.9))
             Spacer()
-            Text("\(count) 个").font(.system(size: 10.5, weight: .semibold)).foregroundStyle(Color.lingFg.opacity(0.45))
+            Text(LingShuLanguagePreferenceStore.localized("\(count) 个", "\(count) files")).font(.system(size: 10.5, weight: .semibold)).foregroundStyle(Color.lingFg.opacity(0.45))
         }
         .padding(.top, alongsideGit ? 6 : 0).padding(.bottom, 2)
     }
@@ -71,7 +73,7 @@ struct LingShuWorkspaceDiffView: View {
             Button { toggleArtifact(a) } label: {
                 HStack(spacing: 8) {
                     Image(systemName: open ? "chevron.down" : "chevron.right").font(.system(size: 8.5, weight: .bold)).foregroundStyle(Color.lingFg.opacity(0.5))
-                    Text(isNew ? "新增" : "修改").font(.system(size: 9.5, weight: .bold))
+                    Text(isNew ? LingShuLanguagePreferenceStore.localized("新增", "Added") : LingShuLanguagePreferenceStore.localized("修改", "Modified")).font(.system(size: 9.5, weight: .bold))
                         .foregroundStyle(isNew ? .green : Color.lingHolo)
                         .padding(.horizontal, 5).padding(.vertical, 1.5)
                         .background((isNew ? Color.green : Color.lingHolo).opacity(0.15), in: Capsule())
@@ -97,7 +99,7 @@ struct LingShuWorkspaceDiffView: View {
         Task {
             let content = await Task.detached { (try? String(contentsOfFile: path, encoding: .utf8)) ?? "" }.value
             let lines: [LingShuDiffLine] = content.isEmpty
-                ? [LingShuDiffLine(kind: .ctx, text: "（文件为空或读不到）")]
+                ? [LingShuDiffLine(kind: .ctx, text: LingShuLanguagePreferenceStore.localized("（文件为空或读不到）", "(File is empty or unreadable)"))]
                 : content.components(separatedBy: "\n").prefix(1000).map { LingShuDiffLine(kind: .add, text: $0) }
             await MainActor.run { diffs[path] = lines; loading.remove(path) }
         }
@@ -112,7 +114,7 @@ struct LingShuWorkspaceDiffView: View {
                 .padding(.horizontal, 6).padding(.vertical, 1.5)
                 .background(Color.lingHoloAlt.opacity(0.12), in: Capsule())
             Spacer()
-            Text("\(s.files.count) 个文件改动").font(.system(size: 10.5, weight: .semibold)).foregroundStyle(Color.lingFg.opacity(0.45))
+            Text(LingShuLanguagePreferenceStore.localized("\(s.files.count) 个文件改动", "\(s.files.count) changed files")).font(.system(size: 10.5, weight: .semibold)).foregroundStyle(Color.lingFg.opacity(0.45))
         }
         .padding(.bottom, 2)
     }
@@ -143,7 +145,7 @@ struct LingShuWorkspaceDiffView: View {
                 if let lines = diffs[f.path] {
                     diffBody(lines)
                 } else if !loading.contains(f.path) {
-                    Text("（无 diff 内容）").font(.system(size: 10.5)).foregroundStyle(Color.lingFg.opacity(0.4)).padding(8)
+                    Text(LingShuLanguagePreferenceStore.localized("（无 diff 内容）", "(No diff content)")).font(.system(size: 10.5)).foregroundStyle(Color.lingFg.opacity(0.4)).padding(8)
                 }
             }
         }
@@ -172,8 +174,8 @@ struct LingShuWorkspaceDiffView: View {
     private var emptyState: some View {
         VStack(spacing: 10) {
             Image(systemName: "plusminus.circle").font(.system(size: 30)).foregroundStyle(Color.lingFg.opacity(0.25))
-            Text("本任务没有代码改动").font(.system(size: 12.5, weight: .semibold)).foregroundStyle(Color.lingFg.opacity(0.5))
-            Text("有代码交付时,这里按文件列出真实 diff（红减绿增）。").font(.system(size: 10.5)).foregroundStyle(Color.lingFg.opacity(0.35))
+            Text(LingShuLanguagePreferenceStore.localized("本任务没有代码改动", "No Code Changes for This Task")).font(.system(size: 12.5, weight: .semibold)).foregroundStyle(Color.lingFg.opacity(0.5))
+            Text(LingShuLanguagePreferenceStore.localized("有代码交付时,这里按文件列出真实 diff（红减绿增）。", "When code is delivered, real file diffs appear here with removals in red and additions in green.")).font(.system(size: 10.5)).foregroundStyle(Color.lingFg.opacity(0.35))
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -191,7 +193,7 @@ struct LingShuWorkspaceDiffView: View {
         openPaths.insert(f.path)
         guard diffs[f.path] == nil, !loading.contains(f.path) else { return }
         guard let dir = s.repoWorkingDir else {
-            diffs[f.path] = [LingShuDiffLine(kind: .ctx, text: "（无仓库路径，无法加载 diff）")]; return
+            diffs[f.path] = [LingShuDiffLine(kind: .ctx, text: LingShuLanguagePreferenceStore.localized("（无仓库路径，无法加载 diff）", "(Repository path unavailable; cannot load diff)"))]; return
         }
         loading.insert(f.path)
         let path = f.path
@@ -207,7 +209,7 @@ struct LingShuWorkspaceDiffView: View {
             }
             let parsed = LingShuWorkspaceDiffView.parseDiff(out)
             await MainActor.run {
-                diffs[path] = parsed.isEmpty ? [LingShuDiffLine(kind: .ctx, text: "（无差异或已提交）")] : parsed
+                diffs[path] = parsed.isEmpty ? [LingShuDiffLine(kind: .ctx, text: LingShuLanguagePreferenceStore.localized("（无差异或已提交）", "(No difference or already committed)"))] : parsed
                 loading.remove(path)
             }
         }

@@ -20,7 +20,7 @@ struct LingShuBrowserHost: NSViewRepresentable {
             if controller.isPresented, window == nil {
                 let host = NSHostingController(rootView: LingShuBrowserChrome(controller: controller))
                 let w = NSWindow(contentViewController: host)
-                w.title = "灵枢浏览器"
+                w.title = LingShuLanguagePreferenceStore.localized("灵枢浏览器", "LingShu Browser")
                 w.setContentSize(NSSize(width: 1100, height: 760))
                 w.styleMask = [.titled, .closable, .resizable, .miniaturizable, .fullSizeContentView]
                 w.collectionBehavior.insert(.fullScreenPrimary)
@@ -68,7 +68,9 @@ struct LingShuBrowserChrome: View {
             HStack(spacing: 6) {
                 ForEach(Array(controller.tabs.enumerated()), id: \.element.id) { i, tab in
                     HStack(spacing: 6) {
-                        Text(tab.title.isEmpty ? "新标签页" : tab.title)
+                        Text(tab.title.isEmpty
+                             ? LingShuLanguagePreferenceStore.localized("新标签页", "New Tab")
+                             : tab.title)
                             .font(.system(size: 11.5, weight: .medium)).lineLimit(1)
                         Button { _ = controller.closeTab(index: i) } label: { Image(systemName: "xmark").font(.system(size: 8, weight: .bold)) }
                             .buttonStyle(.plain).foregroundStyle(Color.lingFg.opacity(0.5))
@@ -92,7 +94,10 @@ struct LingShuBrowserChrome: View {
             Button { _ = controller.navigate("back") } label: { Image(systemName: "chevron.left") }.buttonStyle(.plain)
             Button { _ = controller.navigate("forward") } label: { Image(systemName: "chevron.right") }.buttonStyle(.plain)
             Button { _ = controller.navigate("reload") } label: { Image(systemName: "arrow.clockwise") }.buttonStyle(.plain)
-            TextField("输入网址,回车打开", text: $addressText, onCommit: {
+            TextField(
+                LingShuLanguagePreferenceStore.localized("输入网址，回车打开", "Enter a URL and press Return"),
+                text: $addressText,
+                onCommit: {
                 guard !addressText.trimmingCharacters(in: .whitespaces).isEmpty else { return }
                 _ = controller.navigate(addressText)
             })

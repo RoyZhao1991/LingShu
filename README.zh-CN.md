@@ -157,7 +157,7 @@ swift test
 bash Scripts/smoke-e2e.sh
 ```
 
-官网分发的签名、公证与 DMG 构建见 [`Scripts/release-website.sh`](./Scripts/release-website.sh)。Apple Developer 凭据只在发布时注入，不存入仓库。
+官网分发的签名、公证与 DMG 构建见 [`Scripts/release-website.sh`](./Scripts/release-website.sh)。官方构建锁定 Developer ID Team `KM7N84AC9Y` 与当前签名证书指纹，并把指纹写入发布清单；Apple Developer 凭据与私钥不存入仓库。官方二进制一旦被修改，原签名会立即失效；派生版本必须使用自己的签名身份。
 
 架构资料：
 

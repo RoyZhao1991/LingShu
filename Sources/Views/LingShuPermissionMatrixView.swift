@@ -24,15 +24,15 @@ struct LingShuPermissionMatrixView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("权限矩阵").font(.headline)
-            Text("裁决 = 资源域 × 风险 × 运行模式。红线(供应链/紧急停止/不可逆)恒不自动放行,不随任何旋钮放松。")
+            Text(LingShuLanguagePreferenceStore.localized("权限矩阵", "Permission Matrix")).font(.headline)
+            Text(LingShuLanguagePreferenceStore.localized("裁决 = 资源域 × 风险 × 运行模式。红线(供应链/紧急停止/不可逆)恒不自动放行,不随任何旋钮放松。", "Decision = resource domain × risk × run mode. Red lines such as supply-chain risk and irreversible actions are never auto-approved."))
                 .font(.caption).foregroundStyle(.secondary)
 
             HStack(spacing: 16) {
-                Picker("风险档", selection: $risk) {
-                    ForEach(risks, id: \.self) { Text(Self.riskName[$0] ?? "\($0)").tag($0) }
+                Picker(LingShuLanguagePreferenceStore.localized("风险档", "Risk Level"), selection: $risk) {
+                    ForEach(risks, id: \.self) { Text(localizedRiskName($0)).tag($0) }
                 }.frame(width: 240)
-                Toggle("已持久授权(主人勾过完全授权)", isOn: $durablyAllowed)
+                Toggle(LingShuLanguagePreferenceStore.localized("已持久授权(主人勾过完全授权)", "Durable authorization granted"), isOn: $durablyAllowed)
             }
 
             grid
@@ -43,12 +43,12 @@ struct LingShuPermissionMatrixView: View {
     private var grid: some View {
         VStack(spacing: 1) {
             HStack(spacing: 1) {
-                cellText("资源域 \\ 模式", bold: true).frame(width: 120, alignment: .leading)
-                ForEach(modes, id: \.self) { cellText(Self.modeName[$0] ?? "", bold: true).frame(maxWidth: .infinity) }
+                cellText(LingShuLanguagePreferenceStore.localized("资源域 \\ 模式", "Domain \\ Mode"), bold: true).frame(width: 120, alignment: .leading)
+                ForEach(modes, id: \.self) { cellText(localizedModeName($0), bold: true).frame(maxWidth: .infinity) }
             }
             ForEach(domains, id: \.self) { domain in
                 HStack(spacing: 1) {
-                    cellText(Self.domainName[domain] ?? domain.rawValue).frame(width: 120, alignment: .leading)
+                    cellText(localizedDomainName(domain)).frame(width: 120, alignment: .leading)
                     ForEach(modes, id: \.self) { mode in
                         let v = LingShuPermissionMatrix.decide(domain: domain, risk: risk, mode: mode, durablyAllowed: durablyAllowed)
                         verdictCell(v).frame(maxWidth: .infinity)
@@ -70,9 +70,9 @@ struct LingShuPermissionMatrixView: View {
     private func verdictCell(_ v: LingShuPermissionVerdict) -> some View {
         let (text, color): (String, Color) = {
             switch v {
-            case .allow: return ("放行", .green)
-            case .askUser: return ("审批", .orange)
-            case .deny: return ("拒绝", .red)
+            case .allow: return (LingShuLanguagePreferenceStore.localized("放行", "Allow"), .green)
+            case .askUser: return (LingShuLanguagePreferenceStore.localized("审批", "Ask"), .orange)
+            case .deny: return (LingShuLanguagePreferenceStore.localized("拒绝", "Deny"), .red)
             }
         }()
         return Text(text).font(.system(size: 11, weight: .medium)).foregroundStyle(color)
@@ -82,10 +82,38 @@ struct LingShuPermissionMatrixView: View {
 
     private var legend: some View {
         HStack(spacing: 16) {
-            label("放行", .green); label("审批(先确认)", .orange); label("拒绝", .red)
+            label(LingShuLanguagePreferenceStore.localized("放行", "Allow"), .green)
+            label(LingShuLanguagePreferenceStore.localized("审批(先确认)", "Ask First"), .orange)
+            label(LingShuLanguagePreferenceStore.localized("拒绝", "Deny"), .red)
         }.font(.caption)
     }
     private func label(_ t: String, _ c: Color) -> some View {
         HStack(spacing: 4) { Circle().fill(c).frame(width: 8, height: 8); Text(t).foregroundStyle(.secondary) }
+    }
+
+    private func localizedDomainName(_ domain: LingShuResourceDomain) -> String {
+        let zh = Self.domainName[domain] ?? domain.rawValue
+        let en: [LingShuResourceDomain: String] = [
+            .file: "Files", .terminal: "Terminal", .network: "Network", .browser: "Browser", .microphone: "Microphone",
+            .camera: "Camera", .speaker: "Speaker", .systemControl: "System Control", .externalAccount: "External Accounts",
+            .privateKnowledge: "Private Knowledge", .supplyChain: "Supply Chain / Unreviewed Code"
+        ]
+        return LingShuLanguagePreferenceStore.localized(zh, en[domain] ?? domain.rawValue)
+    }
+
+    private func localizedModeName(_ mode: LingShuRunMode) -> String {
+        let zh = Self.modeName[mode] ?? ""
+        let en: [LingShuRunMode: String] = [
+            .readOnly: "Read-only", .standard: "Standard", .developerFull: "Developer", .autonomous: "Autonomous", .presentation: "Presentation"
+        ]
+        return LingShuLanguagePreferenceStore.localized(zh, en[mode] ?? mode.rawValue)
+    }
+
+    private func localizedRiskName(_ risk: LingShuRiskLevel) -> String {
+        let zh = Self.riskName[risk] ?? "\(risk)"
+        let en: [LingShuRiskLevel: String] = [
+            .readonly: "Read-only", .low: "Low", .medium: "Medium", .high: "High", .critical: "Critical (Irreversible / System)"
+        ]
+        return LingShuLanguagePreferenceStore.localized(zh, en[risk] ?? "\(risk)")
     }
 }

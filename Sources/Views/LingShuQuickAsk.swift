@@ -80,7 +80,7 @@ struct LingShuQuickAskView: View {
             HStack(spacing: 10) {
                 Image(systemName: "brain")
                     .foregroundStyle(.secondary)
-                TextField("问灵枢 · 找东西 · 让它做事…", text: $text)
+                TextField(state.loc("问灵枢 · 找东西 · 让它做事…", "Ask Nous · Find something · Get things done…"), text: $text)
                     .textFieldStyle(.plain)
                     .font(.system(size: 20))
                     .focused($focused)
@@ -100,7 +100,7 @@ struct LingShuQuickAskView: View {
                         let links = LingShuQuickAskLinks.extract(from: reply)
                         if !links.isEmpty {
                             Divider()
-                            Text("结果 · 可直接操作").font(.system(size: 11)).foregroundStyle(.tertiary)
+                            Text(state.loc("结果 · 可直接操作", "Results · Ready to use")).font(.system(size: 11)).foregroundStyle(.tertiary)
                             ForEach(Array(links.enumerated()), id: \.offset) { _, link in
                                 HStack(spacing: 6) {
                                     Button { open(link) } label: {
@@ -113,10 +113,10 @@ struct LingShuQuickAskView: View {
                                     .buttonStyle(.plain)
                                     // 直接执行动作:打开 / 访达中显示(文件)/ 复制路径或网址
                                     if link.kind == .file {
-                                        actionButton("folder", "在访达中显示") { reveal(link) }
+                                        actionButton("folder", state.loc("在访达中显示", "Show in Finder")) { reveal(link) }
                                     }
-                                    actionButton("doc.on.doc", "复制") { copyToClipboard(link) }
-                                    actionButton("arrow.up.forward.app", link.kind == .file ? "打开" : "在浏览器打开") { open(link) }
+                                    actionButton("doc.on.doc", state.loc("复制", "Copy")) { copyToClipboard(link) }
+                                    actionButton("arrow.up.forward.app", link.kind == .file ? state.loc("打开", "Open") : state.loc("在浏览器打开", "Open in Browser")) { open(link) }
                                 }
                                 .padding(.vertical, 5).padding(.horizontal, 10)
                                 .background(Color.lingFg.opacity(0.06), in: RoundedRectangle(cornerRadius: 8))
@@ -127,10 +127,10 @@ struct LingShuQuickAskView: View {
                 .frame(maxHeight: 320)
             } else if submitted {
                 Divider()
-                Text("灵枢正在处理…(可按本机知识检索)")
+                Text(state.loc("灵枢正在处理…(可按本机知识检索)", "Nous is working… (local knowledge can be searched)"))
                     .font(.system(size: 13)).foregroundStyle(.secondary)
             } else {
-                Text("⌥Space 唤起 · Enter 发送 · Esc 收起")
+                Text(state.loc("⌥Space 唤起 · Enter 发送 · Esc 收起", "⌥Space to open · Enter to send · Esc to close"))
                     .font(.system(size: 12)).foregroundStyle(.tertiary)
             }
         }

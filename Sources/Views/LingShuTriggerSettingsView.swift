@@ -23,10 +23,10 @@ struct LingShuTriggerSettingsView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            SectionHeader(icon: "clock.badge", title: "常驻与定时触发", subtitle: "关窗不退出 · 菜单栏值守 · 到点自动执行")
+            SectionHeader(icon: "clock.badge", title: state.loc("常驻与定时触发", "Residency & Scheduling"), subtitle: state.loc("关窗不退出 · 菜单栏值守 · 到点自动执行", "Keep running after closing · Menu bar standby · Automatic schedules"))
 
             HStack(spacing: 10) {
-                Toggle("开机自启", isOn: $launchAtLogin)
+                Toggle(state.loc("开机自启", "Launch at Login"), isOn: $launchAtLogin)
                     .toggleStyle(.switch)
                     .onChange(of: launchAtLogin) { _, enabled in
                         residencyNote = LingShuResidencyService.setLaunchAtLogin(enabled)
@@ -37,7 +37,7 @@ struct LingShuTriggerSettingsView: View {
                         .foregroundStyle(Color.lingFg.opacity(0.5))
                 }
                 Spacer()
-                Text("主窗口关闭后灵枢仍在菜单栏值守，定时任务照常触发")
+                Text(state.loc("主窗口关闭后灵枢仍在菜单栏值守，定时任务照常触发", "LingShu remains in the menu bar after its main window closes, and schedules still run."))
                     .font(.system(size: 10.5, weight: .medium))
                     .foregroundStyle(Color.lingFg.opacity(0.4))
             }
@@ -45,10 +45,10 @@ struct LingShuTriggerSettingsView: View {
             // 新建定时任务
             VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 8) {
-                    TextField("名称（可空）", text: $newTitle)
+                    TextField(state.loc("名称（可空）", "Name (optional)"), text: $newTitle)
                         .textFieldStyle(.roundedBorder)
                         .frame(width: 140)
-                    TextField("到点交给灵枢的指令，例如：提醒我喝水 / 整理今天的工作日志", text: $newPrompt)
+                    TextField(state.loc("到点交给灵枢的指令，例如：提醒我喝水 / 整理今天的工作日志", "Instruction for LingShu, for example: remind me to drink water / summarize today's work"), text: $newPrompt)
                         .textFieldStyle(.roundedBorder)
                     Picker("", selection: $newHour) {
                         ForEach(0..<24, id: \.self) { Text(String(format: "%02d", $0)).tag($0) }
@@ -59,14 +59,14 @@ struct LingShuTriggerSettingsView: View {
                         ForEach(0..<60, id: \.self) { Text(String(format: "%02d", $0)).tag($0) }
                     }
                     .frame(width: 64)
-                    Toggle("每天", isOn: $newRepeats)
+                    Toggle(state.loc("每天", "Daily"), isOn: $newRepeats)
                         .toggleStyle(.checkbox)
                     Button {
                         triggerService.add(title: newTitle, prompt: newPrompt, hour: newHour, minute: newMinute, repeatsDaily: newRepeats)
                         newTitle = ""
                         newPrompt = ""
                     } label: {
-                        Label("添加", systemImage: "plus.circle.fill")
+                        Label(state.loc("添加", "Add"), systemImage: "plus.circle.fill")
                             .font(.system(size: 11.5, weight: .bold))
                     }
                     .disabled(newPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
@@ -77,21 +77,21 @@ struct LingShuTriggerSettingsView: View {
             let finished = triggerService.triggers.filter { !$0.enabled }
 
             if triggerService.triggers.isEmpty {
-                Text("还没有定时任务。到点后内容是提醒就开口提醒，是任务就走完整协同管线。")
+                Text(state.loc("还没有定时任务。到点后内容是提醒就开口提醒，是任务就走完整协同管线。", "No schedules yet. Reminders are spoken at the due time; tasks enter the full collaboration pipeline."))
                     .font(.system(size: 11.5, weight: .medium))
                     .foregroundStyle(Color.lingFg.opacity(0.4))
             } else {
                 // 运行中(启用、会到点触发)
                 if !running.isEmpty {
-                    groupHeader("运行中", count: running.count, color: Color.lingHolo)
+                    groupHeader(state.loc("运行中", "Active"), count: running.count, color: Color.lingHolo)
                     VStack(spacing: 6) { ForEach(running) { triggerRow($0) } }
                 }
                 // 已结束/已停用(一次性已触发 → 自动停用,或手动停用)
                 if !finished.isEmpty {
                     HStack {
-                        groupHeader("已结束 / 已停用", count: finished.count, color: Color.lingFg.opacity(0.4))
+                        groupHeader(state.loc("已结束 / 已停用", "Finished / Disabled"), count: finished.count, color: Color.lingFg.opacity(0.4))
                         Spacer()
-                        Button("清除已结束") { finished.forEach { triggerService.remove(id: $0.id) } }
+                        Button(state.loc("清除已结束", "Clear Finished")) { finished.forEach { triggerService.remove(id: $0.id) } }
                             .font(.system(size: 10.5, weight: .semibold)).buttonStyle(.plain)
                             .foregroundStyle(Color.lingFg.opacity(0.45))
                     }
@@ -120,10 +120,12 @@ struct LingShuTriggerSettingsView: View {
     /// 单条定时任务状态(分清运行中/已结束):运行中·每天 / 待触发 / 已完成 / 已停用。
     private func statusLabel(_ t: LingShuScheduledTrigger) -> (String, Color) {
         if t.enabled {
-            return t.repeatsDaily ? ("运行中·每天", Color.lingHolo) : ("待触发", Color.lingHolo)
+            return t.repeatsDaily
+                ? (state.loc("运行中·每天", "Active · Daily"), Color.lingHolo)
+                : (state.loc("待触发", "Scheduled"), Color.lingHolo)
         }
-        if !t.repeatsDaily, t.lastFiredAt != nil { return ("已完成", Color.lingFg.opacity(0.45)) }
-        return ("已停用", Color.lingFg.opacity(0.4))
+        if !t.repeatsDaily, t.lastFiredAt != nil { return (state.loc("已完成", "Completed"), Color.lingFg.opacity(0.45)) }
+        return (state.loc("已停用", "Disabled"), Color.lingFg.opacity(0.4))
     }
 
     @ViewBuilder
@@ -150,18 +152,18 @@ struct LingShuTriggerSettingsView: View {
                 .foregroundStyle(Color.lingFg.opacity(0.45)).lineLimit(1)
             Spacer()
             if let firedAt = trigger.lastFiredAt {
-                Text("上次 \(firedAt.taskRecordDisplayTime)")
+                Text(state.loc("上次 \(firedAt.taskRecordDisplayTime)", "Last \(firedAt.taskRecordDisplayTime)"))
                     .font(.system(size: 10, weight: .medium, design: .monospaced))
                     .foregroundStyle(Color.lingFg.opacity(0.32))
             }
             Button { expandedTriggerID = expanded ? nil : trigger.id } label: {
                 HStack(spacing: 3) {
                     Image(systemName: expanded ? "chevron.down" : "chevron.right").font(.system(size: 8, weight: .bold))
-                    Text("执行记录 \(records.count)").font(.system(size: 10, weight: .semibold))
+                    Text(state.loc("执行记录 \(records.count)", "Runs \(records.count)")).font(.system(size: 10, weight: .semibold))
                 }
                 .foregroundStyle(records.isEmpty ? Color.lingFg.opacity(0.35) : Color.lingHolo.opacity(0.85))
             }
-            .buttonStyle(.plain).help("展开看这个定时任务到点跑出来的执行记录")
+            .buttonStyle(.plain).help(state.loc("展开看这个定时任务到点跑出来的执行记录", "Show execution records for this schedule"))
             Toggle("", isOn: Binding(
                 get: { trigger.enabled },
                 set: { triggerService.setEnabled(id: trigger.id, enabled: $0) }
@@ -177,7 +179,7 @@ struct LingShuTriggerSettingsView: View {
         if expanded {
             VStack(alignment: .leading, spacing: 4) {
                 if records.isEmpty {
-                    Text("还没有执行记录(到点跑过就会出现在这里)。")
+                    Text(state.loc("还没有执行记录(到点跑过就会出现在这里)。", "No runs yet. They will appear here after this schedule fires."))
                         .font(.system(size: 10.5, weight: .medium)).foregroundStyle(Color.lingFg.opacity(0.4))
                 } else {
                     ForEach(records) { rec in
@@ -186,15 +188,15 @@ struct LingShuTriggerSettingsView: View {
                                 Circle().fill(rec.status.color).frame(width: 5, height: 5)
                                 Text(rec.updatedAt.taskRecordDisplayTime)
                                     .font(.system(size: 10, weight: .medium, design: .monospaced)).foregroundStyle(Color.lingFg.opacity(0.62))
-                                Text(rec.status.rawValue).font(.system(size: 10, weight: .bold)).foregroundStyle(rec.status.color)
-                                Text("\(rec.messages.count) 条").font(.system(size: 10)).foregroundStyle(Color.lingFg.opacity(0.4))
+                                Text(state.language == .english ? rec.status.englishName : rec.status.rawValue).font(.system(size: 10, weight: .bold)).foregroundStyle(rec.status.color)
+                                Text(state.loc("\(rec.messages.count) 条", "\(rec.messages.count) messages")).font(.system(size: 10)).foregroundStyle(Color.lingFg.opacity(0.4))
                                 Spacer()
-                                Text("查看 →").font(.system(size: 10, weight: .semibold)).foregroundStyle(Color.lingHolo)
+                                Text(state.loc("查看 →", "View →")).font(.system(size: 10, weight: .semibold)).foregroundStyle(Color.lingHolo)
                             }
                             .padding(.horizontal, 8).padding(.vertical, 4)
                             .background(Color.lingFg.opacity(0.03), in: RoundedRectangle(cornerRadius: 5))
                         }
-                        .buttonStyle(.plain).help("打开这次执行的完整记录(含参与方对话)")
+                        .buttonStyle(.plain).help(state.loc("打开这次执行的完整记录(含参与方对话)", "Open the complete execution record, including participant messages"))
                     }
                 }
             }

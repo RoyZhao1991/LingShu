@@ -63,12 +63,12 @@ struct LingShuAutonomousOrbOnlyView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)   // 填满整窗、内容居中(本体不被裁)
         .contextMenu {   // 兜底:无边框窗口若按钮点不动,右键本体一样能暂停/退出
             if paused {
-                Button { state.resumeAutonomousRun() } label: { Label("继续运行", systemImage: "play.fill") }
+                Button { state.resumeAutonomousRun() } label: { Label(state.loc("继续运行", "Resume"), systemImage: "play.fill") }
             } else {
-                Button { state.pauseAutonomousRun() } label: { Label("暂停", systemImage: "pause.fill") }
+                Button { state.pauseAutonomousRun() } label: { Label(state.loc("暂停", "Pause"), systemImage: "pause.fill") }
             }
             Divider()
-            Button(role: .destructive) { state.stopAutonomousRun() } label: { Label("退出自主模式", systemImage: "xmark") }
+            Button(role: .destructive) { state.stopAutonomousRun() } label: { Label(state.loc("退出自主模式", "Exit Autonomous Mode"), systemImage: "xmark") }
         }
         .transition(.scale(scale: 0.3).combined(with: .opacity))
     }
@@ -78,7 +78,7 @@ struct LingShuAutonomousOrbOnlyView: View {
     /// 串行管线状态(用户定调 2026-06-17),**以音频为准、不以文字回复为准**(TTS 有起播延迟):
     /// 待机中 → 听到进音→我在听 → 有效语音收口→处理中(持续到 TTS **真开始播**) → 回应中(音频播放中) → 播完→待机中。
     private func standingStateChip() -> (text: String, tint: Color, icon: String) {
-        if paused { return ("已暂停", .orange, "pause.circle") }
+        if paused { return (state.loc("已暂停", "Paused"), .orange, "pause.circle") }
         // 单一权威状态机(LingShuVoicePhase):待机→我在听→处理中→回应中→待机。
         // **回应中=音频真正在播**(`hasAudibleOutput`=输出电平真起来了);`isSpeaking` 在"请求发声"时就置 true、
         // 早于真出声,故只用它判处理中(TTS 已请求待起播)而非回应中。我在听=明确聆听窗口内(喊唤醒词/开口触发)。
@@ -93,9 +93,9 @@ struct LingShuAutonomousOrbOnlyView: View {
         // 处理中:展示**当前 LOOP 阶段**(理解中/规划中/执行中/验收中,loopPhase.rawValue),让主人看得到此刻在哪一步,而非笼统"处理中";
         // 纯文本回合(无工具→loopPhase idle)仍显"处理中"(确实没有子阶段)。
         if phase == .processing, state.loopPhase.isActive {
-            return (state.loopPhase.rawValue, phase.tint, state.loopPhase.icon)
+            return (state.language == .english ? state.loopPhase.englishName : state.loopPhase.rawValue, phase.tint, state.loopPhase.icon)
         }
-        return (phase.caption, phase.tint, phase.icon)
+        return (state.language == .english ? phase.englishCaption : phase.caption, phase.tint, phase.icon)
     }
 
     @ViewBuilder private var phaseLabel: some View {
@@ -112,10 +112,10 @@ struct LingShuAutonomousOrbOnlyView: View {
 
     private var controlBar: some View {
         HStack(spacing: 8) {
-            pill(paused ? "继续" : "暂停", icon: paused ? "play.fill" : "pause.fill", tint: paused ? .lingHolo : .lingHoloAlt) {
+            pill(paused ? state.loc("继续", "Resume") : state.loc("暂停", "Pause"), icon: paused ? "play.fill" : "pause.fill", tint: paused ? .lingHolo : .lingHoloAlt) {
                 if paused { state.resumeAutonomousRun() } else { state.pauseAutonomousRun() }
             }
-            pill("退出", icon: "xmark", tint: .red) { state.stopAutonomousRun() }
+            pill(state.loc("退出", "Exit"), icon: "xmark", tint: .red) { state.stopAutonomousRun() }
         }
         .padding(.horizontal, 7).padding(.vertical, 5)
         .background(.ultraThinMaterial, in: Capsule())

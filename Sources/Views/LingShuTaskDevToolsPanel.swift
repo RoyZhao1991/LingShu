@@ -81,15 +81,15 @@ struct TaskDevToolsPanel: View {
     private var filesSection: some View {
         if record.isDevelopmentTask {
             HStack(spacing: 6) {
-                tabButton("产出物", systemImage: "shippingbox.fill", count: allArtifacts.count, active: fileTab == .artifacts) { fileTab = .artifacts }
-                tabButton("代码管理", systemImage: "arrow.triangle.branch", count: record.codeChanges?.files.count ?? 0, active: fileTab == .code) { fileTab = .code }
+                tabButton(state.loc("产出物", "Artifacts"), systemImage: "shippingbox.fill", count: allArtifacts.count, active: fileTab == .artifacts) { fileTab = .artifacts }
+                tabButton(state.loc("代码管理", "Code"), systemImage: "arrow.triangle.branch", count: record.codeChanges?.files.count ?? 0, active: fileTab == .code) { fileTab = .code }
                 Spacer(minLength: 0)
             }
             if fileTab == .artifacts { artifactsCards } else { gitManageContent }
         } else {
             VStack(alignment: .leading, spacing: 9) {
                 HStack(spacing: 7) {
-                    sectionHeader("产出物", systemImage: "shippingbox.fill", tint: .lingHolo)
+                    sectionHeader(state.loc("产出物", "Artifacts"), systemImage: "shippingbox.fill", tint: .lingHolo)
                     Text("\(allArtifacts.count)")
                         .font(.system(size: 10.5, weight: .bold, design: .monospaced)).foregroundStyle(Color.lingFg.opacity(0.42))
                     Spacer(minLength: 0)
@@ -116,7 +116,7 @@ struct TaskDevToolsPanel: View {
     @ViewBuilder
     private var artifactsCards: some View {
         if allArtifacts.isEmpty {
-            Text("本任务还没有登记产出文件")
+            Text(state.loc("本任务还没有登记产出文件", "No artifacts have been registered for this task"))
                 .font(.system(size: 11.5, weight: .medium)).foregroundStyle(Color.lingFg.opacity(0.38))
                 .padding(.vertical, 10)
         } else {
@@ -137,7 +137,7 @@ struct TaskDevToolsPanel: View {
             HStack(spacing: 8) {
                 Image(systemName: "plusminus.circle.fill")
                     .font(.system(size: 12, weight: .bold)).foregroundStyle(Color.lingHolo)
-                Text("改动").font(.system(size: 12, weight: .semibold)).foregroundStyle(Color.lingFg.opacity(0.72))
+                Text(state.loc("改动", "Changes")).font(.system(size: 12, weight: .semibold)).foregroundStyle(Color.lingFg.opacity(0.72))
                 Spacer(minLength: 0)
                 Text("+\(stat.added)").font(.system(size: 11.5, weight: .bold, design: .monospaced)).foregroundStyle(.green.opacity(0.9))
                 Text("-\(stat.removed)").font(.system(size: 11.5, weight: .bold, design: .monospaced)).foregroundStyle(.red.opacity(0.85))
@@ -159,7 +159,7 @@ struct TaskDevToolsPanel: View {
                 }
                 commitButton(fileCount: code.files.count)
             } else {
-                Text("尚未捕获 git 改动(任务收尾后扫描)。")
+                Text(state.loc("尚未捕获 Git 改动（任务收尾后扫描）。", "No Git changes captured yet; LingShu scans them at task completion."))
                     .font(.system(size: 10.5, weight: .medium)).foregroundStyle(Color.lingFg.opacity(0.36))
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -168,7 +168,7 @@ struct TaskDevToolsPanel: View {
 
     private func changeFileRow(_ file: LingShuCodeChangeSummary.Change) -> some View {
         HStack(spacing: 7) {
-            Text(file.label)
+            Text(localizedFileLabel(file.label))
                 .font(.system(size: 9, weight: .bold, design: .monospaced))
                 .foregroundStyle(file.label == "删除" ? .red.opacity(0.85)
                                  : (file.label == "新增" || file.label == "未跟踪" ? Color.lingHolo : Color.lingHoloAlt))
@@ -186,7 +186,7 @@ struct TaskDevToolsPanel: View {
         Button { showCommitConfirm = true } label: {
             HStack(spacing: 7) {
                 Image(systemName: "arrow.up.circle.fill").font(.system(size: 12, weight: .bold))
-                Text("提交改动").font(.system(size: 11.5, weight: .bold))
+                Text(state.loc("提交改动", "Commit Changes")).font(.system(size: 11.5, weight: .bold))
                 Spacer(minLength: 0)
                 Image(systemName: "chevron.right").font(.system(size: 9, weight: .bold)).opacity(0.6)
             }
@@ -197,12 +197,18 @@ struct TaskDevToolsPanel: View {
             .overlay { RoundedRectangle(cornerRadius: 8, style: .continuous).stroke(Color.lingHolo.opacity(0.28)) }
         }
         .buttonStyle(.plain)
-        .confirmationDialog("提交本任务的 \(fileCount) 个改动到 \(record.codeChanges?.branch ?? "当前分支")?",
+        .confirmationDialog(state.loc(
+                                "提交本任务的 \(fileCount) 个改动到 \(record.codeChanges?.branch ?? "当前分支")？",
+                                "Commit \(fileCount) task changes to \(record.codeChanges?.branch ?? "the current branch")?"
+                            ),
                             isPresented: $showCommitConfirm, titleVisibility: .visible) {
-            Button("提交") { state.commitTaskCodeChanges(recordID: record.id) }
-            Button("取消", role: .cancel) {}
+            Button(state.loc("提交", "Commit")) { state.commitTaskCodeChanges(recordID: record.id) }
+            Button(state.loc("取消", "Cancel"), role: .cancel) {}
         } message: {
-            Text("仅暂存并提交本任务改动的文件,可随时 git reset 还原。")
+            Text(state.loc(
+                "仅暂存并提交本任务改动的文件，可随时使用 git reset 还原。",
+                "Only files changed by this task are staged and committed; git reset can restore them."
+            ))
         }
     }
 
@@ -211,9 +217,11 @@ struct TaskDevToolsPanel: View {
     private var goalSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
-                sectionHeader("目标", systemImage: "target", tint: .lingHolo)
+                sectionHeader(state.loc("目标", "Goal"), systemImage: "target", tint: .lingHolo)
                 Spacer(minLength: 0)
-                Text(statusIsComplete ? "已完成" : record.status.rawValue)
+                Text(statusIsComplete
+                     ? state.loc("已完成", "Completed")
+                     : state.loc(record.status.rawValue, record.status.englishName))
                     .font(.system(size: 10, weight: .bold))
                     .foregroundStyle(statusIsComplete ? .green.opacity(0.92) : record.status.color)
                     .padding(.horizontal, 7).padding(.vertical, 2)
@@ -229,11 +237,11 @@ struct TaskDevToolsPanel: View {
             if let spec = record.goalSpec { goalSpecBreakdown(spec) }
             HStack(spacing: 6) {
                 if !record.plan.isEmpty {
-                    statChip("\(doneSteps)/\(record.plan.count) 步", icon: "checklist")
+                    statChip(state.loc("\(doneSteps)/\(record.plan.count) 步", "\(doneSteps)/\(record.plan.count) steps"), icon: "checklist")
                 }
                 statChip(elapsedText, icon: "clock")
                 if record.participants.count > 1 {
-                    statChip("\(record.participants.count) 参与方", icon: "person.2")
+                    statChip(state.loc("\(record.participants.count) 参与方", "\(record.participants.count) participants"), icon: "person.2")
                 }
                 Spacer(minLength: 0)
             }
@@ -249,11 +257,11 @@ struct TaskDevToolsPanel: View {
     /// **目标拆解**:把 GoalSpec 的结构化理解逐组展开(成功标准=验收依据最重要)。空组不显示。
     @ViewBuilder private func goalSpecBreakdown(_ spec: LingShuGoalSpec) -> some View {
         VStack(alignment: .leading, spacing: 7) {
-            criteriaGroup("成功标准(验收依据)", spec.successCriteria, icon: "checkmark.seal.fill", tint: .green)
-            criteriaGroup("约束", spec.constraints, icon: "ruler.fill", tint: .lingHolo)
-            criteriaGroup("边界 · 不做", spec.boundaries, icon: "hand.raised.fill", tint: .orange)
-            criteriaGroup("风险", spec.risks, icon: "exclamationmark.triangle.fill", tint: .red)
-            criteriaGroup("待澄清", spec.openQuestions, icon: "questionmark.circle.fill", tint: .yellow)
+            criteriaGroup(state.loc("成功标准（验收依据）", "Success Criteria"), spec.successCriteria, icon: "checkmark.seal.fill", tint: .green)
+            criteriaGroup(state.loc("约束", "Constraints"), spec.constraints, icon: "ruler.fill", tint: .lingHolo)
+            criteriaGroup(state.loc("边界 · 不做", "Boundaries · Out of Scope"), spec.boundaries, icon: "hand.raised.fill", tint: .orange)
+            criteriaGroup(state.loc("风险", "Risks"), spec.risks, icon: "exclamationmark.triangle.fill", tint: .red)
+            criteriaGroup(state.loc("待澄清", "Open Questions"), spec.openQuestions, icon: "questionmark.circle.fill", tint: .yellow)
         }
         .padding(.top, 2)
     }
@@ -289,7 +297,7 @@ struct TaskDevToolsPanel: View {
 
     private var progressSection: some View {
         VStack(alignment: .leading, spacing: 9) {
-            sectionHeader("分步计划", systemImage: "list.bullet.clipboard", tint: .lingHolo)
+            sectionHeader(state.loc("分步计划", "Step-by-Step Plan"), systemImage: "list.bullet.clipboard", tint: .lingHolo)
             TaskPlanCard(steps: record.plan)
         }
     }
@@ -300,6 +308,16 @@ struct TaskDevToolsPanel: View {
         HStack(spacing: 7) {
             Image(systemName: systemImage).font(.system(size: 12, weight: .bold)).foregroundStyle(tint)
             Text(title).font(.system(size: 12.5, weight: .bold)).foregroundStyle(Color.lingFg.opacity(0.92))
+        }
+    }
+
+    private func localizedFileLabel(_ label: String) -> String {
+        switch label {
+        case "删除": state.loc("删除", "Deleted")
+        case "新增": state.loc("新增", "Added")
+        case "未跟踪": state.loc("未跟踪", "Untracked")
+        case "修改": state.loc("修改", "Modified")
+        default: label
         }
     }
 }

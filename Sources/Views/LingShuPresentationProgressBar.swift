@@ -15,7 +15,10 @@ struct LingShuPresentationProgressBar: View {
                     Spacer()
                     let pos = presentation.queue.position
                     let page = script.currentBeat?.pageNumber ?? script.beatCount
-                    Text("\(script.title) · 第 \(pos.current)/\(pos.total) 篇 · 第 \(page)/\(script.beatCount) 页")
+                    Text(LingShuLanguagePreferenceStore.localized(
+                        "\(script.title) · 第 \(pos.current)/\(pos.total) 篇 · 第 \(page)/\(script.beatCount) 页",
+                        "\(script.title) · Item \(pos.current)/\(pos.total) · Page \(page)/\(script.beatCount)"
+                    ))
                         .font(.caption).foregroundStyle(.secondary).lineLimit(1)
                 }
 
@@ -28,7 +31,10 @@ struct LingShuPresentationProgressBar: View {
                             .frame(maxWidth: .infinity)
                             .contentShape(Rectangle())
                             .onTapGesture { Task { await presentation.seekAndContinue(toBeat: i) } }
-                            .help("跳到第 \(i + 1) 页继续")
+                            .help(LingShuLanguagePreferenceStore.localized(
+                                "跳到第 \(i + 1) 页继续",
+                                "Continue from page \(i + 1)"
+                            ))
                     }
                 }
 
@@ -52,12 +58,12 @@ struct LingShuPresentationProgressBar: View {
 
     private var phaseLabel: String {
         switch presentation.phase {
-        case .idle: return "待命"
-        case .scripting: return "正在通读 · 生成讲稿"
-        case .playing: return "演示中"
-        case .pausedForQA: return "答疑中（答完接着讲）"
-        case .awaitingNextDoc: return "本篇演完 · 说「继续」切下一篇"
-        case .finished: return "已结束"
+        case .idle: return LingShuLanguagePreferenceStore.localized("待命", "Idle")
+        case .scripting: return LingShuLanguagePreferenceStore.localized("正在通读 · 生成讲稿", "Reading · Preparing Notes")
+        case .playing: return LingShuLanguagePreferenceStore.localized("演示中", "Presenting")
+        case .pausedForQA: return LingShuLanguagePreferenceStore.localized("答疑中（答完接着讲）", "Q&A · Presentation Will Resume")
+        case .awaitingNextDoc: return LingShuLanguagePreferenceStore.localized("本篇演完 · 说「继续」切下一篇", "Finished This Item · Say “Continue” for the Next")
+        case .finished: return LingShuLanguagePreferenceStore.localized("已结束", "Finished")
         }
     }
 

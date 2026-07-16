@@ -17,6 +17,7 @@ PRODUCT_NAME="灵枢"
 VERSION="${LINGSHU_VERSION:-0.1.0}"
 BUILD_NUMBER="${LINGSHU_BUILD_NUMBER:-1}"
 TEAM_ID="${LINGSHU_APPLE_TEAM_ID:-KM7N84AC9Y}"
+EXPECTED_CERT_SHA256="${LINGSHU_SIGN_CERT_SHA256:-8B15EC76661737C31CAB3AF508A50F923BD86FC4C7B8AF2313E0157FAA2D8D02}"
 NOTARY_PROFILE="${LINGSHU_NOTARY_PROFILE:-lingshu-notary}"
 BUNDLE_SENSEVOICE="${LINGSHU_BUNDLE_SENSEVOICE:-0}"
 BUNDLE_HAL_DRIVER="${LINGSHU_BUNDLE_HAL_DRIVER:-0}"
@@ -71,6 +72,7 @@ IDENTITY="${LINGSHU_SIGN_IDENTITY:-}"
 if [ -z "$IDENTITY" ]; then
   IDENTITY="$(security find-identity -v -p codesigning 2>/dev/null \
     | sed -n 's/.*"\(Developer ID Application:.*\)"/\1/p' \
+    | grep -F "($TEAM_ID)" \
     | sed -n '1p')"
 fi
 
@@ -79,6 +81,14 @@ fi
 [[ "$IDENTITY" == *"($TEAM_ID)"* ]] || fail "signing identity does not belong to expected team $TEAM_ID: $IDENTITY"
 security find-identity -v -p codesigning 2>/dev/null | grep -F "\"$IDENTITY\"" >/dev/null \
   || fail "signing identity is not currently valid: $IDENTITY"
+
+CERTIFICATE_SHA256="$(security find-certificate -a -c "$IDENTITY" -Z 2>/dev/null \
+  | sed -n 's/^SHA-256 hash: //p' \
+  | sed -n '1p')"
+[ -n "$CERTIFICATE_SHA256" ] || fail "could not read the signing certificate fingerprint: $IDENTITY"
+[[ "$CERTIFICATE_SHA256" =~ ^[0-9A-F]{64}$ ]] || fail "invalid signing certificate fingerprint: $CERTIFICATE_SHA256"
+[ "$CERTIFICATE_SHA256" = "$EXPECTED_CERT_SHA256" ] \
+  || fail "signing certificate fingerprint mismatch: expected $EXPECTED_CERT_SHA256, got $CERTIFICATE_SHA256"
 
 SIGNING_PROBE="$TMP_DIR/signing-probe"
 SIGNING_PROBE_LOG="$TMP_DIR/signing-probe.log"
@@ -99,6 +109,7 @@ fi
 echo "==> release preflight"
 echo "    version: $VERSION ($BUILD_NUMBER)"
 echo "    identity: $IDENTITY"
+echo "    certificate SHA-256: $CERTIFICATE_SHA256"
 echo "    notary profile: $NOTARY_PROFILE"
 echo "    bundled SenseVoice: $BUNDLE_SENSEVOICE"
 echo "    bundled HAL driver: $BUNDLE_HAL_DRIVER"
@@ -213,6 +224,8 @@ plutil -insert build -integer "$BUILD_NUMBER" "$MANIFEST_PLIST"
 plutil -insert bundle_id -string "com.zhaoroy.LingShu" "$MANIFEST_PLIST"
 plutil -insert architectures -json '["arm64","x86_64"]' "$MANIFEST_PLIST"
 plutil -insert team_id -string "$TEAM_ID" "$MANIFEST_PLIST"
+plutil -insert signing_identity -string "$IDENTITY" "$MANIFEST_PLIST"
+plutil -insert signing_certificate_sha256 -string "$CERTIFICATE_SHA256" "$MANIFEST_PLIST"
 plutil -insert source_revision -string "$SOURCE_REVISION" "$MANIFEST_PLIST"
 plutil -insert source_dirty -bool "$SOURCE_DIRTY" "$MANIFEST_PLIST"
 plutil -insert dmg_file -string "$DMG_NAME" "$MANIFEST_PLIST"

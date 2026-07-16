@@ -19,8 +19,8 @@ struct LingShuModelConfigPortabilityBar: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 10) {
-                actionButton("导出加密配置", icon: "lock.doc") { sheet = .export }
-                actionButton("导入配置", icon: "square.and.arrow.down") { beginImport() }
+                actionButton(state.loc("导出加密配置", "Export Encrypted Config"), icon: "lock.doc") { sheet = .export }
+                actionButton(state.loc("导入配置", "Import Config"), icon: "square.and.arrow.down") { beginImport() }
                 Spacer()
             }
             if !status.isEmpty {
@@ -28,7 +28,7 @@ struct LingShuModelConfigPortabilityBar: View {
                     .font(.system(size: 11.5))
                     .foregroundStyle(statusOK ? Color.green.opacity(0.9) : Color.orange.opacity(0.95))
             }
-            Text("把当前接入的脑/通道/各密钥用口令加密成一个文件;换台机器或给别人,用同一口令一键导入即用。没口令谁也解不开——可安全分享 / 开源。")
+            Text(state.loc("把当前接入的脑/通道/各密钥用口令加密成一个文件;换台机器或给别人,用同一口令一键导入即用。没口令谁也解不开——可安全分享 / 开源。", "Encrypt the configured brain, channels, and credentials into one file. Import it on another Mac with the same passphrase; without the passphrase, the secrets cannot be decrypted."))
                 .font(.system(size: 11))
                 .foregroundStyle(Color.lingFg.opacity(0.5))
                 .fixedSize(horizontal: false, vertical: true)
@@ -60,7 +60,7 @@ struct LingShuModelConfigPortabilityBar: View {
 
     private func beginImport() {
         let panel = NSOpenPanel()
-        panel.title = "选择灵枢加密配置文件"
+        panel.title = state.loc("选择灵枢加密配置文件", "Choose an Encrypted LingShu Configuration")
         panel.allowedContentTypes = []
         panel.allowsMultipleSelection = false
         panel.canChooseDirectories = false
@@ -73,27 +73,27 @@ struct LingShuModelConfigPortabilityBar: View {
         switch s {
         case .export:
             let panel = NSSavePanel()
-            panel.title = "保存加密配置"
-            panel.nameFieldStringValue = "灵枢模型配置.lingshucfg"
+            panel.title = state.loc("保存加密配置", "Save Encrypted Configuration")
+            panel.nameFieldStringValue = state.loc("灵枢模型配置.lingshucfg", "LingShu-model-config.lingshucfg")
             sheet = nil
             guard panel.runModal() == .OK, let url = panel.url else { return }
             switch state.exportModelConfig(passphrase: passphrase, to: url) {
             case .success(let r):
                 statusOK = true
-                status = "✅ 已加密导出(\(r.summary))→ \(url.lastPathComponent)。用同一口令即可在别处一键导入。"
+                status = state.loc("✅ 已加密导出(\(r.summary))→ \(url.lastPathComponent)。用同一口令即可在别处一键导入。", "✅ Encrypted export complete (\(r.summary)) → \(url.lastPathComponent). Use the same passphrase to import it elsewhere.")
             case .failure(let e):
                 statusOK = false
-                status = "导出失败:\((e as? LingShuModelConfigPortability.PortError)?.errorDescription ?? e.localizedDescription)"
+                status = state.loc("导出失败:", "Export failed: ") + ((e as? LingShuModelConfigPortability.PortError)?.errorDescription ?? e.localizedDescription)
             }
         case .importing(let url):
             sheet = nil
             switch state.importModelConfig(passphrase: passphrase, from: url) {
             case .success(let b):
                 statusOK = true
-                status = "✅ 已导入并启用:脑=\(b.provider)/\(b.model) · 通道 \(b.channels.count) 个 · 密钥 \(b.credentials.count) 条。下一回合即用新配置。"
+                status = state.loc("✅ 已导入并启用:脑=\(b.provider)/\(b.model) · 通道 \(b.channels.count) 个 · 密钥 \(b.credentials.count) 条。下一回合即用新配置。", "✅ Imported and enabled: brain \(b.provider)/\(b.model) · \(b.channels.count) channels · \(b.credentials.count) credentials. The new configuration applies next turn.")
             case .failure(let e):
                 statusOK = false
-                status = "导入失败:\((e as? LingShuModelConfigPortability.PortError)?.errorDescription ?? e.localizedDescription)"
+                status = state.loc("导入失败:", "Import failed: ") + ((e as? LingShuModelConfigPortability.PortError)?.errorDescription ?? e.localizedDescription)
             }
         }
     }
@@ -115,30 +115,32 @@ private struct LingShuPassphraseSheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text(isExport ? "设置导出口令" : "输入导入口令")
+            Text(isExport
+                 ? LingShuLanguagePreferenceStore.localized("设置导出口令", "Set Export Passphrase")
+                 : LingShuLanguagePreferenceStore.localized("输入导入口令", "Enter Import Passphrase"))
                 .font(.system(size: 15, weight: .bold)).foregroundStyle(Color.lingFg)
             Text(isExport
-                 ? "这个口令保护导出的密钥;导入时要用同一个。请妥善保管——丢了就解不开。"
-                 : "输入导出时设置的口令以解密恢复配置。")
+                 ? LingShuLanguagePreferenceStore.localized("这个口令保护导出的密钥;导入时要用同一个。请妥善保管——丢了就解不开。", "This passphrase protects exported credentials and is required for import. Store it safely; it cannot be recovered.")
+                 : LingShuLanguagePreferenceStore.localized("输入导出时设置的口令以解密恢复配置。", "Enter the passphrase used during export to decrypt and restore the configuration."))
                 .font(.system(size: 11.5)).foregroundStyle(Color.lingFg.opacity(0.6))
                 .fixedSize(horizontal: false, vertical: true)
 
-            SecureField("口令(至少 \(LingShuModelConfigPortability.minPassphraseLength) 位)", text: $pass)
+            SecureField(LingShuLanguagePreferenceStore.localized("口令(至少 \(LingShuModelConfigPortability.minPassphraseLength) 位)", "Passphrase (at least \(LingShuModelConfigPortability.minPassphraseLength) characters)"), text: $pass)
                 .textFieldStyle(.roundedBorder)
             if isExport {
-                SecureField("再输一遍", text: $confirm)
+                SecureField(LingShuLanguagePreferenceStore.localized("再输一遍", "Enter it again"), text: $confirm)
                     .textFieldStyle(.roundedBorder)
             }
             if tooShort, !pass.isEmpty {
-                Text("口令至少 \(LingShuModelConfigPortability.minPassphraseLength) 位").font(.system(size: 11)).foregroundStyle(.orange)
+                Text(LingShuLanguagePreferenceStore.localized("口令至少 \(LingShuModelConfigPortability.minPassphraseLength) 位", "Passphrase must contain at least \(LingShuModelConfigPortability.minPassphraseLength) characters")).font(.system(size: 11)).foregroundStyle(.orange)
             } else if mismatch, !confirm.isEmpty {
-                Text("两次口令不一致").font(.system(size: 11)).foregroundStyle(.orange)
+                Text(LingShuLanguagePreferenceStore.localized("两次口令不一致", "Passphrases do not match")).font(.system(size: 11)).foregroundStyle(.orange)
             }
 
             HStack {
                 Spacer()
-                Button("取消", action: onCancel).buttonStyle(.plain).foregroundStyle(Color.lingFg.opacity(0.7))
-                Button(isExport ? "导出" : "导入") { onConfirm(pass) }
+                Button(LingShuLanguagePreferenceStore.localized("取消", "Cancel"), action: onCancel).buttonStyle(.plain).foregroundStyle(Color.lingFg.opacity(0.7))
+                Button(isExport ? LingShuLanguagePreferenceStore.localized("导出", "Export") : LingShuLanguagePreferenceStore.localized("导入", "Import")) { onConfirm(pass) }
                     .buttonStyle(.plain)
                     .foregroundStyle(canConfirm ? Color.lingVoid : Color.lingFg.opacity(0.3))
                     .padding(.horizontal, 14).padding(.vertical, 7)

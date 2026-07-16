@@ -28,7 +28,7 @@ struct LingShuPreviewHost: NSViewRepresentable {
             if controller.isPresented, window == nil {
                 let host = NSHostingController(rootView: LingShuPreviewSheet(controller: controller, presentation: presentation))
                 let w = NSWindow(contentViewController: host)
-                w.title = "灵枢演示"
+                w.title = LingShuLanguagePreferenceStore.localized("灵枢演示", "LingShu Presentation")
                 w.setContentSize(NSSize(width: 1040, height: 720))
                 w.styleMask = [.titled, .closable, .resizable, .miniaturizable, .fullSizeContentView]
                 w.collectionBehavior.insert(.fullScreenPrimary)
@@ -74,7 +74,7 @@ struct LingShuPreviewSheet: View {
                 HStack(spacing: 10) {
                     Image(systemName: "rectangle.on.rectangle.angled")
                         .foregroundStyle(Color.lingHolo)
-                    Text(controller.title.isEmpty ? "预览" : controller.title)
+                    Text(controller.title.isEmpty ? LingShuLanguagePreferenceStore.localized("预览", "Preview") : controller.title)
                         .font(.system(size: 13, weight: .bold))
                         .foregroundStyle(Color.lingFg)
                         .lineLimit(1)
@@ -85,7 +85,7 @@ struct LingShuPreviewSheet: View {
                             .foregroundStyle(Color.lingHolo)
                     }
                     Button { _ = controller.setSlideshow(true) } label: {
-                        Label("全屏演示", systemImage: "play.rectangle.fill")
+                        Label(LingShuLanguagePreferenceStore.localized("全屏演示", "Present Full Screen"), systemImage: "play.rectangle.fill")
                             .font(.system(size: 11.5, weight: .bold))
                     }.buttonStyle(.plain).foregroundStyle(Color.lingHolo)
                     Button { _ = controller.prev() } label: { Image(systemName: "chevron.left") }.buttonStyle(.plain)
@@ -111,7 +111,7 @@ struct LingShuPreviewSheet: View {
                                 .font(.system(size: 12, weight: .bold, design: .monospaced))
                         }
                         Button { _ = controller.next() } label: { Image(systemName: controller.isHTML ? "chevron.down.circle.fill" : "chevron.right.circle.fill") }.buttonStyle(.plain)
-                        Button { _ = controller.setSlideshow(false) } label: { Label("退出", systemImage: "xmark").font(.system(size: 11, weight: .bold)) }.buttonStyle(.plain)
+                        Button { _ = controller.setSlideshow(false) } label: { Label(LingShuLanguagePreferenceStore.localized("退出", "Exit"), systemImage: "xmark").font(.system(size: 11, weight: .bold)) }.buttonStyle(.plain)
                     }
                     .foregroundStyle(Color.lingFg.opacity(0.85))
                     .padding(.horizontal, 18).padding(.vertical, 9)
@@ -135,7 +135,7 @@ struct LingShuPreviewSheet: View {
         HStack(spacing: 8) {
             Image(systemName: "text.bubble.fill")
                 .foregroundStyle(Color.lingHolo).font(.system(size: 12))
-            TextField("打字提问或控制演示（暂停 / 继续 / 跳到第N页 / 任何问题）…", text: $draft)
+            TextField(LingShuLanguagePreferenceStore.localized("打字提问或控制演示（暂停 / 继续 / 跳到第N页 / 任何问题）…", "Ask a question or control the presentation (pause / resume / go to slide N)…"), text: $draft)
                 .textFieldStyle(.plain)
                 .font(.system(size: 13))
                 .foregroundStyle(Color.lingFg)

@@ -25,6 +25,15 @@ struct LingShuWorkspacePanel: View {
         case browser = "浏览器"
         case terminal = "终端"
         var id: String { rawValue }
+        var englishName: String {
+            switch self {
+            case .overview: "Overview"
+            case .review: "Review"
+            case .files: "Files"
+            case .browser: "Browser"
+            case .terminal: "Terminal"
+            }
+        }
         var icon: String {
             switch self {
             case .overview: return "rectangle.3.group"
@@ -78,7 +87,9 @@ struct LingShuWorkspacePanel: View {
                     .background(Color.lingFg.opacity(0.06), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
             }
             .buttonStyle(.plain)
-            .help(expanded ? "收起为侧栏" : "展开铺满窗口")
+            .help(expanded
+                  ? state.loc("收起为侧栏", "Collapse to Sidebar")
+                  : state.loc("展开铺满窗口", "Expand to Full Window"))
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
@@ -92,7 +103,7 @@ struct LingShuWorkspacePanel: View {
             Button { select(m) } label: {
                 HStack(spacing: 5) {
                     Image(systemName: m.icon).font(.system(size: 10.5, weight: .bold))
-                    Text(m.rawValue).font(.system(size: 12, weight: .semibold)).lineLimit(1).fixedSize()
+                    Text(state.loc(m.rawValue, m.englishName)).font(.system(size: 12, weight: .semibold)).lineLimit(1).fixedSize()
                     if m == .review, reviewCount > 0 {
                         Text("\(reviewCount)").font(.system(size: 9, weight: .bold, design: .monospaced)).opacity(0.7)
                     }
@@ -117,10 +128,10 @@ struct LingShuWorkspacePanel: View {
         let closed = Mode.allCases.filter { !openTabs.contains($0) }
         return Menu {
             if closed.isEmpty {
-                Text("已全部打开")
+                Text(state.loc("已全部打开", "All Open"))
             } else {
                 ForEach(closed) { m in
-                    Button { open(m) } label: { Label(m.rawValue, systemImage: m.icon) }
+                    Button { open(m) } label: { Label(state.loc(m.rawValue, m.englishName), systemImage: m.icon) }
                 }
             }
         } label: {
@@ -131,7 +142,7 @@ struct LingShuWorkspacePanel: View {
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
         .fixedSize()
-        .help("追加一个模式标签")
+        .help(state.loc("追加一个模式标签", "Add a Workspace Tab"))
     }
 
     private func select(_ m: Mode) {

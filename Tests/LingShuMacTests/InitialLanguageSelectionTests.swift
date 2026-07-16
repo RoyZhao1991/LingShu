@@ -43,4 +43,24 @@ final class InitialLanguageSelectionTests: XCTestCase {
 
         XCTAssertFalse(LingShuLanguagePreferenceStore.hasCompletedInitialSelection(in: defaults))
     }
+
+    func testUnselectedLanguageDefaultsToChinese() {
+        XCTAssertEqual(LingShuLanguagePreferenceStore.currentLanguage(in: defaults), .chinese)
+        XCTAssertEqual(LingShuLanguagePreferenceStore.localized("中文", "English", in: defaults), "中文")
+    }
+
+    func testLocalizedTextUsesPersistedEnglishSelection() {
+        LingShuLanguagePreferenceStore.completeInitialSelection(.english, in: defaults)
+
+        XCTAssertEqual(LingShuLanguagePreferenceStore.currentLanguage(in: defaults), .english)
+        XCTAssertEqual(LingShuLanguagePreferenceStore.localized("中文", "English", in: defaults), "English")
+    }
+
+    func testChangingLanguageSelectionUpdatesLocalizedText() {
+        LingShuLanguagePreferenceStore.completeInitialSelection(.english, in: defaults)
+        XCTAssertEqual(LingShuLanguagePreferenceStore.localized("中文", "English", in: defaults), "English")
+
+        LingShuLanguagePreferenceStore.completeInitialSelection(.chinese, in: defaults)
+        XCTAssertEqual(LingShuLanguagePreferenceStore.localized("中文", "English", in: defaults), "中文")
+    }
 }

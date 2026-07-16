@@ -24,7 +24,7 @@ struct LingShuFormCard: View {
             }
             if resolved == nil {
                 Button { onSubmit(collectAnswers()) } label: {
-                    Text("提交")
+                    Text(LingShuLanguagePreferenceStore.localized("提交", "Submit"))
                         .font(.system(size: 12.5, weight: .bold))
                         .foregroundStyle(.black.opacity(0.85))
                         .padding(.horizontal, 18).padding(.vertical, 7)
@@ -33,7 +33,9 @@ struct LingShuFormCard: View {
                 .buttonStyle(.plain)
                 .disabled(!allAnswered)
                 .opacity(allAnswered ? 1 : 0.45)
-                .help(allAnswered ? "提交确认" : "请把每一项都填好")
+                .help(allAnswered
+                      ? LingShuLanguagePreferenceStore.localized("提交确认", "Submit Answers")
+                      : LingShuLanguagePreferenceStore.localized("请把每一项都填好", "Complete every field"))
             }
         }
         .padding(13)
@@ -51,7 +53,7 @@ struct LingShuFormCard: View {
                 Text(field.question).font(.system(size: 13, weight: .semibold)).foregroundStyle(Color.lingFg.opacity(0.86))
             }
             if let resolved {
-                Text(resolved[field.key]?.isEmpty == false ? resolved[field.key]! : "(未填)")
+                Text(resolved[field.key]?.isEmpty == false ? resolved[field.key]! : LingShuLanguagePreferenceStore.localized("(未填)", "(Not provided)"))
                     .font(.system(size: 12.5, weight: .medium)).foregroundStyle(Color.lingHolo.opacity(0.92))
                     .padding(.leading, 23)
             } else {
@@ -63,10 +65,10 @@ struct LingShuFormCard: View {
                                 Button(opt) { picked[field.key] = opt }
                             }
                             Divider()
-                            Button(otherLabel) { picked[field.key] = otherLabel }
+                            Button(LingShuLanguagePreferenceStore.localized(otherLabel, "Other")) { picked[field.key] = otherLabel }
                         } label: {
                             HStack(spacing: 5) {
-                                Text(picked[field.key] ?? "请选择…")
+                                Text(picked[field.key] ?? LingShuLanguagePreferenceStore.localized("请选择…", "Choose…"))
                                     .foregroundStyle((picked[field.key] == nil) ? Color.lingFg.opacity(0.45) : Color.lingFg.opacity(0.9))
                                 Image(systemName: "chevron.down").font(.system(size: 9, weight: .bold)).foregroundStyle(Color.lingFg.opacity(0.5))
                             }
@@ -77,7 +79,9 @@ struct LingShuFormCard: View {
                         .buttonStyle(.plain)
                     }
                     if isOther {
-                        TextField(field.options.isEmpty ? "请输入…" : "自行输入…", text: bindingOther(field.key))
+                        TextField(field.options.isEmpty
+                                  ? LingShuLanguagePreferenceStore.localized("请输入…", "Enter a value…")
+                                  : LingShuLanguagePreferenceStore.localized("自行输入…", "Enter another value…"), text: bindingOther(field.key))
                             .textFieldStyle(.plain)
                             .font(.system(size: 12.5))
                             .foregroundStyle(Color.lingFg.opacity(0.92))

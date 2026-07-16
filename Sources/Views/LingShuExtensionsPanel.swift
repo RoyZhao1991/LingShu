@@ -18,13 +18,13 @@ struct LingShuExtensionsPanel: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("扩展(技能 + 连接器统一管理)").font(.headline)
-            Text("声明式权限作用域 + 启停 + 效能。停用的扩展不再被匹配/调用;低成功率的会被建议降级。")
+            Text(state.loc("扩展(技能 + 连接器统一管理)", "Extensions (Skills + Connectors)")).font(.headline)
+            Text(state.loc("声明式权限作用域 + 启停 + 效能。停用的扩展不再被匹配/调用;低成功率的会被建议降级。", "Manage permission scopes, enablement, and effectiveness. Disabled extensions are not matched or invoked; low-performing ones are flagged for demotion."))
                 .font(.caption).foregroundStyle(.secondary)
 
             let exts = extensions
             if exts.isEmpty {
-                Text("还没有可管理的扩展(用户技能 / MCP 连接器)。")
+                Text(state.loc("还没有可管理的扩展(用户技能 / MCP 连接器)。", "No manageable extensions yet (user skills or MCP connectors)."))
                     .font(.callout).foregroundStyle(.secondary).padding(.top, 6)
             } else {
                 ForEach(exts) { ext in row(ext) }
@@ -42,16 +42,16 @@ struct LingShuExtensionsPanel: View {
                         .background(.quaternary, in: Capsule())
                     if ext.kind == .skill { Text("v\(ext.version)").font(.caption2).foregroundStyle(.secondary) }
                     if ext.riskLevel != "—" {
-                        Text("风险 \(ext.riskLevel)").font(.caption2)
+                        Text(state.loc("风险 \(ext.riskLevel)", "Risk \(ext.riskLevel)")).font(.caption2)
                             .foregroundStyle(ext.riskLevel == "high" ? .red : (ext.riskLevel == "medium" ? .orange : .secondary))
                     }
                     if registry.shouldDemote(ext.id) {
-                        Text("建议降级").font(.caption2).foregroundStyle(.orange)
+                        Text(state.loc("建议降级", "Demotion Suggested")).font(.caption2).foregroundStyle(.orange)
                     }
                 }
                 Text(ext.permissionSummary).font(.caption2).foregroundStyle(.secondary).lineLimit(2)
                 if let rate = ext.successRate {
-                    Text("成功率 \(Int(rate * 100))%(\(ext.successCount)/\(ext.successCount + ext.failCount))")
+                    Text(state.loc("成功率 \(Int(rate * 100))%(\(ext.successCount)/\(ext.successCount + ext.failCount))", "Success \(Int(rate * 100))% (\(ext.successCount)/\(ext.successCount + ext.failCount))"))
                         .font(.caption2).foregroundStyle(.secondary)
                 }
             }

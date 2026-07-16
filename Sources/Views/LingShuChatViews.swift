@@ -17,7 +17,10 @@ struct LingShuTaskProgressIndicator: View {
                     progressContent
                 }
                 .buttonStyle(.plain)
-                .help("打开任务子线程窗口，实时查看多段执行过程")
+                .help(LingShuLanguagePreferenceStore.localized(
+                    "打开任务子线程窗口，实时查看多段执行过程",
+                    "Open the task thread to view live execution details"
+                ))
             } else {
                 progressContent
             }
@@ -46,7 +49,7 @@ struct LingShuTaskProgressIndicator: View {
                     if onOpen != nil {
                         HStack(spacing: 3) {
                             Image(systemName: "rectangle.split.2x1")
-                            Text("查看执行过程")
+                            Text(LingShuLanguagePreferenceStore.localized("查看执行过程", "View Progress"))
                         }
                         .font(.system(size: 10.5, weight: .semibold))
                         .foregroundStyle(Color.lingHolo.opacity(0.85))
@@ -209,7 +212,7 @@ struct ChatBubbleView: View {
                                         .foregroundStyle(Color.lingFg.opacity(0.35))
                                 }
                                 .buttonStyle(.plain)
-                                .help("删除这条等待中的问答(执行中的不可删)")
+                                .help(state.loc("删除这条等待中的问答（执行中的不可删）", "Remove this queued turn"))
                             }
                         }
                     } else {
@@ -225,7 +228,10 @@ struct ChatBubbleView: View {
                                 if message.text.isEmpty {
                                     TimelineView(.periodic(from: .now, by: 1)) { context in
                                         let elapsed = max(0, Int(context.date.timeIntervalSince(message.createdAt)))
-                                        Text("思考中 \(Self.formatLoadingElapsed(elapsed))")
+                                        Text(state.loc(
+                                            "思考中 \(Self.formatLoadingElapsed(elapsed))",
+                                            "Thinking \(Self.formatLoadingElapsed(elapsed))"
+                                        ))
                                             .font(.system(size: 14.5, weight: .medium, design: .monospaced))
                                             .foregroundStyle(Color.lingFg.opacity(0.5))
                                     }
@@ -341,7 +347,7 @@ struct ChatBubbleView: View {
                             }
                     }
                     .buttonStyle(.plain)
-                    .help("打开本轮任务的 agent 群聊式执行记录")
+                    .help(state.loc("打开本轮任务的 Agent 协作执行记录", "Open the agent collaboration record"))
                 }
 
                 if hasCopyableText {
@@ -405,9 +411,9 @@ private struct LingShuBubbleCopyBar: View {
         var tipText: String {
             switch self {
             case .plain:
-                return "已复制文本"
+                return LingShuLanguagePreferenceStore.localized("已复制文本", "Text Copied")
             case .markdown:
-                return "已复制 Markdown"
+                return LingShuLanguagePreferenceStore.localized("已复制 Markdown", "Markdown Copied")
             }
         }
     }
@@ -423,7 +429,7 @@ private struct LingShuBubbleCopyBar: View {
             }
             .buttonStyle(.plain)
             .foregroundStyle(copiedMode == .plain ? Color.lingHolo : Color.lingFg.opacity(0.42))
-            .help("复制纯文本")
+            .help(LingShuLanguagePreferenceStore.localized("复制纯文本", "Copy Plain Text"))
 
             Button {
                 copyMarkdown()
@@ -434,7 +440,7 @@ private struct LingShuBubbleCopyBar: View {
             }
             .buttonStyle(.plain)
             .foregroundStyle(copiedMode == .markdown ? Color.lingHolo : Color.lingFg.opacity(0.42))
-            .help("复制 Markdown")
+            .help(LingShuLanguagePreferenceStore.localized("复制 Markdown", "Copy Markdown"))
 
             if let copiedMode {
                 Text(copiedMode.tipText)
@@ -544,13 +550,17 @@ struct FlowChips: View {
                 let previewable = !path.isEmpty && onPreview != nil && FileManager.default.fileExists(atPath: path)
                 if previewable {
                     Button { onPreview?(URL(fileURLWithPath: path)) } label: { chip(name, previewable: true) }
-                        .buttonStyle(.plain).help("点击重新预览")
+                        .buttonStyle(.plain)
+                        .help(LingShuLanguagePreferenceStore.localized("点击重新预览", "Preview Again"))
                 } else {
                     chip(name, previewable: false)
                 }
             }
             if names.count > 6 {
-                Text("等 \(names.count) 个文件")
+                Text(LingShuLanguagePreferenceStore.localized(
+                    "共 \(names.count) 个文件",
+                    "\(names.count) files total"
+                ))
                     .font(.system(size: 10.5, weight: .medium))
                     .foregroundStyle(Color.lingFg.opacity(0.5))
             }

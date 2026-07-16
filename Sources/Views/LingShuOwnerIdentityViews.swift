@@ -4,14 +4,14 @@ struct LingShuOwnerIdentityPanel: View {
     @ObservedObject var perceptionGateway: LingShuRealtimePerceptionGateway
     @ObservedObject var voice: VoiceIOManager
     @ObservedObject var vision: VisionIOManager
-    @State private var ownerName = "主人"
+    @State private var ownerName = LingShuLanguagePreferenceStore.localized("主人", "Owner")
 
     var body: some View {
         let snapshot = perceptionGateway.ownerIdentitySnapshot
 
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 8) {
-                Text("身份锁")
+                Text(LingShuLanguagePreferenceStore.localized("身份锁", "Identity Lock"))
                     .font(.system(size: 11.5, weight: .semibold))
                     .foregroundStyle(Color.lingFg.opacity(0.72))
 
@@ -27,7 +27,7 @@ struct LingShuOwnerIdentityPanel: View {
             }
 
             HStack(spacing: 8) {
-                TextField("主人名称", text: $ownerName)
+                TextField(LingShuLanguagePreferenceStore.localized("主人名称", "Owner Name"), text: $ownerName)
                     .textFieldStyle(.plain)
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(Color.lingFg)
@@ -39,21 +39,21 @@ struct LingShuOwnerIdentityPanel: View {
                             .stroke(Color.lingHolo.opacity(0.14))
                     }
 
-                Button("开始认主") {
+                Button(LingShuLanguagePreferenceStore.localized("开始认主", "Start Enrollment")) {
                     perceptionGateway.beginOwnerEnrollment(ownerName: ownerName)
                 }
                 .buttonStyle(IdentityCapsuleButtonStyle(active: snapshot.enrollmentState == .enrolling))
 
-                Button("重置") {
+                Button(LingShuLanguagePreferenceStore.localized("重置", "Reset")) {
                     perceptionGateway.resetOwnerIdentity()
                 }
                 .buttonStyle(IdentityCapsuleButtonStyle(active: false))
             }
 
             HStack(spacing: 8) {
-                IdentityMetric(title: "面容", value: "\(snapshot.faceSampleCount)/3", confidence: snapshot.faceConfidence)
-                IdentityMetric(title: "声线", value: "\(snapshot.voiceSampleCount)/3", confidence: snapshot.voiceConfidence)
-                IdentityMetric(title: "综合", value: snapshot.isLocked ? "通过" : "待确认", confidence: snapshot.combinedConfidence)
+                IdentityMetric(title: LingShuLanguagePreferenceStore.localized("面容", "Face"), value: "\(snapshot.faceSampleCount)/3", confidence: snapshot.faceConfidence)
+                IdentityMetric(title: LingShuLanguagePreferenceStore.localized("声线", "Voice"), value: "\(snapshot.voiceSampleCount)/3", confidence: snapshot.voiceConfidence)
+                IdentityMetric(title: LingShuLanguagePreferenceStore.localized("综合", "Combined"), value: snapshot.isLocked ? LingShuLanguagePreferenceStore.localized("通过", "Verified") : LingShuLanguagePreferenceStore.localized("待确认", "Pending"), confidence: snapshot.combinedConfidence)
             }
 
             Text(snapshot.detailText)
@@ -76,15 +76,15 @@ struct LingShuOwnerIdentityPanel: View {
 
     private var hintText: String {
         if !voice.isRecording && !vision.isCameraRunning {
-            return "认主需要同时启用收音和视觉；身份锁开启后，触发词命中也必须先通过面容和声线联合确认。"
+            return LingShuLanguagePreferenceStore.localized("认主需要同时启用收音和视觉；身份锁开启后，触发词命中也必须先通过面容和声线联合确认。", "Enrollment requires audio and vision. Once identity lock is enabled, wake-word matches also require combined face and voice verification.")
         }
         if !voice.isRecording {
-            return "请启用收音并连续说几句话，用于采集声线样本。"
+            return LingShuLanguagePreferenceStore.localized("请启用收音并连续说几句话，用于采集声线样本。", "Enable listening and speak a few sentences to capture voice samples.")
         }
         if !vision.isCameraRunning {
-            return "请启用视觉并面向摄像头，用于采集面容样本。"
+            return LingShuLanguagePreferenceStore.localized("请启用视觉并面向摄像头，用于采集面容样本。", "Enable vision and face the camera to capture face samples.")
         }
-        return "采集中。请面向摄像头，用自然语速连续说几句话。"
+        return LingShuLanguagePreferenceStore.localized("采集中。请面向摄像头，用自然语速连续说几句话。", "Capturing. Face the camera and speak naturally for a few sentences.")
     }
 
     private var identityStrokeColor: Color {

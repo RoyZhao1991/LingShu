@@ -30,8 +30,8 @@ struct LingShuTaskPoolView: View {
                     if pool.isEmpty {
                         emptyState
                     } else {
-                        if !ongoing.isEmpty { section("进行中 / 待处理", ongoing) }
-                        if !done.isEmpty { section("已完成", done) }
+                        if !ongoing.isEmpty { section(state.loc("进行中 / 待处理", "In Progress / Needs Attention"), ongoing) }
+                        if !done.isEmpty { section(state.loc("已完成", "Completed"), done) }
                     }
                 }
                 .padding(20)
@@ -42,29 +42,31 @@ struct LingShuTaskPoolView: View {
             if state.selectedTaskRecord != nil {
                 TaskExecutionRecordSheet(state: state)
             } else {
-                Text("任务记录不存在").frame(width: 520, height: 320)
+                Text(state.loc("任务记录不存在", "Task record not found")).frame(width: 520, height: 320)
             }
         }
     }
 
     private var header: some View {
         HStack(spacing: 14) {
-            Label("线程", systemImage: "bubble.left.and.bubble.right")
+            Label(state.loc("线程", "Tasks"), systemImage: "bubble.left.and.bubble.right")
                 .font(.system(size: 16, weight: .bold))
                 .foregroundStyle(Color.lingHolo)
-                .help("主线程是全能中枢;每个任务是一条线程,派生的子线程像专项工作室——其上下文对该任务更聚焦、价值更高。")
-            Text("进行中 \(ongoing.count) · 已完成 \(done.count)")
+                .help(state.loc("主线程是全能中枢;每个任务是一条线程,派生的子线程像专项工作室——其上下文对该任务更聚焦、价值更高。", "The main thread is the general hub. Each task has a focused thread, and its child threads act as specialist workspaces."))
+            Text(state.loc("进行中 \(ongoing.count) · 已完成 \(done.count)", "In progress \(ongoing.count) · Completed \(done.count)"))
                 .font(.system(size: 12))
                 .foregroundStyle(Color.lingFg.opacity(0.5))
             Spacer()
             if !cold.isEmpty {
                 Toggle(isOn: $includeArchived) {
-                    Text(includeArchived ? "已含冷备 \(cold.count)" : "含冷备 \(cold.count)")
+                    Text(includeArchived
+                         ? state.loc("已含冷备 \(cold.count)", "Archive included \(cold.count)")
+                         : state.loc("含冷备 \(cold.count)", "Include archive \(cold.count)"))
                         .font(.system(size: 11.5, weight: .medium))
                 }
                 .toggleStyle(.button)
                 .tint(Color.lingHolo)
-                .help("纳入一个月前的冷备任务(更早的线程记录)")
+                .help(state.loc("纳入一个月前的冷备任务(更早的线程记录)", "Include archived tasks older than one month"))
             }
         }
         .padding(.horizontal, 20)
@@ -105,7 +107,7 @@ struct LingShuTaskPoolView: View {
                         .foregroundStyle(Color.lingFg.opacity(0.9))
                         .lineLimit(1)
                     HStack(spacing: 9) {
-                        Text(record.status.rawValue)
+                        Text(state.language == .english ? record.status.englishName : record.status.rawValue)
                             .font(.system(size: 10.5, weight: .semibold))
                             .foregroundStyle(statusColor(record.status))
                         Text(record.updatedAt.taskRecordDisplayTime)
@@ -136,7 +138,7 @@ struct LingShuTaskPoolView: View {
             Image(systemName: "tray")
                 .font(.system(size: 34))
                 .foregroundStyle(Color.lingFg.opacity(0.25))
-            Text("还没有任务。下达目标后,这里会按时间归集进行中与已完成的任务。")
+            Text(state.loc("还没有任务。下达目标后,这里会按时间归集进行中与已完成的任务。", "No tasks yet. Once you give LingShu a goal, active and completed tasks will be collected here."))
                 .font(.system(size: 12.5))
                 .foregroundStyle(Color.lingFg.opacity(0.4))
                 .multilineTextAlignment(.center)

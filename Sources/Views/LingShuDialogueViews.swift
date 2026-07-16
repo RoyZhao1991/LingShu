@@ -66,7 +66,7 @@ private struct LingShuChatScroll: View {
                             windowSize += Self.windowStep
                             if windowSize >= chatStore.messages.count { state.loadOlderChatHistoryIfNeeded() }
                         } label: {
-                            Text("加载更早的对话")
+                            Text(state.loc("加载更早的对话", "Load Earlier Messages"))
                                 .font(.system(size: 11, weight: .medium))
                                 .foregroundStyle(Color.lingFg.opacity(0.45))
                                 .padding(.vertical, 4)
@@ -137,7 +137,10 @@ struct LingShuCoreHeader: View {
         HStack(alignment: .center, spacing: 18) {
             VStack(alignment: .leading, spacing: 10) {
                 LingShuHUDReadout(label: "MISSION", value: state.missionTitle, color: state.coreState.color)
-                LingShuHUDReadout(label: "THREADS", value: "\(state.taskThreads.count) 条任务线程")
+                LingShuHUDReadout(
+                    label: "THREADS",
+                    value: state.loc("\(state.taskThreads.count) 条任务线程", "\(state.taskThreads.count) task threads")
+                )
                 LingShuHUDReadout(label: "MEMORY", value: state.mainMemoryStatus)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -151,7 +154,7 @@ struct LingShuCoreHeader: View {
                 .frame(width: 150, height: 150)
 
                 VStack(spacing: 3) {
-                    Text(state.coreState.rawValue)
+                    Text(state.loc(state.coreState.rawValue, state.coreState.englishName))
                         .font(.system(size: 17, weight: .bold))
                         .foregroundStyle(state.coreState.color)
                     // 待机时不显示副标题：它会压在核心中央的白点上重叠。仅思考/执行/异常时显示已用时。
@@ -246,7 +249,9 @@ struct LingShuAttachmentTray: View {
                     .font(.system(size: 11.5, weight: .semibold))
                     .foregroundStyle(Color.lingFg.opacity(0.9))
                     .lineLimit(1)
-                Text(attachment.status ?? (attachment.extractedContext.isEmpty ? "已登记" : "已解析 · 可改写"))
+                Text(attachment.status ?? (attachment.extractedContext.isEmpty
+                                           ? state.loc("已登记", "Registered")
+                                           : state.loc("已解析 · 可改写", "Parsed · Editable")))
                     .font(.system(size: 9, weight: .bold, design: .monospaced))
                     .foregroundStyle(attachment.status == nil ? Color.lingHolo.opacity(0.85) : .orange.opacity(0.85))
                     .lineLimit(1)
@@ -299,7 +304,10 @@ struct LingShuDispatchQueueTray: View {
                 Image(systemName: "tray.full")
                     .font(.system(size: 10, weight: .bold))
                     .foregroundStyle(Color.lingHolo)
-                Text("队列区 · \(items.count) 条等待中(任务串行,前一条完成后开始;晋级前可删)")
+                Text(state.loc(
+                    "队列区 · \(items.count) 条等待中（任务串行，前一条完成后开始；晋级前可删）",
+                    "Queue · \(items.count) waiting (tasks run serially; removable before start)"
+                ))
                     .font(.system(size: 10, weight: .bold, design: .monospaced))
                     .foregroundStyle(Color.lingFg.opacity(0.5))
                 Spacer(minLength: 0)
@@ -322,7 +330,7 @@ struct LingShuDispatchQueueTray: View {
                     .font(.system(size: 11.5, weight: .semibold))
                     .foregroundStyle(Color.lingFg.opacity(0.9))
                     .lineLimit(1)
-                Text("排队中")
+                Text(state.loc("排队中", "Queued"))
                     .font(.system(size: 9, weight: .bold, design: .monospaced))
                     .foregroundStyle(Color.lingHolo.opacity(0.7))
             }
@@ -352,7 +360,10 @@ struct LingShuSerialInputTray: View {
                 Image(systemName: "tray.full")
                     .font(.system(size: 10, weight: .bold))
                     .foregroundStyle(Color.lingHolo)
-                Text("队列区 · \(items.count) 条等待中(单串行,前一件事完成后自动开始;开始前可删)")
+                Text(state.loc(
+                    "队列区 · \(items.count) 条等待中（单线串行，前一件完成后自动开始；开始前可删）",
+                    "Queue · \(items.count) waiting (one at a time; removable before start)"
+                ))
                     .font(.system(size: 10, weight: .bold, design: .monospaced))
                     .foregroundStyle(Color.lingFg.opacity(0.5))
                 Spacer(minLength: 0)
@@ -375,7 +386,7 @@ struct LingShuSerialInputTray: View {
                     .font(.system(size: 11.5, weight: .semibold))
                     .foregroundStyle(Color.lingFg.opacity(0.9))
                     .lineLimit(1)
-                Text("排队中")
+                Text(state.loc("排队中", "Queued"))
                     .font(.system(size: 9, weight: .bold, design: .monospaced))
                     .foregroundStyle(Color.lingHolo.opacity(0.7))
             }
@@ -403,7 +414,9 @@ struct LingShuRunningTaskBar: View {
         if let rec = state.runningDispatchedTask {
             HStack(spacing: 9) {
                 LingShuPulseDot()
-                Text(state.activeTaskThreadCount > 1 ? "进行中 \(state.activeTaskThreadCount)" : "进行中")
+                Text(state.activeTaskThreadCount > 1
+                     ? state.loc("进行中 \(state.activeTaskThreadCount)", "Running \(state.activeTaskThreadCount)")
+                     : state.loc("进行中", "Running"))
                     .font(.system(size: 9.5, weight: .bold, design: .monospaced))
                     .foregroundStyle(Color.lingHolo)
                 Text(rec.title.isEmpty ? rec.prompt : rec.title)
@@ -413,12 +426,12 @@ struct LingShuRunningTaskBar: View {
                 Spacer(minLength: 6)
                 if state.canOpenTaskRecord(rec.id) {
                     Button { state.openTaskRecord(rec.id) } label: {
-                        Label("定位", systemImage: "scope").font(.system(size: 10.5, weight: .semibold))
+                        Label(state.loc("定位", "Locate"), systemImage: "scope").font(.system(size: 10.5, weight: .semibold))
                     }
                     .buttonStyle(.bordered).controlSize(.small)
                 }
                 Button { state.stopDispatchedTask(recordID: rec.id) } label: {
-                    Label("停止", systemImage: "stop.fill")
+                    Label(state.loc("停止", "Stop"), systemImage: "stop.fill")
                         .font(.system(size: 10.5, weight: .semibold))
                         .foregroundStyle(.red.opacity(0.85))
                 }
@@ -445,8 +458,13 @@ struct LingShuTaskThreadCompletionNoticeBar: View {
                     .font(.system(size: 13, weight: .bold))
                     .foregroundStyle(allCompleted ? Color.green : Color.orange)
                 Text(state.unreadTaskThreadCount == 1
-                     ? (allCompleted ? "子线程已完成" : "子线程有新结果")
-                     : "\(state.unreadTaskThreadCount) 个子线程有新结果")
+                     ? (allCompleted
+                        ? state.loc("子线程已完成", "Subtask Completed")
+                        : state.loc("子线程有新结果", "New Subtask Result"))
+                     : state.loc(
+                        "\(state.unreadTaskThreadCount) 个子线程有新结果",
+                        "\(state.unreadTaskThreadCount) new subtask results"
+                     ))
                     .font(.system(size: 10.5, weight: .bold))
                     .foregroundStyle(Color.lingFg.opacity(0.82))
                 Text(latest.title)
@@ -455,7 +473,7 @@ struct LingShuTaskThreadCompletionNoticeBar: View {
                     .lineLimit(1)
                 Spacer(minLength: 6)
                 Button { state.openLatestUnreadTaskThread() } label: {
-                    Label("查看", systemImage: "arrow.up.right.square")
+                    Label(state.loc("查看", "View"), systemImage: "arrow.up.right.square")
                         .font(.system(size: 10.5, weight: .semibold))
                 }
                 .buttonStyle(.bordered)
@@ -467,7 +485,7 @@ struct LingShuTaskThreadCompletionNoticeBar: View {
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(Color.lingFg.opacity(0.48))
-                .help("全部标为已读")
+                .help(state.loc("全部标为已读", "Mark All as Read"))
             }
             .padding(.horizontal, 11)
             .padding(.vertical, 7)
@@ -501,7 +519,9 @@ struct LingShuInvocationHintBar: View {
             Image(systemName: "bolt.horizontal.circle.fill")
                 .font(.system(size: 12, weight: .bold))
                 .foregroundStyle(Color.lingHolo)
-            Text(chips.count > 1 ? "将编排(\(chips.count) 步):" : "将调用:")
+            Text(chips.count > 1
+                 ? LingShuLanguagePreferenceStore.localized("将编排（\(chips.count) 步）：", "Workflow (\(chips.count) steps):")
+                 : LingShuLanguagePreferenceStore.localized("将调用：", "Will invoke:"))
                 .font(.system(size: 10.5, weight: .bold, design: .monospaced))
                 .foregroundStyle(Color.lingFg.opacity(0.55))
             ScrollView(.horizontal, showsIndicators: false) {
@@ -698,7 +718,7 @@ struct LingShuInputDock: View {
                 if voice.isRecording {
                     HStack(spacing: 6) {
                         LingShuVoiceWaveView(color: .red, isActive: true, barCount: 7)
-                        Text("正在聆听")
+                        Text(state.loc("正在聆听", "Listening"))
                             .font(.system(size: 10, weight: .bold, design: .monospaced))
                             .foregroundStyle(.red.opacity(0.85))
                     }
@@ -765,7 +785,7 @@ struct LingShuInputDock: View {
                         .background(inputStore.pendingAttachments.isEmpty ? Color.lingFg.opacity(0.08) : Color.lingHolo, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
                 }
                 .buttonStyle(.plain)
-                .help("上传图片 / PPT / 文档给灵枢理解或修改")
+                .help(state.loc("上传图片 / PPT / 文档给灵枢理解或修改", "Upload an image, presentation, or document"))
 
                 Button {
                     toggleVoiceInput()
@@ -777,7 +797,9 @@ struct LingShuInputDock: View {
                         .background(voice.isRecording ? Color.red.opacity(0.92) : Color.lingHolo, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
                 }
                 .buttonStyle(.plain)
-                .help(voice.isRecording ? "停止语音输入" : "语音输入")
+                .help(voice.isRecording
+                      ? state.loc("停止语音输入", "Stop Voice Input")
+                      : state.loc("语音输入", "Voice Input"))
 
                 Button {
                     state.voiceOutputEnabled.toggle()
@@ -789,7 +811,9 @@ struct LingShuInputDock: View {
                         .background(Color.lingFg.opacity(0.08), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
                 }
                 .buttonStyle(.plain)
-                .help(state.voiceOutputEnabled ? "关闭语音输出" : "开启语音输出")
+                .help(state.voiceOutputEnabled
+                      ? state.loc("关闭语音输出", "Disable Voice Output")
+                      : state.loc("开启语音输出", "Enable Voice Output"))
 
                 // 正在播报时出现：一键打断当前 TTS（含分句早读队列）。
                 if voice.isSpeaking {
@@ -803,7 +827,7 @@ struct LingShuInputDock: View {
                             .background(Color.red.opacity(0.9), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
                     }
                     .buttonStyle(.plain)
-                    .help("中断当前播放")
+                    .help(state.loc("中断当前播放", "Stop Current Playback"))
                     .transition(.opacity)
                 }
 
@@ -818,7 +842,7 @@ struct LingShuInputDock: View {
                             .background(Color.orange.opacity(0.88), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
                     }
                     .buttonStyle(.plain)
-                    .help("停止本轮调用")
+                    .help(state.loc("停止本轮调用", "Stop Current Run"))
                 }
 
                 Spacer(minLength: 12)
@@ -834,7 +858,7 @@ struct LingShuInputDock: View {
                             .background(Color.lingFg.opacity(0.07), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
                     }
                     .buttonStyle(.plain)
-                    .help("检索历史对话和任务冷备")
+                    .help(state.loc("检索历史对话和任务冷备", "Search Chat and Task History"))
 
                     Button {
                         showClearConfirm = true
@@ -846,12 +870,15 @@ struct LingShuInputDock: View {
                             .background(Color.lingFg.opacity(0.07), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
                     }
                     .buttonStyle(.plain)
-                    .help("清空上下文 / 新会话")
-                    .confirmationDialog("清空当前对话上下文?", isPresented: $showClearConfirm, titleVisibility: .visible) {
-                        Button("清空(新会话)", role: .destructive) { state.clearMainContext() }
-                        Button("取消", role: .cancel) {}
+                    .help(state.loc("清空上下文 / 新会话", "Clear Context / New Chat"))
+                    .confirmationDialog(state.loc("清空当前对话上下文？", "Clear the current chat context?"), isPresented: $showClearConfirm, titleVisibility: .visible) {
+                        Button(state.loc("清空（新会话）", "Clear and Start New Chat"), role: .destructive) { state.clearMainContext() }
+                        Button(state.loc("取消", "Cancel"), role: .cancel) {}
                     } message: {
-                        Text("清掉当前聊天与执行轨迹、重置会话。任务线程与长期记忆保留。")
+                        Text(state.loc(
+                            "清掉当前聊天与执行轨迹、重置会话。任务线程与长期记忆保留。",
+                            "Clears this chat and its execution trace. Task threads and long-term memory are retained."
+                        ))
                     }
 
                     Button {
@@ -864,7 +891,9 @@ struct LingShuInputDock: View {
                             .background(vision.isCameraRunning ? Color.cyan.opacity(0.92) : Color.lingFg.opacity(0.07), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
                     }
                     .buttonStyle(.plain)
-                    .help(vision.isCameraRunning ? "关闭视觉解析" : "打开视觉解析")
+                    .help(vision.isCameraRunning
+                          ? state.loc("关闭视觉解析", "Disable Vision")
+                          : state.loc("打开视觉解析", "Enable Vision"))
                 }
                 .padding(.leading, 2)
 
@@ -878,7 +907,7 @@ struct LingShuInputDock: View {
                         .background(Color.lingHolo, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
                 }
                 .buttonStyle(.plain)
-                .help("发送")
+                .help(state.loc("发送", "Send"))
             }
             .animation(.easeInOut(duration: 0.2), value: voice.isSpeaking)
 
@@ -915,17 +944,17 @@ struct LingShuInputDock: View {
             // 优先用持久降级标记（云端男声失败后常驻，不随单句播完而消失）；
             // 没有标记时再看实时输出状态里的降级关键词。
             if let degraded = voice.cloudVoiceDegradedReason {
-                alerts.append("情绪 TTS：\(degraded)")
+                alerts.append(state.loc("情绪 TTS：\(degraded)", "Expressive TTS: \(degraded)"))
             } else {
                 let tts = voice.outputStatusMessage
                 if ["不可用", "失败", "缺凭据", "降级", "未配置", "未就绪", "兜底"].contains(where: tts.contains) {
-                    alerts.append("情绪 TTS：\(tts)")
+                    alerts.append(state.loc("情绪 TTS：\(tts)", "Expressive TTS: \(tts)"))
                 }
             }
         }
         let perception = perceptionGateway.statusText
         if ["中断", "降级", "异常", "不可用", "失败"].contains(where: perception.contains) {
-            alerts.append("云感知：\(perception)")
+            alerts.append(state.loc("云感知：\(perception)", "Cloud Perception: \(perception)"))
         }
         return alerts
     }
@@ -934,10 +963,13 @@ struct LingShuInputDock: View {
     /// (「@Codex 开发 @Claude 验收」),@名字 即声明式插件格式,提交时按出现顺序解析成执行链(多 agent=maker→checker)。
     @ViewBuilder private var invocationMenu: some View {
         Menu {
-            Text("选一个插进输入框(@名字);可多选拼成编排:@Codex 开发 @Claude 验收")
+            Text(state.loc(
+                "选择后插入输入框（@名称）；可多选组成编排：@Codex 开发 @Claude 验收",
+                "Insert a mention into the prompt; select multiple agents to compose a workflow."
+            ))
             let all = state.invocablePlugins()
             // **三块分区(2026-06-29 用户定调):① 外部 agent ② 外部 agent 技能 ③ 灵枢插件**——别堆成一锅。
-            Section("外部 agent") {
+            Section(state.loc("外部 Agent", "External Agents")) {
                 ForEach(all.filter { $0.kind == .agent }) { p in
                     Button { insertMention(p.displayName) } label: { Label(p.displayName, systemImage: p.icon) }
                 }
@@ -946,7 +978,7 @@ struct LingShuInputDock: View {
             if !caps.isEmpty {
                 // **按 agent 收成二级子菜单(2026-06-29 用户定调)**:技能多(Claude 官方市场就 50 个),全平铺太长;
                 // 每个 agent 一个子菜单,展开才看它的技能。agent 名取技能 displayName 的「·」前缀,顺序保原序。
-                Section("外部 agent 技能") {
+                Section(state.loc("外部 Agent 技能", "External Agent Skills")) {
                     let agentOrder = caps.map { Self.capAgentPrefix($0.displayName) }
                         .reduce(into: [String]()) { if !$0.contains($1) { $0.append($1) } }
                     ForEach(agentOrder, id: \.self) { agentName in
@@ -962,7 +994,7 @@ struct LingShuInputDock: View {
                     }
                 }
             }
-            Section("灵枢插件") {
+            Section(state.loc("灵枢插件", "LingShu Plugins")) {
                 ForEach(all.filter { $0.kind == .plugin }) { p in
                     Button { insertMention(p.displayName) } label: { Label(p.displayName, systemImage: p.icon) }
                 }
@@ -977,7 +1009,10 @@ struct LingShuInputDock: View {
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
         .fixedSize()
-        .help("声明式调插件/agent:选中即在输入框插入 @名字,可 inline 编排「@Codex 开发 @Claude 验收」")
+        .help(state.loc(
+            "声明式调用插件或 Agent：选中后在输入框插入 @名称，可直接编排执行链",
+            "Invoke plugins or agents by mention and compose an execution chain inline"
+        ))
     }
 
     /// agent 子能力 displayName 形如「<agent>·<能力>」:取「·」前缀=agent 名(用于二级菜单分组)。
@@ -1140,10 +1175,13 @@ struct LingShuAlertTicker: View {
             }
         }
         .buttonStyle(.plain)
-        .help("点击查看全部告警")
+        .help(LingShuLanguagePreferenceStore.localized("点击查看全部告警", "View All Alerts"))
         .popover(isPresented: $showAll, arrowEdge: .top) {
             VStack(alignment: .leading, spacing: 10) {
-                Text("当前告警（\(alerts.count)）")
+                Text(LingShuLanguagePreferenceStore.localized(
+                    "当前告警（\(alerts.count)）",
+                    "Current Alerts (\(alerts.count))"
+                ))
                     .font(.system(size: 12.5, weight: .bold))
                     .foregroundStyle(.orange)
                 ForEach(Array(alerts.enumerated()), id: \.offset) { _, alert in

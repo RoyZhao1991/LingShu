@@ -52,7 +52,9 @@ struct LingShuWorkspaceTerminalView: View {
                 .font(.system(size: 11.5, weight: .semibold, design: .monospaced))
                 .foregroundStyle(Color.lingHolo.opacity(0.9))
             if running {
-                Text("运行中…").font(.system(size: 11, design: .monospaced)).foregroundStyle(Color.lingFg.opacity(0.4))
+                Text(LingShuLanguagePreferenceStore.localized("运行中…", "Running…"))
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundStyle(Color.lingFg.opacity(0.4))
             } else {
                 TextField("", text: $input)
                     .textFieldStyle(.plain)

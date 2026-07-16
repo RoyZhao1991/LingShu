@@ -29,7 +29,9 @@ struct LingShuWorkspaceFileTree: View {
                             Spacer()
                             Button { NSWorkspace.shared.activateFileViewerSelecting([selected]) } label: {
                                 Image(systemName: "folder").font(.system(size: 10)).foregroundStyle(Color.lingFg.opacity(0.55))
-                            }.buttonStyle(.plain).help("在 Finder 中显示")
+                            }
+                            .buttonStyle(.plain)
+                            .help(LingShuLanguagePreferenceStore.localized("在 Finder 中显示", "Show in Finder"))
                         }
                         .padding(.horizontal, 10).padding(.vertical, 7)
                         .background(Color.black.opacity(0.4))
@@ -47,7 +49,7 @@ struct LingShuWorkspaceFileTree: View {
             VStack(spacing: 0) {
                 HStack(spacing: 6) {
                     Image(systemName: "magnifyingglass").font(.system(size: 10)).foregroundStyle(Color.lingFg.opacity(0.4))
-                    TextField("筛选文件…", text: $filter)
+                    TextField(LingShuLanguagePreferenceStore.localized("筛选文件…", "Filter files…"), text: $filter)
                         .textFieldStyle(.plain).font(.system(size: 11.5))
                         .foregroundStyle(Color.lingFg.opacity(0.9))
                 }
@@ -70,8 +72,10 @@ struct LingShuWorkspaceFileTree: View {
     private var emptyPreview: some View {
         VStack(spacing: 10) {
             Image(systemName: "folder").font(.system(size: 32)).foregroundStyle(Color.lingFg.opacity(0.25))
-            Text("打开文件").font(.system(size: 13, weight: .bold)).foregroundStyle(Color.lingFg.opacity(0.55))
-            Text("从右侧工作区目录树中选择文件").font(.system(size: 11)).foregroundStyle(Color.lingFg.opacity(0.35))
+            Text(LingShuLanguagePreferenceStore.localized("打开文件", "Open a File"))
+                .font(.system(size: 13, weight: .bold)).foregroundStyle(Color.lingFg.opacity(0.55))
+            Text(LingShuLanguagePreferenceStore.localized("从右侧工作区目录树中选择文件", "Select a file from the workspace tree"))
+                .font(.system(size: 11)).foregroundStyle(Color.lingFg.opacity(0.35))
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }

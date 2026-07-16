@@ -37,7 +37,10 @@ struct LingShuArtifactPreviewSheet: View {
                 Button {
                     NSWorkspace.shared.open(fileURL)
                 } label: {
-                    Label("用系统应用打开", systemImage: "arrow.up.forward.app")
+                    Label(
+                        LingShuLanguagePreferenceStore.localized("用系统应用打开", "Open in Default App"),
+                        systemImage: "arrow.up.forward.app"
+                    )
                         .font(.system(size: 11.5, weight: .semibold))
                 }
                 .buttonStyle(.plain)
@@ -45,14 +48,20 @@ struct LingShuArtifactPreviewSheet: View {
                 Button {
                     NSWorkspace.shared.activateFileViewerSelecting([fileURL])
                 } label: {
-                    Label("在 Finder 中显示", systemImage: "folder")
+                    Label(
+                        LingShuLanguagePreferenceStore.localized("在 Finder 中显示", "Show in Finder"),
+                        systemImage: "folder"
+                    )
                         .font(.system(size: 11.5, weight: .semibold))
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(Color.lingFg.opacity(0.7))
                 // **醒目的"关闭"按钮**(原来只有个很淡的小 X,用户找不到)+ Esc 也能关。
                 Button(action: close) {
-                    Label("关闭", systemImage: "xmark")
+                    Label(
+                        LingShuLanguagePreferenceStore.localized("关闭", "Close"),
+                        systemImage: "xmark"
+                    )
                         .font(.system(size: 11.5, weight: .bold))
                         .padding(.horizontal, 10).padding(.vertical, 5)
                         .background(toolbarButtonSurface, in: Capsule())

@@ -20,7 +20,7 @@ final class LingShuWorkspaceReviewModel: ObservableObject {
         let diff = await Task.detached { LingShuWorkspaceReviewGit.diff(dir: dir) }.value
         files = LingShuWorkspaceReview.parse(unifiedDiff: diff)
         loading = false
-        if files.isEmpty { message = "工作区没有未提交的代码改动。" }
+        if files.isEmpty { message = LingShuLanguagePreferenceStore.localized("工作区没有未提交的代码改动。", "The workspace has no uncommitted code changes.") }
     }
 
     func setAccepted(_ accepted: Bool, fileIndex: Int, hunkIndex: Int) {
@@ -37,10 +37,12 @@ final class LingShuWorkspaceReviewModel: ObservableObject {
             return f2
         }
         let patch = LingShuWorkspaceReview.assembleAcceptedPatch(toRevert)
-        guard !patch.isEmpty else { message = "没有未接受的改动需要回退。"; return }
+        guard !patch.isEmpty else { message = LingShuLanguagePreferenceStore.localized("没有未接受的改动需要回退。", "There are no rejected changes to revert."); return }
         let dir = workingDir
         let ok = await Task.detached { LingShuWorkspaceReviewGit.applyReverse(patch: patch, dir: dir) }.value
-        message = ok ? "已回退未接受的改动。" : "回退失败:补丁与当前工作树不匹配(可能文件又被改过)。"
+        message = ok
+            ? LingShuLanguagePreferenceStore.localized("已回退未接受的改动。", "Rejected changes were reverted.")
+            : LingShuLanguagePreferenceStore.localized("回退失败:补丁与当前工作树不匹配(可能文件又被改过)。", "Revert failed because the patch no longer matches the working tree.")
         await load()
     }
 
@@ -63,9 +65,9 @@ struct LingShuWorkspaceReviewView: View {
             summaryBar
             Divider()
             if model.loading {
-                ProgressView("读取改动…").frame(maxWidth: .infinity, maxHeight: .infinity)
+                ProgressView(LingShuLanguagePreferenceStore.localized("读取改动…", "Loading Changes…")).frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if model.files.isEmpty {
-                Text(model.message.isEmpty ? "无改动" : model.message)
+                Text(model.message.isEmpty ? LingShuLanguagePreferenceStore.localized("无改动", "No Changes") : model.message)
                     .foregroundStyle(.secondary).frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 ScrollView { LazyVStack(alignment: .leading, spacing: 8) { fileList } .padding(8) }
@@ -78,20 +80,20 @@ struct LingShuWorkspaceReviewView: View {
         let s = model.summary
         return HStack(spacing: 12) {
             Image(systemName: "plusminus.circle")
-            Text("\(s.files) 文件 · 接受 \(s.acceptedHunks) 块").font(.system(size: 12, weight: .medium))
+            Text(LingShuLanguagePreferenceStore.localized("\(s.files) 文件 · 接受 \(s.acceptedHunks) 块", "\(s.files) files · \(s.acceptedHunks) accepted hunks")).font(.system(size: 12, weight: .medium))
             Text("+\(s.added)").foregroundStyle(.green).font(.system(size: 12))
             Text("−\(s.removed)").foregroundStyle(.red).font(.system(size: 12))
             Spacer()
             Button { Task { await model.load() } } label: { Image(systemName: "arrow.clockwise") }
-                .buttonStyle(.borderless).help("重新读取")
+                .buttonStyle(.borderless).help(LingShuLanguagePreferenceStore.localized("重新读取", "Reload"))
             Button(role: .destructive) { confirmRevert = true } label: {
-                Label("回退未接受", systemImage: "arrow.uturn.backward")
+                Label(LingShuLanguagePreferenceStore.localized("回退未接受", "Revert Rejected"), systemImage: "arrow.uturn.backward")
             }
             .controlSize(.small)
             .disabled(model.files.allSatisfy { $0.hunks.allSatisfy(\.accepted) })
-            .confirmationDialog("回退所有未接受(已取消勾选)的改动?此操作会修改工作区文件。", isPresented: $confirmRevert) {
-                Button("回退未接受的改动", role: .destructive) { Task { await model.revertRejected() } }
-                Button("取消", role: .cancel) {}
+            .confirmationDialog(LingShuLanguagePreferenceStore.localized("回退所有未接受(已取消勾选)的改动?此操作会修改工作区文件。", "Revert all rejected (unchecked) changes? This modifies workspace files."), isPresented: $confirmRevert) {
+                Button(LingShuLanguagePreferenceStore.localized("回退未接受的改动", "Revert Rejected Changes"), role: .destructive) { Task { await model.revertRejected() } }
+                Button(LingShuLanguagePreferenceStore.localized("取消", "Cancel"), role: .cancel) {}
             }
         }
         .padding(.horizontal, 12).padding(.vertical, 8)
@@ -109,7 +111,7 @@ struct LingShuWorkspaceReviewView: View {
                         Image(systemName: "doc.text").foregroundStyle(.secondary)
                         Text(file.path).font(.system(size: 13, weight: .medium)).lineLimit(1).truncationMode(.middle)
                         Spacer()
-                        Text("\(file.acceptedHunkCount)/\(file.hunks.count) 块").font(.system(size: 11)).foregroundStyle(.tertiary)
+                        Text(LingShuLanguagePreferenceStore.localized("\(file.acceptedHunkCount)/\(file.hunks.count) 块", "\(file.acceptedHunkCount)/\(file.hunks.count) hunks")).font(.system(size: 11)).foregroundStyle(.tertiary)
                     }
                 }.buttonStyle(.plain)
                 if isOpen {
@@ -128,7 +130,7 @@ struct LingShuWorkspaceReviewView: View {
             HStack {
                 Text(hunk.header).font(.system(size: 11, design: .monospaced)).foregroundStyle(.secondary).lineLimit(1)
                 Spacer()
-                Toggle("接受", isOn: Binding(
+                Toggle(LingShuLanguagePreferenceStore.localized("接受", "Accept"), isOn: Binding(
                     get: { hunk.accepted },
                     set: { model.setAccepted($0, fileIndex: fi, hunkIndex: hi) }
                 )).toggleStyle(.switch).controlSize(.mini)

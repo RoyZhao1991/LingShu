@@ -34,7 +34,7 @@ struct LingShuTopPerceptionStrip: View {
             }
         }
         .buttonStyle(.plain)
-        .help("查看实时感知状态")
+        .help(state.loc("查看实时感知状态", "View real-time perception status"))
         .popover(isPresented: $isDetailPresented, arrowEdge: .bottom) {
             LingShuPerceptionPopoverContent(
                 state: state,
@@ -50,20 +50,20 @@ struct LingShuTopPerceptionStrip: View {
 
     private var earStatusText: String {
         if state.isVoiceConversationActive {
-            return "对话"
+            return state.loc("对话", "Live")
         }
 
-        return state.voiceWakeListeningEnabled ? "待唤醒" : "待机"
+        return state.voiceWakeListeningEnabled ? state.loc("待唤醒", "Awaiting wake word") : state.loc("待机", "Idle")
     }
 
     private var mouthStatusText: String {
         if voice.isSpeaking {
-            return "说"
+            return state.loc("说", "Speaking")
         }
         if !state.voiceOutputEnabled {
-            return "静音"
+            return state.loc("静音", "Muted")
         }
-        return isSpeechOutputConfigured ? "待命" : "待配置"
+        return isSpeechOutputConfigured ? state.loc("待命", "Ready") : state.loc("待配置", "Setup")
     }
 
     private var mouthIsActive: Bool {
@@ -119,7 +119,7 @@ struct LingShuPerceptionPopoverContent: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
-                Text("实时感知")
+                Text(state.loc("实时感知", "Real-time Perception"))
                     .font(.system(size: 14, weight: .semibold))
                     .foregroundStyle(Color.lingFg)
 
@@ -131,18 +131,18 @@ struct LingShuPerceptionPopoverContent: View {
             }
 
             VStack(alignment: .leading, spacing: 8) {
-                PerceptionDetailRow(label: "耳朵", value: voice.inputStatusMessage, isActive: voice.isRecording)
-                PerceptionDetailRow(label: "嘴巴", value: state.voiceOutputEnabled ? voice.outputStatusMessage : "静音", isActive: state.voiceOutputEnabled)
-                PerceptionDetailRow(label: "眼睛", value: vision.statusMessage, isActive: vision.isCameraRunning)
-                PerceptionDetailRow(label: "认主", value: perceptionGateway.ownerIdentitySnapshot.statusText, isActive: perceptionGateway.isOwnerIdentityLocked)
-                PerceptionDetailRow(label: "解析", value: perceptionGateway.statusText, isActive: !perceptionGateway.statusText.contains("中断"))
+                PerceptionDetailRow(label: state.loc("耳朵", "Audio In"), value: voice.inputStatusMessage, isActive: voice.isRecording)
+                PerceptionDetailRow(label: state.loc("嘴巴", "Audio Out"), value: state.voiceOutputEnabled ? voice.outputStatusMessage : state.loc("静音", "Muted"), isActive: state.voiceOutputEnabled)
+                PerceptionDetailRow(label: state.loc("眼睛", "Vision"), value: vision.statusMessage, isActive: vision.isCameraRunning)
+                PerceptionDetailRow(label: state.loc("认主", "Owner"), value: perceptionGateway.ownerIdentitySnapshot.statusText, isActive: perceptionGateway.isOwnerIdentityLocked)
+                PerceptionDetailRow(label: state.loc("解析", "Analysis"), value: perceptionGateway.statusText, isActive: !perceptionGateway.statusText.contains("中断"))
             }
 
             LingShuOwnerIdentityPanel(perceptionGateway: perceptionGateway, voice: voice, vision: vision)
 
             VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 8) {
-                    Text("语音理解")
+                    Text(state.loc("语音理解", "Speech Input"))
                         .font(.system(size: 11.5, weight: .semibold))
                         .foregroundStyle(Color.lingFg.opacity(0.48))
                         .frame(width: 56, alignment: .leading)
@@ -172,7 +172,7 @@ struct LingShuPerceptionPopoverContent: View {
                             .background(Color.lingFg.opacity(0.06), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
                     }
                     .buttonStyle(.plain)
-                    .help("重新检测本地语音模型")
+                    .help(state.loc("重新检测本地语音模型", "Check local speech model again"))
                 }
 
                 Text(voice.transcriptionProvider.note)
@@ -206,7 +206,7 @@ struct LingShuPerceptionPopoverContent: View {
 
             VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 8) {
-                    Text("语音输出")
+                    Text(state.loc("语音输出", "Speech Output"))
                         .font(.system(size: 11.5, weight: .semibold))
                         .foregroundStyle(Color.lingFg.opacity(0.48))
                         .frame(width: 56, alignment: .leading)
@@ -229,7 +229,7 @@ struct LingShuPerceptionPopoverContent: View {
                 }
 
                 HStack(spacing: 8) {
-                    Text("音色")
+                    Text(state.loc("音色", "Voice"))
                         .font(.system(size: 11.5, weight: .semibold))
                         .foregroundStyle(Color.lingFg.opacity(0.48))
                         .frame(width: 56, alignment: .leading)
@@ -276,11 +276,11 @@ struct LingShuPerceptionPopoverContent: View {
                         .fill(isConfigured ? Color.green : Color.gray.opacity(0.62))
                         .frame(width: 7, height: 7)
 
-                    Text("云端 TTS")
+                    Text(state.loc("云端 TTS", "Cloud TTS"))
                         .font(.system(size: 11, weight: .semibold))
                         .foregroundStyle(Color.lingFg.opacity(0.56))
 
-                    Text(isConfigured ? "已配置" : "待配置")
+                    Text(isConfigured ? state.loc("已配置", "Configured") : state.loc("待配置", "Setup Needed"))
                         .font(.system(size: 11, weight: .semibold))
                         .foregroundStyle(isConfigured ? Color.green.opacity(0.85) : Color.lingFg.opacity(0.46))
                         .lineLimit(1)
@@ -296,18 +296,18 @@ struct LingShuPerceptionPopoverContent: View {
             }
 
             VStack(alignment: .leading, spacing: 8) {
-                Toggle("使用触发词", isOn: $state.requiresVoiceWakeWord)
+                Toggle(state.loc("使用触发词", "Require Wake Word"), isOn: $state.requiresVoiceWakeWord)
                     .toggleStyle(.switch)
                     .font(.system(size: 11.5, weight: .semibold))
                     .foregroundStyle(Color.lingFg.opacity(0.72))
 
                 HStack(spacing: 8) {
-                    Text("触发词")
+                    Text(state.loc("触发词", "Wake Word"))
                         .font(.system(size: 11.5, weight: .semibold))
                         .foregroundStyle(Color.lingFg.opacity(0.48))
                         .frame(width: 42, alignment: .leading)
 
-                    TextField("灵枢", text: $state.voiceWakeWord)
+                    TextField(state.loc("灵枢", "LingShu"), text: $state.voiceWakeWord)
                         .textFieldStyle(.plain)
                         .font(.system(size: 12.5, weight: .semibold))
                         .foregroundStyle(Color.lingFg)
@@ -334,7 +334,7 @@ struct LingShuPerceptionPopoverContent: View {
 
             HStack(spacing: 8) {
                 PerceptionActionButton(
-                    title: state.voiceWakeListeningEnabled ? "停止收音" : "启用收音",
+                    title: state.voiceWakeListeningEnabled ? state.loc("停止收音", "Stop Listening") : state.loc("启用收音", "Start Listening"),
                     icon: voice.isRecording ? "mic.slash.fill" : "mic.fill",
                     isActive: state.voiceWakeListeningEnabled
                 ) {
@@ -346,7 +346,7 @@ struct LingShuPerceptionPopoverContent: View {
                 }
 
                 PerceptionActionButton(
-                    title: state.voiceOutputEnabled ? "关闭发声" : "启用发声",
+                    title: state.voiceOutputEnabled ? state.loc("关闭发声", "Mute Voice") : state.loc("启用发声", "Enable Voice"),
                     icon: state.voiceOutputEnabled ? "speaker.slash.fill" : "speaker.wave.2.fill",
                     isActive: state.voiceOutputEnabled
                 ) {
@@ -354,7 +354,7 @@ struct LingShuPerceptionPopoverContent: View {
                 }
 
                 PerceptionActionButton(
-                    title: vision.isCameraRunning ? "关闭视觉" : "启用视觉",
+                    title: vision.isCameraRunning ? state.loc("关闭视觉", "Stop Vision") : state.loc("启用视觉", "Start Vision"),
                     icon: vision.isCameraRunning ? "eye.slash.fill" : "eye.fill",
                     isActive: vision.isCameraRunning
                 ) {
@@ -386,7 +386,7 @@ struct LingShuPerceptionPopoverContent: View {
                     Button {
                         appendVisionContext(observation)
                     } label: {
-                        Text("交给灵枢")
+                        Text(state.loc("交给灵枢", "Send to LingShu"))
                             .font(.system(size: 11.5, weight: .semibold))
                             .foregroundStyle(Color.lingVoid)
                             .padding(.horizontal, 9)
@@ -412,11 +412,15 @@ struct LingShuPerceptionPopoverContent: View {
 
     private var voiceModeHint: String {
         if !state.requiresVoiceWakeWord {
-            return "收音开启后会直接进入实时对话。"
+            return state.loc("收音开启后会直接进入实时对话。", "Listening starts a real-time conversation immediately.")
         }
 
         let wakeWord = state.voiceWakeWord.trimmingCharacters(in: .whitespacesAndNewlines)
-        return "先说“\(wakeWord.isEmpty ? "灵枢" : wakeWord)”唤醒，再说具体指令。"
+        let fallbackWakeWord = state.loc("灵枢", "LingShu")
+        return state.loc(
+            "先说“\(wakeWord.isEmpty ? fallbackWakeWord : wakeWord)”唤醒，再说具体指令。",
+            "Say “\(wakeWord.isEmpty ? fallbackWakeWord : wakeWord)” first, then give your instruction."
+        )
     }
 
     private func appendVisionContext(_ observation: LingShuVisionObservation) {

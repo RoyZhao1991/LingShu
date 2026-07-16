@@ -13,10 +13,14 @@ struct LingShuPermissionApprovalView: View {
                     .font(.system(size: 22, weight: .bold))
                     .foregroundStyle(Color.lingHolo)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(pending.riskNotes.isEmpty ? "灵枢 请求执行系统命令" : "⚠️ 灵枢 请求执行高风险来源脚本")
+                    Text(pending.riskNotes.isEmpty
+                         ? LingShuLanguagePreferenceStore.localized("灵枢 请求执行系统命令", "LingShu Requests to Run a System Command")
+                         : LingShuLanguagePreferenceStore.localized("⚠️ 灵枢 请求执行高风险来源脚本", "⚠️ LingShu Requests to Run a High-risk Script"))
                         .font(.system(size: 15.5, weight: .bold))
                         .foregroundStyle(pending.riskNotes.isEmpty ? .white : Color.orange)
-                    Text(pending.riskNotes.isEmpty ? "需要你授权才会在本机运行" : "自发现 skill 的脚本经风险审被标记,首次运行需你裁决")
+                    Text(pending.riskNotes.isEmpty
+                         ? LingShuLanguagePreferenceStore.localized("需要你授权才会在本机运行", "Your approval is required before it runs locally")
+                         : LingShuLanguagePreferenceStore.localized("自发现 skill 的脚本经风险审被标记,首次运行需你裁决", "A discovered skill was flagged by risk review and needs approval before its first run"))
                         .font(.system(size: 11.5, weight: .medium))
                         .foregroundStyle(Color.lingFg.opacity(0.55))
                 }
@@ -24,7 +28,7 @@ struct LingShuPermissionApprovalView: View {
 
             if !pending.riskNotes.isEmpty {
                 VStack(alignment: .leading, spacing: 5) {
-                    Text("风险审提示")
+                    Text(LingShuLanguagePreferenceStore.localized("风险审提示", "Risk Review"))
                         .font(.system(size: 10, weight: .bold, design: .monospaced))
                         .foregroundStyle(Color.orange.opacity(0.9))
                     ForEach(Array(pending.riskNotes.enumerated()), id: \.offset) { _, note in
@@ -44,11 +48,11 @@ struct LingShuPermissionApprovalView: View {
             }
 
             VStack(alignment: .leading, spacing: 6) {
-                Text("命令")
+                Text(LingShuLanguagePreferenceStore.localized("命令", "Command"))
                     .font(.system(size: 10, weight: .bold, design: .monospaced))
                     .foregroundStyle(Color.lingHolo.opacity(0.8))
                 ScrollView(.vertical, showsIndicators: true) {
-                    Text(pending.command.isEmpty ? "（空命令）" : pending.command)
+                    Text(pending.command.isEmpty ? LingShuLanguagePreferenceStore.localized("（空命令）", "(Empty command)") : pending.command)
                         .font(.system(size: 12.5, weight: .regular, design: .monospaced))
                         .foregroundStyle(Color.lingFg.opacity(0.92))
                         .textSelection(.enabled)
@@ -71,24 +75,24 @@ struct LingShuPermissionApprovalView: View {
 
             VStack(spacing: 9) {
                 approvalButton(
-                    title: "本次允许",
-                    subtitle: "只放行这一条命令",
+                    title: LingShuLanguagePreferenceStore.localized("本次允许", "Allow Once"),
+                    subtitle: LingShuLanguagePreferenceStore.localized("只放行这一条命令", "Allow only this command"),
                     icon: "checkmark.circle.fill",
                     tint: Color.lingHolo,
                     filled: true
                 ) { onDecision(.allowOnce) }
 
                 approvalButton(
-                    title: "完全授权",
-                    subtitle: "本次会话后续命令不再询问",
+                    title: LingShuLanguagePreferenceStore.localized("完全授权", "Allow for Session"),
+                    subtitle: LingShuLanguagePreferenceStore.localized("本次会话后续命令不再询问", "Do not ask again for later commands in this session"),
                     icon: "bolt.shield.fill",
                     tint: .orange,
                     filled: false
                 ) { onDecision(.allowAlways) }
 
                 approvalButton(
-                    title: "拒绝",
-                    subtitle: "不执行，灵枢改用其它方式",
+                    title: LingShuLanguagePreferenceStore.localized("拒绝", "Deny"),
+                    subtitle: LingShuLanguagePreferenceStore.localized("不执行，灵枢改用其它方式", "Do not run it; LingShu will try another approach"),
                     icon: "xmark.circle.fill",
                     tint: .red,
                     filled: false

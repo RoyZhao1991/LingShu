@@ -37,7 +37,7 @@ struct LingShuHistorySearchSheet: View {
                 Image(systemName: "magnifyingglass")
                     .font(.system(size: 18, weight: .bold))
                     .foregroundStyle(Color.lingHolo)
-                Text("历史检索")
+                Text(state.loc("历史检索", "History Search"))
                     .font(.system(size: 20, weight: .bold))
                     .foregroundStyle(primaryText)
                 Spacer()
@@ -51,7 +51,7 @@ struct LingShuHistorySearchSheet: View {
             }
 
             HStack(spacing: 10) {
-                TextField("搜索热记录和冷备记录中的关键字", text: $query)
+                TextField(state.loc("搜索热记录和冷备记录中的关键字", "Search recent and archived records"), text: $query)
                     .textFieldStyle(.plain)
                     .font(.system(size: 14, weight: .medium))
                     .foregroundStyle(primaryText)
@@ -64,9 +64,11 @@ struct LingShuHistorySearchSheet: View {
             }
 
             HStack {
-                Text(query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "输入关键字开始检索" : "命中 \(results.count) 条")
+                Text(query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                     ? state.loc("输入关键字开始检索", "Enter keywords to search")
+                     : state.loc("命中 \(results.count) 条", "\(results.count) matches"))
                 Spacer()
-                Text("热对话 / 冷备对话 / 热任务 / 冷备任务")
+                Text(state.loc("热对话 / 冷备对话 / 热任务 / 冷备任务", "Recent chat / Archived chat / Recent tasks / Archived tasks"))
             }
             .font(.system(size: 11.5, weight: .semibold, design: .monospaced))
             .foregroundStyle(tertiaryText)
@@ -76,9 +78,9 @@ struct LingShuHistorySearchSheet: View {
             ScrollView {
                 LazyVStack(spacing: 10) {
                     if query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                        historyEmptyState("输入一个关键词，我会同时查当前对话、冷备对话和任务执行记录。")
+                        historyEmptyState(state.loc("输入一个关键词，我会同时查当前对话、冷备对话和任务执行记录。", "Enter a keyword to search current chats, archived chats, and task records."))
                     } else if results.isEmpty {
-                        historyEmptyState("没有找到匹配记录。")
+                        historyEmptyState(state.loc("没有找到匹配记录。", "No matching records found."))
                     } else {
                         ForEach(results) { hit in
                             LingShuHistorySearchResultRow(hit: hit) {
@@ -110,7 +112,7 @@ struct LingShuHistorySearchSheet: View {
                 Button {
                     scope = item
                 } label: {
-                    Text(item.label)
+                    Text(state.language == .english ? item.englishName : item.label)
                         .font(.system(size: 12, weight: .bold))
                         .foregroundStyle(selected ? Color.lingVoid : secondaryText)
                         .frame(maxWidth: .infinity)
@@ -175,7 +177,7 @@ private struct LingShuHistorySearchResultRow: View {
         }) {
             VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 8) {
-                    Text(hit.source.label)
+                    Text(LingShuLanguagePreferenceStore.localized(hit.source.label, hit.source.englishName))
                         .font(.system(size: 10, weight: .heavy, design: .monospaced))
                         .foregroundStyle(sourceLabelText)
                         .padding(.horizontal, 7)
@@ -196,7 +198,7 @@ private struct LingShuHistorySearchResultRow: View {
                     }
                 }
 
-                Text(hit.snippet.isEmpty ? "（无文本摘要）" : hit.snippet)
+                Text(hit.snippet.isEmpty ? LingShuLanguagePreferenceStore.localized("（无文本摘要）", "(No text summary)") : hit.snippet)
                     .font(.system(size: 12.5, weight: .medium))
                     .foregroundStyle(secondaryText)
                     .lineLimit(3)
@@ -207,7 +209,9 @@ private struct LingShuHistorySearchResultRow: View {
             .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).stroke(Color.lingHolo.opacity(0.16), lineWidth: 1))
         }
         .buttonStyle(.plain)
-        .help(hit.source.isTask ? "打开任务执行记录" : "聊天命中记录")
+        .help(hit.source.isTask
+              ? LingShuLanguagePreferenceStore.localized("打开任务执行记录", "Open Task Record")
+              : LingShuLanguagePreferenceStore.localized("聊天命中记录", "Chat Search Result"))
     }
 
     private var sourceColor: Color {

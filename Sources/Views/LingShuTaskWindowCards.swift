@@ -13,7 +13,7 @@ struct TaskPlanCard: View {
             HStack(spacing: 8) {
                 Image(systemName: "checklist")
                     .font(.system(size: 12, weight: .bold)).foregroundStyle(Color.lingHolo)
-                Text("执行计划")
+                Text(LingShuLanguagePreferenceStore.localized("执行计划", "Execution Plan"))
                     .font(.system(size: 12.5, weight: .bold)).foregroundStyle(Color.lingFg.opacity(0.92))
                 Text("\(doneCount)/\(steps.count)")
                     .font(.system(size: 11, weight: .bold, design: .monospaced)).foregroundStyle(Color.lingFg.opacity(0.45))
@@ -134,18 +134,23 @@ struct TaskToolResultCard: View {
     private var hasMore: Bool { trimmedOutput.contains("\n") || trimmedOutput.count > 80 }
 
     var body: some View {
+        let resultLabel = success
+            ? LingShuLanguagePreferenceStore.localized("完成", "Completed")
+            : LingShuLanguagePreferenceStore.localized("失败", "Failed")
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 8) {
                 Image(systemName: success ? "checkmark.circle.fill" : "xmark.octagon.fill")
                     .font(.system(size: 11, weight: .bold))
                     .foregroundStyle(success ? .green : .red)
-                Text("\(LingShuState.toolDisplayName(tool)) \(success ? "完成" : "失败")")
+                Text("\(LingShuState.toolDisplayName(tool)) \(resultLabel)")
                     .font(.system(size: 10.5, weight: .bold))
                     .foregroundStyle((success ? Color.green : Color.red).opacity(0.95))
                 Spacer(minLength: 0)
                 if hasMore {
                     Button { withAnimation(.easeOut(duration: 0.15)) { expanded.toggle() } } label: {
-                        Text(expanded ? "收起" : "查看输出")
+                        Text(expanded
+                             ? LingShuLanguagePreferenceStore.localized("收起", "Collapse")
+                             : LingShuLanguagePreferenceStore.localized("查看输出", "View Output"))
                             .font(.system(size: 9.5, weight: .bold))
                             .foregroundStyle(Color.lingFg.opacity(0.55))
                     }
@@ -194,7 +199,7 @@ struct TaskFileDiffCard: View {
                 Image(systemName: "doc.text.fill")
                     .font(.system(size: 11, weight: .bold))
                     .foregroundStyle(operation == .modified ? Color.lingHoloAlt : Color.lingHolo)
-                Text(operation.rawValue)
+                Text(LingShuLanguagePreferenceStore.localized(operation.rawValue, operation.englishName))
                     .font(.system(size: 9, weight: .bold))
                     .foregroundStyle(operation == .modified ? Color.lingHoloAlt : Color.lingHolo)
                     .padding(.horizontal, 5).padding(.vertical, 1)
@@ -211,7 +216,12 @@ struct TaskFileDiffCard: View {
 
             HStack(spacing: 8) {
                 Button { withAnimation(.easeOut(duration: 0.15)) { expanded.toggle() } } label: {
-                    Label(expanded ? "收起" : "审核", systemImage: expanded ? "eye.slash" : "eye")
+                    Label(
+                        expanded
+                        ? LingShuLanguagePreferenceStore.localized("收起", "Collapse")
+                        : LingShuLanguagePreferenceStore.localized("审核", "Review"),
+                        systemImage: expanded ? "eye.slash" : "eye"
+                    )
                         .font(.system(size: 10, weight: .bold))
                         .foregroundStyle(Color.lingHolo.opacity(0.92))
                         .padding(.horizontal, 7).padding(.vertical, 4)
@@ -220,11 +230,11 @@ struct TaskFileDiffCard: View {
                 .buttonStyle(.plain)
 
                 if undone {
-                    Label("已撤销", systemImage: "arrow.uturn.backward")
+                    Label(LingShuLanguagePreferenceStore.localized("已撤销", "Reverted"), systemImage: "arrow.uturn.backward")
                         .font(.system(size: 10, weight: .bold)).foregroundStyle(Color.lingFg.opacity(0.45))
                 } else if canUndo, let onUndo {
                     Button(action: onUndo) {
-                        Label("撤销", systemImage: "arrow.uturn.backward")
+                        Label(LingShuLanguagePreferenceStore.localized("撤销", "Revert"), systemImage: "arrow.uturn.backward")
                             .font(.system(size: 10, weight: .bold))
                             .foregroundStyle(.orange.opacity(0.95))
                             .padding(.horizontal, 7).padding(.vertical, 4)
@@ -232,7 +242,7 @@ struct TaskFileDiffCard: View {
                     }
                     .buttonStyle(.plain)
                 } else if onUndo != nil, LingShuLineDiff.isTruncated(diff) {
-                    Text("改动过大不可撤销")
+                    Text(LingShuLanguagePreferenceStore.localized("改动过大不可撤销", "Change Too Large to Revert"))
                         .font(.system(size: 9.5, weight: .semibold)).foregroundStyle(Color.lingFg.opacity(0.36))
                 }
                 Spacer(minLength: 0)

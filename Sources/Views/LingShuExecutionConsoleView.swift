@@ -6,17 +6,17 @@ struct LingShuExecutionConsoleView: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 10) {
-                Label("底层执行窗", systemImage: "terminal")
+                Label(state.loc("底层执行窗", "Execution Console"), systemImage: "terminal")
                     .font(.system(size: 12.5, weight: .bold))
                     .foregroundStyle(Color.lingHolo)
 
-                Text(state.hasActiveModelCall ? "实时跟踪中" : "最近轨迹")
+                Text(state.hasActiveModelCall ? state.loc("实时跟踪中", "Tracking Live") : state.loc("最近轨迹", "Recent Trace"))
                     .font(.system(size: 10.5, weight: .bold, design: .monospaced))
                     .foregroundStyle(state.hasActiveModelCall ? Color.lingHolo.opacity(0.86) : Color.lingFg.opacity(0.42))
 
                 Spacer()
 
-                Text("\(state.executionTrace.count) 条")
+                Text(state.loc("\(state.executionTrace.count) 条", "\(state.executionTrace.count) events"))
                     .font(.system(size: 10.5, weight: .bold, design: .monospaced))
                     .foregroundStyle(Color.lingFg.opacity(0.42))
 
@@ -30,7 +30,7 @@ struct LingShuExecutionConsoleView: View {
                         .background(Color.lingFg.opacity(0.07), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
                 }
                 .buttonStyle(.plain)
-                .help(state.isExecutionConsoleExpanded ? "收起底层执行窗" : "展开底层执行窗")
+                .help(state.isExecutionConsoleExpanded ? state.loc("收起底层执行窗", "Collapse Execution Console") : state.loc("展开底层执行窗", "Expand Execution Console"))
             }
             .padding(.horizontal, 12)
             .frame(height: 42)
@@ -44,7 +44,7 @@ struct LingShuExecutionConsoleView: View {
                     ScrollView {
                         LazyVStack(alignment: .leading, spacing: 7) {
                             if state.executionTrace.isEmpty {
-                                Text("待机中。下一道指令开始后，这里会显示灵枢的具体执行轨迹。")
+                                Text(state.loc("待机中。下一道指令开始后，这里会显示灵枢的具体执行轨迹。", "Idle. Detailed execution events will appear here when the next instruction begins."))
                                     .font(.system(size: 11.5, weight: .medium))
                                     .foregroundStyle(Color.lingFg.opacity(0.46))
                                     .frame(maxWidth: .infinity, alignment: .leading)

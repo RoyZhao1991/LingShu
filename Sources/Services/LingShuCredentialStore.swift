@@ -93,7 +93,7 @@ final class LingShuCredentialStore: @unchecked Sendable {
         return cache.filter { !$0.value.isEmpty }
     }
 
-    /// 批量写入凭据(供「加密配置导入」一次性恢复)。落盘仍走本机绑定 AES-GCM(导入即变成本机加密态)。
+    /// 批量写入凭据(供「加密配置导入」一次性恢复)。生产环境写入 Keychain；测试文件后端仍使用本机绑定 AES-GCM。
     func bulkSet(_ entries: [String: String]) {
         lock.lock()
         defer { lock.unlock() }

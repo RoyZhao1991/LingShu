@@ -125,10 +125,13 @@ struct TaskExecutionRecordSheet: View {
                         .foregroundStyle(Color.lingFg)
                         .lineLimit(1)
                     HStack(spacing: 8) {
-                        Text(record.status.rawValue)
+                        Text(state.loc(record.status.rawValue, record.status.englishName))
                             .font(.system(size: 11, weight: .bold))
                             .foregroundStyle(record.status.color)
-                        Text("\(participantFilters(record).count) 个参与方")   // 与下方过滤 chip 同源(排除「你」+内部机制标签),不再头部5/下面4 对不上
+                        Text(state.loc(
+                            "\(participantFilters(record).count) 个参与方",
+                            "\(participantFilters(record).count) participants"
+                        ))   // 与下方过滤 chip 同源(排除「你」+内部机制标签),不再头部5/下面4 对不上
                             .font(.system(size: 11, weight: .semibold))
                             .foregroundStyle(Color.lingFg.opacity(0.52))
                         Text(record.updatedAt.taskRecordDisplayTime)
@@ -148,7 +151,7 @@ struct TaskExecutionRecordSheet: View {
                     Button {
                         state.stopTaskWindowRecord(record.id)
                     } label: {
-                        Label("停止", systemImage: "stop.fill")
+                        Label(state.loc("停止", "Stop"), systemImage: "stop.fill")
                             .font(.system(size: 11, weight: .bold))
                             .foregroundStyle(.red.opacity(0.94))
                             .padding(.horizontal, 9)
@@ -156,7 +159,7 @@ struct TaskExecutionRecordSheet: View {
                             .background(Color.red.opacity(0.13), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
                     }
                     .buttonStyle(.plain)
-                    .help("停止当前任务")
+                    .help(state.loc("停止当前任务", "Stop Current Task"))
                 }
 
                 // 右栏显隐切换(对齐 Codex 可隐藏右侧面板):隐藏后时间线独占整窗。
@@ -170,7 +173,9 @@ struct TaskExecutionRecordSheet: View {
                         .background(Color.lingFg.opacity(0.07), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
                 }
                 .buttonStyle(.plain)
-                .help(panelHidden ? "显示右侧面板" : "隐藏右侧面板")
+                .help(panelHidden
+                      ? state.loc("显示右侧面板", "Show Right Panel")
+                      : state.loc("隐藏右侧面板", "Hide Right Panel"))
 
                 Button {
                     dismiss()
@@ -230,7 +235,7 @@ struct TaskExecutionRecordSheet: View {
         if agents.count > 1 {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 6) {
-                    agentChip("全部", icon: "person.3.fill", count: record.messages.count, selected: selectedParticipantID == nil) { selectedParticipantID = nil }
+                    agentChip(state.loc("全部", "All"), icon: "person.3.fill", count: record.messages.count, selected: selectedParticipantID == nil) { selectedParticipantID = nil }
                     ForEach(agents) { a in
                         agentChip(a.label, icon: a.icon, count: a.count, selected: selectedParticipantID == a.id) {
                             selectedParticipantID = (selectedParticipantID == a.id) ? nil : a.id
@@ -256,7 +261,7 @@ struct TaskExecutionRecordSheet: View {
             .background(selected ? Color.lingHolo : Color.lingFg.opacity(0.07), in: Capsule())
         }
         .buttonStyle(.plain)
-        .help("只看「\(name)」的对话")
+        .help(state.loc("只看“\(name)”的对话", "Show only \(name)"))
     }
 
     private func timelineColumn(record: LingShuTaskExecutionRecord) -> some View {
@@ -269,10 +274,10 @@ struct TaskExecutionRecordSheet: View {
                                     Image(systemName: "clock.arrow.circlepath")
                                         .font(.system(size: 12, weight: .bold))
                                         .foregroundStyle(Color.lingHolo)
-                                    Text("续接历史流程")
+                                    Text(state.loc("续接历史流程", "Continued History"))
                                         .font(.system(size: 12.5, weight: .bold))
                                         .foregroundStyle(Color.lingFg.opacity(0.92))
-                                    Text("\(lineageRecords.count) 段")
+                                    Text(state.loc("\(lineageRecords.count) 段", "\(lineageRecords.count) runs"))
                                         .font(.system(size: 11, weight: .bold, design: .monospaced))
                                         .foregroundStyle(Color.lingFg.opacity(0.42))
                                 }
@@ -290,7 +295,7 @@ struct TaskExecutionRecordSheet: View {
                                 Image(systemName: "play.circle.fill")
                                     .font(.system(size: 12, weight: .bold))
                                     .foregroundStyle(Color.lingHolo)
-                                Text("本轮执行")
+                                Text(state.loc("本轮执行", "Current Run"))
                                     .font(.system(size: 12.5, weight: .bold))
                                     .foregroundStyle(Color.lingFg.opacity(0.92))
                             }
@@ -305,7 +310,10 @@ struct TaskExecutionRecordSheet: View {
                             TaskExecutionMessageRow(message: message, state: state, recordID: record.id)
                         }
                         if shownMessages.isEmpty {
-                            Text("「\(selectedFilter?.label ?? "")」这个参与方在本任务里还没有消息。")
+                            Text(state.loc(
+                                "“\(selectedFilter?.label ?? "")”这个参与方在本任务里还没有消息。",
+                                "\(selectedFilter?.label ?? "This participant") has no messages in this task yet."
+                            ))
                                 .font(.system(size: 12, weight: .medium)).foregroundStyle(Color.lingFg.opacity(0.4))
                         }
 
@@ -353,9 +361,9 @@ struct TaskArtifactFilesPanel: View {
         VStack(alignment: .leading, spacing: 0) {
             // 顶部 tab 栏:有代码改动才显示"代码改动"页;否则只有"产出物"(非代码需求连这页都不需要)。
             HStack(spacing: 4) {
-                tabButton("产出物", systemImage: "folder.fill", count: allArtifacts.count, active: tab == .artifacts) { tab = .artifacts }
+                tabButton(LingShuLanguagePreferenceStore.localized("产出物", "Artifacts"), systemImage: "folder.fill", count: allArtifacts.count, active: tab == .artifacts) { tab = .artifacts }
                 if hasCode {
-                    tabButton("代码改动", systemImage: "arrow.triangle.branch", count: record.codeChanges?.files.count ?? 0, active: tab == .code) { tab = .code }
+                    tabButton(LingShuLanguagePreferenceStore.localized("代码改动", "Code Changes"), systemImage: "arrow.triangle.branch", count: record.codeChanges?.files.count ?? 0, active: tab == .code) { tab = .code }
                 }
                 Spacer()
             }
@@ -372,7 +380,7 @@ struct TaskArtifactFilesPanel: View {
                         Image(systemName: "tray")
                             .font(.system(size: 24, weight: .medium))
                             .foregroundStyle(Color.lingFg.opacity(0.22))
-                        Text("本任务还没有登记产出文件")
+                        Text(LingShuLanguagePreferenceStore.localized("本任务还没有登记产出文件", "No artifacts registered for this task"))
                             .font(.system(size: 11.5, weight: .medium))
                             .foregroundStyle(Color.lingFg.opacity(0.38))
                     }
@@ -380,8 +388,8 @@ struct TaskArtifactFilesPanel: View {
                 } else {
                     ScrollView {
                         VStack(alignment: .leading, spacing: 14) {
-                            fileSection("新增", color: .lingHolo, entries: allArtifacts.filter { ($0.artifact.operation ?? .created) == .created })
-                            fileSection("修改", color: .lingHoloAlt, entries: allArtifacts.filter { $0.artifact.operation == .modified })
+                            fileSection(LingShuLanguagePreferenceStore.localized("新增", "Added"), color: .lingHolo, entries: allArtifacts.filter { ($0.artifact.operation ?? .created) == .created })
+                            fileSection(LingShuLanguagePreferenceStore.localized("修改", "Modified"), color: .lingHoloAlt, entries: allArtifacts.filter { $0.artifact.operation == .modified })
                         }
                         .padding(10)
                     }
@@ -415,7 +423,7 @@ struct TaskArtifactFilesPanel: View {
                 Image(systemName: "arrow.triangle.branch")
                     .font(.system(size: 11, weight: .bold))
                     .foregroundStyle(Color.lingHoloAlt)
-                Text("代码改动")
+                Text(LingShuLanguagePreferenceStore.localized("代码改动", "Code Changes"))
                     .font(.system(size: 11, weight: .bold))
                     .foregroundStyle(Color.lingFg.opacity(0.6))
                 Spacer()
@@ -424,12 +432,15 @@ struct TaskArtifactFilesPanel: View {
                     .foregroundStyle(Color.lingHoloAlt)
                     .lineLimit(1).truncationMode(.middle)
             }
-            Text("\(code.repoName) · \(code.files.count) 个未提交改动(已提交的不计)")
+            Text(LingShuLanguagePreferenceStore.localized(
+                "\(code.repoName) · \(code.files.count) 个未提交改动（已提交的不计）",
+                "\(code.repoName) · \(code.files.count) uncommitted changes"
+            ))
                 .font(.system(size: 10, weight: .medium))
                 .foregroundStyle(Color.lingFg.opacity(0.4))
             ForEach(code.files) { f in
                 HStack(spacing: 7) {
-                    Text(f.label)
+                    Text(Self.localizedFileLabel(f.label))
                         .font(.system(size: 9.5, weight: .bold, design: .monospaced))
                         .foregroundStyle(f.label == "删除" ? .red.opacity(0.85) : (f.label == "新增" || f.label == "未跟踪" ? Color.lingHolo : Color.lingHoloAlt))
                         .frame(width: 34, alignment: .leading)
@@ -463,6 +474,16 @@ struct TaskArtifactFilesPanel: View {
                     TaskArtifactFileCard(artifact: entry.artifact, fromHistory: entry.fromHistory)
                 }
             }
+        }
+    }
+
+    private static func localizedFileLabel(_ label: String) -> String {
+        switch label {
+        case "删除": LingShuLanguagePreferenceStore.localized("删除", "Deleted")
+        case "新增": LingShuLanguagePreferenceStore.localized("新增", "Added")
+        case "未跟踪": LingShuLanguagePreferenceStore.localized("未跟踪", "Untracked")
+        case "修改": LingShuLanguagePreferenceStore.localized("修改", "Modified")
+        default: label
         }
     }
 }
@@ -525,14 +546,14 @@ struct TaskArtifactFileCard: View {
                         .lineLimit(2)
                     HStack(spacing: 6) {
                         let op = artifact.operation ?? .created
-                        Text(op.rawValue)
+                        Text(LingShuLanguagePreferenceStore.localized(op.rawValue, op.englishName))
                             .font(.system(size: 9, weight: .bold))
                             .foregroundStyle(op == .modified ? Color.lingHoloAlt : Color.lingHolo)
                             .padding(.horizontal, 4)
                             .padding(.vertical, 1)
                             .background((op == .modified ? Color.lingHoloAlt : Color.lingHolo).opacity(0.16), in: Capsule())
                         if fromHistory {
-                            Text("历史")
+                            Text(LingShuLanguagePreferenceStore.localized("历史", "History"))
                                 .font(.system(size: 9, weight: .bold))
                                 .foregroundStyle(Color.lingFg.opacity(0.5))
                                 .padding(.horizontal, 4)
@@ -562,17 +583,17 @@ struct TaskArtifactFileCard: View {
 
             if let url = localFileURL {
                 HStack(spacing: 6) {
-                    artifactActionButton("预览", icon: "eye") { isPreviewing = true }
-                    artifactActionButton("打开", icon: "arrow.up.forward.app") {
+                    artifactActionButton(LingShuLanguagePreferenceStore.localized("预览", "Preview"), icon: "eye") { isPreviewing = true }
+                    artifactActionButton(LingShuLanguagePreferenceStore.localized("打开", "Open"), icon: "arrow.up.forward.app") {
                         NSWorkspace.shared.open(url)
                     }
-                    artifactActionButton("打开目录", icon: "folder") {
+                    artifactActionButton(LingShuLanguagePreferenceStore.localized("打开目录", "Show in Finder"), icon: "folder") {
                         // 在访达里打开该文件所在目录并选中它(reveal in Finder)。
                         NSWorkspace.shared.activateFileViewerSelecting([url])
                     }
                 }
             } else if artifact.location.hasPrefix("/") {
-                Text("文件已不存在")
+                Text(LingShuLanguagePreferenceStore.localized("文件已不存在", "File No Longer Exists"))
                     .font(.system(size: 10, weight: .semibold))
                     .foregroundStyle(.orange.opacity(0.7))
             }
@@ -618,7 +639,7 @@ struct TaskExecutionRecordHistoryBlock: View {
                     .font(.system(size: 13.5, weight: .bold))
                     .foregroundStyle(Color.lingFg.opacity(0.9))
                     .lineLimit(1)
-                Text(record.status.rawValue)
+                Text(LingShuLanguagePreferenceStore.localized(record.status.rawValue, record.status.englishName))
                     .font(.system(size: 10.5, weight: .bold))
                     .foregroundStyle(record.status.color)
                 Spacer()
@@ -637,7 +658,10 @@ struct TaskExecutionRecordHistoryBlock: View {
                     TaskExecutionMessageRow(message: message)
                 }
                 if record.messages.count > visibleMessages.count {
-                    Text("已折叠更早的 \(record.messages.count - visibleMessages.count) 条历史进度。")
+                    Text(LingShuLanguagePreferenceStore.localized(
+                        "已折叠更早的 \(record.messages.count - visibleMessages.count) 条历史进度。",
+                        "\(record.messages.count - visibleMessages.count) earlier progress entries are collapsed."
+                    ))
                         .font(.system(size: 11, weight: .semibold))
                         .foregroundStyle(Color.lingFg.opacity(0.38))
                         .padding(.leading, 38)
@@ -689,7 +713,7 @@ struct TaskExecutionArtifactRow: View {
                         Button {
                             isPreviewing = true
                         } label: {
-                            Label("预览", systemImage: "eye")
+                            Label(LingShuLanguagePreferenceStore.localized("预览", "Preview"), systemImage: "eye")
                                 .font(.system(size: 10.5, weight: .bold))
                                 .foregroundStyle(Color.lingHolo)
                         }

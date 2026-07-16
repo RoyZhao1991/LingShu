@@ -12,8 +12,13 @@ struct LingShuSelfCheckPanel: View {
             HStack(spacing: 8) {
                 Image(systemName: "scope").font(.system(size: 14, weight: .bold)).foregroundStyle(Color.lingHolo)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("自检 · 灵枢掌握的自己").font(.system(size: 14, weight: .bold)).foregroundStyle(Color.lingFg.opacity(0.92))
-                    Text("整体架构 + 实时能力——大脑也经 self_inspect 工具拉同一份自我认知,用于答自指/规划/自进化")
+                    Text(state.loc("自检 · 灵枢掌握的自己", "Self-check · What Nous knows about itself"))
+                        .font(.system(size: 14, weight: .bold))
+                        .foregroundStyle(Color.lingFg.opacity(0.92))
+                    Text(state.loc(
+                        "整体架构 + 实时能力。大脑也经 self_inspect 工具读取同一份自我认知，用于自指回答、规划与自进化。",
+                        "Architecture + live capabilities. The brain reads the same self-model through self_inspect for self-reference, planning, and evolution."
+                    ))
                         .font(.system(size: 11)).foregroundStyle(Color.lingFg.opacity(0.45))
                 }
                 Spacer(minLength: 0)
@@ -23,7 +28,9 @@ struct LingShuSelfCheckPanel: View {
                         Image(systemName: "arrow.clockwise").font(.system(size: 12, weight: .bold))
                     }
                 }
-                .buttonStyle(.plain).foregroundStyle(Color.lingFg.opacity(0.5)).help("刷新自检并重新探活 agent 插件")
+                .buttonStyle(.plain)
+                .foregroundStyle(Color.lingFg.opacity(0.5))
+                .help(state.loc("刷新自检并重新探活 Agent 插件", "Refresh self-check and probe Agent plugins"))
                 .disabled(isRefreshingAgents)
             }
 
@@ -33,10 +40,10 @@ struct LingShuSelfCheckPanel: View {
                     .padding(12).frame(maxWidth: .infinity, alignment: .leading)
                     .background(Color.lingHolo.opacity(0.08), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
 
-                groupHeader("整体架构", "灵枢是怎么搭的(相对稳定)")
+                groupHeader(state.loc("整体架构", "Architecture"), state.loc("灵枢是怎么搭的（相对稳定）", "How Nous is built (relatively stable)"))
                 ForEach(Array(snap.architecture.enumerated()), id: \.offset) { _, s in sectionCard(s, accent: Color.lingHolo) }
 
-                groupHeader("当前能力(实时)", "此刻具体有什么")
+                groupHeader(state.loc("当前能力（实时）", "Current Capabilities (Live)"), state.loc("此刻具体有什么", "What is available right now"))
                 ForEach(Array(snap.capabilities.enumerated()), id: \.offset) { _, s in sectionCard(s, accent: .green) }
             }
         }

@@ -63,11 +63,14 @@ struct TaskWindowFooter: View {
                 HStack(spacing: 8) {
                     Image(systemName: "exclamationmark.bubble.fill")
                         .font(.system(size: 10, weight: .bold)).foregroundStyle(.orange.opacity(0.9))
-                    Text("灵枢正在执行——看到跑偏可直接输入纠正,立即调整方向")
+                    Text(state.loc(
+                        "灵枢正在执行——看到跑偏可直接输入纠正，立即调整方向",
+                        "LingShu is running — send a correction at any time to adjust course"
+                    ))
                         .font(.system(size: 10.5, weight: .semibold)).foregroundStyle(.orange.opacity(0.82))
                     Spacer(minLength: 0)
                     Button { state.stopTaskWindowRecord(recordID) } label: {
-                        Label("停止", systemImage: "stop.fill")
+                        Label(state.loc("停止", "Stop"), systemImage: "stop.fill")
                             .font(.system(size: 10, weight: .bold)).foregroundStyle(.red.opacity(0.92))
                             .padding(.horizontal, 7).padding(.vertical, 4)
                             .background(Color.red.opacity(0.12), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
@@ -86,9 +89,15 @@ struct TaskWindowFooter: View {
                         .background(Color.lingFg.opacity(0.07), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
                 }
                 .buttonStyle(.plain)
-                .help("为这条任务上传附件")
+                .help(state.loc("为这条任务上传附件", "Upload an Attachment to This Task"))
 
-                TextField(running ? "回复这条线程…（执行中也会立即采纳）" : "回复这条线程…（发消息就续跑）", text: $draft, axis: .vertical)
+                TextField(
+                    running
+                    ? state.loc("回复这条线程…（执行中也会立即采纳）", "Reply to this thread… (applied while running)")
+                    : state.loc("回复这条线程…（发消息就续跑）", "Reply to this thread… (send to continue)"),
+                    text: $draft,
+                    axis: .vertical
+                )
                     .textFieldStyle(.plain)
                     .font(.system(size: 12.5))
                     .foregroundStyle(Color.lingFg)
@@ -116,7 +125,9 @@ struct TaskWindowFooter: View {
                 }
                 .buttonStyle(.plain)
                 .disabled(!canSend)
-                .help(running ? "把纠正发给正在执行的灵枢(立即纠偏)" : "继续这条任务")
+                .help(running
+                      ? state.loc("把纠正发给正在执行的灵枢（立即纠偏）", "Send a Correction to the Running Task")
+                      : state.loc("继续这条任务", "Continue This Task"))
             }
         }
     }

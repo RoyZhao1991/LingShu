@@ -157,7 +157,7 @@ swift test
 bash Scripts/smoke-e2e.sh
 ```
 
-For a signed, notarized website build, see [`Scripts/release-website.sh`](./Scripts/release-website.sh). Apple Developer credentials are intentionally supplied at release time and are never stored in the repository.
+For a signed, notarized website build, see [`Scripts/release-website.sh`](./Scripts/release-website.sh). Official builds are pinned to Developer ID Team `KM7N84AC9Y` and the current signing-certificate fingerprint, which is also recorded in the release manifest. Apple Developer credentials and private keys are never stored in the repository. Changing an official binary invalidates its signature; forks must use their own signing identity.
 
 Architecture references:
 

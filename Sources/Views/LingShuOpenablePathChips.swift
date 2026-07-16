@@ -24,7 +24,9 @@ struct LingShuOpenablePathChips: View {
                             Image(systemName: "eye")
                                 .font(.system(size: 9.5, weight: .bold))
                                 .foregroundStyle(Color.lingHolo)
-                            Text(paths.count == 1 ? "预览" : "预览 \(index + 1)")
+                            Text(paths.count == 1
+                                 ? LingShuLanguagePreferenceStore.localized("预览", "Preview")
+                                 : LingShuLanguagePreferenceStore.localized("预览 \(index + 1)", "Preview \(index + 1)"))
                                 .font(.system(size: 10.5, weight: .semibold))
                                 .foregroundStyle(Color.lingFg.opacity(0.86))
                                 .lineLimit(1)
@@ -38,7 +40,7 @@ struct LingShuOpenablePathChips: View {
                         }
                     }
                     .buttonStyle(.plain)
-                    .help("点击预览 \(path)")
+                    .help(LingShuLanguagePreferenceStore.localized("点击预览 \(path)", "Preview \(path)"))
                 }
             }
         }

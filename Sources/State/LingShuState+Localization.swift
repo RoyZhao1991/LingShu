@@ -21,6 +21,20 @@ enum LingShuLanguagePreferenceStore {
         defaults.set(language.rawValue, forKey: languageKey)
         defaults.set(true, forKey: initialSelectionKey)
     }
+
+    static func localized(
+        _ chinese: String,
+        _ english: String,
+        in defaults: UserDefaults = .standard
+    ) -> String {
+        currentLanguage(in: defaults) == .english ? english : chinese
+    }
+
+    static func currentLanguage(in defaults: UserDefaults = .standard) -> LingShuVoiceLanguage {
+        LingShuVoiceLanguage(
+            rawValue: defaults.string(forKey: languageKey) ?? LingShuVoiceLanguage.chinese.rawValue
+        ) ?? .chinese
+    }
 }
 
 /// 国际化(中/英两档)。`LingShuState.language` 是全局唯一语言开关:切它则**整个界面 + 状态 + 本体**动态切语言,
@@ -82,6 +96,80 @@ extension LingShuLoopPhase {
         case .planning: "Planning"
         case .executing: "Executing"
         case .verifying: "Verifying"
+        }
+    }
+}
+
+extension LingShuTaskExecutionStatus {
+    var englishName: String {
+        switch self {
+        case .queued: "Queued"
+        case .running: "Running"
+        case .answered: "Answered"
+        case .dispatched: "Dispatched"
+        case .completed: "Completed"
+        case .needsRevision: "Needs Revision"
+        case .blocked: "Blocked"
+        case .suspended: "Paused"
+        case .analyzing: "Analyzing"
+        case .acquiringCapability: "Acquiring Capability"
+        case .waitingForUser: "Waiting for User"
+        case .ready: "Ready"
+        case .partial: "Partially Completed"
+        case .verified: "Verified"
+        case .failed: "Failed"
+        }
+    }
+}
+
+extension LingShuArtifactOperation {
+    var englishName: String {
+        switch self {
+        case .created: "Added"
+        case .modified: "Modified"
+        }
+    }
+}
+
+extension LingShuHistorySearchScope {
+    var englishName: String {
+        switch self {
+        case .all: "All"
+        case .hot: "Recent"
+        case .cold: "Archive"
+        }
+    }
+}
+
+extension LingShuHistorySearchSource {
+    var englishName: String {
+        switch self {
+        case .hotChat: "Recent Chat"
+        case .coldChat: "Archived Chat"
+        case .hotTask: "Recent Task"
+        case .coldTask: "Archived Task"
+        }
+    }
+}
+
+extension LingShuAutonomousRunbookStepStatus {
+    var englishName: String {
+        switch self {
+        case .waiting: "Waiting"
+        case .running: "Running"
+        case .completed: "Completed"
+        case .blocked: "Blocked"
+        }
+    }
+}
+
+extension LingShuVoicePhase {
+    var englishCaption: String {
+        switch self {
+        case .standby: "Standby"
+        case .listening: "Listening"
+        case .processing: "Processing"
+        case .responding: "Responding"
         }
     }
 }

@@ -91,13 +91,15 @@ struct LingShuCodeBlockView: View {
                 } label: {
                     HStack(spacing: 4) {
                         Image(systemName: copied ? "checkmark" : "doc.on.doc")
-                        Text(copied ? "已复制" : "复制")
+                        Text(copied
+                             ? LingShuLanguagePreferenceStore.localized("已复制", "Copied")
+                             : LingShuLanguagePreferenceStore.localized("复制", "Copy"))
                     }
                     .font(.system(size: 9.5, weight: .semibold, design: .monospaced))
                     .foregroundStyle(copied ? Color.lingHolo : Color.lingFg.opacity(0.66))
                 }
                 .buttonStyle(.plain)
-                .help("复制这段代码")
+                .help(LingShuLanguagePreferenceStore.localized("复制这段代码", "Copy Code"))
             }
             .padding(.horizontal, 11)
             .padding(.vertical, 6)

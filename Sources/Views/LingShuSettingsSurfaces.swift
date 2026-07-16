@@ -416,40 +416,86 @@ struct LingShuModelGatewaySurface: View {
 
     @ViewBuilder private var visionRows: some View {
         LingShuChannelRow(
-            state: state, title: state.channelDisplayName(LingShuState.visionChannelKey, default: "视觉 / 视频 · 数据网关 VL"),
+            state: state,
+            title: state.channelDisplayName(
+                LingShuState.visionChannelKey,
+                default: state.loc("视觉 / 视频 · 数据网关 VL", "Vision / Video · Data Gateway VL")
+            ),
             subtitle: state.channelConfig(LingShuState.visionChannelKey).model.isEmpty ? "swds-vision-fast · Qwen2.5-VL" : state.channelConfig(LingShuState.visionChannelKey).model,
             channelKey: LingShuState.visionChannelKey,
             isActive: state.isChannelValidated(LingShuState.visionChannelKey),
             onValidate: { await state.validateVisionChannel() }, onUse: nil,
-            onEdit: { sheet = .channel(key: LingShuState.visionChannelKey, title: "视觉 · 数据网关 VL", endpoint: LingShuState.perceptionGatewayEndpoint, model: LingShuState.visionDefaultModel) }
+            onEdit: {
+                sheet = .channel(
+                    key: LingShuState.visionChannelKey,
+                    title: state.loc("视觉 · 数据网关 VL", "Vision · Data Gateway VL"),
+                    endpoint: LingShuState.perceptionGatewayEndpoint,
+                    model: LingShuState.visionDefaultModel
+                )
+            }
         )
         if state.hasChannelConfig(LingShuState.visionCustomKey) {
             LingShuChannelRow(
-                state: state, title: state.channelDisplayName(LingShuState.visionCustomKey, default: "自定义视觉网关"),
+                state: state,
+                title: state.channelDisplayName(
+                    LingShuState.visionCustomKey,
+                    default: state.loc("自定义视觉网关", "Custom Vision Gateway")
+                ),
                 subtitle: state.channelConfig(LingShuState.visionCustomKey).endpoint,
                 channelKey: LingShuState.visionCustomKey, isActive: false,
                 onValidate: { await state.validateVisionChannel() }, onUse: nil,
-                onEdit: { sheet = .channel(key: LingShuState.visionCustomKey, title: "自定义视觉网关", endpoint: state.channelConfig(LingShuState.visionCustomKey).endpoint, model: state.channelConfig(LingShuState.visionCustomKey).model) }
+                onEdit: {
+                    sheet = .channel(
+                        key: LingShuState.visionCustomKey,
+                        title: state.loc("自定义视觉网关", "Custom Vision Gateway"),
+                        endpoint: state.channelConfig(LingShuState.visionCustomKey).endpoint,
+                        model: state.channelConfig(LingShuState.visionCustomKey).model
+                    )
+                }
             )
         }
     }
 
     @ViewBuilder private var hearingRows: some View {
         LingShuChannelRow(
-            state: state, title: state.channelDisplayName(LingShuState.asrChannelKey, default: "语音识别 · 数据网关"),
-            subtitle: state.channelConfig(LingShuState.asrChannelKey).model.isEmpty ? "数据网络模型网关 · swds-realtime-hearing" : state.channelConfig(LingShuState.asrChannelKey).model,
+            state: state,
+            title: state.channelDisplayName(
+                LingShuState.asrChannelKey,
+                default: state.loc("语音识别 · 数据网关", "Speech Recognition · Data Gateway")
+            ),
+            subtitle: state.channelConfig(LingShuState.asrChannelKey).model.isEmpty
+                ? state.loc("数据网络模型网关 · swds-realtime-hearing", "Data Model Gateway · swds-realtime-hearing")
+                : state.channelConfig(LingShuState.asrChannelKey).model,
             channelKey: LingShuState.asrChannelKey,
             isActive: state.isChannelValidated(LingShuState.asrChannelKey) && !state.asrLocalModeEnabled,
             onValidate: { state.validateASRChannel(LingShuState.asrChannelKey) }, onUse: nil,
-            onEdit: { sheet = .channel(key: LingShuState.asrChannelKey, title: "语音识别 · 数据网关", endpoint: LingShuState.perceptionGatewayEndpoint, model: LingShuState.asrDefaultModel) }
+            onEdit: {
+                sheet = .channel(
+                    key: LingShuState.asrChannelKey,
+                    title: state.loc("语音识别 · 数据网关", "Speech Recognition · Data Gateway"),
+                    endpoint: LingShuState.perceptionGatewayEndpoint,
+                    model: LingShuState.asrDefaultModel
+                )
+            }
         )
         if state.hasChannelConfig(LingShuState.asrCustomKey) {
             LingShuChannelRow(
-                state: state, title: state.channelDisplayName(LingShuState.asrCustomKey, default: "自定义语音识别"),
+                state: state,
+                title: state.channelDisplayName(
+                    LingShuState.asrCustomKey,
+                    default: state.loc("自定义语音识别", "Custom Speech Recognition")
+                ),
                 subtitle: state.channelConfig(LingShuState.asrCustomKey).endpoint,
                 channelKey: LingShuState.asrCustomKey, isActive: false,
                 onValidate: { state.validateASRChannel(LingShuState.asrCustomKey) }, onUse: nil,
-                onEdit: { sheet = .channel(key: LingShuState.asrCustomKey, title: "自定义语音识别", endpoint: state.channelConfig(LingShuState.asrCustomKey).endpoint, model: state.channelConfig(LingShuState.asrCustomKey).model) }
+                onEdit: {
+                    sheet = .channel(
+                        key: LingShuState.asrCustomKey,
+                        title: state.loc("自定义语音识别", "Custom Speech Recognition"),
+                        endpoint: state.channelConfig(LingShuState.asrCustomKey).endpoint,
+                        model: state.channelConfig(LingShuState.asrCustomKey).model
+                    )
+                }
             )
         }
     }
@@ -811,7 +857,8 @@ struct LingShuChannelConfigSheet: View {
             field(state.loc("接口地址", "Endpoint"))
             TextField("https://…", text: $endpoint).textFieldStyle(.roundedBorder)
             field(state.loc("模型 / 音色（可选）", "Model / Voice (optional)"))
-            TextField("如 deepseek-chat / qwen2.5-vl / male_steady", text: $model).textFieldStyle(.roundedBorder)
+            TextField(state.loc("如 deepseek-chat / qwen2.5-vl / male_steady", "e.g. deepseek-chat / qwen2.5-vl / male_steady"), text: $model)
+                .textFieldStyle(.roundedBorder)
             field(state.loc("访问密钥（不返显，留空保持不变）", "Access key (hidden; blank keeps current)"))
             SecureField("API Key / Token", text: $secret).textFieldStyle(.roundedBorder)
             Spacer(minLength: 0)

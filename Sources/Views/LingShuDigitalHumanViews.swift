@@ -9,8 +9,14 @@ struct LingShuDigitalHumanMiniOrb: View {
         TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { timeline in
             MiniOrbStack(snapshot: snapshot, now: timeline.date.timeIntervalSinceReferenceDate, audioLevel: audioLevel)
         }
-        .help("灵枢：\(snapshot.expression.displayName) · \(snapshot.displayText)")
-        .accessibilityLabel("灵枢，\(snapshot.expression.displayName)")
+        .help(LingShuLanguagePreferenceStore.localized(
+            "灵枢：\(snapshot.expression.displayName) · \(snapshot.displayText)",
+            "Nous: \(snapshot.expression.displayName) · \(snapshot.displayText)"
+        ))
+        .accessibilityLabel(LingShuLanguagePreferenceStore.localized(
+            "灵枢，\(snapshot.expression.displayName)",
+            "Nous, \(snapshot.expression.displayName)"
+        ))
     }
 }
 

@@ -26,15 +26,15 @@ struct LingShuAutonomousRunPanel: View {
                 .background((state.autonomousRun.isActive ? Color.orange : Color.lingHolo).opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
 
             VStack(alignment: .leading, spacing: 2) {
-                Text("独立运行模式")
+                Text(state.loc("独立运行模式", "Autonomous Mode"))
                     .font(.system(size: 15.5, weight: .semibold))
                     .foregroundStyle(Color.lingFg)
-                Text("常驻灵枢 · 能听能说能思考能动手 · 人工接管")
+                Text(state.loc("常驻灵枢 · 能听能说能思考能动手 · 人工接管", "Always on · Perceive, reason, and act · Human takeover"))
                     .font(.system(size: 11.5, weight: .medium))
                     .foregroundStyle(Color.lingFg.opacity(0.52))
             }
             Spacer()
-            Text(state.autonomousRun.phase.rawValue)
+            Text(state.language == .english ? state.autonomousRun.phase.englishName : state.autonomousRun.phase.rawValue)
                 .font(.system(size: 12, weight: .bold, design: .monospaced))
                 .foregroundStyle(state.autonomousRun.isActive ? .orange : Color.lingFg.opacity(0.54))
         }
@@ -46,8 +46,8 @@ struct LingShuAutonomousRunPanel: View {
         VStack(alignment: .leading, spacing: 14) {
             // 贾维斯式上岗按钮:大、居中、科技感。默认完整授权,点一下即上岗。
             JarvisLaunchButton(
-                title: "让灵枢上岗",
-                subtitle: "AUTONOMOUS · 完整授权 · 灵枢在岗",
+                title: state.loc("让灵枢上岗", "Put Nous on Duty"),
+                subtitle: state.loc("AUTONOMOUS · 完整授权 · 灵枢在岗", "AUTONOMOUS · FULL ACCESS · ON DUTY"),
                 isEnabled: true
             ) {
                 state.goLiveAsStandingPerson()
@@ -61,19 +61,19 @@ struct LingShuAutonomousRunPanel: View {
             HStack(alignment: .top, spacing: 16) {
                 VStack(alignment: .leading, spacing: 8) {
                     if standing {
-                        metric(label: "形态", value: "常驻灵枢 · 在岗", icon: "person.wave.2")
+                        metric(label: state.loc("形态", "Mode"), value: state.loc("常驻灵枢 · 在岗", "Resident · On Duty"), icon: "person.wave.2")
                     } else {
-                        metric(label: "目标", value: state.autonomousRun.objective.isEmpty ? "等待目标" : state.autonomousRun.objective, icon: "scope")
+                        metric(label: state.loc("目标", "Goal"), value: state.autonomousRun.objective.isEmpty ? state.loc("等待目标", "Waiting for goal") : state.autonomousRun.objective, icon: "scope")
                     }
-                    metric(label: "权限", value: state.autonomousRun.permissionLevel.rawValue, icon: "lock.shield")
-                    metric(label: "状态", value: state.autonomousRun.statusLine, icon: "waveform.path.ecg")
+                    metric(label: state.loc("权限", "Access"), value: state.language == .english ? state.autonomousRun.permissionLevel.englishName : state.autonomousRun.permissionLevel.rawValue, icon: "lock.shield")
+                    metric(label: state.loc("状态", "Status"), value: state.autonomousRun.statusLine, icon: "waveform.path.ecg")
                 }
                 Spacer(minLength: 12)
                 controls
             }
 
             if standing {
-                Text("在岗待命:直接在对话里说话或发指令,我就理解→思考→动手。")
+                Text(state.loc("在岗待命:直接在对话里说话或发指令,我就理解→思考→动手。", "On duty. Speak or send an instruction in chat, and I will understand, reason, and act."))
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(Color.lingFg.opacity(0.5))
                     .fixedSize(horizontal: false, vertical: true)
@@ -94,11 +94,11 @@ struct LingShuAutonomousRunPanel: View {
             }
 
             if let environment = state.autonomousRun.environment {
-                compactChecks(title: "环境检测", report: environment.items)
+                compactChecks(title: state.loc("环境检测", "Environment Check"), report: environment.items)
             }
 
             if let selfCheck = state.autonomousRun.selfCheck {
-                compactChecks(title: "自检", report: selfCheck.items)
+                compactChecks(title: state.loc("自检", "Self-check"), report: selfCheck.items)
             }
 
             if let runbook = state.autonomousRun.runbook {
@@ -113,21 +113,21 @@ struct LingShuAutonomousRunPanel: View {
         return HStack(spacing: 8) {
             switch state.autonomousRun.phase {
             case .ready:
-                compactButton("授权执行", icon: "play.fill", tint: .lingHolo) { state.authorizeAutonomousRun() }
+                compactButton(state.loc("授权执行", "Authorize"), icon: "play.fill", tint: .lingHolo) { state.authorizeAutonomousRun() }
             case .running:
-                compactButton("暂停", icon: "pause.fill", tint: .orange) { state.pauseAutonomousRun() }
+                compactButton(state.loc("暂停", "Pause"), icon: "pause.fill", tint: .orange) { state.pauseAutonomousRun() }
             case .paused:
-                compactButton("继续", icon: "play.fill", tint: .lingHolo) { state.resumeAutonomousRun() }
+                compactButton(state.loc("继续", "Resume"), icon: "play.fill", tint: .lingHolo) { state.resumeAutonomousRun() }
             case .blocked:
-                compactButton("重检", icon: "arrow.clockwise", tint: .orange) {
+                compactButton(state.loc("重检", "Check Again"), icon: "arrow.clockwise", tint: .orange) {
                     if standing { state.goLiveAsStandingPerson() } else { state.prepareAutonomousRun(objective: state.autonomousRun.objective) }
                 }
             case .idle, .probing, .planning, .completed:
-                compactButton("重建", icon: "sparkles", tint: .lingHolo) {
+                compactButton(state.loc("重建", "Rebuild"), icon: "sparkles", tint: .lingHolo) {
                     if standing { state.goLiveAsStandingPerson() } else { state.prepareAutonomousRun(objective: state.autonomousRun.objective) }
                 }
             }
-            compactButton("停止", icon: "stop.fill", tint: .red) { state.stopAutonomousRun() }
+            compactButton(state.loc("停止", "Stop"), icon: "stop.fill", tint: .red) { state.stopAutonomousRun() }
         }
     }
 
@@ -180,7 +180,7 @@ struct LingShuAutonomousRunPanel: View {
     private func runbookView(_ runbook: LingShuAutonomousRunbook) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
-                Text("动态 Runbook")
+                Text(state.loc("动态 Runbook", "Dynamic Runbook"))
                     .font(.system(size: 12.5, weight: .bold))
                     .foregroundStyle(Color.lingFg)
                 Spacer()
@@ -212,7 +212,7 @@ struct LingShuAutonomousRunPanel: View {
                             .lineLimit(2)
                     }
                     Spacer()
-                    Text(step.status.rawValue)
+                    Text(state.language == .english ? step.status.englishName : step.status.rawValue)
                         .font(.system(size: 10.5, weight: .bold))
                         .foregroundStyle(Color.lingFg.opacity(0.45))
                 }

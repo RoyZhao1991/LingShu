@@ -59,7 +59,7 @@ struct LingShuMinimalVoiceView: View {
                     .contentTransition(.opacity)
             }
             Spacer()
-            Text("实时通话")
+            Text(state.loc("实时通话", "LIVE CALL"))
                 .font(.system(size: 11, weight: .bold, design: .monospaced))
                 .tracking(2)
                 .foregroundStyle(Color.lingFg.opacity(0.4))
@@ -93,7 +93,7 @@ struct LingShuMinimalVoiceView: View {
                             Image(systemName: "video.slash")
                                 .font(.system(size: 22, weight: .medium))
                                 .foregroundStyle(Color.lingFg.opacity(0.3))
-                            Text("摄像头关闭")
+                            Text(state.loc("摄像头关闭", "Camera Off"))
                                 .font(.system(size: 10.5, weight: .medium))
                                 .foregroundStyle(Color.lingFg.opacity(0.35))
                         }
@@ -109,8 +109,8 @@ struct LingShuMinimalVoiceView: View {
 
     private var waveforms: some View {
         VStack(spacing: 10) {
-            waveformRow(label: "你", color: .lingHoloAlt, level: { voice.inputLevel }, active: { voice.isRecording })
-            waveformRow(label: "灵枢", color: .lingHolo, level: { voice.outputLevel }, active: { voice.isSpeaking })
+            waveformRow(label: state.loc("你", "You"), color: .lingHoloAlt, level: { voice.inputLevel }, active: { voice.isRecording })
+            waveformRow(label: state.appName, color: .lingHolo, level: { voice.outputLevel }, active: { voice.isSpeaking })
         }
     }
 

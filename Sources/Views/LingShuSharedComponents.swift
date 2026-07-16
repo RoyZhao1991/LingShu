@@ -62,7 +62,7 @@ struct SupervisorChainEventRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 8) {
-                Text("巡检\(event.tick)")
+                Text(LingShuLanguagePreferenceStore.localized("巡检\(event.tick)", "Check \(event.tick)"))
                     .font(.system(size: 10, weight: .bold, design: .monospaced))
                     .foregroundStyle(event.severity.eventColor)
                 Text("\(event.agent) / \(event.title)")

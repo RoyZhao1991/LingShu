@@ -73,6 +73,31 @@ final class ArchitectureGuardTests: XCTestCase {
         }
     }
 
+    func testSwiftUIControlsDoNotBypassInterfaceLocalization() throws {
+        let controlTokens = [
+            "Text(", "Label(", "Button(", "Toggle(", "Picker(",
+            "TextField(", "SecureField(", ".help("
+        ]
+
+        for file in try swiftFiles(under: "Sources/Views") where file.lastPathComponent != "LingShuInitialLanguageSelectionView.swift" {
+            let lines = try String(contentsOf: file, encoding: .utf8)
+                .split(separator: "\n", omittingEmptySubsequences: false)
+            for (index, rawLine) in lines.enumerated() {
+                let line = String(rawLine)
+                let code = line.split(separator: "//", maxSplits: 1, omittingEmptySubsequences: false).first.map(String.init) ?? line
+                guard controlTokens.contains(where: code.contains) else { continue }
+                guard code.unicodeScalars.contains(where: { (0x4E00...0x9FFF).contains($0.value) }) else { continue }
+                guard !code.contains("state.loc("),
+                      !code.contains("LingShuLanguagePreferenceStore.localized("),
+                      !code.contains("Text(loc("),
+                      !code.contains("Button(loc(")
+                else { continue }
+
+                XCTFail("\(file.lastPathComponent):\(index + 1) contains a direct Chinese SwiftUI control string; route it through the interface language store")
+            }
+        }
+    }
+
     func testGoalSpecGenerationNeverBranchesOnModelOrProviderIdentity() throws {
         let files = [
             "Sources/State/LingShuState+GoalSpec.swift",
@@ -264,6 +289,10 @@ final class ArchitectureGuardTests: XCTestCase {
         XCTAssertFalse(releaseScript.contains("/usr/local/bin"))
         XCTAssertTrue(buildScript.contains(#"if [ "${LINGSHU_REQUIRE_DISTRIBUTION_SIGNING:-0}" = "1" ]"#))
         XCTAssertTrue(buildScript.contains(trustedPath))
+        XCTAssertTrue(releaseScript.contains(#"TEAM_ID="${LINGSHU_APPLE_TEAM_ID:-KM7N84AC9Y}""#))
+        XCTAssertTrue(releaseScript.contains("EXPECTED_CERT_SHA256="))
+        XCTAssertTrue(releaseScript.contains("signing_certificate_sha256"))
+        XCTAssertTrue(releaseScript.contains("signing certificate fingerprint mismatch"))
     }
 
     func testArchitectureQuickReferenceStatesCurrentCodeReality() throws {

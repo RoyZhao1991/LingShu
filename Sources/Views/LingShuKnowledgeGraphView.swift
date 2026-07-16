@@ -61,20 +61,23 @@ struct LingShuKnowledgeGraphView: View {
     private var header: some View {
         HStack(alignment: .center, spacing: 12) {
             VStack(alignment: .leading, spacing: 4) {
-                Text("知识图谱")
+                Text(state.loc("知识图谱", "Knowledge Graph"))
                     .font(.system(size: 14.5, weight: .bold))
                     .foregroundStyle(Color.lingFg.opacity(0.92))
-                Text("本地 Markdown vault · 原子笔记 · 别名归一 · 双链关系")
+                Text(state.loc(
+                    "本地 Markdown Vault · 原子笔记 · 别名归一 · 双链关系",
+                    "Local Markdown vault · Atomic notes · Alias normalization · Bidirectional links"
+                ))
                     .font(.system(size: 11.5, weight: .medium))
                     .foregroundStyle(Color.lingFg.opacity(0.46))
             }
             Spacer()
-            statChip("节点", "\(allNotes.count)", tint: .lingHolo)
-            statChip("当前显示", "\(candidateNotes.count)", tint: .cyan)
+            statChip(state.loc("节点", "Nodes"), "\(allNotes.count)", tint: .lingHolo)
+            statChip(state.loc("当前显示", "Visible"), "\(candidateNotes.count)", tint: .cyan)
             Button {
                 NSWorkspace.shared.open(LingShuKnowledgeGraph.defaultRoot)
             } label: {
-                Label("打开 Vault", systemImage: "folder")
+                Label(state.loc("打开 Vault", "Open Vault"), systemImage: "folder")
                     .font(.system(size: 11.5, weight: .semibold))
             }
             .buttonStyle(.plain)
@@ -92,7 +95,7 @@ struct LingShuKnowledgeGraphView: View {
                     Image(systemName: "magnifyingglass")
                         .font(.system(size: 11, weight: .bold))
                         .foregroundStyle(Color.lingFg.opacity(0.45))
-                    TextField("搜索标题、正文、别名或标签", text: $query)
+                    TextField(state.loc("搜索标题、正文、别名或标签", "Search titles, content, aliases, or tags"), text: $query)
                         .textFieldStyle(.plain)
                         .font(.system(size: 12, weight: .medium))
                 }
@@ -102,7 +105,7 @@ struct LingShuKnowledgeGraphView: View {
                 .overlay { RoundedRectangle(cornerRadius: 8, style: .continuous).stroke(Color.lingHolo.opacity(0.13)) }
 
                 HStack(spacing: 7) {
-                    Text("显示")
+                    Text(state.loc("显示", "Show"))
                         .font(.system(size: 10.5, weight: .bold))
                         .foregroundStyle(Color.lingFg.opacity(0.42))
                     Slider(value: $nodeLimit, in: 40...260, step: 20)
@@ -115,7 +118,7 @@ struct LingShuKnowledgeGraphView: View {
             }
 
             HStack(spacing: 6) {
-                kindButton(nil, title: "全部", count: allNotes.count)
+                kindButton(nil, title: state.loc("全部", "All"), count: allNotes.count)
                 ForEach(LingShuMemoryNote.Kind.allCases, id: \.rawValue) { kind in
                     kindButton(kind, title: kind.displayName, count: allNotes.filter { $0.kind == kind }.count)
                 }
@@ -166,7 +169,7 @@ struct LingShuKnowledgeGraphView: View {
                 }
 
                 ScrollView {
-                    Text(note.body.isEmpty ? "这条笔记暂无正文。" : note.body)
+                    Text(note.body.isEmpty ? state.loc("这条笔记暂无正文。", "This note has no content yet.") : note.body)
                         .font(.system(size: 12.5, weight: .medium))
                         .foregroundStyle(Color.lingFg.opacity(0.86))
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -176,11 +179,11 @@ struct LingShuKnowledgeGraphView: View {
 
                 Divider().overlay(Color.lingFg.opacity(0.1))
 
-                metricRow("热度", "\(Int(selectedHeat(note) * 100))%", icon: "flame")
-                metricRow("置信度", String(format: "%.2f", note.confidence), icon: "checkmark.seal")
-                metricRow("来源", note.source.rawValue, icon: "dot.radiowaves.left.and.right")
-                metricRow("出链", "\(note.links.count)", icon: "point.3.connected.trianglepath.dotted")
-                metricRow("历史", "\(note.history.count)", icon: "clock.arrow.circlepath")
+                metricRow(state.loc("热度", "Heat"), "\(Int(selectedHeat(note) * 100))%", icon: "flame")
+                metricRow(state.loc("置信度", "Confidence"), String(format: "%.2f", note.confidence), icon: "checkmark.seal")
+                metricRow(state.loc("来源", "Source"), note.source.rawValue, icon: "dot.radiowaves.left.and.right")
+                metricRow(state.loc("出链", "Links"), "\(note.links.count)", icon: "point.3.connected.trianglepath.dotted")
+                metricRow(state.loc("历史", "History"), "\(note.history.count)", icon: "clock.arrow.circlepath")
 
                 if !note.tags.isEmpty {
                     tagWrap(note.tags.prefix(10).map { "#\($0)" }, color: .lingHolo.opacity(0.75))
@@ -192,7 +195,7 @@ struct LingShuKnowledgeGraphView: View {
                         .appendingPathComponent("\(note.id).md")
                     NSWorkspace.shared.activateFileViewerSelecting([url])
                 } label: {
-                    Label("在访达中定位", systemImage: "scope")
+                    Label(state.loc("在访达中定位", "Show in Finder"), systemImage: "scope")
                         .font(.system(size: 11.5, weight: .semibold))
                 }
                 .buttonStyle(.plain)
@@ -206,7 +209,7 @@ struct LingShuKnowledgeGraphView: View {
                     Image(systemName: "point.3.connected.trianglepath.dotted")
                         .font(.system(size: 24, weight: .bold))
                         .foregroundStyle(Color.lingFg.opacity(0.35))
-                    Text("选择一个节点查看详情")
+                    Text(state.loc("选择一个节点查看详情", "Select a node to view details"))
                         .font(.system(size: 12.5, weight: .semibold))
                         .foregroundStyle(Color.lingFg.opacity(0.5))
                 }
@@ -355,7 +358,7 @@ private struct LingShuKnowledgeGraphCanvas: View {
                         .animation(.easeOut(duration: 0.16), value: hoveredID)
                 }
                 if notes.isEmpty {
-                    Text("没有可显示的知识节点")
+                    Text(LingShuLanguagePreferenceStore.localized("没有可显示的知识节点", "No knowledge nodes to display"))
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(Color.lingFg.opacity(0.45))
                 }
@@ -394,11 +397,14 @@ private struct LingShuKnowledgeGraphCanvas: View {
         VStack {
             HStack {
                 VStack(alignment: .leading, spacing: 5) {
-                    Text("拖拽平移 · 触控板捏合缩放 · 悬停放大并显示标题")
+                    Text(LingShuLanguagePreferenceStore.localized(
+                        "拖拽平移 · 触控板捏合缩放 · 悬停放大并显示标题",
+                        "Drag to pan · Pinch to zoom · Hover to enlarge and reveal titles"
+                    ))
                         .font(.system(size: 10.5, weight: .semibold))
                         .foregroundStyle(Color.lingFg.opacity(0.62))
                     if let selectedID, let note = notes.first(where: { $0.id == selectedID }) {
-                        Text("聚焦: \(note.title)")
+                        Text(LingShuLanguagePreferenceStore.localized("聚焦：\(note.title)", "Focus: \(note.title)"))
                             .font(.system(size: 11, weight: .bold))
                             .foregroundStyle(Color.lingHolo.opacity(0.92))
                             .lineLimit(1)
@@ -406,7 +412,7 @@ private struct LingShuKnowledgeGraphCanvas: View {
                 }
                 Spacer()
                 HStack(spacing: 7) {
-                    graphToolButton("minus.magnifyingglass", "缩小") {
+                    graphToolButton("minus.magnifyingglass", LingShuLanguagePreferenceStore.localized("缩小", "Zoom Out")) {
                         withAnimation(.spring(response: 0.24, dampingFraction: 0.88)) {
                             zoom = clamp(zoom / 1.22, min: 0.35, max: 4)
                         }
@@ -415,18 +421,18 @@ private struct LingShuKnowledgeGraphCanvas: View {
                         .font(.system(size: 10.5, weight: .bold, design: .monospaced))
                         .foregroundStyle(Color.lingFg.opacity(0.68))
                         .frame(width: 44)
-                    graphToolButton("plus.magnifyingglass", "放大") {
+                    graphToolButton("plus.magnifyingglass", LingShuLanguagePreferenceStore.localized("放大", "Zoom In")) {
                         withAnimation(.spring(response: 0.24, dampingFraction: 0.88)) {
                             zoom = clamp(zoom * 1.22, min: 0.35, max: 4)
                         }
                     }
-                    graphToolButton("scope", "回到聚焦") {
+                    graphToolButton("scope", LingShuLanguagePreferenceStore.localized("回到聚焦", "Return to Focus")) {
                         withAnimation(.spring(response: 0.28, dampingFraction: 0.82)) {
                             pan = .zero
                             zoom = 1.35
                         }
                     }
-                    graphToolButton("arrow.counterclockwise", "重置视图") {
+                    graphToolButton("arrow.counterclockwise", LingShuLanguagePreferenceStore.localized("重置视图", "Reset View")) {
                         withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) {
                             pan = .zero
                             zoom = 1
@@ -464,7 +470,7 @@ private struct LingShuKnowledgeGraphCanvas: View {
 
     private var heatLegend: some View {
         HStack(spacing: 8) {
-            Text("冷")
+            Text(LingShuLanguagePreferenceStore.localized("冷", "Cold"))
             LinearGradient(
                 colors: [
                     Color.lingHolo.opacity(0.2),
@@ -476,8 +482,8 @@ private struct LingShuKnowledgeGraphCanvas: View {
             )
             .frame(width: 74, height: 7)
             .clipShape(Capsule())
-            Text("热")
-            Text("颜色深浅=热度")
+            Text(LingShuLanguagePreferenceStore.localized("热", "Hot"))
+            Text(LingShuLanguagePreferenceStore.localized("颜色深浅 = 热度", "Color intensity = heat"))
                 .foregroundStyle(Color.lingFg.opacity(0.58))
         }
         .font(.system(size: 9.5, weight: .bold))
@@ -739,13 +745,13 @@ private extension LingShuMemoryNote {
 private extension LingShuMemoryNote.Kind {
     var displayName: String {
         switch self {
-        case .person: "人物"
-        case .project: "项目"
-        case .preference: "偏好"
-        case .decision: "决策"
-        case .fact: "事实"
-        case .skill: "技能"
-        case .glossary: "术语"
+        case .person: LingShuLanguagePreferenceStore.localized("人物", "Person")
+        case .project: LingShuLanguagePreferenceStore.localized("项目", "Project")
+        case .preference: LingShuLanguagePreferenceStore.localized("偏好", "Preference")
+        case .decision: LingShuLanguagePreferenceStore.localized("决策", "Decision")
+        case .fact: LingShuLanguagePreferenceStore.localized("事实", "Fact")
+        case .skill: LingShuLanguagePreferenceStore.localized("技能", "Skill")
+        case .glossary: LingShuLanguagePreferenceStore.localized("术语", "Glossary")
         }
     }
 
