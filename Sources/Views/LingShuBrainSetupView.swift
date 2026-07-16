@@ -58,10 +58,13 @@ struct LingShuBrainSetupView: View {
                 .frame(width: 46, height: 46)
                 .background(Color.lingHolo.opacity(0.12), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
             VStack(alignment: .leading, spacing: 5) {
-                Text("连接灵枢主脑")
+                Text(state.loc("连接灵枢主脑", "Connect the LingShu Brain"))
                     .font(.system(size: 23, weight: .bold))
                     .foregroundStyle(Color.lingFg)
-                Text("检测到当前没有可用的主脑通道。选择服务并完成一次连接验证。")
+                Text(state.loc(
+                    "检测到当前没有可用的主脑通道。选择服务并完成一次连接验证。",
+                    "No working brain channel was found. Choose a provider and verify the connection."
+                ))
                     .font(.system(size: 12.5, weight: .medium))
                     .foregroundStyle(Color.lingFg.opacity(0.55))
             }
@@ -78,8 +81,8 @@ struct LingShuBrainSetupView: View {
                         Image(systemName: item.systemImage)
                             .font(.system(size: 14, weight: .semibold))
                         VStack(alignment: .leading, spacing: 2) {
-                            Text(item.title).font(.system(size: 13, weight: .bold))
-                            Text(item.subtitle).font(.system(size: 9.5, weight: .medium)).opacity(0.65)
+                            Text(state.loc(item.title, item.englishTitle)).font(.system(size: 13, weight: .bold))
+                            Text(state.loc(item.subtitle, item.englishSubtitle)).font(.system(size: 9.5, weight: .medium)).opacity(0.65)
                         }
                         Spacer(minLength: 0)
                         if route == item {
@@ -103,25 +106,25 @@ struct LingShuBrainSetupView: View {
     private var configurationForm: some View {
         VStack(alignment: .leading, spacing: 13) {
             if route == .custom {
-                fieldLabel("接口地址")
+                fieldLabel(state.loc("接口地址", "Endpoint"))
                 TextField("https://your-gateway.example.com/v1", text: $customEndpoint)
                     .textFieldStyle(.roundedBorder)
-                fieldLabel("模型名称")
-                TextField("例如 model-name", text: $customModel)
+                fieldLabel(state.loc("模型名称", "Model name"))
+                TextField(state.loc("例如 model-name", "For example, model-name"), text: $customModel)
                     .textFieldStyle(.roundedBorder)
             } else {
                 HStack(spacing: 10) {
                     VStack(alignment: .leading, spacing: 3) {
-                        Text("已选择 \(route.subtitle)")
+                        Text(state.loc("已选择 \(route.subtitle)", "Selected: \(route.englishSubtitle)"))
                             .font(.system(size: 12.5, weight: .bold))
                             .foregroundStyle(Color.lingFg)
-                        Text("接口地址已预设，无需填写")
+                        Text(state.loc("接口地址已预设，无需填写", "The endpoint is preset."))
                             .font(.system(size: 10.5, weight: .medium))
                             .foregroundStyle(Color.lingFg.opacity(0.45))
                     }
                     Spacer()
                     if route.modelOptions.count > 1 {
-                        Picker("模型", selection: $selectedModel) {
+                        Picker(state.loc("模型", "Model"), selection: $selectedModel) {
                             ForEach(route.modelOptions, id: \.self) { Text($0).tag($0) }
                         }
                         .pickerStyle(.menu)
@@ -133,13 +136,13 @@ struct LingShuBrainSetupView: View {
                 .background(Color.lingFg.opacity(0.045), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
             }
 
-            fieldLabel("访问 Token")
-            SecureField("粘贴 Token", text: $token)
+            fieldLabel(state.loc("访问 Token", "Access token"))
+            SecureField(state.loc("粘贴 Token", "Paste token"), text: $token)
                 .textFieldStyle(.roundedBorder)
 
             HStack(spacing: 6) {
                 Image(systemName: "lock.fill")
-                Text("Token 仅保存在本机加密凭据库中")
+                Text(state.loc("Token 仅保存在本机加密凭据库中", "The token is stored only in the local encrypted credential store."))
             }
             .font(.system(size: 10.5, weight: .medium))
             .foregroundStyle(Color.lingFg.opacity(0.43))
@@ -162,7 +165,9 @@ struct LingShuBrainSetupView: View {
 
     private var footer: some View {
         HStack(spacing: 12) {
-            Text(isConnecting ? "正在向模型发送连接校验…" : "验证成功后将自动进入灵枢")
+            Text(isConnecting
+                 ? state.loc("正在向模型发送连接校验…", "Verifying the model connection…")
+                 : state.loc("验证成功后将自动进入灵枢", "LingShu opens automatically after verification"))
                 .font(.system(size: 10.5, weight: .medium))
                 .foregroundStyle(Color.lingFg.opacity(0.45))
             Spacer()
@@ -175,7 +180,9 @@ struct LingShuBrainSetupView: View {
                     } else {
                         Image(systemName: "arrow.right.circle.fill")
                     }
-                    Text(isConnecting ? "正在验证" : "验证并启用")
+                    Text(isConnecting
+                         ? state.loc("正在验证", "Verifying")
+                         : state.loc("验证并启用", "Verify and Enable"))
                 }
                 .font(.system(size: 12.5, weight: .bold))
                 .padding(.horizontal, 17)
@@ -206,7 +213,11 @@ struct LingShuBrainSetupView: View {
                 customModel: customModel
             )
         } catch {
-            validationMessage = error.localizedDescription
+            if let inputError = error as? LingShuBrainSetupInputError {
+                validationMessage = state.loc(inputError.localizedDescription, inputError.englishDescription)
+            } else {
+                validationMessage = error.localizedDescription
+            }
             return
         }
 

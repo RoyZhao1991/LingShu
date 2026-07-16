@@ -286,6 +286,24 @@ struct ChatBubbleView: View {
                     }
                 }
 
+                if !message.isUser, !message.isLoading, let interaction = message.humanInteraction {
+                    LingShuHumanInteractionCard(state: state, request: interaction) { answer, displayAnswer in
+                        if let recordID = message.awaitingInputForRecordID {
+                            state.answerDispatchedTask(
+                                recordID: recordID,
+                                answer: answer,
+                                displayAnswer: displayAnswer
+                            )
+                        } else {
+                            state.resolveMainHumanInteraction(
+                                messageID: message.id,
+                                answer: answer,
+                                displayAnswer: displayAnswer
+                            )
+                        }
+                    }
+                }
+
                 // **气泡内追加信息**:这条任务在等用户输入 → 从气泡直接回复(选项上方/无选项时单独),
                 // 答复**直达该任务隔离会话**(不经主输入/分诊),不怕被后续聊天淹没。
                 if !message.isUser, let rid = message.awaitingInputForRecordID {

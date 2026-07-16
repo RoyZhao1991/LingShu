@@ -2,32 +2,37 @@ import Foundation
 import Security
 import CryptoKit
 
-/// 本地凭据仓库（灵枢自有配置文件实现，**加密落盘**）。
+/// Local credential store backed by macOS Keychain.
 ///
-/// 凭据按 provider id 存进灵枢自己的配置目录
-/// `~/Library/Application Support/LingShu/Credentials/credentials.json`（文件权限 0600，仅当前用户可读）。
-/// 文件内容用 **AES-GCM 加密**：密钥由本机硬件 UUID（`gethostuuid`）+ 固定盐经 SHA-256 派生，
-/// 不入仓库、不写 UserDefaults，复制到别的机器也解不开。
-/// 读取顺序：内存缓存 → 加密配置文件 → 旧明文配置（一次性升级）→ 旧钥匙串（**静默**一次性迁移，
-/// 永不弹框）→ 环境变量（`LINGSHU_TOKEN_<PROVIDER_ID>`，id 中的 `-` 换成 `_` 并大写，便于 CI/调试注入）。
-///
-/// 为什么不用钥匙串：灵枢是 ad-hoc 签名，签名每次重建都变，导致读钥匙串项每次都要弹框授权——
-/// 反复摩擦，还卡住网关 TTS token。改存灵枢自有加密配置后：应用自有、启动不弹框、跨重建稳定。
-/// 旧钥匙串里的凭据**静默**（`kSecUseAuthenticationUISkip`，需要弹框时直接失败而非打扰用户）
-/// 首次访问时自动迁移进来，之后不再碰钥匙串。
+/// Production credentials never enter UserDefaults or a repository-visible file. Releases use a
+/// stable Apple signature, so Keychain is both the strongest available local boundary and stable
+/// across app upgrades. Older machine-bound AES files are migrated once and removed only after
+/// every value is safely written to Keychain. Supplying `directory` without `useKeychain` selects
+/// the deterministic file backend used by tests.
 final class LingShuCredentialStore: @unchecked Sendable {
-    private let legacyKeychainService: String
+    private let service: String
     private let fileURL: URL
+    private let usesKeychain: Bool
     private let lock = NSLock()
     private var cache: [String: String] = [:]
 
-    init(service: String = "cn.lingshu.model-credentials", directory: URL? = nil) {
-        self.legacyKeychainService = service
+    init(
+        service: String = "cn.lingshu.model-credentials",
+        directory: URL? = nil,
+        useKeychain: Bool? = nil
+    ) {
+        self.service = service
+        self.usesKeychain = useKeychain ?? (directory == nil)
         let base = directory ?? FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/Application Support/LingShu/Credentials", isDirectory: true)
         try? FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
         self.fileURL = base.appendingPathComponent("credentials.json")
-        loadFile()
+        if usesKeychain {
+            cache = readAllFromKeychain()
+            migrateLegacyFileIfNeeded()
+        } else {
+            loadFile()
+        }
     }
 
     func apiKey(forProvider providerID: String) -> String? {
@@ -37,11 +42,11 @@ final class LingShuCredentialStore: @unchecked Sendable {
         if let cached = cache[providerID] {
             return cached.isEmpty ? nil : cached
         }
-        // 一次性迁移：旧凭据在钥匙串里 → 静默读出来写进加密配置，以后这个 provider 不再碰钥匙串。
-        if let migrated = readFromKeychain(account: providerID), !migrated.isEmpty {
-            cache[providerID] = migrated
-            persist()
-            return migrated
+        if usesKeychain,
+           let stored = readFromKeychain(account: providerID),
+           !stored.isEmpty {
+            cache[providerID] = stored
+            return stored
         }
         if let env = ProcessInfo.processInfo.environment[Self.environmentKey(forProvider: providerID)],
            !env.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -53,12 +58,24 @@ final class LingShuCredentialStore: @unchecked Sendable {
         return nil
     }
 
-    func setAPIKey(_ key: String, forProvider providerID: String) {
+    @discardableResult
+    func setAPIKey(_ key: String, forProvider providerID: String) -> Bool {
         lock.lock()
         defer { lock.unlock() }
 
-        cache[providerID] = key.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmed = key.trimmingCharacters(in: .whitespacesAndNewlines)
+        if usesKeychain {
+            let stored = trimmed.isEmpty
+                ? deleteFromKeychain(account: providerID)
+                : writeToKeychain(account: providerID, value: trimmed)
+            guard stored else { return false }
+            cache[providerID] = trimmed
+            return true
+        }
+
+        cache[providerID] = trimmed
         persist()
+        return true
     }
 
     /// 已存的 provider id 列表(**只返回 key 名,绝不返回明文值**)。供凭据四肢 list_credentials 用。
@@ -82,16 +99,19 @@ final class LingShuCredentialStore: @unchecked Sendable {
         defer { lock.unlock() }
         for (id, value) in entries {
             let v = value.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !v.isEmpty { cache[id] = v }
+            guard !v.isEmpty else { continue }
+            if !usesKeychain || writeToKeychain(account: id, value: v) {
+                cache[id] = v
+            }
         }
-        persist()
+        if !usesKeychain { persist() }
     }
 
     static func environmentKey(forProvider providerID: String) -> String {
         "LINGSHU_TOKEN_" + providerID.uppercased().replacingOccurrences(of: "-", with: "_")
     }
 
-    // MARK: - 加密配置文件（灵枢自有）
+    // MARK: - Legacy/test encrypted file
 
     /// 落盘信封：版本号 + base64(AES-GCM combined)。旧明文文件没有这层信封，靠 `loadFile` 兼容升级。
     private struct Envelope: Codable {
@@ -100,23 +120,9 @@ final class LingShuCredentialStore: @unchecked Sendable {
     }
 
     private func loadFile() {
-        guard let raw = try? Data(contentsOf: fileURL) else { return }
-
-        // 新格式：加密信封 → 解密。
-        if let envelope = try? JSONDecoder().decode(Envelope.self, from: raw),
-           envelope.v >= 2,
-           let sealed = Data(base64Encoded: envelope.data),
-           let plain = Self.decrypt(sealed),
-           let dict = try? JSONDecoder().decode([String: String].self, from: plain) {
-            cache = dict
-            return
-        }
-
-        // 旧格式：明文 [String: String] → 读出来后立即重写为加密格式（一次性升级）。
-        if let dict = try? JSONDecoder().decode([String: String].self, from: raw) {
-            cache = dict
-            persist()
-        }
+        guard let values = Self.decodeLegacyFile(at: fileURL) else { return }
+        cache = values
+        persist() // Plain v1 files are immediately rewritten as an encrypted envelope.
     }
 
     private func persist() {
@@ -127,6 +133,33 @@ final class LingShuCredentialStore: @unchecked Sendable {
         guard let data = try? JSONEncoder().encode(envelope) else { return }
         try? data.write(to: fileURL, options: [.atomic])
         try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: fileURL.path)
+    }
+
+    private func migrateLegacyFileIfNeeded() {
+        guard let values = Self.decodeLegacyFile(at: fileURL), !values.isEmpty else { return }
+        var migratedAll = true
+        for (providerID, value) in values where !value.isEmpty {
+            if writeToKeychain(account: providerID, value: value) {
+                cache[providerID] = value
+            } else {
+                migratedAll = false
+            }
+        }
+        if migratedAll {
+            try? FileManager.default.removeItem(at: fileURL)
+        }
+    }
+
+    private static func decodeLegacyFile(at url: URL) -> [String: String]? {
+        guard let raw = try? Data(contentsOf: url) else { return nil }
+        if let envelope = try? JSONDecoder().decode(Envelope.self, from: raw),
+           envelope.v >= 2,
+           let sealed = Data(base64Encoded: envelope.data),
+           let plain = decrypt(sealed),
+           let values = try? JSONDecoder().decode([String: String].self, from: plain) {
+            return values
+        }
+        return try? JSONDecoder().decode([String: String].self, from: raw)
     }
 
     // MARK: - 本机绑定加密（AES-GCM，密钥不落盘）
@@ -154,18 +187,22 @@ final class LingShuCredentialStore: @unchecked Sendable {
         return plain
     }
 
-    // MARK: - 旧钥匙串（仅静默一次性迁移读取，永不弹框）
+    // MARK: - Keychain
+
+    private func baseQuery(account: String? = nil) -> [String: Any] {
+        var query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service
+        ]
+        if let account { query[kSecAttrAccount as String] = account }
+        return query
+    }
 
     private func readFromKeychain(account: String) -> String? {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: legacyKeychainService,
-            kSecAttrAccount as String: account,
-            kSecReturnData as String: true,
-            kSecMatchLimit as String: kSecMatchLimitOne,
-            // 关键：需要用户交互（输入钥匙串密码）时直接失败，绝不弹框打扰。
-            kSecUseAuthenticationUI as String: kSecUseAuthenticationUISkip
-        ]
+        var query = baseQuery(account: account)
+        query[kSecReturnData as String] = true
+        query[kSecMatchLimit as String] = kSecMatchLimitOne
+        query[kSecUseAuthenticationUI as String] = kSecUseAuthenticationUISkip
         var item: CFTypeRef?
         guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess,
               let data = item as? Data,
@@ -174,5 +211,46 @@ final class LingShuCredentialStore: @unchecked Sendable {
             return nil
         }
         return key
+    }
+
+    private func readAllFromKeychain() -> [String: String] {
+        var query = baseQuery()
+        query[kSecReturnAttributes as String] = true
+        query[kSecReturnData as String] = true
+        query[kSecMatchLimit as String] = kSecMatchLimitAll
+        query[kSecUseAuthenticationUI as String] = kSecUseAuthenticationUISkip
+        var item: CFTypeRef?
+        guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess,
+              let rows = item as? [[String: Any]] else { return [:] }
+
+        var values: [String: String] = [:]
+        for row in rows {
+            guard let account = row[kSecAttrAccount as String] as? String,
+                  let data = row[kSecValueData as String] as? Data,
+                  let value = String(data: data, encoding: .utf8),
+                  !value.isEmpty else { continue }
+            values[account] = value
+        }
+        return values
+    }
+
+    private func writeToKeychain(account: String, value: String) -> Bool {
+        let data = Data(value.utf8)
+        let updateStatus = SecItemUpdate(
+            baseQuery(account: account) as CFDictionary,
+            [kSecValueData as String: data] as CFDictionary
+        )
+        if updateStatus == errSecSuccess { return true }
+        guard updateStatus == errSecItemNotFound else { return false }
+
+        var addQuery = baseQuery(account: account)
+        addQuery[kSecValueData as String] = data
+        addQuery[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
+        return SecItemAdd(addQuery as CFDictionary, nil) == errSecSuccess
+    }
+
+    private func deleteFromKeychain(account: String) -> Bool {
+        let status = SecItemDelete(baseQuery(account: account) as CFDictionary)
+        return status == errSecSuccess || status == errSecItemNotFound
     }
 }

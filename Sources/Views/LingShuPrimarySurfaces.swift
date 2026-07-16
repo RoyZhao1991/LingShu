@@ -16,6 +16,16 @@ struct LingShuRootView: View {
 
     var body: some View {
         Group {
+            if state.hasCompletedInitialLanguageSelection {
+                operationalBody
+            } else {
+                LingShuInitialLanguageSelectionView(state: state)
+            }
+        }
+    }
+
+    private var operationalBody: some View {
+        Group {
             if orbActive {
                 // 终态:界面消失,只剩半透明悬浮本体(右键暂停/继续、解除自主模式)。窗口由 controller 收缩成小浮窗。
                 LingShuAutonomousOrbOnlyView(state: state, voice: voice, vision: vision, perceptionGateway: perceptionGateway)
@@ -334,7 +344,7 @@ struct LingShuStableTopBar: View {
                                     .shadow(color: isSelected ? Color.lingHolo.opacity(0.8) : .clear, radius: 4)
                             }
                             if surface == .taskPool, state.unreadTaskThreadCount > 0 {
-                                LingShuUnreadCountBadge(count: state.unreadTaskThreadCount)
+                                LingShuUnreadCountBadge(count: state.unreadTaskThreadCount, language: state.language)
                                     .offset(x: 9, y: -5)
                             }
                         }
@@ -343,7 +353,7 @@ struct LingShuStableTopBar: View {
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
-                    .help(surface.rawValue)
+                    .help(state.loc(surface.rawValue, surface.englishName))
                 }
             }
 
@@ -372,7 +382,9 @@ struct LingShuStableTopBar: View {
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .help(state.isStandingPersonOnDuty ? "退出自主模式" : "进入自主模式（灵枢上岗，化身右上角悬浮本体）")
+            .help(state.isStandingPersonOnDuty
+                  ? state.loc("退出自主模式", "Exit autonomous mode")
+                  : state.loc("进入自主模式（灵枢上岗，化身右上角悬浮本体）", "Enter autonomous mode"))
 
         }
         .padding(.horizontal, 22)
@@ -399,6 +411,7 @@ struct LingShuStableTopBar: View {
 
 private struct LingShuUnreadCountBadge: View {
     let count: Int
+    let language: LingShuVoiceLanguage
 
     var body: some View {
         Text(count > 99 ? "99+" : "\(count)")
@@ -408,7 +421,9 @@ private struct LingShuUnreadCountBadge: View {
             .frame(minWidth: 16, minHeight: 16)
             .background(Color.red.opacity(0.92), in: Capsule())
             .overlay(Capsule().stroke(Color.lingBar, lineWidth: 1.5))
-            .accessibilityLabel("\(count) 个子线程有新结果")
+            .accessibilityLabel(language == .english
+                                ? "\(count) child tasks have new results"
+                                : "\(count) 个子线程有新结果")
     }
 }
 

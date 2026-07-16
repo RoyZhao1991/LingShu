@@ -34,11 +34,17 @@ extension LingShuState {
         // 跑单个 agent checker(独立会话:它自己读文件/跑测试),记参与方 + 结论。
         func runAgentChecker(_ plugin: LingShuAgentPlugin, makerText: String, round: Int) async -> (passed: Bool, critique: String) {
             appendTrace(kind: .tool, actor: "独立验收·\(plugin.displayName)", title: "复核中", detail: String(objective.prefix(50)))
+            let resumedHuman = consumeResumedVerificationHumanResult(
+                recordID: rid,
+                mode: .externalChecker,
+                scope: plugin.id
+            )
             // 修 1a:给外部 agent checker 也带上产出物真实绝对路径,别只说"在工作目录"(同 runCheckerSession 根因)。
             let artPaths = (taskExecutionRecords.first { $0.id == rid }?.artifacts ?? []).map(\.location)
             let artHint = artPaths.isEmpty ? "产物应在工作目录 \(agentWorkingDirectory)。"
                 : "产出物绝对路径(直接核验这些具体文件):\n" + artPaths.map { "- \($0)" }.joined(separator: "\n")
-            let reviewObj = "你是独立验收方(checker)。maker 针对目标完成了开发。\n目标:\(objective)\n工作目录:\(agentWorkingDirectory)\n\(artHint)\n请独立核验:真实读文件 / 跑测试 / 运行起来,判断是否达成目标。**只验收,别替它重写。**\n\(LingShuCheckerVerdict.outputContract)\nmaker 自述产出:\n\(makerText.prefix(1500))"
+            let humanBlock = resumedHuman.map { "\n此前你要求的人机协作已经完成，用户给出的结果是：\($0)\n请据此继续同一验收节点，不要把这一步再次当成失败。" } ?? ""
+            let reviewObj = "你是独立验收方(checker)。maker 针对目标完成了开发。\n目标:\(objective)\n工作目录:\(agentWorkingDirectory)\n\(artHint)\(humanBlock)\n请独立核验:真实读文件 / 跑测试 / 运行起来,判断是否达成目标。**只验收,别替它重写。**\n\(LingShuCheckerVerdict.outputContract)\nmaker 自述产出:\n\(makerText.prefix(1500))"
             let c: String
             // **流式**:边跑边把 checker 的复核进展更新进同一条参与方气泡(不再干等)。
             switch await runAgentStreamingToRecord(plugin, objective: reviewObj, recordID: rid,
@@ -47,11 +53,27 @@ extension LingShuState {
             case .completed(let t): c = t
             case .failure(let f):   c = "(checker 未能完成复核:\(f))"
             }
-            let p = Self.checkerVerdictPassed(c)
+            let finalCritique: String
+            if let interaction = LingShuCheckerVerdict.parse(c)?.humanInteraction?.normalized {
+                let retained = retainVerificationInteraction(
+                    interaction,
+                    mode: .externalChecker,
+                    scope: plugin.id,
+                    recordID: rid,
+                    objective: objective,
+                    makerResult: .completed(text: makerText),
+                    session: nil
+                )
+                finalCritique = LingShuWorkflowControlEnvelope(event: .requiresHumanInteraction(retained)).encodedPrompt
+            } else {
+                finalCritique = c
+            }
+            let waitingForHuman = LingShuWorkflowControlEnvelope.extract(from: finalCritique)?.humanInteraction != nil
+            let p = Self.checkerVerdictPassed(finalCritique)
             appendTaskRecordMessage(rid, actor: plugin.displayName,
-                role: p ? "验收(checker)·通过" : "验收(checker)·需修正(第\(round + 1)轮)",
-                kind: p ? .result : .agent, text: String(c.prefix(1500)))
-            return (p, c)
+                role: waitingForHuman ? "验收(checker)·等待人机协作" : (p ? "验收(checker)·通过" : "验收(checker)·需修正(第\(round + 1)轮)"),
+                kind: waitingForHuman ? .warning : (p ? .result : .agent), text: waitingForHuman ? (LingShuWorkflowControlEnvelope.extract(from: finalCritique)?.userFacingText ?? "等待人机协作") : String(finalCritique.prefix(1500)))
+            return (p, finalCritique)
         }
 
         while round < maxRounds {
@@ -66,11 +88,13 @@ extension LingShuState {
             } else {
                 await checkerIndependentlyRunsTests(recordID: rid, makerText: makerText)
                 let (p, c) = await verifyAgentDeliverable(userRequest: objective, reply: makerText, taskRecordID: rid)
+                let waitingForHuman = LingShuWorkflowControlEnvelope.extract(from: c)?.humanInteraction != nil
                 appendTaskRecordMessage(rid, actor: "审查员",
-                    role: p ? "验收(checker)·通过" : "验收(checker)·需修正(第\(round + 1)轮)",
-                    kind: p ? .result : .agent,
-                    text: p ? "🧑‍⚖️ 独立审查(\(binding.checker.providerLabel),异源于 maker \(binding.maker.providerLabel)):✅ 通过——产出真实落地、达成目标。"
-                            : "🧑‍⚖️ 独立审查(\(binding.checker.providerLabel)):⚠️ 需修正 — \(String(c.prefix(400)))")
+                    role: waitingForHuman ? "验收(checker)·等待人机协作" : (p ? "验收(checker)·通过" : "验收(checker)·需修正(第\(round + 1)轮)"),
+                    kind: waitingForHuman ? .warning : (p ? .result : .agent),
+                    text: waitingForHuman ? (LingShuWorkflowControlEnvelope.extract(from: c)?.userFacingText ?? "等待人机协作")
+                        : (p ? "🧑‍⚖️ 独立审查(\(binding.checker.providerLabel),异源于 maker \(binding.maker.providerLabel)):✅ 通过——产出真实落地、达成目标。"
+                             : "🧑‍⚖️ 独立审查(\(binding.checker.providerLabel)):⚠️ 需修正 — \(String(c.prefix(400)))"))
                 verdicts.append(("审查员", p, c))
             }
             // **额外 checker(多 checker:多个 agent 同时验,各自独立会话、各自一条命名角色卡)**
@@ -79,6 +103,12 @@ extension LingShuState {
                     let (p, c) = await runAgentChecker(plugin, makerText: makerText, round: round)
                     verdicts.append((plugin.displayName, p, c))
                 }
+            }
+
+            if let waiting = verdicts.compactMap({ LingShuWorkflowControlEnvelope.extract(from: $0.critique) }).first,
+               waiting.humanInteraction != nil {
+                appendTrace(kind: .warning, actor: "独立验收", title: "等待人机协作", detail: waiting.userFacingText)
+                return .blocked(question: waiting.encodedPrompt)
             }
 
             let allPassed = verdicts.allSatisfy { $0.passed }
@@ -145,6 +175,9 @@ extension LingShuState {
     /// 它看不到 maker 的内部过程,只面对落盘产出——这才是真 LOOP(maker 干活、checker 独立验,两条会话各司其职)。
     /// 异源与否取决于配了几档脑(配了第二档=真异源;单脑=同 GLM 两个独立会话/上下文)。
     func runCheckerSession(recordID rid: String, objective: String, makerText: String) async -> (passed: Bool, critique: String) {
+        if let resumed = consumeResumedVerificationVerdict(recordID: rid, mode: .checkerSession, scope: "internal") {
+            return (Self.checkerVerdictPassed(resumed), resumed)
+        }
         let adapter = checkerAdapter(taskRecordID: rid)   // 异源脑(配了的话)否则当前脑——但都是**独立会话**
         let verifyToolNames: Set<String> = ["read_file", "list_directory", "run_command"]
         let tools = agentBuiltinTools(recordIDProvider: { rid }, executionPolicy: dispatchedTaskExecutionPolicy)
@@ -176,12 +209,31 @@ extension LingShuState {
         \(makerText.prefix(1500))
         请独立核验后给结论(第一行 通过/不通过)。
         """
-        let verdict = Self.runResultText(await session.send(task))
+        let checkerResult = await session.send(task)
+        let verdict = Self.runResultText(checkerResult)
+        let interaction: LingShuHumanInteractionRequest? = {
+            if case .blocked(let question) = checkerResult {
+                return LingShuWorkflowControlEnvelope.extract(from: question)?.humanInteraction?.normalized
+            }
+            return LingShuCheckerVerdict.parse(verdict)?.humanInteraction?.normalized
+        }()
+        if let interaction {
+            let retained = retainVerificationInteraction(
+                interaction,
+                mode: .checkerSession,
+                scope: "internal",
+                recordID: rid,
+                objective: objective,
+                makerResult: .completed(text: makerText),
+                session: session
+            )
+            return (false, LingShuWorkflowControlEnvelope(event: .requiresHumanInteraction(retained)).encodedPrompt)
+        }
         return (Self.checkerVerdictPassed(verdict), verdict)
     }
 
     /// checker JSON verdict 是否判过(纯函数可测):只接受标准 JSON 对象,拒绝旧式“通过/不通过”文本。
     nonisolated static func checkerVerdictPassed(_ text: String) -> Bool {
-        LingShuCheckerVerdict.parse(text)?.passed == true
+        LingShuCheckerVerdict.parse(text)?.outcome == .passed
     }
 }

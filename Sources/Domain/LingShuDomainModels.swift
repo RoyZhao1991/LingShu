@@ -406,6 +406,8 @@ struct ChatMessage: Identifiable, Codable, Equatable, Sendable {
     /// **这条气泡在等某条派发任务的用户输入**(选择/追加信息)→ UI 在气泡内渲染回复控件,答复**直达该记录的隔离会话**
     /// (不经主输入/分诊,避免被后续聊天淹没后找不回那条任务)。nil=普通消息。Optional 向后兼容。
     var awaitingInputForRecordID: String?
+    /// 通用人机协作卡。扫码/外部登录/实体操作/选文件等都走同一结构；OAuth 授权卡不走这里。
+    var humanInteraction: LingShuHumanInteractionRequest?
 
     init(
         id: UUID = UUID(),
@@ -423,7 +425,8 @@ struct ChatMessage: Identifiable, Codable, Equatable, Sendable {
         isStandingGreeting: Bool? = nil,
         form: LingShuConfirmForm? = nil,
         formAnswers: [String: String]? = nil,
-        awaitingInputForRecordID: String? = nil
+        awaitingInputForRecordID: String? = nil,
+        humanInteraction: LingShuHumanInteractionRequest? = nil
     ) {
         self.id = id
         self.speaker = speaker
@@ -441,6 +444,7 @@ struct ChatMessage: Identifiable, Codable, Equatable, Sendable {
         self.form = form
         self.formAnswers = formAnswers
         self.awaitingInputForRecordID = awaitingInputForRecordID
+        self.humanInteraction = humanInteraction
     }
 }
 

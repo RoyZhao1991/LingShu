@@ -7,10 +7,23 @@ extension LingShuState {
 
     @discardableResult
     func renderHumanInputBlockIfNeeded(result: LingShuAgentRunResult, bubbleID: UUID, recordID: String?, prompt: String, startedAt: Date) -> Bool {
-        guard case .blocked(let raw) = result,
-              let envelope = LingShuHumanInputEnvelope.decode(from: raw) else { return false }
+        guard case .blocked(let raw) = result else { return false }
         let elapsed = Date().timeIntervalSince(startedAt)
         let context = LingShuPendingHumanInputContext(recordID: recordID, originalPrompt: prompt)
+
+        if let control = LingShuWorkflowControlEnvelope.decode(from: raw),
+           let interaction = control.humanInteraction {
+            return renderGenericHumanInteraction(
+                interaction,
+                bubbleID: bubbleID,
+                recordID: recordID,
+                context: context,
+                prompt: prompt,
+                elapsed: elapsed
+            )
+        }
+
+        guard let envelope = LingShuHumanInputEnvelope.decode(from: raw) else { return false }
 
         switch envelope.tool {
         case "ask_form":

@@ -139,15 +139,37 @@ final class CloudGatewayTests: XCTestCase {
     // MARK: - 凭据仓库
 
     func testCredentialStoreRoundTripsThroughKeychain() {
-        let store = LingShuCredentialStore(service: "cn.lingshu.tests.\(UUID().uuidString)")
+        let service = "cn.lingshu.tests.\(UUID().uuidString)"
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lingshu-keychain-test-\(UUID().uuidString)", isDirectory: true)
+        let store = LingShuCredentialStore(service: service, directory: directory, useKeychain: true)
         let provider = "unit-test-provider"
 
         XCTAssertNil(store.apiKey(forProvider: provider))
-        store.setAPIKey("sk-unit-test-key", forProvider: provider)
+        XCTAssertTrue(store.setAPIKey("sk-unit-test-key", forProvider: provider))
         XCTAssertEqual(store.apiKey(forProvider: provider), "sk-unit-test-key")
 
-        store.setAPIKey("", forProvider: provider)
-        XCTAssertNil(store.apiKey(forProvider: provider))
+        let reopened = LingShuCredentialStore(service: service, directory: directory, useKeychain: true)
+        XCTAssertEqual(reopened.apiKey(forProvider: provider), "sk-unit-test-key")
+
+        XCTAssertTrue(reopened.setAPIKey("", forProvider: provider))
+        let afterDeletion = LingShuCredentialStore(service: service, directory: directory, useKeychain: true)
+        XCTAssertNil(afterDeletion.apiKey(forProvider: provider))
+    }
+
+    func testCredentialStoreMigratesLegacyEncryptedFileIntoKeychain() {
+        let service = "cn.lingshu.tests.\(UUID().uuidString)"
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lingshu-keychain-migration-\(UUID().uuidString)", isDirectory: true)
+        let provider = "legacy-provider"
+        let legacy = LingShuCredentialStore(service: service, directory: directory, useKeychain: false)
+        XCTAssertTrue(legacy.setAPIKey("legacy-test-key", forProvider: provider))
+
+        let migrated = LingShuCredentialStore(service: service, directory: directory, useKeychain: true)
+        XCTAssertEqual(migrated.apiKey(forProvider: provider), "legacy-test-key")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: directory.appendingPathComponent("credentials.json").path))
+
+        XCTAssertTrue(migrated.setAPIKey("", forProvider: provider))
     }
 
     func testCredentialStoreEnvironmentKeyNaming() {

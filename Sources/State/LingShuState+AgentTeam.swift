@@ -24,7 +24,7 @@ extension LingShuState {
         }
     }
 
-    /// 执行命名角色团队:解析 → 拓扑分层 → 逐层(层内并行)起隔离会话经 orchestrator.spawn 跑到收尾、传依赖产出 → 聚合。
+    /// 执行命名角色团队：声明只负责给出初始图；运行时图会持久化，并允许角色用受控 mutation 动态调整。
     func runAgentTeam(argsJSON: String, recordID: String?, model: any LingShuAgentModel) async -> String {
         if isMinimalVoiceMode { return "当前是极简对话模式(纯对话),不派生角色团队。请直接简洁作答。" }
         guard let specs = LingShuAgentDAG.parse(argsJSON), !specs.isEmpty else {
@@ -39,49 +39,28 @@ extension LingShuState {
         }
         let plan = layers.enumerated().map { "第\($0.offset + 1)层[\($0.element.map(\.name).joined(separator: "、"))]" }.joined(separator: " → ")
         appendTrace(kind: .system, actor: "编排", title: "组建命名角色团队",
-                    detail: "\(specs.count) 个角色,\(layers.count) 层(层内并行、层间按序):\(plan)")
+                    detail: "\(specs.count) 个初始角色,\(layers.count) 层:\(plan)。执行中允许受控改图。")
 
-        var outputs: [String: String] = [:]   // 角色名 → 产出文本(供后续层作上下文)
-        for layer in layers {
-            // 层内并行:每个角色起一个非结构化 Task(立即并发跑,网络往返重叠),本层全收齐再进下一层。
-            var layerTasks: [(name: String, task: Task<String, Never>)] = []
-            for spec in layer {
-                let s = spec
-                let context = spec.dependsOn
-                    .compactMap { d in outputs[d].map { "【「\(d)」的产出】\n\($0.prefix(1200))" } }
-                    .joined(separator: "\n\n")
-                let task = Task { @MainActor [weak self] () -> String in
-                    guard let self else { return "" }
-                    return await self.runRoleAgent(spec: s, context: context, recordID: recordID, model: model)
-                }
-                layerTasks.append((s.name, task))
+        let goal = recordID.flatMap { id in
+            taskExecutionRecords.first(where: { $0.id == id }).map { record in
+                record.goalSpec?.objective ?? (record.goal.isEmpty ? record.prompt : record.goal)
             }
-            for entry in layerTasks { outputs[entry.name] = await entry.task.value }
+        } ?? "完成命名角色团队任务"
+        let nodes = specs.map {
+            LingShuWorkflowNode(id: $0.name, name: $0.name, role: $0.role,
+                                objective: $0.objective, dependencies: $0.dependsOn)
         }
-        return aggregateTeamResult(specs: specs, outputs: outputs)
-    }
-
-    /// 跑一个命名角色:起隔离会话(全工具 + 角色系统提示 + 依赖上下文)经 orchestrator.spawn 到收尾;时间线出**命名角色卡**。
-    private func runRoleAgent(spec: LingShuRoleAgentSpec, context: String, recordID: String?, model: any LingShuAgentModel) async -> String {
-        let id = "role-\(UUID().uuidString.prefix(5))-\(spec.name.prefix(10))"
-        let system = """
-        你是一个协作团队里的命名角色「\(spec.name)」(职责:\(spec.role))。**只做你这个角色该做的事**,别越界替别的角色做。
-        做完用清晰的一段交付你的产出(会作为后续角色的输入/最终汇总)。有产出物就用 write_file/run_command 真落盘并给绝对路径;
-        写代码要真构建+运行起来+测试全绿、把真实结果展示出来;信息确实不足才 ask_user。
-        """
-        let input = context.isEmpty ? spec.objective
-            : "你的目标:\(spec.objective)\n\n前序角色已完成(作为你的输入/上下文):\n\(context)"
-        let tools = agentBuiltinTools(recordIDProvider: { recordID })
-            + [Self.timeTool(), Self.locationTool(), webSearchTool(), searchTextTool(), findImagesTool(), Self.askUserTool()]
-        let session = makeAgentSession(id: id, system: system, tools: tools, model: model, maxTurns: 80, recordIDProvider: { recordID })
-
-        appendTaskRecordMessage(recordID, actor: spec.name, role: "角色·\(spec.role)", kind: .agent,
-                                text: "🧑‍💼 角色「\(spec.name)」(\(spec.role))开始:\(spec.objective)\(context.isEmpty ? "" : "(已接前序产出)")")
-        let result = await agentOrchestrator.spawn(id: id, objective: input, session: session)
-        let text = LingShuStructuredModelOutput.visibleText(from: Self.runResultText(result))
-        appendTaskRecordMessage(recordID, actor: spec.name, role: "角色·\(spec.role)·完成", kind: .result,
-                                text: "🧑‍💼 角色「\(spec.name)」产出:\(String(text.prefix(400)))")
-        return text
+        var run = LingShuWorkflowRun(taskRecordID: recordID, goal: goal, nodes: nodes)
+        do {
+            try run.validate()
+        } catch {
+            return "spawn_team 无法调度:\(error)"
+        }
+        persistWorkflowRun(run, recordID: recordID)
+        appendTaskRecordMessage(recordID, actor: "工作流", role: "运行图", kind: .router,
+                                text: "已建立可动态调整的运行图：\(specs.count) 个节点，revision 1。")
+        run = await driveWorkflowRun(run, recordID: recordID, model: model)
+        return workflowResultText(run)
     }
 
     /// 聚合各命名角色产出成一句面向主人的团队交付(按角色列出,纯逻辑)。

@@ -1,10 +1,39 @@
 import Foundation
 
+enum LingShuLanguagePreferenceStore {
+    static let languageKey = "lingshu.voiceLanguage"
+    static let initialSelectionKey = "lingshu.interfaceLanguage.didChoose.v1"
+
+    static func hasCompletedInitialSelection(in defaults: UserDefaults = .standard) -> Bool {
+        if defaults.object(forKey: initialSelectionKey) != nil {
+            return defaults.bool(forKey: initialSelectionKey)
+        }
+
+        // Existing installations with an explicit language preference migrate without
+        // being interrupted by the new first-launch gate. A clean install has neither key.
+        return defaults.object(forKey: languageKey) != nil
+    }
+
+    static func completeInitialSelection(
+        _ language: LingShuVoiceLanguage,
+        in defaults: UserDefaults = .standard
+    ) {
+        defaults.set(language.rawValue, forKey: languageKey)
+        defaults.set(true, forKey: initialSelectionKey)
+    }
+}
+
 /// 国际化(中/英两档)。`LingShuState.language` 是全局唯一语言开关:切它则**整个界面 + 状态 + 本体**动态切语言,
 /// 并同步语音子系统(ASR locale / TTS 嗓音 / 灵枢回复语言)。视图都观察 state,故切语言时全 UI 自动重渲染。
 /// 视图里用 `state.loc("中文", "English")` 取当前语言文案;灵枢英文名 = Nous(用户定名 2026-06-17)。
 @MainActor
 extension LingShuState {
+
+    func completeInitialLanguageSelection(_ selectedLanguage: LingShuVoiceLanguage) {
+        LingShuLanguagePreferenceStore.completeInitialSelection(selectedLanguage)
+        language = selectedLanguage
+        hasCompletedInitialLanguageSelection = true
+    }
 
     /// 取当前语言的文案:`state.loc(中文, English)`。
     func loc(_ zh: String, _ en: String) -> String { language == .english ? en : zh }

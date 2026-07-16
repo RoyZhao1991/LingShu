@@ -22,6 +22,10 @@ Use [GitHub private vulnerability reporting](https://github.com/RoyZhao1991/Ling
 
 ## Credential Exposure
 
+Model-provider credentials are stored in macOS Keychain. LingShu migrates the older local encrypted credential file only after each value has been written successfully, then removes that legacy file. Exported configuration bundles are a separate, user-initiated operation and must remain encrypted with the user-provided export password.
+
+模型服务凭据保存在 macOS 钥匙串中。旧版本的本地加密凭据文件只会在每项凭据成功写入钥匙串后删除。配置导出属于用户主动操作，导出包必须继续使用用户提供的口令加密。
+
 If a real token or signing credential is ever committed:
 
 1. revoke or rotate it immediately;

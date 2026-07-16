@@ -51,11 +51,21 @@ extension LingShuState {
             return result
         }
 
+        let trimmedKey = configuration.apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard credentialStore.setAPIKey(trimmedKey, forProvider: configuration.providerID) else {
+            let detail = loc(
+                "模型连接成功，但 Token 无法安全写入 macOS 钥匙串。请解锁登录钥匙串后重试。",
+                "The model responded, but the token could not be saved securely in macOS Keychain. Unlock the login keychain and try again."
+            )
+            let storageFailure = LingShuChannelValidation(ok: false, detail: detail, at: Date())
+            brainSetupPhase = .required(reason: detail)
+            return storageFailure
+        }
+
         modelProvider = configuration.providerName
         endpoint = configuration.endpoint.trimmingCharacters(in: .whitespacesAndNewlines)
         modelName = configuration.model.trimmingCharacters(in: .whitespacesAndNewlines)
-        credentialStore.setAPIKey(configuration.apiKey.trimmingCharacters(in: .whitespacesAndNewlines), forProvider: configuration.providerID)
-        apiKey = configuration.apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        apiKey = trimmedKey
         rememberBrainModel(modelName, for: modelProvider)
 
         channelValidations[Self.brainChannelKey(modelProvider)] = result

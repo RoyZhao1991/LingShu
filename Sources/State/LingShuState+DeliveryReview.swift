@@ -160,19 +160,46 @@ extension LingShuState {
         5. 代码门:以上【代码门】结论为准——标 ❌ 则本维度未达标;标 ✅ 或"非代码交付跳过"则达标。代码门通过只证明能跑,你还必须继续评审代码质量、边界、可维护性和安全风险。
         \(LingShuCheckerVerdict.outputContract)
         """
-        let verifier = LingShuAgentSession(
-            id: "verifier-\(UUID().uuidString.prefix(6))",
-            system: reviewer.promptBlock(for: userRequest),
-            tools: [],
-            model: checkerAdapter(taskRecordID: taskRecordID),   // 异源绑定 → 真用 checker 复核;否则原验收脑
-            maxTurns: 1
-        )
-        let result = await verifier.send(prompt)
         let critique: String
-        if case .completed(let value) = result {
-            critique = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let resumed = consumeResumedVerificationVerdict(
+            recordID: taskRecordID,
+            mode: .deliveryReview,
+            scope: "delivery"
+        ) {
+            critique = resumed.trimmingCharacters(in: .whitespacesAndNewlines)
         } else {
-            critique = ""
+            let verifier = LingShuAgentSession(
+                id: "verifier-\(UUID().uuidString.prefix(6))",
+                system: reviewer.promptBlock(for: userRequest),
+                tools: [],
+                model: checkerAdapter(taskRecordID: taskRecordID),   // 异源绑定 → 真用 checker 复核;否则原验收脑
+                // One verdict normally uses one turn. Reserve bounded continuation turns so a
+                // structured human-interaction pause can resume this exact verifier session.
+                maxTurns: 4
+            )
+            let result = await verifier.send(prompt)
+            let raw = Self.runResultText(result).trimmingCharacters(in: .whitespacesAndNewlines)
+            let interaction: LingShuHumanInteractionRequest? = {
+                if case .blocked(let question) = result {
+                    return LingShuWorkflowControlEnvelope.extract(from: question)?.humanInteraction?.normalized
+                }
+                return LingShuCheckerVerdict.parse(raw)?.humanInteraction?.normalized
+            }()
+            if let interaction {
+                let retained = retainVerificationInteraction(
+                    interaction,
+                    mode: .deliveryReview,
+                    scope: "delivery",
+                    recordID: taskRecordID,
+                    objective: userRequest,
+                    makerResult: .completed(text: reply),
+                    session: verifier
+                )
+                let envelope = LingShuWorkflowControlEnvelope(event: .requiresHumanInteraction(retained))
+                appendTrace(kind: .warning, actor: "审查员", title: "验收等待人机协作", detail: String(retained.prompt.prefix(120)))
+                return (false, envelope.encodedPrompt)
+            }
+            critique = raw
         }
         if LingShuVerifierGate.isNonActionableReviewCritique(critique) {
             let codeEvidenceClean = codeFiles.isEmpty || codeGatePassed

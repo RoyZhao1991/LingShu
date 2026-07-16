@@ -99,7 +99,7 @@ enum LingShuWindowPlacement {
 
     @MainActor
     private static func shouldManage(_ window: NSWindow) -> Bool {
-        window.title == "灵枢"
+        ["灵枢", "Nous", "LingShu"].contains(window.title)
     }
 
     @MainActor
@@ -142,7 +142,7 @@ struct LingShuMacApp: App {
     @StateObject private var perceptionGateway = LingShuRealtimePerceptionGateway()
 
     var body: some Scene {
-        WindowGroup("灵枢") {
+        WindowGroup(state.appName) {
             // 尺寸约束在 LingShuRootView 内部按模式切换：
             // 标准界面 ≥1240×820，极简语音模式收成 340×560 的小浮窗。
             LingShuRootView(
@@ -151,7 +151,8 @@ struct LingShuMacApp: App {
                 vision: vision,
                 perceptionGateway: perceptionGateway
             )
-            .task {
+            .task(id: state.hasCompletedInitialLanguageSelection) {
+                guard state.hasCompletedInitialLanguageSelection else { return }
                 // 启动本机回环 MCP 控制服务(幂等),让外部测试/MCP 客户端可驱动灵枢内部动作。
                 LingShuControlServer.shared.start(state: state)
                 // 主线程卡死看门狗:独立后台探测 MainActor,卡死自动重启续作(不挂 MainActor,否则自身也被卡)。
@@ -169,25 +170,37 @@ struct LingShuMacApp: App {
         .windowResizability(.contentMinSize)
         .defaultSize(width: 1360, height: 900)
         // 菜单栏常驻：主窗关闭后这里是灵枢的值守入口。
-        MenuBarExtra("灵枢", systemImage: "brain") {
-            Text("状态：\(state.coreStateDisplay)")
-            if state.hasActiveModelCall {
-                Text("后台任务：\(state.missionTitle)")
-            }
-            let enabledTriggers = state.scheduledTriggers.triggers.filter(\.enabled).count
-            if enabledTriggers > 0 {
-                Text("定时任务：\(enabledTriggers) 个待触发")
-            }
-            Divider()
-            Button("快速提问 / 找东西 (⌥Space)") {
-                LingShuQuickAskController.shared.toggle()
-            }
-            Button("打开主窗口") {
-                NSApp.setActivationPolicy(.regular)
-                LingShuWindowPlacement.bringWindowsToMainScreen()
-            }
-            Button("退出灵枢") {
-                NSApp.terminate(nil)
+        MenuBarExtra(state.appName, systemImage: "brain") {
+            if state.hasCompletedInitialLanguageSelection {
+                Text("\(state.loc("状态", "Status")): \(state.coreStateDisplay)")
+                if state.hasActiveModelCall {
+                    Text("\(state.loc("后台任务", "Background task")): \(state.missionTitle)")
+                }
+                let enabledTriggers = state.scheduledTriggers.triggers.filter(\.enabled).count
+                if enabledTriggers > 0 {
+                    Text(state.loc("定时任务：\(enabledTriggers) 个待触发", "Scheduled tasks: \(enabledTriggers) pending"))
+                }
+                Divider()
+                Button(state.loc("快速提问 / 找东西 (⌥Space)", "Quick Ask / Find (⌥Space)")) {
+                    LingShuQuickAskController.shared.toggle()
+                }
+                Button(state.loc("打开主窗口", "Open Main Window")) {
+                    NSApp.setActivationPolicy(.regular)
+                    LingShuWindowPlacement.bringWindowsToMainScreen()
+                }
+                Button(state.loc("退出灵枢", "Quit \(state.appName)")) {
+                    NSApp.terminate(nil)
+                }
+            } else {
+                Text("请选择语言 · Choose a language")
+                Divider()
+                Button("打开语言选择 · Open Language Selection") {
+                    NSApp.setActivationPolicy(.regular)
+                    LingShuWindowPlacement.bringWindowsToMainScreen()
+                }
+                Button("退出 · Quit") {
+                    NSApp.terminate(nil)
+                }
             }
         }
     }

@@ -201,6 +201,59 @@ final class NestedLoopTests: XCTestCase {
         XCTAssertFalse(box.interrupted, "续接入口已消费/复位打断标志(内在修掉经典引擎的旁路bug)")
     }
 
+    /// 任务阶段中途需要扫码/登录等人机协作时，必须冻结当前 inner 与阶段索引；恢复后续跑
+    /// 原会话，再进入本阶段验收和后继阶段，不能把 blocked 误记成阶段交付，也不能重新规划。
+    @MainActor
+    func testTaskStageHumanInteractionResumesExactInnerWithoutReplanning() async {
+        let box = HookBox()
+        let interaction = #"""
+        {
+          "reply": "请扫码后继续。",
+          "completion": {"status": "waiting_for_user", "reason": "等待扫码", "needs_user": true},
+          "user_input": null,
+          "human_interaction": {
+            "kind": "qr_code",
+            "title": "扫码登录",
+            "prompt": "请扫描二维码完成登录",
+            "payload": {},
+            "options": [],
+            "completion_probe": null,
+            "resume_token": null,
+            "source": "worker"
+          },
+          "inability": null,
+          "OAuth": null
+        }
+        """#
+        let model = LingShuScriptedAgentModel([
+            .text("1. [任务] 登录并交付A\n2. [任务] 完成B"),
+            .text(interaction),
+            .text("登录完成，A 已交付 /tmp/a.txt"),
+            .text("B 已交付 /tmp/b.txt")
+        ])
+        let session = makeTestSession(id: "human-stage", model: model, box: box, verifyPasses: true)
+
+        let first = await session.send("先写A,再写B")
+        guard case .blocked(let prompt) = first else { return XCTFail("阶段应暂停等待人机协作，实际为 \(first)") }
+        XCTAssertEqual(
+            LingShuWorkflowControlEnvelope.decode(from: prompt)?.humanInteraction?.kind,
+            .qrCode
+        )
+        let blockedBeforeResume = await session.isBlocked
+        XCTAssertTrue(blockedBeforeResume)
+        XCTAssertEqual(box.verifyCount, 0, "暂停不是交付，不能提前进入阶段验收")
+
+        let resumed = await session.resume("已扫码")
+        guard case .completed(let text) = resumed else { return XCTFail("人工步骤完成后应跑完剩余阶段") }
+        XCTAssertTrue(text.contains("/tmp/a.txt"))
+        XCTAssertTrue(text.contains("/tmp/b.txt"))
+        XCTAssertEqual(box.verifyCount, 2, "恢复后应依次验收当前阶段和后继阶段")
+        XCTAssertEqual(box.noteTitles.filter { $0 == "规划完成" }.count, 1, "恢复不能重新规划")
+        XCTAssertTrue(box.noteTitles.contains("人机协作完成"))
+        let blockedAfterResume = await session.isBlocked
+        XCTAssertFalse(blockedAfterResume)
+    }
+
     // MARK: - 测试脚手架
 
     /// 测试用 hook 容器(只在 @MainActor 钩子里访问,单线程安全)。

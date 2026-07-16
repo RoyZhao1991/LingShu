@@ -292,6 +292,10 @@ struct LingShuTaskExecutionRecord: Identifiable, Codable, Equatable, Sendable {
     /// 主线程据此判断运行、阻塞、收尾、产出与续接;长期记忆蒸馏不能替代它。
     var threadCommit: LingShuTaskThreadCommit?
 
+    /// 运行时可变工作流图。GoalSpec 只定义“做成什么”，这里持久化“当前怎么做、做到哪、
+    /// 哪个节点在等人”，供动态重排与重启后续接。数组允许同一任务分阶段启动多条工作流。
+    var workflowRuns: [LingShuWorkflowRun]
+
     /// 一句话**总目标**(模型经 `update_plan` 蒸馏的高度概括,如"构建一个清分结算系统";**不是复述需求**)。
     /// 三级信息架构第 1 级(右侧规划):总目标 → 分步计划(`plan`,抽象里程碑)→ 具体实现(左侧执行对话)。
     /// 空=模型未给(回退用 title)。
@@ -346,6 +350,7 @@ struct LingShuTaskExecutionRecord: Identifiable, Codable, Equatable, Sendable {
         case taskOutcome
         case effectVerificationReport
         case threadCommit
+        case workflowRuns
     }
 
     init(
@@ -375,7 +380,8 @@ struct LingShuTaskExecutionRecord: Identifiable, Codable, Equatable, Sendable {
         capabilityProbeObservations: [LingShuCapabilityProbeObservation]? = nil,
         taskOutcome: LingShuCompletionStatus? = nil,
         effectVerificationReport: LingShuEffectVerificationReport? = nil,
-        threadCommit: LingShuTaskThreadCommit? = nil
+        threadCommit: LingShuTaskThreadCommit? = nil,
+        workflowRuns: [LingShuWorkflowRun] = []
     ) {
         self.id = id
         self.goal = goal
@@ -389,6 +395,7 @@ struct LingShuTaskExecutionRecord: Identifiable, Codable, Equatable, Sendable {
         self.taskOutcome = taskOutcome
         self.effectVerificationReport = effectVerificationReport
         self.threadCommit = threadCommit
+        self.workflowRuns = workflowRuns
         self.title = title
         self.prompt = prompt
         self.status = status
@@ -435,6 +442,7 @@ struct LingShuTaskExecutionRecord: Identifiable, Codable, Equatable, Sendable {
         taskOutcome = try container.decodeIfPresent(LingShuCompletionStatus.self, forKey: .taskOutcome)
         effectVerificationReport = try container.decodeIfPresent(LingShuEffectVerificationReport.self, forKey: .effectVerificationReport)
         threadCommit = try container.decodeIfPresent(LingShuTaskThreadCommit.self, forKey: .threadCommit)
+        workflowRuns = try container.decodeIfPresent([LingShuWorkflowRun].self, forKey: .workflowRuns) ?? []
     }
 
     static func create(prompt: String, now: Date = Date()) -> LingShuTaskExecutionRecord {

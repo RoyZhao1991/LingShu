@@ -55,6 +55,15 @@ extension LingShuState {
         let answerText = chatMessages[idx].form?.formatAnswers(answers) ?? "主人已提交确认表单:\n" + answers.map { "- \($0.key) → \($0.value)" }.joined(separator: "\n")
         chatMessages[idx].formAnswers = answers
         logEvent("用户提交确认表单(\(answers.count) 项)")
+        if let recordID = chatMessages[idx].awaitingInputForRecordID {
+            chatMessages[idx].awaitingInputForRecordID = nil
+            answerDispatchedTask(recordID: recordID, answer: answerText)
+            return
+        }
+        if pendingHumanInteractionContexts[messageID] != nil {
+            resolveMainHumanInteraction(messageID: messageID, answer: answerText)
+            return
+        }
         if let resolver = pendingFormResolvers.removeValue(forKey: messageID) {
             resolver(answers)
             return

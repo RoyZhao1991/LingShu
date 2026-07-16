@@ -269,9 +269,12 @@ final class ArchitectureGuardTests: XCTestCase {
     func testArchitectureQuickReferenceStatesCurrentCodeReality() throws {
         let document = try readText("Docs/架构速查手册.md")
         let requiredMarkers = [
-            "最后更新:2026-07-07",
+            "最后更新:2026-07-16",
             "LingShuAgentOrchestrator(maxConcurrent:1)",
             "pendingSerialInputs",
+            "GoalSpec 不可变,运行图可变",
+            "人机协作 ≠ 失败",
+            "OAuth 只认 OAuth 标识",
             "FullStackE2E200Tests",
             "不能直接当当前 HEAD 绿灯",
             "表内带日期的“实测 / 全量 N 测试 0 失败”",

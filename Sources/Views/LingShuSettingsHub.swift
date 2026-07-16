@@ -184,7 +184,7 @@ struct LingShuConnectorsHub: View {
             ScrollView {
                 switch sub {
                 case .mcp:
-                    LingShuConnectorsPanel(registry: state.connectorRegistry).padding(22)
+                    LingShuConnectorsPanel(state: state, registry: state.connectorRegistry).padding(22)
                 case .peripheral:
                     LingShuExternalSensoryView(state: state, hub: state.externalSensory).padding(22)
                 case .home:
@@ -205,17 +205,24 @@ struct LingShuSkillsPanel: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            SectionHeader(icon: "puzzlepiece.extension", title: "专家技能", subtitle: "内置专家 + 用户自定义 .md 技能（触发词命中时优先）")
+            SectionHeader(
+                icon: "puzzlepiece.extension",
+                title: state.loc("专家技能", "Expert Skills"),
+                subtitle: state.loc("内置专家 + 用户自定义 .md 技能（触发词命中时优先）", "Built-in experts and user-defined .md skills")
+            )
 
             HStack(spacing: 10) {
                 Button {
                     NSWorkspace.shared.open(LingShuSkillLoader.defaultDirectory)
                 } label: {
-                    Label("打开技能目录", systemImage: "folder")
+                    Label(state.loc("打开技能目录", "Open Skills Folder"), systemImage: "folder")
                         .font(.system(size: 11.5, weight: .semibold))
                 }
                 .buttonStyle(.bordered)
-                Text("放入带 frontmatter（title/triggers）的 .md 文件，重启后生效。")
+                Text(state.loc(
+                    "放入带 frontmatter（title/triggers）的 .md 文件，重启后生效。",
+                    "Add .md files with title/triggers frontmatter, then restart LingShu."
+                ))
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(Color.lingFg.opacity(0.45))
             }
@@ -234,7 +241,7 @@ struct LingShuSkillsPanel: View {
                             .lineLimit(1)
                     }
                     Spacer()
-                    Text(profile.id.hasPrefix("skill-") ? "用户" : "内置")
+                    Text(profile.id.hasPrefix("skill-") ? state.loc("用户", "User") : state.loc("内置", "Built-in"))
                         .font(.system(size: 9.5, weight: .bold))
                         .foregroundStyle(Color.lingFg.opacity(0.5))
                         .padding(.horizontal, 6).padding(.vertical, 2)
@@ -253,6 +260,7 @@ struct LingShuSkillsPanel: View {
 // MARK: - 连接器面板（MCP）
 
 struct LingShuConnectorsPanel: View {
+    @ObservedObject var state: LingShuState
     @ObservedObject var registry: LingShuConnectorRegistry
     @State private var name = ""
     @State private var command = ""
@@ -260,28 +268,35 @@ struct LingShuConnectorsPanel: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            SectionHeader(icon: "app.connected.to.app.below.fill", title: "MCP 连接器", subtitle: "接外部 MCP server 的工具进协同管线（数据库 / API / Slack 等）")
+            SectionHeader(
+                icon: "app.connected.to.app.below.fill",
+                title: state.loc("MCP 连接器", "MCP Connectors"),
+                subtitle: state.loc("把外部 MCP server 工具接入协同管线", "Connect external MCP server tools to the agent pipeline")
+            )
 
             HStack(spacing: 8) {
-                TextField("名称", text: $name).textFieldStyle(.roundedBorder).frame(width: 120)
-                TextField("启动命令，例如：npx -y @modelcontextprotocol/server-filesystem /path", text: $command)
+                TextField(state.loc("名称", "Name"), text: $name).textFieldStyle(.roundedBorder).frame(width: 120)
+                TextField(state.loc("启动命令，例如：npx -y @modelcontextprotocol/server-filesystem /path", "Command, for example: npx -y @modelcontextprotocol/server-filesystem /path"), text: $command)
                     .textFieldStyle(.roundedBorder)
                 Button {
                     let parts = command.split(separator: " ").map(String.init)
                     guard let first = parts.first else { return }
                     registry.addServer(name: name, command: first, arguments: Array(parts.dropFirst()))
                     name = ""; command = ""
-                } label: { Label("添加", systemImage: "plus.circle.fill").font(.system(size: 11.5, weight: .bold)) }
+                } label: { Label(state.loc("添加", "Add"), systemImage: "plus.circle.fill").font(.system(size: 11.5, weight: .bold)) }
                 .disabled(command.trimmingCharacters(in: .whitespaces).isEmpty)
                 Button {
                     isRefreshing = true
                     Task { await registry.refreshTools(); isRefreshing = false }
-                } label: { Label(isRefreshing ? "探测中…" : "探测工具", systemImage: "arrow.triangle.2.circlepath").font(.system(size: 11.5, weight: .semibold)) }
+                } label: { Label(isRefreshing ? state.loc("探测中…", "Discovering…") : state.loc("探测工具", "Discover Tools"), systemImage: "arrow.triangle.2.circlepath").font(.system(size: 11.5, weight: .semibold)) }
                 .disabled(isRefreshing || registry.servers.isEmpty)
             }
 
             if registry.servers.isEmpty {
-                Text("还没有连接器。MCP server 让灵枢能读 issue、查数据库、发消息——为一个写的连接器在 Claude Code/Codex 里通常也能直接用。")
+                Text(state.loc(
+                    "还没有连接器。MCP server 可以让灵枢读取 Issue、查询数据库或调用外部服务。",
+                    "No connectors yet. MCP servers can let LingShu read issues, query databases, or call external services."
+                ))
                     .font(.system(size: 11.5, weight: .medium)).foregroundStyle(Color.lingFg.opacity(0.4))
             } else {
                 ForEach(registry.servers) { server in
@@ -296,7 +311,7 @@ struct LingShuConnectorsPanel: View {
                         Spacer()
                         let toolCount = registry.discoveredTools.filter { $0.serverID == server.id }.count
                         if toolCount > 0 {
-                            Text("\(toolCount) 工具").font(.system(size: 10, weight: .bold, design: .monospaced)).foregroundStyle(Color.lingHolo)
+                            Text(state.loc("\(toolCount) 工具", "\(toolCount) tools")).font(.system(size: 10, weight: .bold, design: .monospaced)).foregroundStyle(Color.lingHolo)
                         }
                         Toggle("", isOn: Binding(get: { server.enabled }, set: { registry.setEnabled(id: server.id, enabled: $0) }))
                             .toggleStyle(.switch).controlSize(.mini)
@@ -322,16 +337,19 @@ struct LingShuMemoryStatsPanel: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            SectionHeader(icon: "brain", title: "记忆", subtitle: "本地知识图谱 + 本机知识索引 + 经验资产")
+            SectionHeader(icon: "brain", title: state.loc("记忆", "Memory"), subtitle: state.loc("本地知识图谱 + 本机知识索引 + 经验资产", "Local knowledge graph, index, and experience assets"))
 
             let stats = state.memoryDashboardStats()
             HStack(spacing: 12) {
-                statCard(title: "图谱节点", value: "\(stats.graphNodes)", hint: "本地 Markdown vault")
-                statCard(title: "经验资产", value: "\(stats.experienceAssets)", hint: experienceHint(stats))
-                statCard(title: "任务记录", value: "\(stats.retainedTaskRecords)", hint: "热 \(stats.hotTaskRecords) · 冷 \(stats.coldTaskRecords)")
+                statCard(title: state.loc("图谱节点", "Graph nodes"), value: "\(stats.graphNodes)", hint: state.loc("本地 Markdown vault", "Local Markdown vault"))
+                statCard(title: state.loc("经验资产", "Experience assets"), value: "\(stats.experienceAssets)", hint: experienceHint(stats))
+                statCard(title: state.loc("任务记录", "Task records"), value: "\(stats.retainedTaskRecords)", hint: state.loc("热 \(stats.hotTaskRecords) · 冷 \(stats.coldTaskRecords)", "Hot \(stats.hotTaskRecords) · Cold \(stats.coldTaskRecords)"))
             }
 
-            Text("图谱节点来自长期记忆 vault：每条原子笔记都是一个本地 Markdown 文件，可被召回、补链、归并和归档；经验资产来自终态任务的结构化沉淀，任务记录显示当前热记录与冷备保留窗口，用于回放和续接。")
+            Text(state.loc(
+                "图谱节点来自长期记忆 vault；经验资产来自已完成任务的结构化沉淀，任务记录用于回放和续接。",
+                "Graph nodes come from the local long-term memory vault. Experience assets are distilled from completed tasks, while retained task records support replay and continuation."
+            ))
                 .font(.system(size: 11.5, weight: .medium))
                 .foregroundStyle(Color.lingFg.opacity(0.5))
                 .fixedSize(horizontal: false, vertical: true)
@@ -344,9 +362,9 @@ struct LingShuMemoryStatsPanel: View {
     }
 
     private func experienceHint(_ stats: LingShuMemoryDashboardStats) -> String {
-        var parts = ["经验 \(stats.goalExperiences)", "规则 \(stats.experienceRules)"]
+        var parts = [state.loc("经验 \(stats.goalExperiences)", "Goals \(stats.goalExperiences)"), state.loc("规则 \(stats.experienceRules)", "Rules \(stats.experienceRules)")]
         if stats.pendingExperienceBackfill > 0 {
-            parts.append("待回填 \(stats.pendingExperienceBackfill)")
+            parts.append(state.loc("待回填 \(stats.pendingExperienceBackfill)", "Pending \(stats.pendingExperienceBackfill)"))
         }
         return parts.joined(separator: " · ")
     }

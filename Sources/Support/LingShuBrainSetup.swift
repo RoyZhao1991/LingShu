@@ -36,6 +36,16 @@ enum LingShuBrainSetupRoute: String, CaseIterable, Identifiable {
         }
     }
 
+    var englishTitle: String {
+        switch self {
+        case .openAI: "GPT"
+        case .claude: "Claude"
+        case .deepSeek: "DeepSeek"
+        case .minimax: "MiniMax M3"
+        case .custom: "Other"
+        }
+    }
+
     var subtitle: String {
         switch self {
         case .openAI: "OpenAI 官方"
@@ -43,6 +53,15 @@ enum LingShuBrainSetupRoute: String, CaseIterable, Identifiable {
         case .deepSeek: "官方 API"
         case .minimax: "官方 API"
         case .custom: "兼容接口"
+        }
+    }
+
+    var englishSubtitle: String {
+        switch self {
+        case .openAI: "Official OpenAI"
+        case .claude: "Official Anthropic"
+        case .deepSeek, .minimax: "Official API"
+        case .custom: "Compatible endpoint"
         }
     }
 
@@ -140,6 +159,15 @@ enum LingShuBrainSetupInputError: LocalizedError, Equatable {
         case .missingToken: "请填写访问 Token。"
         case .missingModel: "请填写模型名称。"
         case .invalidEndpoint: "接口地址需要是完整的 http 或 https 地址。"
+        }
+    }
+
+    var englishDescription: String {
+        switch self {
+        case .missingProvider: "Choose a brain provider."
+        case .missingToken: "Enter an access token."
+        case .missingModel: "Enter a model name."
+        case .invalidEndpoint: "The endpoint must be a complete HTTP or HTTPS URL."
         }
     }
 }

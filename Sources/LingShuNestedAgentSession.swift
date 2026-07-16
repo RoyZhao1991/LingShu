@@ -46,6 +46,7 @@ actor LingShuNestedAgentSession: LingShuAgentSessioning {
     private enum Phase: Equatable {
         case conversational            // 无进行中的流水线 → 走 spine(简单请求直通 + 跨回合连续性)
         case awaitingInteraction(Int)  // 第 i 阶段是互动、已开场,等主人下一句(说"结束/没了"进下一阶段)
+        case awaitingStageHuman(Int)   // 第 i 个任务阶段在原会话内等待扫码/登录/确认等人机协作
         case awaitingResume(Int)       // 第 i 阶段被打断,存断点,等"继续"从该阶段续
     }
     private var phase: Phase = .conversational
@@ -104,7 +105,11 @@ actor LingShuNestedAgentSession: LingShuAgentSessioning {
         self.messages = initialMessages
     }
 
-    var isBlocked: Bool { spineBlocked }
+    var isBlocked: Bool {
+        if spineBlocked { return true }
+        if case .awaitingStageHuman = phase { return true }
+        return false
+    }
 
     func setTextDeltaSink(_ sink: (@Sendable (String) async -> Void)?) {
         textDeltaSink = sink
@@ -119,6 +124,9 @@ actor LingShuNestedAgentSession: LingShuAgentSessioning {
 
     /// 续接。在岗/自主会话走这条。spine 卡在 ask_user 时回填答案;否则与 send 同路(据相位)。
     func resume(_ answer: String) async -> LingShuAgentRunResult {
+        if case .awaitingStageHuman(let i) = phase {
+            return await continueTaskStageAfterHuman(stageIndex: i, answer: answer)
+        }
         if case .conversational = phase, spineBlocked, let s = spine {
             let r = await s.resume(answer)
             await syncFromSpine(s)
@@ -160,6 +168,8 @@ actor LingShuNestedAgentSession: LingShuAgentSessioning {
         switch phase {
         case .awaitingInteraction(let i):
             return await continueInteraction(stageIndex: i, userText: text)
+        case .awaitingStageHuman(let i):
+            return await continueTaskStageAfterHuman(stageIndex: i, answer: text)
         case .awaitingResume(let i):
             await consumeInterrupt()   // 断点续接:消费打断标志,新这段不被旧标志立刻中止
             await note("断点续接", "从第 \(i + 1) 阶段续(不重头)。")
@@ -220,6 +230,9 @@ actor LingShuNestedAgentSession: LingShuAgentSessioning {
             var result = await inner.send(input)
             turnsUsed += await inner.turnsUsed
             toolInvocations += await inner.toolInvocations
+            if case .blocked = result {
+                return await pauseTaskStageForHuman(stageIndex: i, result: result)
+            }
             if case .interrupted = result {   // 断网:挂起,保留断点,交还 .interrupted 由上层暂停/重连续
                 phase = .awaitingResume(i)
                 return result
@@ -228,6 +241,9 @@ actor LingShuNestedAgentSession: LingShuAgentSessioning {
                 // 任务阶段:复用整套 verifyAndContinue(撞顶恢复 + 多轮验收 + 停滞检测 + 非代码返工预算 + [验收]通过 trace),
                 // 把内层会话驱动到验收通过(或停滞交还)。全程可被打断(verifyAndContinue 内查 Task.isCancelled/batchInterruptRequested)。
                 result = await acceptStage(inner, result, stage.title)
+                if case .blocked = result {
+                    return await pauseTaskStageForHuman(stageIndex: i, result: result)
+                }
                 if case .interrupted = result { phase = .awaitingResume(i); return result }
                 let interruptedAfter = await isInterrupted()
                 if Task.isCancelled || interruptedAfter {
@@ -251,6 +267,58 @@ actor LingShuNestedAgentSession: LingShuAgentSessioning {
             }
         }
         return await finalizePipeline()
+    }
+
+    /// 当前任务阶段由模型/工具请求人机协作。冻结阶段索引与 inner 会话；上层会把它显示成
+    /// 通用交互卡并释放并发槽，用户完成后由 `resume` 精确接回这里。
+    private func pauseTaskStageForHuman(stageIndex i: Int, result: LingShuAgentRunResult) async -> LingShuAgentRunResult {
+        phase = .awaitingStageHuman(i)
+        await note("等待人机协作", "第 \(i + 1) 阶段已暂停，保留当前会话与阶段断点。")
+        await setPhase(.idle)
+        return result
+    }
+
+    /// 人工步骤完成后只续当前 inner，不重新规划、不重发阶段目标。inner 再次收尾后从该阶段的
+    /// 验收与后继节点继续；若又请求人工协作，则保持在同一阶段继续等待。
+    private func continueTaskStageAfterHuman(stageIndex i: Int, answer: String) async -> LingShuAgentRunResult {
+        guard stages.indices.contains(i), let inner = activeInner else {
+            phase = .awaitingResume(i)
+            return .interrupted(reason: "任务阶段恢复上下文已丢失")
+        }
+        await consumeInterrupt()
+        if let sink = textDeltaSink { await inner.setTextDeltaSink(sink) }
+        await note("人机协作完成", "从第 \(i + 1) 阶段的原会话继续。")
+        var result = await inner.resume(answer)
+        if case .blocked = result {
+            return await pauseTaskStageForHuman(stageIndex: i, result: result)
+        }
+        if case .interrupted = result {
+            phase = .awaitingResume(i)
+            return result
+        }
+
+        let stage = stages[i]
+        if stage.kind == .task {
+            result = await acceptStage(inner, result, stage.title)
+            if case .blocked = result {
+                return await pauseTaskStageForHuman(stageIndex: i, result: result)
+            }
+            if case .interrupted = result {
+                phase = .awaitingResume(i)
+                return result
+            }
+        } else {
+            let text = Self.text(result)
+            interactionInner = inner
+            priorSummaries.append(text)
+            phase = .awaitingInteraction(i)
+            await note("互动待续", "第 \(i + 1) 阶段的人机前提已完成；互动已开场，等待主人继续或结束。")
+            await setPhase(.idle)
+            return result
+        }
+        let text = Self.text(result)
+        priorSummaries.append(text)
+        return await drivePipeline(fromStage: i + 1)
     }
 
     /// 互动阶段续:主人示意没后续 → 进下一阶段;否则把这句交给该互动阶段继续(答疑/翻页/接着讲)。

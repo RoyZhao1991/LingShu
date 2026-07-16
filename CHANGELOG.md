@@ -6,7 +6,18 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
-No unreleased changes have been recorded yet.
+### Added
+
+- Mutable, persisted runtime workflow graphs that let the model add, replace, reorder, retry, or skip still-pending execution nodes without changing the GoalSpec or acceptance boundary.
+- A typed human-collaboration protocol for questions, choices, forms, QR/login steps, physical actions, file selection, confirmation, manual completion, HTTP probes, and file probes.
+- Exact-session resume for workers and checkers, including a third `needs_human_interaction` verification outcome that does not misreport human participation as failure.
+- First-launch language selection and bilingual setup surfaces.
+
+### Changed
+
+- Model credentials now use macOS Keychain as the primary store; legacy local credential files migrate once and are removed only after every entry is safely persisted.
+- OAuth authorization cards remain driven exclusively by the structured OAuth marker, while generic human interaction follows its own protocol.
+- Dynamic workflow mutations are validated as a transaction, reject dependency cycles and started-node rewrites, and persist their revision history in the task record.
 
 ## [0.1.0-alpha] - 2026-07-15
 

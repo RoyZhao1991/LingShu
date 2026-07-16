@@ -86,12 +86,14 @@ final class LingShuState: ObservableObject {
     @Published var language: LingShuVoiceLanguage = VoiceIOManager.persistedVoiceLanguage {
         didSet {
             guard language != oldValue else { return }
-            UserDefaults.standard.set(language.rawValue, forKey: "lingshu.voiceLanguage")
+            UserDefaults.standard.set(language.rawValue, forKey: LingShuLanguagePreferenceStore.languageKey)
             voiceManager?.voiceLanguage = language
             // 外接设备蓝牙广播名随语言切换(中文「灵枢」/ 英文「Nous」)。
             externalSensory.setBluetoothLocalName(appName)
         }
     }
+    /// 新安装必须先明确选择界面语言；已有显式语言偏好的安装自动迁移为已选择。
+    @Published var hasCompletedInitialLanguageSelection = LingShuLanguagePreferenceStore.hasCompletedInitialSelection()
     // 每秒变化的计时量不做 @Published：它们只服务于超时判断与文案拼装，
     // 界面上的实时读数由 TimelineView 局部自刷新，避免每秒让全部观察者失效。
     var thinkingElapsedSeconds = 0
@@ -632,6 +634,17 @@ final class LingShuState: ObservableObject {
     var pendingFormResolvers: [UUID: ([String: String]) -> Void] = [:]
     /// 新阻塞协议下的 ask_form:循环已 `.blocked` 释放任务槽,表单提交后 resume 原工具调用。
     var pendingFormContexts: [UUID: LingShuPendingHumanInputContext] = [:]
+    /// 通用人机协作暂停：主会话按气泡保存请求与续接上下文；派发任务按记录保存。
+    /// OAuth 卡不进入这里，仍只由结构化 auth/OAuth 标识驱动。
+    var pendingHumanInteractionContexts: [UUID: LingShuPendingHumanInteractionContext] = [:]
+    var pendingDispatchedHumanInteractions: [String: LingShuHumanInteractionRequest] = [:]
+    /// Checker/verifier 人机协作断点。内部会话原地保留；外部一次性 checker 则保留同一验收节点，
+    /// 人工结果回来后只重放该节点，不把答案误发给 maker。
+    var pendingVerificationInteractions: [String: LingShuPendingVerificationInteraction] = [:]
+    var resumedVerificationVerdicts: [String: String] = [:]
+    var resumedVerificationHumanResults: [String: String] = [:]
+    /// 自动完成探针（例如本地 health URL / 文件出现）在后台轮询；等待不占 Agent 并发槽。
+    var humanInteractionProbeTasks: [String: Task<Void, Never>] = [:]
     /// P3 沙箱:apply_skill 物化过的 skill 脚本路径 → 该 skill 声明的权限(P1)。run_command 跑到这些脚本时,
     /// 按声明权限(+工作目录写,让生成器能产出)经 sandbox-exec 关进受限子进程,而非无沙箱裸跑。无声明=最小权限。
     var materializedSkillScripts: [String: LingShuPluginPermissions] = [:]
@@ -1553,9 +1566,16 @@ final class LingShuState: ObservableObject {
             return localAnswer
         }
 
-        // 自主运行卡在 ask_user 提问上时，本轮输入即为答案：回填续跑（优先于一切常规分流）。
-        // 这些早返回的续接handler都用各自的记录(自主/在岗/被卡住的派发任务),不需要本轮新建记录。
+        // 通用人机协作必须拥有最高续接优先级。扫码、登录、实体操作、选文件等完成后的简短答复
+        // 只能回到原节点，不能先被自主/在岗模式理解成一条新命令。
         let isGroundedEvidenceInput = turnInput.hasAttachments || Self.inputMentionsGroundedEvidence(userFacingPrompt)
+        if let recordID = pendingMainQuestionRecordID,
+           consumePendingMainHumanInteraction(recordID: recordID, answer: trimmedPrompt) {
+            return ""
+        }
+
+        // 自主运行卡在 ask_user 提问上时，本轮输入即为答案：回填续跑（优先于常规分流）。
+        // 这些早返回的续接handler都用各自的记录(自主/在岗/被卡住的派发任务),不需要本轮新建记录。
         if let answerAck = handleAutonomousAnswerIfNeeded(
             prompt: trimmedPrompt,
             visiblePrompt: userFacingPrompt,

@@ -29,6 +29,12 @@ extension LingShuState {
         guard let index = chatMessages.firstIndex(where: { $0.id == messageID }),
               chatMessages[index].resolvedChoice == nil else { return }
         chatMessages[index].resolvedChoice = option.label
+        // 通用人机协作优先于旧 ask_choice 路径：无论请求来自规划、执行、验收还是工具，
+        // 都把结果送回产生控制事件的原会话，而不是重新分诊成一条新消息。
+        if pendingHumanInteractionContexts[messageID] != nil {
+            resolveMainHumanInteraction(messageID: messageID, answer: option.label)
+            return
+        }
         // **气泡内待输入的派发任务**:选项点击**直达那条隔离会话**(不经分诊/主输入),修"卡住任务被聊天淹没回复对不上"。
         if let rid = chatMessages[index].awaitingInputForRecordID {
             chatMessages[index].awaitingInputForRecordID = nil

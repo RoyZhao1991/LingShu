@@ -177,6 +177,15 @@ extension LingShuState {
             let (passed, critique) = useCheckerSession
                 ? await runCheckerSession(recordID: taskRecordID ?? "", objective: userRequest, makerText: Self.runResultText(result))
                 : await verifyAgentDeliverable(userRequest: userRequest, reply: Self.runResultText(result), taskRecordID: taskRecordID)
+            // checker 发现“必须由人完成的步骤”是控制事件，不是验收否决。暂停当前节点并把
+            // 同一 maker/checker 运行上下文留在原位；用户或探针完成后从这里重新进入验收。
+            if !passed, let control = LingShuWorkflowControlEnvelope.decode(from: critique),
+               let interaction = control.humanInteraction {
+                appendTaskRecordMessage(taskRecordID, actor: "审查员", role: "等待人机协作", kind: .warning,
+                                        text: interaction.prompt)
+                appendTrace(kind: .warning, actor: "审查员", title: "暂停验收等待人机协作", detail: String(interaction.prompt.prefix(120)))
+                return .blocked(question: control.encodedPrompt)
+            }
             // **验收时模型通道故障 ≠ 验收驳回(根因修:坦克大战验收超时被误判需修正→异常)**:checker 的判词若是模型故障标记
             // (超时/网络/限流/5xx),那是基础设施故障、不是真的"产出需修正"——当 `.interrupted` 暂停、等通道恢复自动续验,
             // 绝不当需修正去返工、更不该把任务判异常(产物其实已落地)。不可恢复(鉴权/额度)才上抛交还。

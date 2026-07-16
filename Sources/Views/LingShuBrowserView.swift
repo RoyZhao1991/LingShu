@@ -76,7 +76,7 @@ struct LingShuBrowserChrome: View {
                     .padding(.horizontal, 12).padding(.vertical, 7)
                     .frame(maxWidth: 200)
                     .background(tab.id == controller.activeTabID ? Color.lingHolo.opacity(0.25) : Color.lingFg.opacity(0.06), in: RoundedRectangle(cornerRadius: 8))
-                    .foregroundStyle(tab.id == controller.activeTabID ? Color.lingHolo : Color.lingFg.opacity(0.7))
+                    .foregroundStyle(tab.id == controller.activeTabID ? Color.white : Color.lingFg.opacity(0.7))
                     .onTapGesture { _ = controller.switchTab(index: i) }
                 }
                 Button { _ = controller.openTab("about:blank") } label: { Image(systemName: "plus").font(.system(size: 12, weight: .bold)) }

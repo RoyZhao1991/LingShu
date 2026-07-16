@@ -83,17 +83,20 @@ struct LingShuLoopStateSnapshot: Sendable {
     var messages: [LingShuAgentMessage]
     var isRunning: Bool
     var pendingBlockToolCallID: String?
+    var hasPendingHumanInteraction: Bool
     var hasPendingCorrection: Bool
     var maxHistoryMessages: Int
     /// 压缩器的容量契约(差距4):非 nil 时 I6 按它(条数/token)校验;nil 时回退用 `maxHistoryMessages` 条数。
     var compactionBudget: LingShuCompactionBudget?
 
     init(messages: [LingShuAgentMessage], isRunning: Bool = false, pendingBlockToolCallID: String? = nil,
+         hasPendingHumanInteraction: Bool = false,
          hasPendingCorrection: Bool = false, maxHistoryMessages: Int = 0,
          compactionBudget: LingShuCompactionBudget? = nil) {
         self.messages = messages
         self.isRunning = isRunning
         self.pendingBlockToolCallID = pendingBlockToolCallID
+        self.hasPendingHumanInteraction = hasPendingHumanInteraction
         self.hasPendingCorrection = hasPendingCorrection
         self.maxHistoryMessages = maxHistoryMessages
         self.compactionBudget = compactionBudget
@@ -122,7 +125,10 @@ enum LingShuLoopInvariants {
             break   // 此处只保证良构(配对);预算只在 send 入口压缩点保证,循环内允许 in-flight 增长
         case .terminal(let kind):
             if s.isRunning { v.append(.runningAfterTerminal) }
-            v += checkBlockState(kind: kind, pending: s.pendingBlockToolCallID)
+            v += checkBlockState(
+                kind: kind,
+                hasPendingBlock: s.pendingBlockToolCallID != nil || s.hasPendingHumanInteraction
+            )
             if kind == .completed && s.hasPendingCorrection { v.append(.correctionNotConsumed(kind: kind)) }
         }
         return v
@@ -179,8 +185,8 @@ enum LingShuLoopInvariants {
 
     // MARK: I4:阻塞标志一致性
 
-    static func checkBlockState(kind: LingShuLoopTerminalKind, pending: String?) -> [LingShuLoopInvariantViolation] {
-        let pendingNil = (pending == nil)
+    static func checkBlockState(kind: LingShuLoopTerminalKind, hasPendingBlock: Bool) -> [LingShuLoopInvariantViolation] {
+        let pendingNil = !hasPendingBlock
         switch kind {
         case .blocked:
             // 阻塞终态必须有 pending 调用。

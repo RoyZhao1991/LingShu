@@ -15,7 +15,7 @@
     <img alt="Swift 6" src="https://img.shields.io/badge/Swift-6-F05138?logo=swift&logoColor=white">
     <img alt="Apache-2.0" src="https://img.shields.io/badge/license-Apache--2.0-2C8C7F">
     <img alt="项目阶段 Alpha" src="https://img.shields.io/badge/status-alpha-E9A23B">
-    <img alt="发现 1,526 项测试" src="https://img.shields.io/badge/tests-1%2C526%20discovered-2C8C7F">
+    <img alt="1,548 项测试通过" src="https://img.shields.io/badge/tests-1%2C548%20passing-2C8C7F">
     <a href="https://github.com/RoyZhao1991/LingShu/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/RoyZhao1991/LingShu/actions/workflows/ci.yml/badge.svg"></a>
   </p>
 </div>
@@ -55,7 +55,8 @@
 
 | 领域 | 当前实现 |
 | --- | --- |
-| Agent 执行 | 目标理解、规划、工具循环、隔离子任务、中断、续跑与验收 |
+| Agent 执行 | 目标理解、可变运行时工作流、工具循环、隔离子任务、中断、续跑与验收 |
+| 人机协作 | 结构化提问、选择、表单、扫码/登录、实体操作、文件选择、确认、完成探针与精确会话续跑 |
 | Computer Use | 原生 AX 语义快照、元素索引操作、屏幕兜底与动作后验证 |
 | 本地工作 | 文件读写、命令运行、代码修改、测试执行、Git 改动检查与产物登记 |
 | 交付物 | 生成、登记、预览、修改并验收真实 PPTX、DOCX、PDF、Markdown、代码、脚本与本地媒体 |
@@ -71,10 +72,13 @@
 flowchart LR
     U["用户目标"] --> B["灵枢主 Agent"]
     B --> G["结构化 GoalSpec"]
-    G --> Q["串行任务队列"]
+    G --> R["可变运行时工作流"]
+    R --> Q["串行任务队列"]
     Q --> W1["隔离工作线程"]
     Q --> W2["本地工具"]
     Q --> W3["授权后的 Computer Use"]
+    W3 --> H["需要时进入人机协作"]
+    H --> V["独立验收"]
     W1 --> V["独立验收"]
     W2 --> V
     W3 --> V
@@ -83,7 +87,7 @@ flowchart LR
     M --> B
 ```
 
-主对话保持串行，避免上下文相互污染；长任务和派发任务在隔离会话中运行，完成后把经过蒸馏的状态显式注回主 Agent。
+主对话保持串行，避免上下文相互污染；长任务和派发任务在隔离会话中运行，完成后把经过蒸馏的状态显式注回主 Agent。执行期间，大脑只能调整运行图中尚未启动的部分，GoalSpec 与验收边界保持不变；worker、工具或 checker 都可以暂停自己的精确会话等待人参与，完成后从该断点续跑，而不是重启整个目标。
 
 ## 快速开始
 
@@ -116,7 +120,7 @@ open "dist/灵枢.app"
 | MiniMax M3 | API Token | OpenAI 兼容 |
 | 自定义 | 端点、按需填写 Token、模型名 | OpenAI 兼容自定义通道 |
 
-API 凭据只属于本地运行配置，禁止提交到仓库。详见[运行配置说明](./Resources/RuntimeConfig/README.md)。
+API 凭据保存在 macOS 钥匙串中，只属于本地运行配置，禁止提交到仓库。详见[运行配置说明](./Resources/RuntimeConfig/README.md)。
 
 ## 权限与安全边界
 
@@ -124,7 +128,7 @@ API 凭据只属于本地运行配置，禁止提交到仓库。详见[运行配
 
 - 灵枢默认只在内存中处理实时感知流，不主动归档原始音视频。
 - 内容一旦发送到用户配置的远程模型或感知服务，就已经离开本机，其留存和隐私规则由对应服务商条款决定。
-- 运行配置中的敏感文件已被 Git 忽略；支持的执行轨迹会对凭据做脱敏。
+- 模型凭据保存在 macOS 钥匙串中；支持的执行轨迹会对凭据做脱敏。
 - 高风险、不可逆、账号、授权或对外发布动作需要用户明确确认。
 - 原生 Computer Use 受系统权限约束，并在条件允许时执行动作后回读验证。
 
@@ -144,7 +148,7 @@ API 凭据只属于本地运行配置，禁止提交到仓库。详见[运行配
 | HAL 虚拟麦克风 | 实验性；设备出现仍不稳定 |
 | 官网签名与公证发布 | 发布脚本已具备；首个公开 Release 待发布 |
 
-仓库当前包含超过 10 万行源码与测试代码、185 个 Swift 测试文件，以及 SwiftPM 发现的 1,526 项测试。这些数字用于说明工程深度，并不等于所有依赖外部环境的测试都能在每一台 Mac 上通过。
+仓库当前包含超过 10 万行源码与测试代码、187 个 Swift 测试文件；最近一次本机 SwiftPM 全量回归通过 1,548 项测试，另有 3 项跳过。这些数字用于说明工程深度，并不等于所有依赖外部环境的测试都能在每一台 Mac 上通过。
 
 ## 开发与测试
 

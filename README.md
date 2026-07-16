@@ -15,7 +15,7 @@
     <img alt="Swift 6" src="https://img.shields.io/badge/Swift-6-F05138?logo=swift&logoColor=white">
     <img alt="Apache-2.0" src="https://img.shields.io/badge/license-Apache--2.0-2C8C7F">
     <img alt="Project status: alpha" src="https://img.shields.io/badge/status-alpha-E9A23B">
-    <img alt="1,526 discovered tests" src="https://img.shields.io/badge/tests-1%2C526%20discovered-2C8C7F">
+    <img alt="1,548 tests passing" src="https://img.shields.io/badge/tests-1%2C548%20passing-2C8C7F">
     <a href="https://github.com/RoyZhao1991/LingShu/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/RoyZhao1991/LingShu/actions/workflows/ci.yml/badge.svg"></a>
   </p>
 </div>
@@ -55,7 +55,8 @@ The result is a local file that remains openable, editable, previewable, and ava
 
 | Area | Current capability |
 | --- | --- |
-| Agent execution | Goal understanding, planning, tool loops, isolated child tasks, interruption, resume, and verification |
+| Agent execution | Goal understanding, mutable runtime workflows, tool loops, isolated child tasks, interruption, resume, and verification |
+| Human collaboration | Typed questions, choices, forms, QR/login steps, physical actions, file selection, confirmation, completion probes, and exact-session resume |
 | Computer Use | Native accessibility snapshots, indexed UI actions, screen fallback, and post-action verification |
 | Local work | Read/write files, run commands, edit code, execute tests, inspect Git changes, and register artifacts |
 | Deliverables | Create, register, preview, revise, and verify real PPTX, DOCX, PDF, Markdown, code, scripts, and local media |
@@ -71,10 +72,13 @@ The result is a local file that remains openable, editable, previewable, and ava
 flowchart LR
     U["User goal"] --> B["LingShu main agent"]
     B --> G["Structured GoalSpec"]
-    G --> Q["Serial task queue"]
+    G --> R["Mutable runtime workflow"]
+    R --> Q["Serial task queue"]
     Q --> W1["Isolated worker"]
     Q --> W2["Local tools"]
     Q --> W3["Authorized Computer Use"]
+    W3 --> H["Human collaboration when needed"]
+    H --> V["Independent verifier"]
     W1 --> V["Independent verifier"]
     W2 --> V
     W3 --> V
@@ -83,7 +87,7 @@ flowchart LR
     M --> B
 ```
 
-The main conversation remains serialized to protect context. Long-running or delegated work uses isolated sessions, then returns a distilled completion record to the main agent.
+The main conversation remains serialized to protect context. Long-running or delegated work uses isolated sessions, then returns a distilled completion record to the main agent. During execution, the model may update only the still-pending portion of the runtime graph; the GoalSpec and acceptance boundary remain fixed. A worker, tool, or checker can pause its exact session for human participation and resume from that checkpoint instead of restarting the goal.
 
 ## Quick Start
 
@@ -116,7 +120,7 @@ On first launch, LingShu checks whether a working brain channel exists. If not, 
 | MiniMax M3 | API token | OpenAI compatible |
 | Custom | Endpoint, token if required, model | OpenAI-compatible custom route |
 
-API credentials are local runtime configuration and must never be committed. See [runtime configuration notes](./Resources/RuntimeConfig/README.md).
+API credentials are stored in macOS Keychain, remain local runtime configuration, and must never be committed. See [runtime configuration notes](./Resources/RuntimeConfig/README.md).
 
 ## Permissions and Safety
 
@@ -124,7 +128,7 @@ LingShu requests macOS permissions only when a capability needs them. Computer c
 
 - Sensory streams are processed in memory by LingShu and are not archived by default.
 - Content sent to a configured remote model or perception provider leaves the Mac and is governed by that provider's retention and privacy terms.
-- Secrets are redacted from task traces where supported and runtime credential files are ignored by Git.
+- Model credentials are stored in macOS Keychain; secrets are redacted from task traces where supported.
 - High-risk, irreversible, account, authorization, or external-publication actions require explicit user confirmation.
 - Native Computer Use is permission-scoped and verifies the UI again after actions when possible.
 
@@ -144,7 +148,7 @@ LingShu is usable for development and controlled local workflows, but it is not 
 | HAL virtual microphone | Experimental; device appearance is not yet stable |
 | Signed and notarized public release | Release pipeline exists; first public release pending |
 
-The repository currently contains more than 100,000 lines of source and test code, 185 Swift test files, and 1,526 tests discovered by SwiftPM. These numbers describe engineering depth, not a guarantee that every environment-dependent test passes on every Mac.
+The repository currently contains more than 100,000 lines of source and test code, 187 Swift test files, and 1,548 tests passing in the latest full local SwiftPM run (3 skipped). These numbers describe engineering depth, not a guarantee that every environment-dependent test passes on every Mac.
 
 ## Development
 

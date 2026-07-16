@@ -81,6 +81,7 @@ actor LingShuAgentOrchestrator {
     func pendingPushes() -> [String] { pushes }
     func runningCount() -> Int { concurrency.runningCount }
     func waitingCount() -> Int { concurrency.waitingCount }
+    func availableCapacity() -> Int { max(0, concurrency.maxConcurrent - concurrency.runningCount) }
     /// 同时可并行运行的子任务硬上限(= 有界并发 maxConcurrent)。spawn_task 据此做背压。
     func capacity() -> Int { concurrency.maxConcurrent }
     /// 当前是否还能再派生一条子任务(运行数 < 上限)。
@@ -175,6 +176,9 @@ actor LingShuAgentOrchestrator {
     func resume(id: String, answer: String) async -> LingShuAgentRunResult? {
         guard let session = sessions[id], entries[id]?.status == .blocked else { return nil }
         let objective = entries[id]?.objective ?? ""
+        guard await acquireInteractiveSlot(id: id, objective: objective) else {
+            return .interrupted(reason: "恢复等待期间任务已取消")
+        }
         upsert(id: id, objective: objective, status: .running, summary: "已收到补充,续跑中")
         let result = await session.resume(answer)
         record(id: id, objective: objective, result: result)
@@ -266,13 +270,47 @@ actor LingShuAgentOrchestrator {
         let objective = objectives[id] ?? entries[id]?.objective ?? ""
         suspendedForReconnect.remove(id)
         suspendedReasons[id] = nil
-        if concurrency.hasCapacity, !concurrency.isRunning(id) { concurrency.requestAdmission(threadID: id, summary: objective) }
+        guard await acquireInteractiveSlot(id: id, objective: objective) else {
+            return .interrupted(reason: "恢复等待期间任务已取消")
+        }
         upsert(id: id, objective: objective, status: .running, summary: "收到「继续」,续跑中")
         await onEvent?(.resumed(id: id, objective: objective))
         var result = await session.resume(input)
         if let hook = acceptanceHook { result = await hook(id, objective, session, result) }
         record(id: id, objective: objective, result: result)
         return result
+    }
+
+    /// A checker/verifier paused after the maker had already finished its turn. Once the human
+    /// step is complete, resume the acceptance checkpoint without injecting the answer into the
+    /// maker conversation or re-running the objective from the beginning.
+    @discardableResult
+    func resumeAcceptance(id: String, checkpointResult: LingShuAgentRunResult) async -> LingShuAgentRunResult? {
+        guard let session = sessions[id] else { return nil }
+        let objective = objectives[id] ?? entries[id]?.objective ?? ""
+        guard await acquireInteractiveSlot(id: id, objective: objective) else {
+            return .interrupted(reason: "恢复等待期间任务已取消")
+        }
+        upsert(id: id, objective: objective, status: .running, summary: "人机协作已完成，继续原验收节点")
+        await onEvent?(.resumed(id: id, objective: objective))
+        var result = checkpointResult
+        if let hook = acceptanceHook { result = await hook(id, objective, session, result) }
+        record(id: id, objective: objective, result: result)
+        return result
+    }
+
+    /// 人机协作等待期间槽位已释放。用户/探针给出结果后，恢复必须重新进入同一并发闸门；
+    /// 满载时保持原会话与节点不动，短暂等待空位，绝不把它塞进普通首轮队列后从目标重跑。
+    private func acquireInteractiveSlot(id: String, objective: String) async -> Bool {
+        while !Task.isCancelled {
+            if concurrency.isRunning(id) { return true }
+            if concurrency.hasCapacity {
+                return concurrency.requestAdmission(threadID: id, summary: objective)
+            }
+            upsert(id: id, objective: objective, status: .blocked, summary: "人机协作已完成，等待执行槽位")
+            try? await Task.sleep(nanoseconds: 100_000_000)
+        }
+        return false
     }
 
     /// 续跑驱动:从中断处 continueLoop()(重发中断那步模型调用),再过统一验收。

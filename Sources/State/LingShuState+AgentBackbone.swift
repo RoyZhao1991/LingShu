@@ -14,6 +14,9 @@ struct LingShuPendingMainTurn: Sendable {
     let originalPromptForVerification: String?
     let startedAt: Date
     let contextPlan: LingShuContextAssemblyPlan?
+    /// Non-nil when a checker (not the maker) was paused for human participation. The next turn
+    /// continues acceptance from this maker result without sending a new prompt to the maker.
+    let acceptanceCheckpoint: LingShuAgentRunResult?
     /// 附件直接入脑:本回合随用户消息直发大脑的图片/PDF data URL(开关关/纯文本脑时为空)。
     var imageDataURLs: [String]? = nil
 
@@ -25,7 +28,8 @@ struct LingShuPendingMainTurn: Sendable {
         originalPromptForVerification: String?,
         startedAt: Date,
         contextPlan: LingShuContextAssemblyPlan? = nil,
-        imageDataURLs: [String]? = nil
+        imageDataURLs: [String]? = nil,
+        acceptanceCheckpoint: LingShuAgentRunResult? = nil
     ) {
         self.bubbleID = bubbleID
         self.prompt = prompt
@@ -35,6 +39,7 @@ struct LingShuPendingMainTurn: Sendable {
         self.startedAt = startedAt
         self.contextPlan = contextPlan
         self.imageDataURLs = imageDataURLs
+        self.acceptanceCheckpoint = acceptanceCheckpoint
     }
 }
 
@@ -232,7 +237,8 @@ extension LingShuState {
         originalPromptForVerification: String? = nil,
         existingBubbleID: UUID? = nil,
         imageDataURLs: [String]? = nil,
-        contextPlan: LingShuContextAssemblyPlan? = nil
+        contextPlan: LingShuContextAssemblyPlan? = nil,
+        acceptanceCheckpoint: LingShuAgentRunResult? = nil
     ) -> String {
         // 新一轮开始:先掐掉上一条回复还在放的 TTS,避免旧音频盖到新轮(音频/文字 desync)。
         interruptSpeechOutput?()
@@ -245,6 +251,10 @@ extension LingShuState {
         if let existingBubbleID, let idx = chatMessages.firstIndex(where: { $0.id == existingBubbleID }) {
             chatMessages[idx].taskRecordID = taskRecordID
             chatMessages[idx].isLoading = true
+            chatMessages[idx].choices = nil
+            chatMessages[idx].form = nil
+            chatMessages[idx].humanInteraction = nil
+            chatMessages[idx].awaitingInputForRecordID = nil
             pendingID = existingBubbleID
         } else {
             let pending = ChatMessage(speaker: "灵枢", text: "", isUser: false, isLoading: true, taskRecordID: taskRecordID)
@@ -259,7 +269,8 @@ extension LingShuState {
             originalPromptForVerification: originalPromptForVerification,
             startedAt: turnStartedAt,
             contextPlan: contextPlan,
-            imageDataURLs: directImages
+            imageDataURLs: directImages,
+            acceptanceCheckpoint: acceptanceCheckpoint
         )
         pendingMainTurns[pendingID] = turn
         // 问答线可删等待队列:登记这条问答(队首才执行;等待中可删)。
@@ -334,7 +345,9 @@ extension LingShuState {
         }
 
         let session: any LingShuAgentSessioning
-        if turn.resumeBlocked, let existing = mainAgentSessionHolder, await existing.isBlocked {
+        if turn.acceptanceCheckpoint != nil, let existing = mainAgentSessionHolder {
+            session = existing
+        } else if turn.resumeBlocked, let existing = mainAgentSessionHolder, await existing.isBlocked {
             session = existing
         } else {
             // 普通问答按 record 隔离执行。主线程仍常驻于记忆/状态层,但模型消息数组不复用,
@@ -370,7 +383,7 @@ extension LingShuState {
         }
         // **确定性查证兜底(2026-06-27)**:prompt 只能兜住带时间词的(汇率),兜不住"没时间词但会变"的(codex vs claude→模型凭2024旧记忆答)。
         // 故:问答类先用便宜分类判"答案会不会随时间变",会变就**系统替它预取联网资料注入**——不靠模型自觉调 web_search(它判不准也不一定调)。
-        if !isMinimalVoiceMode, await questionNeedsFreshInfo(turn.prompt) {
+        if turn.acceptanceCheckpoint == nil, !isMinimalVoiceMode, await questionNeedsFreshInfo(turn.prompt) {
             let orKey = credentialStore.apiKey(forProvider: "openrouter") ?? ""
             let fresh = await Self.performWebSearch(turn.prompt, openRouterKey: orKey)
             guidance = "【系统已替你联网查到以下实时资料,**据此回答、别用旧记忆**;不够再自己调 web_search 补查】\n\(fresh)\n\n" + guidance
@@ -378,7 +391,15 @@ extension LingShuState {
         }
 
         var result: LingShuAgentRunResult
-        if turn.resumeBlocked, await session.isBlocked {
+        if let checkpoint = turn.acceptanceCheckpoint {
+            result = await verifyAndContinue(
+                session: session,
+                result: checkpoint,
+                userRequest: turn.originalPromptForVerification ?? turn.prompt,
+                taskRecordID: turn.taskRecordID,
+                trustReplyClaim: false
+            )
+        } else if turn.resumeBlocked, await session.isBlocked {
             let initial = await session.resume(turn.prompt)
             result = await verifyAndContinue(
                 session: session,
@@ -457,40 +478,4 @@ extension LingShuState {
         }
     }
 
-    /// 主会话回合收尾(正常完成 / 重连续跑后完成共用):填回气泡 + 落记录 + 记忆。
-    func finalizeMainTurn(result: LingShuAgentRunResult, bubbleID: UUID, recordID: String?, prompt: String, startedAt: Date) {
-        if renderHumanInputBlockIfNeeded(result: result, bubbleID: bubbleID, recordID: recordID, prompt: prompt, startedAt: startedAt) {
-            return
-        }
-        let rawText = Self.runResultText(result)
-        // 收尾与历史气泡共用同一个展示清洗器。除了完整结构化 JSON，模型在协议尾部
-        // 追加用时或中途截断时也能正确处理字符串里的转义引号，避免回复停在首个 \" 前。
-        let visibleRawText = LingShuVisibleModelText.clean(rawText)
-        let text = normalizeFinalVisibleInteractionText(visibleRawText, prompt: prompt, recordID: recordID)
-        // 回复末尾加总用时(极简语音模式不加——会被 TTS 念出来,且那是纯对话)。记录/记忆仍存干净 text。
-        let elapsed = Date().timeIntervalSince(startedAt)
-        let displayText = isMinimalVoiceMode ? text : "\(text)\n\n⏱ 总用时 \(Self.formatElapsed(elapsed))"
-        if let index = chatMessages.firstIndex(where: { $0.id == bubbleID }) {
-            // 流式收尾:早读过则补念尾句 + 打去重标记(防根视图把整段再念一遍=双声线);没早读过则 no-op。
-            concludeStreamedSpeech(for: bubbleID, streamedText: chatMessages[index].text)
-            structuredStreamVisibilityFilters.removeValue(forKey: bubbleID)
-            chatMessages[index].text = displayText
-            chatMessages[index].isLoading = false
-            chatMessages[index].taskRecordID = recordID
-            if case .blocked = result { chatMessages[index].choices = LingShuChoiceParsing.parse(text) }   // 卡住+枚举→壳渲染可点击
-        }
-        lingShuControlLog("agent: 回合完成 bubbleID=\(bubbleID.uuidString.prefix(8)) prompt「\(prompt.prefix(20))」→ reply「\(String(text.prefix(40)))」")
-        // 把最终答复也落进任务记录时间线(codex 式:执行流末尾就是答复;窗口内追问续跑读起来才连贯)。
-        appendTaskRecordMessage(recordID, actor: "灵枢", role: "答复", kind: .result, text: text)
-        appendTrace(kind: .result, actor: "Agent循环", title: "主会话答复", detail: String(text.prefix(60)))
-        // P2 真闭环:终态由完成闸定(防伪完成)——partial/waitingForUser/blocked 不再硬当 answered。
-        let record = taskExecutionRecords.first { $0.id == recordID }
-        let outcome = record?.taskOutcome
-        finishTaskRecord(recordID, status: Self.finishStatus(for: outcome, fallback: Self.defaultSuccessStatus(for: record)), summary: text)
-        // 主会话用 ask_user/ask_form 提了问、在等回答 → 记下这条记录:下条用户消息续到它(把答复接回主会话),
-        // 不被重新分诊成新任务(根治"答复被当新请求丢了原目标")。非 .blocked 则清掉。
-        if case .blocked = result { pendingMainQuestionRecordID = recordID } else { pendingMainQuestionRecordID = nil }
-        recordDeliverable(recordID: recordID, title: prompt, summary: text)   // 主线程任务也登记产出物
-        rememberMainThreadTurn(prompt: prompt, reply: text)
-    }
 }

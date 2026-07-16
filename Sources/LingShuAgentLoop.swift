@@ -162,6 +162,9 @@ actor LingShuAgentSession: LingShuAgentSessioning {
     private(set) var toolInvocations: [String] = []
     /// 卡住时挂起的阻塞工具调用 id(供 resume 回填答案)。
     private var pendingBlockToolCallID: String?
+    /// 模型最终输出或普通工具结果发出的通用人机交互。它没有悬空 tool_call，
+    /// 但同样代表会话暂停，恢复时应把人的结果作为 user 消息接回本会话。
+    private var pendingWorkflowHumanInteraction = false
     /// 用户中途下达的纠正(看到 agent 跑偏时干预):循环在**回合边界**采纳,立即据此调整方向。
     private var pendingCorrection: String?
     /// 子任务完成后回灌主线程的**简报**(信息同步,非完整上下文同步):在回合边界作为 system 提示注入。
@@ -183,6 +186,7 @@ actor LingShuAgentSession: LingShuAgentSessioning {
             messages: messages,
             isRunning: isRunning,
             pendingBlockToolCallID: pendingBlockToolCallID,
+            hasPendingHumanInteraction: pendingWorkflowHumanInteraction,
             hasPendingCorrection: pendingCorrection != nil,
             maxHistoryMessages: maxHistoryMessages,
             compactionBudget: historyCompactor?.budget   // 注入了压缩器→按其契约(条数/token)校验 I6;否则回退条数
@@ -239,7 +243,7 @@ actor LingShuAgentSession: LingShuAgentSessioning {
         self.messages = seeded
     }
 
-    var isBlocked: Bool { pendingBlockToolCallID != nil }
+    var isBlocked: Bool { pendingBlockToolCallID != nil || pendingWorkflowHumanInteraction }
 
     /// 设置/清除最终答复逐字流式接收口。只有主会话调它(把 delta 接进 UI 气泡);传 nil 即关闭流式。
     func setTextDeltaSink(_ sink: (@Sendable (String) async -> Void)?) {
@@ -259,6 +263,8 @@ actor LingShuAgentSession: LingShuAgentSessioning {
 
     /// 同上,**附件直接入脑**时把内联图片/PDF 的 data URL 挂到这条 user 消息上(走多模态)。
     func send(_ userText: String, imageDataURLs: [String]?) async -> LingShuAgentRunResult {
+        // 允许上层把通用交互答案通过 send 或 resume 接回；两条入口都必须清掉暂停标志。
+        pendingWorkflowHumanInteraction = false
         repairOrphanToolCalls()   // 续接前修齐上一回合飞行中被取消留下的孤儿 tool_call(打断恢复泄漏修复)→ 下面的不变量检查见到的是良构 history
         pendingCorrection = nil   // 新回合不带上一回合可能残留的纠正
         consumePendingBriefings() // 子任务简报先入上下文(在用户新输入之前)——主线程信息同步
@@ -455,13 +461,14 @@ actor LingShuAgentSession: LingShuAgentSessioning {
 
     /// 续接:把外部给的答案回填到卡住的阻塞工具调用上,继续跑循环。
     func resume(_ answer: String) async -> LingShuAgentRunResult {
-        guard let pending = pendingBlockToolCallID else {
-            return await send(answer)   // 没在卡 → 当普通输入
+        if let pending = pendingBlockToolCallID {
+            messages.append(.init(role: .tool, content: answer, toolCallID: pending))
+            pendingBlockToolCallID = nil
+            repairOrphanToolCalls()   // 填回阻塞答案后,修齐其余孤儿(若打断曾留下)→ runLoop 首个不变量检查良构
+            return recordTerminal(await runLoop())
         }
-        messages.append(.init(role: .tool, content: answer, toolCallID: pending))
-        pendingBlockToolCallID = nil
-        repairOrphanToolCalls()   // 填回阻塞答案后,修齐其余孤儿(若打断曾留下)→ runLoop 首个不变量检查良构
-        return recordTerminal(await runLoop())
+        pendingWorkflowHumanInteraction = false
+        return await send(answer)   // 通用交互答案作为 user 消息接回；没在卡时也按普通输入处理
     }
 
     /// 重连后续跑(断网恢复用):**不注入任何新消息**,直接接着跑循环——上下文停在中断前的良构状态,
@@ -551,6 +558,16 @@ actor LingShuAgentSession: LingShuAgentSessioning {
                 messages.append(.init(role: .assistant, content: text))
                 // 模型自认收尾,但用户刚下了纠正 → 不收尾,带着纠正继续(纠正跑偏的"假收尾")。
                 if pendingCorrection != nil { continue }
+                // 人机交互是流程控制事件，不是普通“失败/不通过”。任何角色只要在严格结构化
+                // 最终输出里声明 human_interaction，当前节点就暂停并释放执行槽；恢复时把人的
+                // 结果作为新输入接回同一会话。OAuth 仍走独立字段与授权卡，不经过这里。
+                if let request = LingShuStructuredModelOutput.parse(text)?.humanInteraction?.normalized {
+                    pendingWorkflowHumanInteraction = true
+                    lastExitReason = .blockedAwaitingInput
+                    let envelope = LingShuWorkflowControlEnvelope(event: .requiresHumanInteraction(request))
+                    await emitLoopTrace(.warning, actor: "Agent循环", title: "等待人机协作", detail: "\(request.kind.rawValue):\(String(request.prompt.prefix(100)))")
+                    return .blocked(question: envelope.encodedPrompt)
+                }
                 lastExitReason = .normalCompletion
                 await emitLoopTrace(.result, actor: "Agent循环", title: "模型收尾", detail: String(text.prefix(120)))
                 return .completed(text: text)
@@ -692,11 +709,15 @@ actor LingShuAgentSession: LingShuAgentSessioning {
                 )
                 let outcomes = await toolDispatcher.dispatch(calls, tools: tools)
                 var answeredIDs = Set<String>()
+                var workflowControl: LingShuWorkflowControlEnvelope?
                 for outcome in outcomes {
                     toolInvocations.append(outcome.name)
                     lastText = outcome.output
                     messages.append(.init(role: .tool, content: outcome.output, toolCallID: outcome.id))
                     answeredIDs.insert(outcome.id)
+                    if workflowControl == nil {
+                        workflowControl = LingShuWorkflowControlEnvelope.firstEmbedded(in: outcome.output)?.envelope
+                    }
                 }
                 // **取消恢复·孤儿根治(2026-06-22)**:飞行中取消(`lingshu_stop`)可能让调度器只返回部分结果——
                 // 给本回合**未拿到结果的 tool_call 当场补合成结果**,确保 assistant 声明的每个调用都有应答。
@@ -705,6 +726,16 @@ actor LingShuAgentSession: LingShuAgentSessioning {
                     messages.append(.init(role: .tool,
                         content: "（该工具调用被中断,未取得结果;补占位以保持消息结构良构。）",
                         toolCallID: call.id))
+                }
+                // 工具执行过程中也可能发现必须由人完成的步骤（扫码、登录、实体操作、选文件等）。
+                // 工具调用已经得到一个结构化“暂停”结果，因此消息序列保持闭合；恢复时以新 user
+                // 消息继续同一会话，不伪造失败，也不把工具名加入写死的阻塞名单。
+                if let workflowControl {
+                    pendingWorkflowHumanInteraction = true
+                    lastExitReason = .blockedAwaitingInput
+                    let prompt = workflowControl.humanInteraction?.prompt ?? "等待人机协作"
+                    await emitLoopTrace(.warning, actor: "Agent循环", title: "工具请求人机协作", detail: String(prompt.prefix(120)))
+                    return .blocked(question: workflowControl.encodedPrompt)
                 }
                 if let steer = pendingSteer {
                     messages.append(.init(role: .user, content: steer))

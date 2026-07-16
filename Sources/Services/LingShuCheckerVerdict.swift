@@ -6,6 +6,12 @@ import Foundation
 /// reads typed JSON. Legacy "pass/fail" prose is intentionally not accepted as a
 /// verdict, so review results cannot be routed by keyword matching.
 struct LingShuCheckerVerdict: Equatable, Sendable {
+    enum Outcome: String, Equatable, Sendable {
+        case passed
+        case failed
+        case needsHumanInteraction = "needs_human_interaction"
+    }
+
     struct Check: Equatable, Sendable {
         var name: String
         var passed: Bool
@@ -19,10 +25,23 @@ struct LingShuCheckerVerdict: Equatable, Sendable {
     var blockingIssues: [String]
     var evidence: [String]
     var needsUser: String?
+    var humanInteraction: LingShuHumanInteractionRequest?
+
+    /// `passed` is retained for backward compatibility with existing checker
+    /// payloads. The control plane uses this tri-state outcome so waiting for a
+    /// person is never interpreted as an ordinary rejection.
+    var outcome: Outcome {
+        if humanInteraction?.normalized != nil { return .needsHumanInteraction }
+        return passed ? .passed : .failed
+    }
 
     var renderedSummary: String {
         var lines: [String] = []
-        lines.append(passed ? "✅ 验收通过" : "⚠️ 验收未通过")
+        switch outcome {
+        case .passed: lines.append("✅ 验收通过")
+        case .failed: lines.append("⚠️ 验收未通过")
+        case .needsHumanInteraction: lines.append("⏸ 等待人机协作")
+        }
         if !summary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             lines.append(summary)
         }
@@ -42,6 +61,9 @@ struct LingShuCheckerVerdict: Equatable, Sendable {
         }
         if let needsUser, !needsUser.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             lines.append("需要用户: \(needsUser)")
+        }
+        if let interaction = humanInteraction?.normalized {
+            lines.append("等待人机协作: \(interaction.prompt)")
         }
         return lines.joined(separator: "\n")
     }
@@ -79,12 +101,16 @@ struct LingShuCheckerVerdict: Equatable, Sendable {
         if let needsUser, !needsUser.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             sections.append("**需要你确认**：\(Self.compact(needsUser, limit: 180))")
         }
+        if let interaction = humanInteraction?.normalized {
+            sections.append("**等待你完成**：\(Self.compact(interaction.prompt, limit: 180))")
+        }
         return sections.joined(separator: "\n\n")
     }
 
     static let outputContract = """
     只输出一个 JSON 对象,不要 markdown,不要代码围栏,不要额外解释。格式:
     {
+      "status": "passed | failed | needs_human_interaction",
       "passed": true,
       "confidence": 0.0,
       "summary": "一句话总结验收结论",
@@ -94,9 +120,11 @@ struct LingShuCheckerVerdict: Equatable, Sendable {
       ],
       "blockingIssues": ["未通过时列阻断问题;通过时为空数组"],
       "evidence": ["你实际核验过的文件、命令、输出或事实"],
-      "needsUser": null
+      "needsUser": null,
+      "human_interaction": null
     }
-    passed 只有在所有必要检查项都通过时才能为 true;任何阻断问题都必须让 passed=false。
+    正常验收时 status=passed/failed，并填写对应 passed 布尔值；passed 只有在所有必要检查项都通过时才能为 true，任何阻断问题都必须让 status=failed、passed=false。
+    如果验收过程中发现必须由人参与扫码、外部登录、实体操作、选文件、确认或完成其它交互，不要把它当通过或不通过：填 status=needs_human_interaction、human_interaction={kind,title,prompt,payload,options,completion_probe,resume_token,source}，passed 可填 null，blockingIssues 可为空。任何 planner、worker、checker、工具或外部监视器都遵循同一人机交互协议。OAuth/凭据授权仍由主流程的 OAuth 字段处理，不要在这里伪造授权卡。
     """
 
     static func parse(_ raw: String) -> LingShuCheckerVerdict? {
@@ -104,8 +132,24 @@ struct LingShuCheckerVerdict: Equatable, Sendable {
             .trimmingCharacters(in: .whitespacesAndNewlines)
         guard let json = firstJSONObject(in: stripped),
               let data = json.data(using: .utf8),
-              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let passed = object["passed"] as? Bool else {
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return nil
+        }
+
+        let humanInteraction = LingShuHumanInteractionRequest.parse(object["humanInteraction"] ?? object["human_interaction"])
+        let status = (string(object["status"]) ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+            .replacingOccurrences(of: "-", with: "_")
+        let passed: Bool
+        if let explicit = object["passed"] as? Bool {
+            passed = explicit
+        } else if ["passed", "pass", "ok"].contains(status) {
+            passed = true
+        } else if ["failed", "fail", "rejected", "needs_human_interaction", "human_interaction", "waiting_for_human"].contains(status)
+                    || humanInteraction != nil {
+            passed = false
+        } else {
             return nil
         }
 
@@ -116,7 +160,8 @@ struct LingShuCheckerVerdict: Equatable, Sendable {
             checks: checks(object["checks"]),
             blockingIssues: stringArray(object["blockingIssues"] ?? object["blocking_issues"]),
             evidence: stringArray(object["evidence"]),
-            needsUser: nullableString(object["needsUser"] ?? object["needs_user"])
+            needsUser: nullableString(object["needsUser"] ?? object["needs_user"]),
+            humanInteraction: humanInteraction
         )
     }
 

@@ -30,6 +30,9 @@ struct LingShuHumanInputEnvelope: Codable, Equatable, Sendable {
         while let hit = firstEmbedded(in: output) {
             output.replaceSubrange(hit.range, with: userFacingText(for: hit.envelope))
         }
+        while let hit = LingShuWorkflowControlEnvelope.firstEmbedded(in: output) {
+            output.replaceSubrange(hit.range, with: hit.envelope.userFacingText)
+        }
         return output
     }
 
@@ -92,4 +95,9 @@ struct LingShuHumanInputEnvelope: Codable, Equatable, Sendable {
 struct LingShuPendingHumanInputContext {
     var recordID: String?
     var originalPrompt: String
+}
+
+struct LingShuPendingHumanInteractionContext {
+    var request: LingShuHumanInteractionRequest
+    var inputContext: LingShuPendingHumanInputContext
 }

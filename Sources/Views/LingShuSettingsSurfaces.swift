@@ -9,10 +9,17 @@ struct LingShuOperationsSurface: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
-                SectionHeader(icon: "building.columns", title: "能力运维", subtitle: "能力节点实时状态 · 运行策略 · 会话池 · 事件流")
+                SectionHeader(
+                    icon: "building.columns",
+                    title: state.loc("能力运维", "Operations"),
+                    subtitle: state.loc("能力节点实时状态 · 运行策略 · 会话池 · 事件流", "Live capabilities · Policies · Sessions · Events")
+                )
 
                 // 能力节点矩阵：每个节点 = 角色名（字面）+ 实时运行态（服务状态）+ 负载条。
-                Text("能力节点 · \(state.activeWorkerCount) 执行 / \(state.activeSupervisorCount) 监控 / \(state.agents.count) 注册")
+                Text(state.loc(
+                    "能力节点 · \(state.activeWorkerCount) 执行 / \(state.activeSupervisorCount) 监控 / \(state.agents.count) 注册",
+                    "Capabilities · \(state.activeWorkerCount) executing / \(state.activeSupervisorCount) monitoring / \(state.agents.count) registered"
+                ))
                     .font(.system(size: 11.5, weight: .bold, design: .monospaced))
                     .foregroundStyle(Color.lingFg.opacity(0.5))
                 LazyVGrid(columns: gridColumns, spacing: 12) {
@@ -28,30 +35,30 @@ struct LingShuOperationsSurface: View {
                 }
 
                 // 运行策略：每条策略的开关真实状态。
-                Text("运行策略")
+                Text(state.loc("运行策略", "Runtime Policies"))
                     .font(.system(size: 11.5, weight: .bold, design: .monospaced))
                     .foregroundStyle(Color.lingFg.opacity(0.5))
                 LazyVGrid(columns: gridColumns, spacing: 12) {
-                    policyCell("人工确认", on: state.requireHumanApproval, onText: "高风险拦截", offText: "已放行")
-                    policyCell("本地审计", on: state.enableLocalAudit, onText: "记录在册", offText: "未记录")
-                    policyCell("语音播报", on: state.voiceOutputEnabled, onText: "已开启", offText: "静默")
-                    policyCell("流式多轮", on: state.localStreamingDialogueEnabled, onText: "流式", offText: "整段")
+                    policyCell(state.loc("人工确认", "Human approval"), on: state.requireHumanApproval, onText: state.loc("高风险拦截", "High-risk blocked"), offText: state.loc("已放行", "Allowed"))
+                    policyCell(state.loc("本地审计", "Local audit"), on: state.enableLocalAudit, onText: state.loc("记录在册", "Recorded"), offText: state.loc("未记录", "Not recorded"))
+                    policyCell(state.loc("语音播报", "Voice output"), on: state.voiceOutputEnabled, onText: state.loc("已开启", "On"), offText: state.loc("静默", "Silent"))
+                    policyCell(state.loc("流式多轮", "Streaming"), on: state.localStreamingDialogueEnabled, onText: state.loc("流式", "Streaming"), offText: state.loc("整段", "Buffered"))
                     LingShuDualLayerCell(
-                        label: "会话池",
+                        label: state.loc("会话池", "Session pool"),
                         value: state.remoteSessionStatus,
-                        stateText: state.remoteSessionPool.stats().running > 0 ? "运行中" : "空闲",
+                        stateText: state.remoteSessionPool.stats().running > 0 ? state.loc("运行中", "Running") : state.loc("空闲", "Idle"),
                         stateColor: state.remoteSessionPool.stats().running > 0 ? .lingHolo : Color.lingFg.opacity(0.45)
                     )
                     LingShuDualLayerCell(
-                        label: "主通道",
+                        label: state.loc("主通道", "Brain channel"),
                         value: state.modelProvider,
-                        stateText: state.isModelConnected ? "已接入" : "未接入",
+                        stateText: state.isModelConnected ? state.loc("已接入", "Connected") : state.loc("未接入", "Disconnected"),
                         stateColor: state.isModelConnected ? .lingHolo : .orange
                     )
                 }
 
                 // 事件流：底层服务事件，本身即第二层状态信息。
-                Text("事件流 · \(state.eventLog.count) 条")
+                Text(state.loc("事件流 · \(state.eventLog.count) 条", "Event stream · \(state.eventLog.count) entries"))
                     .font(.system(size: 11.5, weight: .bold, design: .monospaced))
                     .foregroundStyle(Color.lingFg.opacity(0.5))
                 VStack(alignment: .leading, spacing: 6) {
@@ -77,16 +84,16 @@ struct LingShuOperationsSurface: View {
         LingShuDualLayerCell(
             label: label,
             value: on ? onText : offText,
-            stateText: on ? "启用" : "关闭",
+            stateText: on ? state.loc("启用", "Enabled") : state.loc("关闭", "Off"),
             stateColor: on ? .lingHolo : Color.lingFg.opacity(0.45)
         )
     }
 
     private func agentStateText(_ s: StepState) -> String {
         switch s {
-        case .waiting: "待命"
-        case .running: "执行中"
-        case .done: "完成"
+        case .waiting: state.loc("待命", "Waiting")
+        case .running: state.loc("执行中", "Running")
+        case .done: state.loc("完成", "Done")
         }
     }
 
@@ -118,6 +125,14 @@ struct LingShuModelGatewaySurface: View {
             case .hearing: "ear"
             }
         }
+        var englishName: String {
+            switch self {
+            case .brain: "Brain"
+            case .voice: "Voice"
+            case .vision: "Vision"
+            case .hearing: "Hearing"
+            }
+        }
     }
     enum SheetRoute: Identifiable {
         case add                                                                  // 中枢新增(选供应商)
@@ -135,7 +150,11 @@ struct LingShuModelGatewaySurface: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
-                SectionHeader(icon: "antenna.radiowaves.left.and.right", title: "模型通道", subtitle: "中枢/眼/耳/口各能力通道在此配置 + 校验;只有校验通过的才会被各模态和子线程切换用")
+                SectionHeader(
+                    icon: "antenna.radiowaves.left.and.right",
+                    title: state.loc("模型通道", "Model Channels"),
+                    subtitle: state.loc("在此配置并校验中枢、视觉、听觉与语音通道", "Configure and verify brain, vision, hearing, and voice channels")
+                )
 
                 // 配置加密导入/导出(换机/分享试用/开源安全):口令加密整包导出,一键导入即用。
                 LingShuModelConfigPortabilityBar(state: state)
@@ -149,7 +168,7 @@ struct LingShuModelGatewaySurface: View {
                         Button { channelTab = item } label: {
                             HStack(spacing: 6) {
                                 Image(systemName: item.icon).font(.system(size: 11, weight: .semibold))
-                                Text(item.rawValue).font(.system(size: 12, weight: .semibold))
+                                Text(state.loc(item.rawValue, item.englishName)).font(.system(size: 12, weight: .semibold))
                             }
                             .foregroundStyle(channelTab == item ? Color.lingVoid : Color.lingFg.opacity(0.7))
                             .padding(.horizontal, 12).padding(.vertical, 7)
@@ -188,7 +207,7 @@ struct LingShuModelGatewaySurface: View {
     @ViewBuilder private var addControl: some View {
         switch channelTab {
         case .brain:
-            accentButton("新增模型") { sheet = .add }
+            accentButton(state.loc("新增模型", "Add Model")) { sheet = .add }
         case .voice:
             let pending = state.unconfiguredTTSDescriptors()
             if pending.isEmpty {
@@ -199,16 +218,16 @@ struct LingShuModelGatewaySurface: View {
                         Button(d.displayName) { sheet = .channel(key: LingShuState.ttsChannelKey(d.id), title: d.displayName, endpoint: d.defaultEndpoint, model: "") }
                     }
                 } label: {
-                    Label("新增声音", systemImage: "plus.circle.fill").font(.system(size: 12, weight: .semibold))
+                    Label(state.loc("新增声音", "Add Voice"), systemImage: "plus.circle.fill").font(.system(size: 12, weight: .semibold))
                         .foregroundStyle(Color.lingVoid).padding(.horizontal, 12).padding(.vertical, 7)
                         .background(Color.lingHolo, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
                 }
                 .menuStyle(.borderlessButton).fixedSize()
             }
         case .vision:
-            accentButton("新增视觉") { sheet = .channel(key: LingShuState.visionCustomKey, title: "自定义视觉网关", endpoint: "", model: "") }
+            accentButton(state.loc("新增视觉", "Add Vision")) { sheet = .channel(key: LingShuState.visionCustomKey, title: state.loc("自定义视觉网关", "Custom Vision Gateway"), endpoint: "", model: "") }
         case .hearing:
-            accentButton("新增识别") { sheet = .channel(key: LingShuState.asrCustomKey, title: "自定义语音识别", endpoint: "", model: "") }
+            accentButton(state.loc("新增识别", "Add Recognition")) { sheet = .channel(key: LingShuState.asrCustomKey, title: state.loc("自定义语音识别", "Custom Speech Recognition"), endpoint: "", model: "") }
         }
     }
 
@@ -226,10 +245,10 @@ struct LingShuModelGatewaySurface: View {
         switch channelTab {
         case .voice:
             compactLocalToggle(isOn: $state.ttsLocalModeEnabled,
-                               help: "本地模式 — 开:强制本机系统语音。关:优先数据网关情绪语音,不可用时仍兜底本机。")
+                               help: state.loc("本地模式 — 开:强制本机系统语音。关:优先数据网关情绪语音,不可用时仍兜底本机。", "Local mode forces macOS speech. When off, the configured remote voice is preferred with a local fallback."))
         case .hearing:
             compactLocalToggle(isOn: $state.asrLocalModeEnabled,
-                               help: "本地模式 — 开:强制本机识别(实时麦克风兜底永远可用)。关:偏好数据网关云端 ASR。当前实时麦克风以本机识别为主。")
+                               help: state.loc("本地模式 — 开:强制本机识别。关:优先云端 ASR，并保留本机兜底。", "Local mode forces on-device recognition. When off, cloud ASR is preferred with a local fallback."))
         case .brain, .vision:
             EmptyView()
         }
@@ -237,7 +256,7 @@ struct LingShuModelGatewaySurface: View {
 
     private func compactLocalToggle(isOn: Binding<Bool>, help: String) -> some View {
         Toggle(isOn: isOn) {
-            Text("本地模式").font(.system(size: 12, weight: .semibold)).foregroundStyle(Color.lingFg.opacity(0.7))
+            Text(state.loc("本地模式", "Local mode")).font(.system(size: 12, weight: .semibold)).foregroundStyle(Color.lingFg.opacity(0.7))
         }
         .toggleStyle(.switch)
         .controlSize(.mini)
@@ -250,7 +269,10 @@ struct LingShuModelGatewaySurface: View {
         actualBrainStatus
         let providers = state.configuredTextProviders()
         if providers.isEmpty {
-            Text("还没有接入任何文本模型。点「新增模型」选一个供应商,配置 endpoint / 模型 / 密钥。")
+            Text(state.loc(
+                "还没有接入任何文本模型。点「新增模型」选择供应商并配置通道。",
+                "No text model is configured. Choose Add Model to configure a provider."
+            ))
                 .font(.system(size: 12, weight: .medium)).foregroundStyle(Color.lingFg.opacity(0.5))
                 .frame(maxWidth: .infinity, minHeight: 50, alignment: .leading)
         } else {
@@ -284,7 +306,7 @@ struct LingShuModelGatewaySurface: View {
     private func brainModelPicker(_ options: [String]) -> some View {
         HStack(spacing: 8) {
             Image(systemName: "cpu").font(.system(size: 11, weight: .bold)).foregroundStyle(Color.lingHolo.opacity(0.85))
-            Text("模型").font(.system(size: 11.5, weight: .semibold)).foregroundStyle(Color.lingFg.opacity(0.6))
+            Text(state.loc("模型", "Model")).font(.system(size: 11.5, weight: .semibold)).foregroundStyle(Color.lingFg.opacity(0.6))
             Picker("", selection: Binding(
                 get: { state.modelName },
                 set: { state.selectActiveBrainModel($0) }
@@ -309,12 +331,22 @@ struct LingShuModelGatewaySurface: View {
                 .font(.system(size: 14, weight: .bold))
                 .foregroundStyle(vision ? Color.lingHolo : Color.lingFg.opacity(0.55))
             VStack(alignment: .leading, spacing: 3) {
-                Text("附件入脑(自动按脑能力)").font(.system(size: 12.5, weight: .bold)).foregroundStyle(Color.lingFg)
+                Text(state.loc("附件入脑（自动按脑能力）", "Attachments (automatic by model capability)"))
+                    .font(.system(size: 12.5, weight: .bold)).foregroundStyle(Color.lingFg)
                 Text(vision
-                     ? "当前脑「\(state.modelName)」将先尝试 OpenAI 兼容多模态直发；若服务端拒绝，会自动标记并降级。"
+                     ? state.loc(
+                        "当前脑「\(state.modelName)」会先尝试原生多模态；若服务端拒绝，将记忆能力状态并自动降级。",
+                        "\(state.modelName) will try native multimodal input first, remember a rejection, and fall back automatically."
+                     )
                      : (downgraded
-                        ? "当前脑「\(state.modelName)」已确认不支持原生多模态 → 附件走图片解析降级。"
-                        : "当前脑「\(state.modelName)」不走原生多模态 → 附件走图片解析降级。"))
+                        ? state.loc(
+                            "当前脑「\(state.modelName)」已确认不支持原生多模态，附件走图片解析降级。",
+                            "\(state.modelName) is marked as not supporting native multimodal input; attachments use image parsing."
+                        )
+                        : state.loc(
+                            "当前脑「\(state.modelName)」不走原生多模态，附件使用图片解析。",
+                            "\(state.modelName) is using image parsing for attachments."
+                        )))
                     .font(.system(size: 10.5, weight: .medium)).foregroundStyle(Color.lingFg.opacity(0.5))
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -337,15 +369,22 @@ struct LingShuModelGatewaySurface: View {
                 .font(.system(size: 14, weight: .bold))
                 .foregroundStyle(actual.isEmpty ? Color.lingFg.opacity(0.45) : (matches ? Color.green.opacity(0.85) : Color.orange))
             VStack(alignment: .leading, spacing: 3) {
-                Text("实际在用(最近一次真实请求)").font(.system(size: 12.5, weight: .bold)).foregroundStyle(Color.lingFg)
+                Text(state.loc("实际在用（最近一次真实请求）", "Actually Used (latest real request)"))
+                    .font(.system(size: 12.5, weight: .bold)).foregroundStyle(Color.lingFg)
                 if actual.isEmpty {
-                    Text("还没发过真实请求——发一条消息后,这里显示**此刻真在干活的脑**(地面真相,不是选中徽标)。")
+                    Text(state.loc(
+                        "还没有真实请求。发送一条消息后，这里会显示实际工作的主脑。",
+                        "No real request has been sent. After one message, this shows the brain that actually handled it."
+                    ))
                         .font(.system(size: 10.5, weight: .medium)).foregroundStyle(Color.lingFg.opacity(0.5)).fixedSize(horizontal: false, vertical: true)
                 } else if matches {
-                    Text("\(actual)" + (state.actualBrainAt.map { "(\(fmt($0)))" } ?? "") + " —— 与选中一致 ✓")
+                    Text("\(actual)" + (state.actualBrainAt.map { " (\(fmt($0)))" } ?? "") + state.loc(" — 与选中一致 ✓", " — matches selection ✓"))
                         .font(.system(size: 10.5, weight: .medium)).foregroundStyle(Color.lingFg.opacity(0.5))
                 } else {
-                    Text("⚠️ 实际:\(actual)" + (state.actualBrainAt.map { "(\(fmt($0)))" } ?? "") + " —— 与选中「\(selected)」**不一致**!可能选中后还没发请求,或会话未重建。再发一条消息以对齐。")
+                    Text(state.loc(
+                        "⚠️ 实际：\(actual)" + (state.actualBrainAt.map { "（\(fmt($0))）" } ?? "") + "，与选中「\(selected)」不一致。发送一条消息以重建会话。",
+                        "⚠️ Actual: \(actual)" + (state.actualBrainAt.map { " (\(fmt($0)))" } ?? "") + ", which differs from \(selected). Send a message to rebuild the session."
+                    ))
                         .font(.system(size: 10.5, weight: .medium)).foregroundStyle(Color.orange.opacity(0.95)).fixedSize(horizontal: false, vertical: true)
                 }
             }
@@ -575,7 +614,7 @@ struct LingShuChannelRow: View {
     let onValidate: () async -> Void
     let onUse: (() -> Void)?
     let onEdit: (() -> Void)?
-    var editLabel: String = "修改"
+    var editLabel: String = ""
     // 账号余额口子(按需,默认关;只有支持余额查询的厂商才传)。
     var balance: LingShuChannelBalance.Result? = nil
     var balanceSupported: Bool = false
@@ -594,10 +633,10 @@ struct LingShuChannelRow: View {
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 7) {
                     Text(title).font(.system(size: 13.5, weight: .bold)).foregroundStyle(Color.lingFg)
-                    if isActive { pill("当前 · 在线", Color.lingHolo) }
+                    if isActive { pill(state.loc("当前 · 在线", "Active · Online"), Color.lingHolo) }
                     statusBadge
-                    if let b = balance { pill("余额 " + b.display, b.available ? Color.lingHolo : .orange) }
-                    else if balanceFetching { pill("查余额…", .orange) }
+                    if let b = balance { pill(state.loc("余额 ", "Balance ") + b.display, b.available ? Color.lingHolo : .orange) }
+                    else if balanceFetching { pill(state.loc("查余额…", "Checking balance…"), .orange) }
                 }
                 Text(subtitle).font(.system(size: 11, weight: .medium, design: .monospaced))
                     .foregroundStyle(Color.lingFg.opacity(0.5)).lineLimit(1)
@@ -606,11 +645,11 @@ struct LingShuChannelRow: View {
             Spacer()
 
             if balanceSupported, let onBalance {
-                chip(balanceFetching ? "查询中…" : "余额", disabled: balanceFetching) { Task { await onBalance() } }
+                chip(balanceFetching ? state.loc("查询中…", "Checking…") : state.loc("余额", "Balance"), disabled: balanceFetching) { Task { await onBalance() } }
             }
-            chip(validating ? "校验中…" : "校验", disabled: validating) { Task { await onValidate() } }
-            if let onUse { chip("使用") { onUse() } }
-            if let onEdit { chip(editLabel) { onEdit() } }
+            chip(validating ? state.loc("校验中…", "Validating…") : state.loc("校验", "Validate"), disabled: validating) { Task { await onValidate() } }
+            if let onUse { chip(state.loc("使用", "Use")) { onUse() } }
+            if let onEdit { chip(editLabel.isEmpty ? state.loc("修改", "Edit") : editLabel) { onEdit() } }
         }
         .padding(12)
         .background(isActive ? Color.lingHolo.opacity(0.10) : Color.lingFg.opacity(0.05), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
@@ -622,9 +661,9 @@ struct LingShuChannelRow: View {
 
     @ViewBuilder private var statusBadge: some View {
         let (text, color): (String, Color) = {
-            if validating { return ("校验中…", .orange) }
-            guard let v = validation else { return ("未校验", Color.lingFg.opacity(0.4)) }
-            return v.ok ? ("✅ 校验通过", .green) : ("❌ " + String(v.detail.prefix(12)), .red)
+            if validating { return (state.loc("校验中…", "Validating…"), .orange) }
+            guard let v = validation else { return (state.loc("未校验", "Not validated"), Color.lingFg.opacity(0.4)) }
+            return v.ok ? (state.loc("✅ 校验通过", "✅ Valid"), .green) : ("❌ " + String(v.detail.prefix(12)), .red)
         }()
         pill(text, color)
     }
@@ -680,14 +719,15 @@ struct LingShuModelChannelSheet: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack {
-                Text(isAdd ? "新增模型" : "修改 · \(provider)").font(.system(size: 15, weight: .bold)).foregroundStyle(Color.lingFg)
+                Text(isAdd ? state.loc("新增模型", "Add Model") : state.loc("修改 · \(provider)", "Edit · \(provider)"))
+                    .font(.system(size: 15, weight: .bold)).foregroundStyle(Color.lingFg)
                 Spacer()
                 Button { dismiss() } label: { Image(systemName: "xmark.circle.fill").font(.system(size: 17)).foregroundStyle(Color.lingFg.opacity(0.5)) }.buttonStyle(.plain)
             }
 
             if isAdd {
-                Picker("供应商", selection: $provider) {
-                    Text("选择供应商").tag("")
+                Picker(state.loc("供应商", "Provider"), selection: $provider) {
+                    Text(state.loc("选择供应商", "Choose provider")).tag("")
                     ForEach(ModelProviderPreset.apiCatalog) { Text($0.displayName).tag($0.name) }
                 }
                 .pickerStyle(.menu)
@@ -697,15 +737,15 @@ struct LingShuModelChannelSheet: View {
             }
 
             if !provider.isEmpty {
-                fieldLabel("接口地址")
+                fieldLabel(state.loc("接口地址", "Endpoint"))
                 TextField("https://api.deepseek.com", text: $endpoint).textFieldStyle(.roundedBorder)
-                fieldLabel("模型名称")
+                fieldLabel(state.loc("模型名称", "Model name"))
                 if let p = preset, !p.defaultModels.isEmpty {
                     Picker("", selection: $model) { ForEach(p.defaultModels, id: \.self) { Text($0).tag($0) } }.labelsHidden().pickerStyle(.menu)
                 }
                 TextField("deepseek-chat / gpt-5.5 / ...", text: $model).textFieldStyle(.roundedBorder)
-                fieldLabel("访问密钥")
-                SecureField(isAdd ? (preset?.authMode ?? "API Key") : "已配置(留空保持不变)", text: $key).textFieldStyle(.roundedBorder)
+                fieldLabel(state.loc("访问密钥", "Access key"))
+                SecureField(isAdd ? (preset?.authMode ?? "API Key") : state.loc("已配置（留空保持不变）", "Configured (leave blank to keep)"), text: $key).textFieldStyle(.roundedBorder)
                 if let note = preset?.note {
                     Text(note).font(.system(size: 11, weight: .medium)).foregroundStyle(Color.lingFg.opacity(0.45)).fixedSize(horizontal: false, vertical: true)
                 }
@@ -714,8 +754,8 @@ struct LingShuModelChannelSheet: View {
             Spacer(minLength: 0)
             HStack {
                 Spacer()
-                Button("取消") { dismiss() }.buttonStyle(.bordered)
-                Button("保存并使用") { save() }.buttonStyle(.borderedProminent).disabled(provider.isEmpty)
+                Button(state.loc("取消", "Cancel")) { dismiss() }.buttonStyle(.bordered)
+                Button(state.loc("保存并使用", "Save and Use")) { save() }.buttonStyle(.borderedProminent).disabled(provider.isEmpty)
             }
         }
         .padding(20)
@@ -761,23 +801,24 @@ struct LingShuChannelConfigSheet: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack {
-                Text("配置 · \(title)").font(.system(size: 15, weight: .bold)).foregroundStyle(Color.lingFg)
+                Text(state.loc("配置 · \(title)", "Configure · \(title)"))
+                    .font(.system(size: 15, weight: .bold)).foregroundStyle(Color.lingFg)
                 Spacer()
                 Button { dismiss() } label: { Image(systemName: "xmark.circle.fill").font(.system(size: 17)).foregroundStyle(Color.lingFg.opacity(0.5)) }.buttonStyle(.plain)
             }
-            field("显示名(留空用默认)")
+            field(state.loc("显示名（留空用默认）", "Display name (blank uses default)"))
             TextField(title, text: $name).textFieldStyle(.roundedBorder)
-            field("接口地址")
+            field(state.loc("接口地址", "Endpoint"))
             TextField("https://…", text: $endpoint).textFieldStyle(.roundedBorder)
-            field("模型 / 音色(可选)")
+            field(state.loc("模型 / 音色（可选）", "Model / Voice (optional)"))
             TextField("如 deepseek-chat / qwen2.5-vl / male_steady", text: $model).textFieldStyle(.roundedBorder)
-            field("访问密钥(不返显,留空保持不变)")
+            field(state.loc("访问密钥（不返显，留空保持不变）", "Access key (hidden; blank keeps current)"))
             SecureField("API Key / Token", text: $secret).textFieldStyle(.roundedBorder)
             Spacer(minLength: 0)
             HStack {
                 Spacer()
-                Button("取消") { dismiss() }.buttonStyle(.bordered)
-                Button("保存") {
+                Button(state.loc("取消", "Cancel")) { dismiss() }.buttonStyle(.bordered)
+                Button(state.loc("保存", "Save")) {
                     state.saveChannelConfig(channelKey, name: name, endpoint: endpoint, model: model, secret: secret)
                     dismiss()
                 }.buttonStyle(.borderedProminent)
