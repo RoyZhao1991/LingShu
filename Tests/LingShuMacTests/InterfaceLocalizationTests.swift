@@ -10,8 +10,12 @@ final class InterfaceLocalizationTests: XCTestCase {
         XCTAssertEqual(state.localizedRuntimeText("收音待机", fallback: "Audio input idle"), "Audio input idle")
         XCTAssertEqual(state.localizedRuntimeText("视觉权限未授权", fallback: "Vision unavailable"), "Camera access not granted")
         XCTAssertEqual(state.localizedRuntimeText("本地解析 12", fallback: "Perception ready"), "Local analysis 12")
+        XCTAssertEqual(state.localizedRuntimeText("模型通道已连接"), "Model channel connected")
+        XCTAssertEqual(state.localizedRuntimeText("本地通道可用"), "Local model channel available")
+        XCTAssertEqual(state.localizedRuntimeText("模型通道未连接"), "Model channel disconnected")
         XCTAssertEqual(state.localizedRuntimeText("尚未登记的新状态", fallback: "Status unavailable"), "Status unavailable")
         XCTAssertFalse(containsHan(state.localizedRuntimeText("尚未登记的新状态", fallback: "Status unavailable")))
+        XCTAssertFalse(containsHan(state.modelConnectionState))
     }
 
     func testEnglishChatStoreStartsWithLocalizedGreeting() {

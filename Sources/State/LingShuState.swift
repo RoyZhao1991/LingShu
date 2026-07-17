@@ -876,7 +876,7 @@ final class LingShuState: ObservableObject {
     }
 
     var modelConnectionState: String {
-        modelGatewaySnapshot.statusText
+        localizedRuntimeText(modelGatewaySnapshot.statusText, fallback: "Model channel unavailable")
     }
 
     var mainRoutingPermissionBoundary: String {

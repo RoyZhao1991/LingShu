@@ -160,6 +160,9 @@ extension LingShuState {
             "理解需求": "Understanding request",
             "等待模型配置": "Waiting for model setup",
             "模型服务异常": "Model service error",
+            "模型通道已连接": "Model channel connected",
+            "本地通道可用": "Local model channel available",
+            "模型通道未连接": "Model channel disconnected",
             "局域网未发现设备。若设备没出现,确认已允许灵枢访问「本地网络」(系统设置 → 隐私与安全 → 本地网络)。": "No devices were found on the local network. Make sure Nous has Local Network access in System Settings > Privacy & Security > Local Network.",
             "大脑未蒸馏出待办，按规则兜底": "The brain returned no to-dos; rule-based distillation was used.",
             "我在。能力池已注册，随时待命，等你开口。": "I am ready. Capabilities are registered and waiting for your request."
