@@ -88,6 +88,10 @@ struct LingShuRootView: View {
                 state.resolveShellApproval(decision)
             }
         }
+        .sheet(item: $state.pendingHardHumanInteraction) { pending in
+            LingShuHardHumanInteractionView(state: state, pending: pending)
+                .interactiveDismissDisabled()
+        }
         .sheet(item: $state.brainBenchmarkResult) { result in   // 脑力测试跑完 → 弹窗显示综合分(在哪个界面都弹)
             LingShuBrainBenchmarkResultView(result: result, history: state.brainBenchmarkHistory) { state.brainBenchmarkResult = nil }
                 .frame(minWidth: 560, minHeight: 480)
@@ -277,6 +281,15 @@ struct LingShuStableBackground: View {
     }
 }
 
+struct LingShuTopBarLayoutPolicy: Equatable {
+    let dense: Bool
+    let compact: Bool
+
+    static func resolve(for width: CGFloat) -> LingShuTopBarLayoutPolicy {
+        .init(dense: width < 1500, compact: width < 1300)
+    }
+}
+
 struct LingShuStableTopBar: View {
     @ObservedObject var state: LingShuState
     @ObservedObject var voice: VoiceIOManager
@@ -287,8 +300,11 @@ struct LingShuStableTopBar: View {
     var body: some View {
         // 顶栏随窗口宽度自适应：空间不足时先隐藏状态类文字，再紧到只剩导航图标——
         // 不再被压缩换行。
-        let dense = headerWidth < 1300      // 隐藏感知值 / STATE·AUTO·TRUST / 副标题
-        let compact = headerWidth < 1080    // 进一步：导航也只剩图标
+        // macOS screenshots may be 2x physical pixels while SwiftUI lays out in logical points.
+        // Switch before the perception strip is compressed; supported widths must never wrap labels.
+        let layout = LingShuTopBarLayoutPolicy.resolve(for: headerWidth)
+        let dense = layout.dense      // 隐藏感知值和品牌副标题
+        let compact = layout.compact  // 最窄支持宽度：导航只剩图标
         let digitalHuman = state.digitalHumanSnapshot(voice: voice, vision: vision, perceptionGateway: perceptionGateway)
         HStack(spacing: 16) {
             HStack(spacing: 11) {
@@ -299,6 +315,8 @@ struct LingShuStableTopBar: View {
                     Text(state.appName)
                         .font(.system(size: 18, weight: .semibold))
                         .foregroundStyle(Color.lingFg)
+                        .lineLimit(1)
+                        .fixedSize(horizontal: true, vertical: false)
                     if !dense {
                         Text("NOUS · GENERAL AGENT HUB")
                             .font(.system(size: 8.5, weight: .bold, design: .monospaced))
@@ -316,6 +334,7 @@ struct LingShuStableTopBar: View {
                 perceptionGateway: perceptionGateway,
                 compact: dense
             )
+            .layoutPriority(2)
 
             Spacer()
 

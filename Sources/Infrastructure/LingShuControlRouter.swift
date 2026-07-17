@@ -47,7 +47,7 @@ final class LingShuControlRouter {
             return reply(id: id, result: [:])
         case "tools/list":
             // 控制/测试工具 + **灵枢具身工具(超越点:对外暴露身体给别的 agent 反向调用)**。
-            return reply(id: id, result: ["tools": Self.toolManifest + LingShuEmbodimentManifest.descriptors(from: embodimentTools())])
+            return reply(id: id, result: ["tools": Self.toolManifest + Self.externalSessionToolManifest + LingShuEmbodimentManifest.descriptors(from: embodimentTools())])
         case "tools/call":
             let name = params["name"] as? String ?? ""
             let arguments = params["arguments"] as? [String: Any] ?? [:]
@@ -432,6 +432,8 @@ final class LingShuControlRouter {
         case "lingshu_get_chat":
             let limit = (arguments["limit"] as? Int) ?? 20
             return (jsonText(["messages": chatPayload(limit: limit)]), false)
+        case "lingshu_submit_human_interaction":
+            return submitExternalHumanInteraction(arguments)
         case "lingshu_set_self_evolution":   // P6 自我进化总开关(默认关,高风险)。args: enabled(bool)
             guard let enabled = arguments["enabled"] as? Bool else {
                 return ("缺少/非法参数 enabled(应为 true 或 false)", true)

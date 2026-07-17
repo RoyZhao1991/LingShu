@@ -117,11 +117,19 @@ extension LingShuState {
         logEvent(on ? "已开启开发阶段全权(系统授权门直接放行)" : "已关闭开发阶段全权(恢复人工授权)")
     }
 
+    /// 输入坞、设置页和授权弹窗统一走这一档；切回沙箱会立即撤销会话级 shell 预授权。
+    func setExecutionPermissionMode(_ mode: LingShuExecutionPermissionMode) {
+        guard executionPermissionMode != mode || sessionShellAlwaysAllowed != (mode == .fullAccess) else { return }
+        executionPermissionMode = mode
+        sessionShellAlwaysAllowed = mode == .fullAccess
+        logEvent(mode == .fullAccess ? "执行权限切换为完整权限" : "执行权限切换为沙箱权限")
+    }
+
     /// 用户在授权弹窗上点选：清挂起、按需置「会话始终允许」、回传决定恢复协程。
     func resolveShellApproval(_ decision: LingShuShellApprovalDecision) {
         guard let pending = pendingShellApproval else { return }
         pendingShellApproval = nil
-        if decision == .allowAlways { sessionShellAlwaysAllowed = true }
+        if decision == .allowAlways { setExecutionPermissionMode(.fullAccess) }
         // 隔离脚本经用户首次审批(allowOnce/allowAlways)→ 解除隔离,此后走常规审批,不再强制。
         if decision != .deny, let q = quarantinedScriptPaths.first(where: { pending.command.contains($0.key) }) {
             LingShuSkillAcquisition.clearQuarantine(skillID: q.value.skillID)

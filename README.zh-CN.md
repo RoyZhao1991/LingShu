@@ -15,7 +15,7 @@
     <img alt="Swift 6" src="https://img.shields.io/badge/Swift-6-F05138?logo=swift&logoColor=white">
     <img alt="Apache-2.0" src="https://img.shields.io/badge/license-Apache--2.0-2C8C7F">
     <img alt="项目阶段 Alpha" src="https://img.shields.io/badge/status-alpha-E9A23B">
-    <img alt="1,548 项测试通过" src="https://img.shields.io/badge/tests-1%2C548%20passing-2C8C7F">
+    <img alt="1,500+ 项测试" src="https://img.shields.io/badge/tests-1%2C500%2B-2C8C7F">
     <a href="https://github.com/RoyZhao1991/LingShu/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/RoyZhao1991/LingShu/actions/workflows/ci.yml/badge.svg"></a>
   </p>
 </div>
@@ -64,13 +64,13 @@
 | 多模态输入 | 默认先尝试模型原生视觉；确认不支持后记忆能力状态并降级图片解析 |
 | 感知 | 麦克风、系统声音、摄像头、屏幕、语音输出与可插拔外部感知源 |
 | 记忆 | 本地知识图谱、偏好召回、任务历史与经验蒸馏 |
-| 集成 | 本地 HTTP JSON-RPC 控制面与外部 Agent 能力注册 |
+| 集成 | 随 App 交付的 `lingshu` CLI、本地 HTTP JSON-RPC 控制面与外部 Agent 能力注册 |
 
 ## 工作方式
 
 ```mermaid
 flowchart LR
-    U["用户目标"] --> B["灵枢主 Agent"]
+    U["App / CLI / 外部连接器"] --> B["灵枢主 Agent"]
     B --> G["结构化 GoalSpec"]
     G --> R["可变运行时工作流"]
     R --> Q["串行任务队列"]
@@ -110,6 +110,34 @@ open "dist/灵枢.app"
 
 首次启动时，灵枢会检查是否存在可用主脑；如果没有，会自动打开配置引导。预设服务商只需填写 Token，自定义服务还需填写端点与模型名。
 
+### CLI 与外部软件接入
+
+每个 App 构建都包含 `lingshu` 命令行客户端。它只是**同一个串行主会话**的外部入口，不会另起一套 Agent，也不会绕过模型选择、记忆、授权、任务记录或人机交互闸门。
+
+把 App 移入“应用程序”后，可将内置客户端加入命令路径：
+
+```bash
+mkdir -p "$HOME/.local/bin"
+ln -sf "/Applications/灵枢.app/Contents/MacOS/lingshu" "$HOME/.local/bin/lingshu"
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+终端、飞书机器人、Webhook 服务、快捷指令或其他本地程序都可以按一问一答方式调用：
+
+```bash
+lingshu ask "总结今天的项目状态"
+echo "生成一页项目报告" | lingshu ask --json
+lingshu status --json
+```
+
+当原任务需要登录、扫码、选文件、确认或其他人工步骤时，JSON 会返回 `needs_user_action`、可展示材料和消息 ID。外部软件完成交互后，可精确续接原断点：
+
+```bash
+lingshu answer <message-id> "已完成"
+```
+
+客户端默认只访问灵枢的本机回环控制服务。退出码、JSON 字段、环境变量和飞书/Webhook 对接范式见 [CLI 与连接器说明](./Docs/CLI.md)。
+
 ### 主脑预设
 
 | 服务商 | 需要填写 | 协议 |
@@ -148,7 +176,7 @@ API 凭据保存在 macOS 钥匙串中，只属于本地运行配置，禁止提
 | HAL 虚拟麦克风 | 实验性；设备出现仍不稳定 |
 | 官网签名与公证发布 | 发布脚本已具备；首个公开 Release 待发布 |
 
-仓库当前包含超过 10 万行源码与测试代码、187 个 Swift 测试文件；最近一次本机 SwiftPM 全量回归通过 1,548 项测试，另有 3 项跳过。这些数字用于说明工程深度，并不等于所有依赖外部环境的测试都能在每一台 Mac 上通过。
+仓库包含超过 10 万行源码与测试代码、超过 180 个 Swift 测试文件以及超过 1,500 项测试。这些数字用于说明工程深度，并不等于所有依赖外部环境的测试都能在每一台 Mac 上通过。
 
 ## 开发与测试
 

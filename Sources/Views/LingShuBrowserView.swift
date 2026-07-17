@@ -20,7 +20,7 @@ struct LingShuBrowserHost: NSViewRepresentable {
             if controller.isPresented, window == nil {
                 let host = NSHostingController(rootView: LingShuBrowserChrome(controller: controller))
                 let w = NSWindow(contentViewController: host)
-                w.title = LingShuLanguagePreferenceStore.localized("灵枢浏览器", "LingShu Browser")
+                w.title = LingShuLanguagePreferenceStore.localized("灵枢浏览器", "Nous Browser")
                 w.setContentSize(NSSize(width: 1100, height: 760))
                 w.styleMask = [.titled, .closable, .resizable, .miniaturizable, .fullSizeContentView]
                 w.collectionBehavior.insert(.fullScreenPrimary)

@@ -30,8 +30,8 @@ struct LingShuExternalSensoryView: View {
         .overlay { RoundedRectangle(cornerRadius: 10, style: .continuous).stroke(Color.lingHolo.opacity(0.14)) }
         .alert(item: $hub.warning) { warning in
             Alert(
-                title: Text(warning.title),
-                message: Text(warning.message),
+                title: Text(state.localizedRuntimeText(warning.title, fallback: state.loc("外接设备需要处理", "External Device Needs Attention"))),
+                message: Text(state.localizedRuntimeText(warning.message, fallback: state.loc("请检查设备、系统权限或连接状态后重试。", "Check the device, system permissions, or connection, then try again."))),
                 dismissButton: .default(Text(state.loc("知道了", "OK")))
             )
         }
@@ -168,7 +168,8 @@ struct LingShuExternalSensoryView: View {
                 .background(Color.lingFg.opacity(0.04), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
             }
             if !hub.lastNote.isEmpty {
-                Text(hub.lastNote).font(.system(size: 9.5, weight: .medium)).foregroundStyle(Color.lingFg.opacity(0.3))
+                Text(state.localizedRuntimeText(hub.lastNote, fallback: state.loc("待办蒸馏已更新", "To-do distillation updated")))
+                    .font(.system(size: 9.5, weight: .medium)).foregroundStyle(Color.lingFg.opacity(0.3))
             }
         }
     }
@@ -203,7 +204,11 @@ struct LingShuExternalSensoryView: View {
         case .connecting: state.loc("连接中", "Connecting")
         case .pairing: state.loc("等待配对确认", "Awaiting pairing")
         case .streaming: state.loc("接收中", "Streaming")
-        case .unavailable(let reason): state.loc("不可用：\(reason)", "Unavailable: \(reason)")
+        case .unavailable(let reason):
+            state.loc(
+                "不可用：\(reason)",
+                "Unavailable: \(state.localizedRuntimeText(reason, fallback: "Check permissions or hardware"))"
+            )
         }
     }
 }

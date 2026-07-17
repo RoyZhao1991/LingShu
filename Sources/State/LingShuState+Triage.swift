@@ -32,6 +32,29 @@ extension LingShuState {
         var brainFailed: Bool = false     // 归属解析失败/超时 → 不劫持输入,交主脑处理
     }
 
+    /// 只有仍在执行、明确等待用户或可继续返工的线程，才有资格接管一条新输入。
+    /// 已完成/已回答/已核验/失败的线程仍保留在历史与记忆里，但不能出现在第③站候选中；
+    /// 否则归属模型把模糊新请求判成 reply 后，第④站会跳过 GoalSpec，旧任务上下文就会劫持本轮。
+    nonisolated static func canRouteInputToExistingThread(status: LingShuTaskExecutionStatus) -> Bool {
+        switch status {
+        case .queued, .running, .dispatched, .needsRevision, .blocked, .suspended,
+             .analyzing, .acquiringCapability, .waitingForUser, .ready, .partial:
+            return true
+        case .answered, .completed, .verified, .failed:
+            return false
+        }
+    }
+
+    func dispatchReplyTargetIsContinuable(_ decision: DispatchDecision) -> Bool {
+        guard decision.kind == .reply,
+              let recordID = decision.replyRecordID,
+              let record = taskExecutionRecords.first(where: { $0.id == recordID }),
+              Self.canRouteInputToExistingThread(status: record.status)
+        else { return false }
+        return recordID == pendingMainQuestionRecordID
+            || agentSubTaskRecords.values.contains(recordID)
+    }
+
     /// 上下文归属解析:
     /// - 无候选线程:不调用模型,直接交主脑 active turn。
     /// - 有候选线程:只判断最新输入是否在回复/补充其中一条;不判断它是不是新任务。
@@ -144,7 +167,11 @@ extension LingShuState {
         // 可续线程 = 近 40 条聊天里出现过的、属于隔离子任务的灵枢消息,取每条线程最近一句作为"它上次说的"。
         var lastSay: [String: (text: String, at: Date)] = [:]
         for m in chatMessages.suffix(40) where !m.isUser {
-            guard let rid = m.taskRecordID, dispatchedRecordIDs.contains(rid) else { continue }
+            guard let rid = m.taskRecordID,
+                  dispatchedRecordIDs.contains(rid),
+                  let record = taskExecutionRecords.first(where: { $0.id == rid }),
+                  Self.canRouteInputToExistingThread(status: record.status)
+            else { continue }
             lastSay[rid] = (m.text, m.createdAt)
         }
         let ordered = lastSay.sorted { $0.value.at > $1.value.at }.prefix(3)   // 取最近 3 条线程
@@ -152,7 +179,8 @@ extension LingShuState {
         // **主会话刚问了问题在等回答** → 作为首条可续线程加进分诊上下文(标⏳),让分诊器能把「答复」路由回它、
         // 也能把「新任务」照常判成 task 去派子线程(不再无脑把后续都塞回主会话→阻塞)。它不是派发线程,路由时单独识别。
         if let pendingQ = pendingMainQuestionRecordID,
-           let rec = taskExecutionRecords.first(where: { $0.id == pendingQ }) {
+           let rec = taskExecutionRecords.first(where: { $0.id == pendingQ }),
+           Self.canRouteInputToExistingThread(status: rec.status) {
             let lastAsk = rec.messages.last(where: { $0.actor == "灵枢" })?.text ?? rec.summary
             threads.append(.init(label: "T1", recordID: pendingQ,
                                  summary: "⏳正等你回答 标题=「\(rec.title.prefix(28))」 它上次问:「\(lastAsk.prefix(120))」"))

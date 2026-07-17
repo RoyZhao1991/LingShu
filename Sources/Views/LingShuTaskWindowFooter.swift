@@ -65,7 +65,7 @@ struct TaskWindowFooter: View {
                         .font(.system(size: 10, weight: .bold)).foregroundStyle(.orange.opacity(0.9))
                     Text(state.loc(
                         "灵枢正在执行——看到跑偏可直接输入纠正，立即调整方向",
-                        "LingShu is running — send a correction at any time to adjust course"
+                        "Nous is running — send a correction at any time to adjust course"
                     ))
                         .font(.system(size: 10.5, weight: .semibold)).foregroundStyle(.orange.opacity(0.82))
                     Spacer(minLength: 0)

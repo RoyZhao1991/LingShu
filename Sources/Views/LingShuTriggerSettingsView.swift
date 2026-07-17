@@ -29,7 +29,7 @@ struct LingShuTriggerSettingsView: View {
                 Toggle(state.loc("开机自启", "Launch at Login"), isOn: $launchAtLogin)
                     .toggleStyle(.switch)
                     .onChange(of: launchAtLogin) { _, enabled in
-                        residencyNote = LingShuResidencyService.setLaunchAtLogin(enabled)
+                        residencyNote = LingShuResidencyService.setLaunchAtLogin(enabled, language: state.language)
                     }
                 if !residencyNote.isEmpty {
                     Text(residencyNote)
@@ -37,7 +37,7 @@ struct LingShuTriggerSettingsView: View {
                         .foregroundStyle(Color.lingFg.opacity(0.5))
                 }
                 Spacer()
-                Text(state.loc("主窗口关闭后灵枢仍在菜单栏值守，定时任务照常触发", "LingShu remains in the menu bar after its main window closes, and schedules still run."))
+                Text(state.loc("主窗口关闭后灵枢仍在菜单栏值守，定时任务照常触发", "Nous remains in the menu bar after its main window closes, and schedules still run."))
                     .font(.system(size: 10.5, weight: .medium))
                     .foregroundStyle(Color.lingFg.opacity(0.4))
             }
@@ -48,7 +48,7 @@ struct LingShuTriggerSettingsView: View {
                     TextField(state.loc("名称（可空）", "Name (optional)"), text: $newTitle)
                         .textFieldStyle(.roundedBorder)
                         .frame(width: 140)
-                    TextField(state.loc("到点交给灵枢的指令，例如：提醒我喝水 / 整理今天的工作日志", "Instruction for LingShu, for example: remind me to drink water / summarize today's work"), text: $newPrompt)
+                    TextField(state.loc("到点交给灵枢的指令，例如：提醒我喝水 / 整理今天的工作日志", "Instruction for Nous, for example: remind me to drink water / summarize today's work"), text: $newPrompt)
                         .textFieldStyle(.roundedBorder)
                     Picker("", selection: $newHour) {
                         ForEach(0..<24, id: \.self) { Text(String(format: "%02d", $0)).tag($0) }
@@ -111,7 +111,7 @@ struct LingShuTriggerSettingsView: View {
     private func groupHeader(_ title: String, count: Int, color: Color) -> some View {
         HStack(spacing: 6) {
             Circle().fill(color).frame(width: 6, height: 6)
-            Text("\(title)（\(count)）")
+            Text(state.language == .english ? "\(title) (\(count))" : "\(title)（\(count)）")
                 .font(.system(size: 11, weight: .bold)).foregroundStyle(color)
         }
         .padding(.top, 4)

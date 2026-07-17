@@ -66,7 +66,11 @@ struct LingShuAutonomousRunPanel: View {
                         metric(label: state.loc("目标", "Goal"), value: state.autonomousRun.objective.isEmpty ? state.loc("等待目标", "Waiting for goal") : state.autonomousRun.objective, icon: "scope")
                     }
                     metric(label: state.loc("权限", "Access"), value: state.language == .english ? state.autonomousRun.permissionLevel.englishName : state.autonomousRun.permissionLevel.rawValue, icon: "lock.shield")
-                    metric(label: state.loc("状态", "Status"), value: state.autonomousRun.statusLine, icon: "waveform.path.ecg")
+                    metric(
+                        label: state.loc("状态", "Status"),
+                        value: state.localizedRuntimeText(state.autonomousRun.statusLine, fallback: "Autonomous run active"),
+                        icon: "waveform.path.ecg"
+                    )
                 }
                 Spacer(minLength: 12)
                 controls

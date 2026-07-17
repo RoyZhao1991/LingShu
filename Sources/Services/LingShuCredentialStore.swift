@@ -15,6 +15,29 @@ final class LingShuCredentialStore: @unchecked Sendable {
     private let usesKeychain: Bool
     private let lock = NSLock()
     private var cache: [String: String] = [:]
+    private var keychainReadsAvailable = true
+
+    private final class KeychainCopyBox: @unchecked Sendable {
+        let query: CFDictionary
+        private let lock = NSLock()
+        private var storedResult: (OSStatus, CFTypeRef?)?
+
+        init(query: CFDictionary) {
+            self.query = query
+        }
+
+        func store(status: OSStatus, item: CFTypeRef?) {
+            lock.lock()
+            storedResult = (status, item)
+            lock.unlock()
+        }
+
+        func result() -> (OSStatus, CFTypeRef?)? {
+            lock.lock()
+            defer { lock.unlock() }
+            return storedResult
+        }
+    }
 
     init(
         service: String = "cn.lingshu.model-credentials",
@@ -43,6 +66,7 @@ final class LingShuCredentialStore: @unchecked Sendable {
             return cached.isEmpty ? nil : cached
         }
         if usesKeychain,
+           keychainReadsAvailable,
            let stored = readFromKeychain(account: providerID),
            !stored.isEmpty {
             cache[providerID] = stored
@@ -203,8 +227,8 @@ final class LingShuCredentialStore: @unchecked Sendable {
         query[kSecReturnData as String] = true
         query[kSecMatchLimit as String] = kSecMatchLimitOne
         query[kSecUseAuthenticationUI as String] = kSecUseAuthenticationUISkip
-        var item: CFTypeRef?
-        guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess,
+        guard let (status, item) = copyMatchingWithoutBlockingLaunch(query),
+              status == errSecSuccess,
               let data = item as? Data,
               let key = String(data: data, encoding: .utf8),
               !key.isEmpty else {
@@ -219,8 +243,8 @@ final class LingShuCredentialStore: @unchecked Sendable {
         query[kSecReturnData as String] = true
         query[kSecMatchLimit as String] = kSecMatchLimitAll
         query[kSecUseAuthenticationUI as String] = kSecUseAuthenticationUISkip
-        var item: CFTypeRef?
-        guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess,
+        guard let (status, item) = copyMatchingWithoutBlockingLaunch(query),
+              status == errSecSuccess,
               let rows = item as? [[String: Any]] else { return [:] }
 
         var values: [String: String] = [:]
@@ -232,6 +256,30 @@ final class LingShuCredentialStore: @unchecked Sendable {
             values[account] = value
         }
         return values
+    }
+
+    /// A locked or legacy Keychain item must never prevent SwiftUI from creating its first window.
+    /// Security.framework can occasionally ignore `kSecUseAuthenticationUISkip` and wait for an
+    /// invisible authorization agent. Run reads off the caller thread and fail closed after a short
+    /// deadline; credentials stay in Keychain and can be retried after the next app launch.
+    private func copyMatchingWithoutBlockingLaunch(
+        _ query: [String: Any],
+        timeout: TimeInterval = 1.5
+    ) -> (OSStatus, CFTypeRef?)? {
+        let box = KeychainCopyBox(query: query as CFDictionary)
+        let completion = DispatchSemaphore(value: 0)
+        DispatchQueue.global(qos: .userInitiated).async {
+            var item: CFTypeRef?
+            let status = SecItemCopyMatching(box.query, &item)
+            box.store(status: status, item: item)
+            completion.signal()
+        }
+
+        guard completion.wait(timeout: .now() + timeout) == .success else {
+            keychainReadsAvailable = false
+            return nil
+        }
+        return box.result()
     }
 
     private func writeToKeychain(account: String, value: String) -> Bool {

@@ -31,6 +31,7 @@ final class SelfInspectionTests: XCTestCase {
     @MainActor
     func testAssemblePullsLiveBrainAndTools() {
         let state = LingShuState()
+        state.language = .chinese
         let insp = state.assembleSelfInspection()
         XCTAssertFalse(insp.architecture.isEmpty, "架构层非空")
         XCTAssertTrue(insp.capabilities.contains { $0.title.contains("大脑") }, "能力含当前大脑")
@@ -43,6 +44,7 @@ final class SelfInspectionTests: XCTestCase {
     @MainActor
     func testSelfInspectionGuidanceGroundsCapabilityQuestions() {
         let state = LingShuState()
+        state.language = .chinese
         // 架构/能力/自检类问题 → 注入真实自我认知作引导(grounded)。
         XCTAssertNotNil(state.selfInspectionGuidance(for: "你的整体架构是什么"))
         XCTAssertNotNil(state.selfInspectionGuidance(for: "你能做什么"))
@@ -57,6 +59,7 @@ final class SelfInspectionTests: XCTestCase {
     @MainActor
     func testAgentInspectionLineShowsAvailabilitySeparately() {
         let state = LingShuState()
+        state.language = .chinese
 
         var available = LingShuAgentPlugin(
             id: "ok", displayName: "OKAgent", executable: "/bin/echo",
@@ -81,5 +84,26 @@ final class SelfInspectionTests: XCTestCase {
             argsTemplate: ["{{objective}}"], available: true
         )
         XCTAssertTrue(state.agentInspectionLine(missing).contains("找不到可执行文件"))
+    }
+
+    @MainActor
+    func testEnglishSelfInspectionUsesConfiguredLanguage() {
+        let state = LingShuState()
+        state.language = .english
+
+        let inspection = state.assembleSelfInspection()
+        XCTAssertTrue(inspection.capabilities.contains { $0.title.contains("Brain") })
+        XCTAssertTrue(inspection.capabilities.contains { $0.title.contains("Tools") })
+        XCTAssertTrue(state.selfInspectionReport.contains(state.modelProviderDisplay))
+
+        var available = LingShuAgentPlugin(
+            id: "ok-en", displayName: "OKAgent", executable: "/bin/echo",
+            argsTemplate: ["{{objective}}"], available: true
+        )
+        XCTAssertTrue(state.agentInspectionLine(available).contains("Available"))
+
+        available.available = false
+        available.unavailableReason = "token expired"
+        XCTAssertTrue(state.agentInspectionLine(available).contains("Unavailable: token expired"))
     }
 }

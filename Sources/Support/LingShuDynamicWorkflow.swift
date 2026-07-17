@@ -29,6 +29,60 @@ struct LingShuHumanInteractionRequest: Codable, Equatable, Sendable, Identifiabl
         }
     }
 
+    /// Everything the user needs to complete a paused step must cross the workflow
+    /// boundary as a displayable material. A terminal window is never part of the UI contract.
+    struct Material: Codable, Equatable, Sendable, Identifiable {
+        enum Kind: String, Codable, Equatable, Sendable {
+            case image
+            case qrCode = "qr_code"
+            case text
+            case code
+            case url
+            case file
+        }
+
+        var id: String
+        var kind: Kind
+        var title: String
+        var value: String
+        var mimeType: String?
+
+        init(
+            id: String = UUID().uuidString,
+            kind: Kind,
+            title: String = "",
+            value: String,
+            mimeType: String? = nil
+        ) {
+            self.id = id
+            self.kind = kind
+            self.title = title
+            self.value = value
+            self.mimeType = mimeType
+        }
+
+        static func parse(_ raw: Any?) -> Material? {
+            guard let object = raw as? [String: Any] else { return nil }
+            let rawKind = ((object["kind"] as? String) ?? (object["type"] as? String) ?? "text")
+                .lowercased().replacingOccurrences(of: "-", with: "_")
+            guard let kind = Kind(rawValue: rawKind) else { return nil }
+            let value = ((object["value"] as? String)
+                         ?? (object["content"] as? String)
+                         ?? (object["path"] as? String)
+                         ?? (object["url"] as? String)
+                         ?? "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !value.isEmpty else { return nil }
+            return .init(
+                id: (object["id"] as? String) ?? UUID().uuidString,
+                kind: kind,
+                title: (object["title"] as? String) ?? (object["label"] as? String) ?? "",
+                value: value,
+                mimeType: (object["mime_type"] as? String) ?? (object["mimeType"] as? String)
+            )
+        }
+    }
+
     struct CompletionProbe: Codable, Equatable, Sendable {
         enum Kind: String, Codable, Equatable, Sendable {
             case manual
@@ -86,6 +140,7 @@ struct LingShuHumanInteractionRequest: Codable, Equatable, Sendable, Identifiabl
     var prompt: String
     var payload: [String: String]
     var options: [Option]
+    var materials: [Material]?
     var completionProbe: CompletionProbe?
     var resumeToken: String?
     var source: String?
@@ -97,6 +152,7 @@ struct LingShuHumanInteractionRequest: Codable, Equatable, Sendable, Identifiabl
         prompt: String,
         payload: [String: String] = [:],
         options: [Option] = [],
+        materials: [Material] = [],
         completionProbe: CompletionProbe? = nil,
         resumeToken: String? = nil,
         source: String? = nil
@@ -107,6 +163,7 @@ struct LingShuHumanInteractionRequest: Codable, Equatable, Sendable, Identifiabl
         self.prompt = prompt
         self.payload = payload
         self.options = options
+        self.materials = materials.isEmpty ? nil : materials
         self.completionProbe = completionProbe
         self.resumeToken = resumeToken
         self.source = source
@@ -117,6 +174,10 @@ struct LingShuHumanInteractionRequest: Codable, Equatable, Sendable, Identifiabl
         copy.title = title.trimmingCharacters(in: .whitespacesAndNewlines)
         copy.prompt = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
         copy.options = options.filter { !$0.label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        let validMaterials = (materials ?? []).filter {
+            !$0.value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
+        copy.materials = validMaterials.isEmpty ? nil : validMaterials
         guard !copy.prompt.isEmpty else { return nil }
         if copy.title.isEmpty { copy.title = copy.prompt }
         return copy
@@ -128,6 +189,81 @@ struct LingShuHumanInteractionRequest: Codable, Equatable, Sendable, Identifiabl
             question: prompt,
             options: options.map { .init(label: $0.label, detail: $0.detail.isEmpty ? nil : $0.detail) }
         ).sanitized
+    }
+
+    var confirmForm: LingShuConfirmForm? {
+        guard kind == .form, let formJSON = payload["form_json"] else { return nil }
+        return LingShuConfirmForm.parse(formJSON)
+    }
+
+    /// Normalizes the typed protocol and the legacy payload keys into one rendering surface.
+    var displayMaterials: [Material] {
+        var result = materials ?? []
+        var signatures = Set(result.map { "\($0.kind.rawValue)|\($0.value)" })
+        func append(_ kind: Material.Kind, _ title: String, keys: [String], mimeType: String? = nil) {
+            guard let pair = keys.compactMap({ key -> (String, String)? in
+                guard let value = payload[key]?.trimmingCharacters(in: .whitespacesAndNewlines),
+                      !value.isEmpty else { return nil }
+                return (key, value)
+            }).first else { return }
+            let value = pair.1
+            let signature = "\(kind.rawValue)|\(value)"
+            guard signatures.insert(signature).inserted else { return }
+            result.append(.init(id: "legacy:\(pair.0)", kind: kind, title: title, value: value, mimeType: mimeType))
+        }
+
+        append(.image, "Image", keys: ["image_path", "qr_path", "image_base64", "qr_image_base64"])
+        append(.qrCode, "QR Code", keys: ["qr_content", "qr_url", "qr_payload"])
+        append(.code, "Code", keys: ["qr_text", "ascii_qr", "terminal_qr"])
+        append(.url, "Link", keys: ["login_url", "verification_url", "action_url", "url"])
+        append(.text, "Details", keys: ["display_text", "instructions", "display_output"])
+        append(.code, "Output", keys: ["terminal_output", "source_output"])
+        append(.file, "File", keys: ["attachment_path", "output_path", "file_path"])
+        return result
+    }
+
+    /// A request may pause execution only when the app can actually let the user finish it.
+    /// This is model-agnostic and applies equally to workers, tools and checkers.
+    var presentationIssue: String? {
+        switch kind {
+        case .qrCode:
+            let usable = displayMaterials.contains {
+                [.qrCode, .image, .code].contains($0.kind) && Self.isUsable($0)
+            }
+            return usable ? nil : "QR interaction is missing a QR payload, image, or visible code."
+        case .externalLogin:
+            let usable = displayMaterials.contains {
+                [.qrCode, .image, .code, .url].contains($0.kind) && Self.isUsable($0)
+            }
+            return usable ? nil : "External login is missing a login link, QR code, image, or visible login code."
+        case .choice:
+            return options.isEmpty ? "Choice interaction has no options." : nil
+        case .form:
+            return confirmForm == nil ? "Form interaction has no valid form_json fields." : nil
+        case .question, .physicalAction, .fileSelection, .confirmation, .custom:
+            return nil
+        }
+    }
+
+    private static func isUsable(_ material: Material) -> Bool {
+        let value = material.value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty else { return false }
+        switch material.kind {
+        case .image:
+            if value.hasPrefix("data:image/"), let comma = value.firstIndex(of: ",") {
+                return Data(base64Encoded: String(value[value.index(after: comma)...])) != nil
+            }
+            let expanded = NSString(string: value).expandingTildeInPath
+            if FileManager.default.fileExists(atPath: expanded) { return true }
+            return Data(base64Encoded: value) != nil
+        case .url:
+            guard let url = URL(string: value), let scheme = url.scheme?.lowercased() else { return false }
+            return ["http", "https"].contains(scheme)
+        case .file:
+            return FileManager.default.fileExists(atPath: NSString(string: value).expandingTildeInPath)
+        case .qrCode, .text, .code:
+            return true
+        }
     }
 
     static func parse(_ raw: Any?) -> LingShuHumanInteractionRequest? {
@@ -157,6 +293,10 @@ struct LingShuHumanInteractionRequest: Codable, Equatable, Sendable, Identifiabl
                 else if let number = value as? NSNumber { payload[key] = number.stringValue }
             }
         }
+        for key in ["source_job_id", "source_log_path", "source_output_path"] {
+            if let value = object[key] as? String, !value.isEmpty { payload[key] = value }
+        }
+        let materials = ((object["materials"] as? [Any]) ?? []).compactMap(Material.parse)
         return LingShuHumanInteractionRequest(
             id: (object["id"] as? String) ?? UUID().uuidString,
             kind: kind,
@@ -164,11 +304,126 @@ struct LingShuHumanInteractionRequest: Codable, Equatable, Sendable, Identifiabl
             prompt: prompt,
             payload: payload,
             options: options,
+            materials: materials,
             completionProbe: CompletionProbe.parse(object["completion_probe"] ?? object["completionProbe"]),
             resumeToken: (object["resume_token"] as? String) ?? (object["resumeToken"] as? String),
             source: object["source"] as? String
         ).normalized
     }
+}
+
+enum LingShuHumanInteractionMaterialExtractor {
+    static func enriching(
+        _ request: LingShuHumanInteractionRequest,
+        sourceText: String,
+        sourceLabel: String? = nil
+    ) -> LingShuHumanInteractionRequest {
+        var request = request
+        var materials = request.materials ?? []
+        let cleanText = strippingANSI(sourceText)
+
+        if request.kind == .qrCode {
+            if let content = qrContent(in: cleanText) {
+                materials.append(.init(kind: .qrCode, title: sourceLabel ?? "QR Code", value: content))
+            } else if let ascii = asciiQRCode(in: cleanText) {
+                materials.append(.init(kind: .code, title: sourceLabel ?? "QR Code", value: ascii))
+            }
+        } else if request.kind == .externalLogin, let url = firstURL(in: cleanText) {
+            materials.append(.init(kind: .url, title: sourceLabel ?? "Login", value: url))
+        } else if request.payload["include_source_output"]?.lowercased() == "true" {
+            let visible = String(cleanText.suffix(12_000)).trimmingCharacters(in: .whitespacesAndNewlines)
+            if !visible.isEmpty {
+                materials.append(.init(kind: .code, title: sourceLabel ?? "Output", value: visible))
+            }
+        }
+
+        request.materials = deduplicated(materials)
+        return request
+    }
+
+    static func qrContent(in text: String) -> String? {
+        firstCapture(
+            pattern: #"(?im)^\s*(?:QR\s*(?:URL|URI)|二维码(?:链接|地址|URL))\s*[:：]\s*(\S+)\s*$"#,
+            text: text
+        )
+    }
+
+    static func firstURL(in text: String) -> String? {
+        firstCapture(pattern: #"(?i)(https?://[^\s<>\"]+)"#, text: text)?
+            .trimmingCharacters(in: CharacterSet(charactersIn: ".,;，。；)）]】"))
+    }
+
+    static func asciiQRCode(in text: String) -> String? {
+        let lines = strippingANSI(text).components(separatedBy: .newlines)
+        guard let marker = lines.firstIndex(where: {
+            let lower = $0.lowercased()
+            return lower.contains("scan this qr") || (lower.contains("扫描") && lower.contains("二维码"))
+        }) else { return nil }
+
+        var qrLines: [String] = []
+        for line in lines.dropFirst(marker + 1) {
+            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.lowercased().hasPrefix("qr url") || trimmed.hasPrefix("二维码链接") { break }
+            if trimmed.isEmpty {
+                if !qrLines.isEmpty { break }
+                continue
+            }
+            let blockScalars = CharacterSet(charactersIn: "█▀▄▐▌▓▒░")
+            if trimmed.unicodeScalars.contains(where: { blockScalars.contains($0) }) {
+                qrLines.append(line)
+            } else if !qrLines.isEmpty {
+                break
+            }
+        }
+        return qrLines.count >= 5 ? qrLines.joined(separator: "\n") : nil
+    }
+
+    private static func firstCapture(pattern: String, text: String) -> String? {
+        guard let regex = try? NSRegularExpression(pattern: pattern),
+              let match = regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
+              match.numberOfRanges > 1,
+              let range = Range(match.range(at: 1), in: text) else { return nil }
+        return String(text[range])
+    }
+
+    private static func strippingANSI(_ text: String) -> String {
+        guard let regex = try? NSRegularExpression(pattern: #"\u001B\[[0-?]*[ -/]*[@-~]"#) else { return text }
+        return regex.stringByReplacingMatches(
+            in: text,
+            range: NSRange(text.startIndex..., in: text),
+            withTemplate: ""
+        )
+    }
+
+    private static func deduplicated(_ materials: [LingShuHumanInteractionRequest.Material])
+        -> [LingShuHumanInteractionRequest.Material] {
+        var seen: Set<String> = []
+        return materials.filter {
+            let signature = "\($0.kind.rawValue)|\($0.value)"
+            return seen.insert(signature).inserted
+        }
+    }
+}
+
+/// A hard human step is surfaced as an app-modal interaction while the exact task
+/// session remains paused. The inline card stays in history and can reopen it.
+struct LingShuPendingHardHumanInteraction: Identifiable, Equatable {
+    enum Target: Equatable {
+        case main(messageID: UUID)
+        case dispatched(recordID: String)
+
+        var stableID: String {
+            switch self {
+            case .main(let messageID): "main:\(messageID.uuidString)"
+            case .dispatched(let recordID): "dispatched:\(recordID)"
+            }
+        }
+    }
+
+    var request: LingShuHumanInteractionRequest
+    var target: Target
+
+    var id: String { "\(request.id)|\(target.stableID)" }
 }
 
 enum LingShuWorkflowControlEvent: Codable, Equatable, Sendable {

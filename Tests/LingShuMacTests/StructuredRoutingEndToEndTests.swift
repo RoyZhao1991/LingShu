@@ -83,4 +83,53 @@ final class StructuredRoutingEndToEndTests: XCTestCase {
         XCTAssertEqual(plan.strategy, .mainActiveTurn)
         XCTAssertFalse(plan.includeTaskMemory)
     }
+
+    @MainActor
+    func testCompletedDispatchedThreadCannotBecomeRoutingCandidateOrSkipGoalSpec() {
+        let state = LingShuState()
+        state.chatMessages = []
+        state.taskExecutionRecords = [
+            LingShuTaskExecutionRecord(
+                id: "completed-weclaw",
+                title: "配置 WeClaw",
+                prompt: "启动微信桥接",
+                status: .completed,
+                summary: "已完成",
+                participants: [],
+                createdAt: Date(timeIntervalSince1970: 1),
+                updatedAt: Date(timeIntervalSince1970: 2),
+                messages: []
+            ),
+            LingShuTaskExecutionRecord(
+                id: "waiting-report",
+                title: "生成报告",
+                prompt: "生成报告",
+                status: .waitingForUser,
+                summary: "等待用户选择格式",
+                participants: [],
+                createdAt: Date(timeIntervalSince1970: 3),
+                updatedAt: Date(timeIntervalSince1970: 4),
+                messages: []
+            )
+        ]
+        state.agentSubTaskRecords = [
+            "task-old": "completed-weclaw",
+            "task-waiting": "waiting-report"
+        ]
+        state.chatMessages = [
+            .init(speaker: "灵枢", text: "WeClaw 已完成", isUser: false, taskRecordID: "completed-weclaw"),
+            .init(speaker: "灵枢", text: "请选择报告格式", isUser: false, taskRecordID: "waiting-report")
+        ]
+
+        let context = state.buildTriageContext()
+
+        XCTAssertFalse(context.threads.contains { $0.recordID == "completed-weclaw" },
+                       "已完成的旧线程只能作为历史，不能接管新输入")
+        XCTAssertTrue(context.threads.contains { $0.recordID == "waiting-report" },
+                      "真实等待用户的线程仍应参与归属判断")
+        XCTAssertFalse(LingShuState.canRouteInputToExistingThread(status: .completed))
+        XCTAssertFalse(LingShuState.canRouteInputToExistingThread(status: .answered))
+        XCTAssertTrue(LingShuState.canRouteInputToExistingThread(status: .waitingForUser))
+        XCTAssertTrue(LingShuState.canRouteInputToExistingThread(status: .needsRevision))
+    }
 }

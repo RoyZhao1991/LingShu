@@ -138,7 +138,7 @@ struct LingShuTaskPoolView: View {
             Image(systemName: "tray")
                 .font(.system(size: 34))
                 .foregroundStyle(Color.lingFg.opacity(0.25))
-            Text(state.loc("还没有任务。下达目标后,这里会按时间归集进行中与已完成的任务。", "No tasks yet. Once you give LingShu a goal, active and completed tasks will be collected here."))
+            Text(state.loc("还没有任务。下达目标后,这里会按时间归集进行中与已完成的任务。", "No tasks yet. Once you give Nous a goal, active and completed tasks will be collected here."))
                 .font(.system(size: 12.5))
                 .foregroundStyle(Color.lingFg.opacity(0.4))
                 .multilineTextAlignment(.center)

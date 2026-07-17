@@ -53,6 +53,24 @@ final class DevFullAccessTests: XCTestCase {
         XCTAssertTrue(state.shellPreauthorized, "开发全权应视作 shell 已预授权(后台守候等路径不被卡)")
     }
 
+    func testExecutionPermissionModeSynchronizesSessionApproval() {
+        let key = "lingshu.execution.permissionMode"
+        let previous = UserDefaults.standard.object(forKey: key)
+        defer {
+            if let previous { UserDefaults.standard.set(previous, forKey: key) }
+            else { UserDefaults.standard.removeObject(forKey: key) }
+        }
+
+        let state = LingShuState()
+        state.setExecutionPermissionMode(.fullAccess)
+        XCTAssertEqual(state.executionPermissionMode, .fullAccess)
+        XCTAssertTrue(state.sessionShellAlwaysAllowed)
+
+        state.setExecutionPermissionMode(.sandbox)
+        XCTAssertEqual(state.executionPermissionMode, .sandbox)
+        XCTAssertFalse(state.sessionShellAlwaysAllowed)
+    }
+
     func testDevFullAccessAutoGrantsManagedModeWithoutPrompt() async {
         let state = LingShuState()
         state.developmentPhaseFullAccess = true

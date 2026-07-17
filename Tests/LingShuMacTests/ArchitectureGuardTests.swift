@@ -139,6 +139,7 @@ final class ArchitectureGuardTests: XCTestCase {
     func testPerceptionViewFilesStaySplitByResponsibility() throws {
         let perceptionFiles = [
             "Sources/Views/LingShuPerceptionViews.swift",
+            "Sources/Views/LingShuPerceptionComponents.swift",
             "Sources/Views/LingShuPerceptionActions.swift",
             "Sources/Views/LingShuOwnerIdentityViews.swift",
             "Sources/Views/LingShuPerceptionPanel.swift",

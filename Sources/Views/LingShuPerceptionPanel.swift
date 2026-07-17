@@ -36,7 +36,7 @@ struct LingShuPerceptionPanel: View {
 
                 PerceptionStatusPill(
                     title: state.loc("解析", "Analysis"),
-                    value: perceptionGateway.activeRoute.displayName,
+                    value: perceptionGateway.activeRoute.localizedDisplayName(language: state.language),
                     icon: perceptionGateway.isRemoteRouteActive ? "network" : "cpu",
                     color: perceptionGateway.isRemoteRouteActive ? .cyan : .lingHolo
                 )
@@ -61,7 +61,7 @@ struct LingShuPerceptionPanel: View {
                     Button {
                         appendVisionContext(observation)
                     } label: {
-                        Label(state.loc("交给灵枢", "Send to LingShu"), systemImage: "arrow.turn.down.left")
+                        Label(state.loc("交给灵枢", "Send to Nous"), systemImage: "arrow.turn.down.left")
                             .font(.system(size: 11.5, weight: .semibold))
                             .foregroundStyle(Color.lingVoid)
                             .padding(.horizontal, 9)
@@ -110,7 +110,10 @@ struct LingShuPerceptionPanel: View {
 
                         HStack(spacing: 10) {
                             Label("\(perceptionGateway.eventCount)", systemImage: "dot.radiowaves.left.and.right")
-                            Label(perceptionGateway.statusText, systemImage: perceptionGateway.isRemoteRouteActive ? "network" : "cpu")
+                            Label(
+                                state.localizedRuntimeText(perceptionGateway.statusText, fallback: "Perception ready"),
+                                systemImage: perceptionGateway.isRemoteRouteActive ? "network" : "cpu"
+                            )
                             if perceptionGateway.rawForwardedCount > 0 {
                                 Label("\(perceptionGateway.rawForwardedCount)", systemImage: "arrow.up.right")
                             }

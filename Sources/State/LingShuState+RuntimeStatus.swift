@@ -19,11 +19,14 @@ struct LingShuTaskProgressDiagnostic: Equatable {
 @MainActor
 extension LingShuState {
     var callChainSubtitle: String {
-        "\(agentRuntimeCounts.subtitle) · \(taskQueueSummary)"
+        "\(agentRuntimeCounts.subtitle(language: language)) · \(taskQueueSummary)"
     }
 
     var taskQueueSummary: String {
-        "线程 \(runningTaskThreadCount) / 排队 \(queuedTaskSegmentCount)"
+        loc(
+            "线程 \(runningTaskThreadCount) / 排队 \(queuedTaskSegmentCount)",
+            "Threads \(runningTaskThreadCount) / Queued \(queuedTaskSegmentCount)"
+        )
     }
 
     var runningTaskThreadCount: Int {
@@ -75,13 +78,16 @@ extension LingShuState {
     var coreStateSubtitle: String {
         switch coreState {
         case .standby:
-            return "随时待命"
+            return loc("随时待命", "Ready")
         case .thinking:
-            return "已思考 \(thinkingElapsedText)"
+            return loc("已思考 \(thinkingElapsedText)", "Thinking \(thinkingElapsedText)")
         case .executing:
-            return "已执行 \(executionElapsedText)"
+            return loc("已执行 \(executionElapsedText)", "Running \(executionElapsedText)")
         case .abnormal:
-            return "异常持续 \(formatElapsed(max(thinkingElapsedSeconds, executionElapsedSeconds)))"
+            return loc(
+                "异常持续 \(formatElapsed(max(thinkingElapsedSeconds, executionElapsedSeconds)))",
+                "Issue for \(formatElapsed(max(thinkingElapsedSeconds, executionElapsedSeconds)))"
+            )
         }
     }
 
@@ -129,6 +135,41 @@ extension LingShuState {
         case "close_preview": return "关闭预览"
         default:
             if let computer = computerToolDisplayName(tool) { return computer }
+            return tool.hasPrefix("mcp:") ? String(tool.dropFirst(4)) : tool
+        }
+    }
+
+    nonisolated static func toolDisplayName(_ tool: String, language: LingShuVoiceLanguage) -> String {
+        guard language == .english else { return toolDisplayName(tool) }
+        switch tool {
+        case "write_file": return "Write file"
+        case "edit_file": return "Edit file"
+        case "read_file": return "Read file"
+        case "list_directory": return "List directory"
+        case "fetch_url": return "Fetch page"
+        case "run_command": return "Run command"
+        case "web_search": return "Web search"
+        case "apply_skill": return "Use skill"
+        case "recall_memory": return "Recall memory"
+        case "remember_credential": return "Save credential"
+        case "list_credentials": return "List credentials"
+        case "watch_until": return "Wait in background"
+        case "list_watches": return "List watches"
+        case "cancel_watch": return "Cancel watch"
+        case "get_current_time": return "Get time"
+        case "update_plan": return "Update plan"
+        case "review_design": return "Review design"
+        case "find_images": return "Find images"
+        case "acquire_resource": return "Acquire resource"
+        case "discover_skill": return "Discover skill"
+        case "spawn_task": return "Dispatch task"
+        case "ask_user": return "Waiting for confirmation"
+        case "speak": return "Speak"
+        case "open_preview": return "Open preview"
+        case "preview_next", "preview_prev", "preview_goto": return "Change page"
+        case "preview_scroll": return "Scroll preview"
+        case "close_preview": return "Close preview"
+        default:
             return tool.hasPrefix("mcp:") ? String(tool.dropFirst(4)) : tool
         }
     }
@@ -345,7 +386,7 @@ extension LingShuState {
         guard let record = currentTaskRecord else { return nil }
         for message in record.messages.reversed() {
             if case let .toolCall(tool, summary, _) = message.detail {
-                let name = Self.toolDisplayName(tool)
+                let name = Self.toolDisplayName(tool, language: language)
                 let brief = summary.trimmingCharacters(in: .whitespacesAndNewlines)
                 return brief.isEmpty ? name : "\(name) · \(brief.prefix(40))"
             }

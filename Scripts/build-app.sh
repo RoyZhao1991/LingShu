@@ -16,6 +16,7 @@ cd "$ROOT_DIR"
 
 CONFIG="${1:-debug}"
 APP_NAME="灵枢"
+CLI_NAME="lingshu"
 BUNDLE_ID="${LINGSHU_BUNDLE_ID:-com.zhaoroy.LingShu}"
 APP_VERSION="${LINGSHU_VERSION:-0.1.0}"
 BUILD_NUMBER="${LINGSHU_BUILD_NUMBER:-1}"
@@ -49,27 +50,36 @@ if [ "$UNIVERSAL_BUILD" = "1" ]; then
   echo "==> swift build ($CONFIG, universal arm64 + x86_64)"
   UNIVERSAL_TMP="$(mktemp -d)"
   ARCH_BINARIES=()
+  CLI_ARCH_BINARIES=()
   for ARCH in arm64 x86_64; do
     SCRATCH_PATH="$ROOT_DIR/.build/website-$CONFIG-$ARCH"
     TRIPLE="$ARCH-apple-macosx14.0"
     swift build -c "$CONFIG" --triple "$TRIPLE" --scratch-path "$SCRATCH_PATH" >/dev/null
     ARCH_BIN="$(swift build -c "$CONFIG" --triple "$TRIPLE" --scratch-path "$SCRATCH_PATH" --show-bin-path)/${APP_NAME}"
+    CLI_ARCH_BIN="$(swift build -c "$CONFIG" --triple "$TRIPLE" --scratch-path "$SCRATCH_PATH" --show-bin-path)/${CLI_NAME}"
     [ -f "$ARCH_BIN" ] || { echo "executable not found: $ARCH_BIN" >&2; exit 1; }
+    [ -f "$CLI_ARCH_BIN" ] || { echo "CLI executable not found: $CLI_ARCH_BIN" >&2; exit 1; }
     ARCH_BINARIES+=("$ARCH_BIN")
+    CLI_ARCH_BINARIES+=("$CLI_ARCH_BIN")
   done
   BIN_PATH="$UNIVERSAL_TMP/$APP_NAME"
+  CLI_BIN_PATH="$UNIVERSAL_TMP/$CLI_NAME"
   lipo -create "${ARCH_BINARIES[@]}" -output "$BIN_PATH"
+  lipo -create "${CLI_ARCH_BINARIES[@]}" -output "$CLI_BIN_PATH"
 else
   echo "==> swift build ($CONFIG)"
   swift build -c "$CONFIG" >/dev/null
   BIN_PATH="$(swift build -c "$CONFIG" --show-bin-path)/${APP_NAME}"
+  CLI_BIN_PATH="$(swift build -c "$CONFIG" --show-bin-path)/${CLI_NAME}"
 fi
 [ -f "$BIN_PATH" ] || { echo "executable not found: $BIN_PATH"; exit 1; }
+[ -f "$CLI_BIN_PATH" ] || { echo "CLI executable not found: $CLI_BIN_PATH"; exit 1; }
 
 echo "==> assembling bundle"
 rm -rf "$APP_DIR"
 mkdir -p "$MACOS_DIR" "$RES_DIR"
 cp "$BIN_PATH" "$MACOS_DIR/$APP_NAME"
+cp "$CLI_BIN_PATH" "$MACOS_DIR/$CLI_NAME"
 
 # 图标：从 appiconset 合成 .icns
 ICONSET="$(mktemp -d)/AppIcon.iconset"
@@ -191,7 +201,18 @@ PLIST
 
 # 稳定签名身份让 TCC 授权（屏幕录制/麦克风等）可持久、重建不丢；ad-hoc 做不到。
 # 本地开发可回退 ad-hoc；官网发布必须显式启用 STRICT_DISTRIBUTION，并使用 Developer ID。
-SIGN_IDENTITY="${LINGSHU_SIGN_IDENTITY:-Apple Development: Yang Zhao}"
+SIGN_IDENTITY="${LINGSHU_SIGN_IDENTITY:-}"
+if [ -z "$SIGN_IDENTITY" ]; then
+  if [ "$STRICT_DISTRIBUTION" = "1" ]; then
+    SIGN_IDENTITY="$(security find-identity -v -p codesigning 2>/dev/null \
+      | sed -n 's/.*"\(Developer ID Application: [^"]*\)".*/\1/p' \
+      | head -n 1)"
+  else
+    SIGN_IDENTITY="$(security find-identity -v -p codesigning 2>/dev/null \
+      | sed -n 's/.*"\(Apple Development: [^"]*\)".*/\1/p' \
+      | head -n 1)"
+  fi
+fi
 DRIVER_BUNDLE="$RES_DIR/LingShuAudioDriver.driver"
 if [ "$STRICT_DISTRIBUTION" = "1" ] && [[ "$SIGN_IDENTITY" != Developer\ ID\ Application:* ]]; then
   echo "error: website distribution requires a Developer ID Application identity" >&2
@@ -200,6 +221,13 @@ fi
 
 if security find-identity -v -p codesigning 2>/dev/null | grep -Fq "\"$SIGN_IDENTITY\""; then
   echo "==> code signing ($SIGN_IDENTITY)"
+  echo "   ==> signing bundled CLI ($SIGN_IDENTITY)"
+  if [[ "$SIGN_IDENTITY" == Developer\ ID* ]]; then
+    codesign --force --sign "$SIGN_IDENTITY" --options runtime --timestamp "$MACOS_DIR/$CLI_NAME"
+  else
+    codesign --force --sign "$SIGN_IDENTITY" --options runtime "$MACOS_DIR/$CLI_NAME" 2>/dev/null \
+      || codesign --force --sign "$SIGN_IDENTITY" "$MACOS_DIR/$CLI_NAME"
+  fi
   # 关键:HAL 驱动必须**单独**用同一身份签——`--deep` 不会遍历 Contents/Resources 里的 .driver
   # (它只签 Frameworks/PlugIns 等常规嵌套位置),漏签会让驱动是 ad-hoc → coreaudiod 静默拒载、设备不出现。
   # 不给驱动套 app 的相机/麦克风 entitlements(HAL 插件不需要);带安全时戳(离线则回退无时戳)。
@@ -290,6 +318,8 @@ else
   echo "⚠️  修复:确保钥匙串里有「${SIGN_IDENTITY}」证书,或用 LINGSHU_SIGN_IDENTITY 指定稳定证书后重建。"
   echo "════════════════════════════════════════════════════════════════"
   [ -d "$DRIVER_BUNDLE" ] && codesign --force --sign - --options runtime "$DRIVER_BUNDLE" 2>/dev/null || true
+  codesign --force --sign - --options runtime "$MACOS_DIR/$CLI_NAME" 2>/dev/null \
+    || codesign --force --sign - "$MACOS_DIR/$CLI_NAME"
   codesign --force --sign - \
     --entitlements "$ROOT_DIR/LingShu.entitlements" \
     --options runtime \

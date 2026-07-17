@@ -494,10 +494,11 @@ actor LingShuAgentSession: LingShuAgentSessioning {
     static let overValidationNudgeAt = 10
     static let overValidationForceAt = 20
     /// **只读空转收敛**(兼容各种模型,根治弱模型"反复读同一份文件就是不动手改/不收尾"):**还没产出过任何改动**就连续
-    /// 这么多步只读/查看 → `readOnlyStallNudgeAt` 先催它动手(产出/答复);再不动到 `readOnlyStallForceAt` 就诚实交还,
-    /// 别无限空转。与上面的过度自测门互补:那个抓"改完后空转",这个抓"从没改过的犹豫空转"。
+    /// 这么多步只读/查看 → 先温和提醒,再要求下一步必须行动或收尾;仍不收敛时关闭工具,让当前大脑基于已有上下文
+    /// 自主生成最终答复/明确的人机协作项。宿主不再把最后一条工具输出拼进用户可见文案。
     static let readOnlyStallNudgeAt = 8
-    static let readOnlyStallForceAt = 16
+    static let readOnlyStallConvergeAt = 16
+    static let readOnlyStallForceAt = 20
 
     /// 目标驱动循环:**停止条件只有「目标达成(模型给出最终答复)/ 卡住等人(ask_user)/ 原地打转交还」**。
     /// `maxTurns` 不是目标预算,而是防失控的安全天花板(高位,正常远到不了)——不靠它来"到点收工"。
@@ -513,7 +514,9 @@ actor LingShuAgentSession: LingShuAgentSessioning {
         var sawMutation = false
         var nudgedOverValidation = false
         var nudgedReadOnlyStall = false
-        while step < maxTurns {   // maxTurns = 安全天花板,非目标停止位
+        var requestedReadOnlyConvergence = false
+        var resolvingReadOnlyStall = false
+        while step < maxTurns || resolvingReadOnlyStall {   // 收敛回合可额外占一轮,避免在天花板处泄漏工具原文
             // 用户停止:真停(任务取消)→ 诚实交还,不假装收尾。
             if Task.isCancelled {
                 lastExitReason = .userCancelled
@@ -528,7 +531,9 @@ actor LingShuAgentSession: LingShuAgentSessioning {
             checkInvariants(at: .beforeModelCall)
             // 差距7-B:延迟加载时只把当前暴露集内的工具 schema 喂模型(全部 handler 仍可执行);nil=全暴露(零变更)。
             let activeTools: [LingShuAgentTool]
-            if let exposed = exposedToolNames {
+            if resolvingReadOnlyStall {
+                activeTools = []
+            } else if let exposed = exposedToolNames {
                 activeTools = tools.filter { exposed.contains($0.name) }
             } else {
                 activeTools = tools
@@ -572,6 +577,17 @@ actor LingShuAgentSession: LingShuAgentSessioning {
                 await emitLoopTrace(.result, actor: "Agent循环", title: "模型收尾", detail: String(text.prefix(120)))
                 return .completed(text: text)
             case .toolCalls(let calls):
+                // 只读空转的最终收敛回合明确不提供工具。若模型仍伪造工具调用,闭合消息协议后安全交还,
+                // 但绝不把原始工具输出、进程列表或内部诊断暴露给用户。
+                if resolvingReadOnlyStall {
+                    if !calls.isEmpty {
+                        messages.append(.init(role: .assistant, content: "", toolCalls: calls))
+                        appendSyntheticToolResults(for: calls, note: "（收敛回合不再执行工具调用。）")
+                    }
+                    lastExitReason = .readOnlyStallHandback
+                    await emitLoopTrace(.warning, actor: "LoopPolicy", title: "只读收敛未形成答复", detail: "modelReturnedToolCalls=\(!calls.isEmpty)")
+                    return .maxTurnsReached(lastText: LingShuAgentLoopPolicy.readOnlyResolutionFallback())
+                }
                 guard !calls.isEmpty else {
                     lastExitReason = .normalCompletion
                     return .completed(text: lastText)
@@ -699,6 +715,14 @@ actor LingShuAgentSession: LingShuAgentSessioning {
                     pendingSteer = LingShuAgentLoopPolicy.readOnlyStallSteer(turns: turnsSinceMutation)
                     await emitLoopTrace(.warning, actor: "LoopPolicy", title: "只读空转纠偏", detail: "turns=\(turnsSinceMutation)")
                 }
+                if !sawMutation,
+                   turnsSinceMutation >= Self.readOnlyStallConvergeAt,
+                   !requestedReadOnlyConvergence,
+                   pendingSteer == nil {
+                    requestedReadOnlyConvergence = true
+                    pendingSteer = LingShuAgentLoopPolicy.readOnlyConvergenceSteer(turns: turnsSinceMutation)
+                    await emitLoopTrace(.warning, actor: "LoopPolicy", title: "只读空转强纠偏", detail: "turns=\(turnsSinceMutation)")
+                }
                 // 差距7-A:同回合无依赖工具经调度器执行(生产侧=并行降延迟);结果**与发起同序**返回,
                 // 据此补 tool 结果保持 OpenAI 协议良构(每个 tool_call 必有同 id 的 tool 响应)。
                 await emitLoopTrace(
@@ -747,11 +771,13 @@ actor LingShuAgentSession: LingShuAgentSessioning {
                     await emitLoopTrace(.result, actor: "LoopPolicy", title: "过度验证强制收尾", detail: "turnsSinceMutation=\(turnsSinceMutation)")
                     return .completed(text: lastText.isEmpty ? "（工作已完成,产出物已落盘,停止重复验证,交付独立验收。）" : lastText)
                 }
-                // 只读空转到顶仍没动手 → 诚实交还(不假装完成,因为确实没产出),换路或等用户给方向(兼容犹豫的弱模型)。
+                // 仍未收敛时不由宿主编造退场话术,也不泄漏最后一条工具输出。关闭工具再给当前大脑一轮,
+                // 让它根据完整上下文决定直接答复、明确阻塞项或发起结构化人机协作。
                 if !sawMutation, turnsSinceMutation >= Self.readOnlyStallForceAt {
-                    lastExitReason = .readOnlyStallHandback
-                    await emitLoopTrace(.warning, actor: "LoopPolicy", title: "只读空转交还", detail: "turns=\(turnsSinceMutation)")
-                    return .maxTurnsReached(lastText: "（我连续 \(turnsSinceMutation) 步只在读取查看、没能动手产出——这步我判断不清,先停下。最近看到:\(lastText.prefix(160))。给我个方向或缺的信息,我换条路继续。）")
+                    resolvingReadOnlyStall = true
+                    messages.append(.init(role: .user, content: LingShuAgentLoopPolicy.readOnlyResolutionSteer(turns: turnsSinceMutation)))
+                    await emitLoopTrace(.warning, actor: "LoopPolicy", title: "只读空转交由大脑收敛", detail: "turns=\(turnsSinceMutation)")
+                    continue
                 }
             }
         }

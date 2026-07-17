@@ -58,7 +58,7 @@ struct LingShuBrainSetupView: View {
                 .frame(width: 46, height: 46)
                 .background(Color.lingHolo.opacity(0.12), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
             VStack(alignment: .leading, spacing: 5) {
-                Text(state.loc("连接灵枢主脑", "Connect the LingShu Brain"))
+                Text(state.loc("连接灵枢主脑", "Connect the Nous Brain"))
                     .font(.system(size: 23, weight: .bold))
                     .foregroundStyle(Color.lingFg)
                 Text(state.loc(
@@ -167,7 +167,7 @@ struct LingShuBrainSetupView: View {
         HStack(spacing: 12) {
             Text(isConnecting
                  ? state.loc("正在向模型发送连接校验…", "Verifying the model connection…")
-                 : state.loc("验证成功后将自动进入灵枢", "LingShu opens automatically after verification"))
+                 : state.loc("验证成功后将自动进入灵枢", "Nous opens automatically after verification"))
                 .font(.system(size: 10.5, weight: .medium))
                 .foregroundStyle(Color.lingFg.opacity(0.45))
             Spacer()

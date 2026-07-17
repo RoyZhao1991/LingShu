@@ -19,21 +19,21 @@ struct LingShuPluginListPanel: View {
             if !agents.isEmpty {
                 groupTitle(state.loc("外部 agent", "External Agents"), state.loc("自检探活通过后才允许 @ 调用", "Agents can be invoked only after passing health checks"))
                 ForEach(agents) { p in
-                    row(name: p.displayName, badge: "agent", badgeColor: .cyan, detail: p.subtitle, available: true,
+                    row(name: p.localizedDisplayName(language: state.language), badge: "agent", badgeColor: .cyan, detail: localizedPluginDetail(p), available: true,
                         rechecking: false, onRecheck: nil, onRemove: nil)
                 }
             }
             if !caps.isEmpty {
                 groupTitle(state.loc("外部 agent 技能", "External Agent Skills"), state.loc("仅展示可用 agent 已启用、已安装的子能力", "Enabled capabilities from available agents"))
                 ForEach(caps) { p in
-                    row(name: p.displayName, badge: "skill", badgeColor: .mint, detail: p.subtitle, available: true,
+                    row(name: p.localizedDisplayName(language: state.language), badge: "skill", badgeColor: .mint, detail: localizedPluginDetail(p), available: true,
                         rechecking: false, onRecheck: nil, onRemove: nil)
                 }
             }
             // ── 内置插件 / 技能
             groupTitle(state.loc("内置插件", "Built-in Plugins"), state.loc("输入框点「+」或打 @名字 即可调用", "Use the + menu or type @name in the prompt"))
             ForEach(all.filter { $0.kind == .plugin }) { p in
-                row(name: p.displayName, badge: nil, badgeColor: .clear, detail: p.subtitle, available: true,
+                row(name: p.localizedDisplayName(language: state.language), badge: nil, badgeColor: .clear, detail: localizedPluginDetail(p), available: true,
                     rechecking: false, onRecheck: nil, onRemove: nil)
             }
         }
@@ -85,7 +85,7 @@ struct LingShuPluginListPanel: View {
                 .disabled(isConnectingComputerUse)
             }
             if !computerUseMessage.isEmpty {
-                Text(computerUseMessage)
+                Text(state.localizedRuntimeText(computerUseMessage, fallback: state.loc("计算机操作能力检测未完成。", "Computer control check did not complete.")))
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(state.isCodexComputerUseConnected() ? Color.lingHolo : Color.orange)
                     .fixedSize(horizontal: false, vertical: true)
@@ -96,6 +96,18 @@ struct LingShuPluginListPanel: View {
         .overlay {
             RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .stroke(connected ? Color.lingHolo.opacity(0.3) : Color.lingFg.opacity(0.08))
+        }
+    }
+
+    private func localizedPluginDetail(_ plugin: LingShuInvocablePlugin) -> String {
+        guard state.language == .english else { return plugin.subtitle }
+        if plugin.id == "present" || plugin.displayName == "演示与答疑" {
+            return "Present documents and slides, explain content, and support live Q&A."
+        }
+        switch plugin.kind {
+        case .agent: return state.localizedRuntimeText(plugin.subtitle, fallback: "Available external agent")
+        case .agentCapability: return state.localizedRuntimeText(plugin.subtitle, fallback: "Available agent capability")
+        case .plugin: return state.localizedRuntimeText(plugin.subtitle, fallback: "Available built-in plugin")
         }
     }
 

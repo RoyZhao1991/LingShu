@@ -221,7 +221,7 @@ struct LingShuSkillsPanel: View {
                 .buttonStyle(.bordered)
                 Text(state.loc(
                     "放入带 frontmatter（title/triggers）的 .md 文件，重启后生效。",
-                    "Add .md files with title/triggers frontmatter, then restart LingShu."
+                    "Add .md files with title/triggers frontmatter, then restart Nous."
                 ))
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(Color.lingFg.opacity(0.45))
@@ -232,10 +232,10 @@ struct LingShuSkillsPanel: View {
                     Image(systemName: profile.id.hasPrefix("skill-") ? "person.crop.circle.badge.plus" : "person.crop.circle")
                         .foregroundStyle(profile.id.hasPrefix("skill-") ? Color.lingHoloAlt : Color.lingHolo)
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(profile.title)
+                        Text(profile.localizedTitle(language: state.language))
                             .font(.system(size: 12.5, weight: .bold))
                             .foregroundStyle(Color.lingFg.opacity(0.9))
-                        Text(profile.mission)
+                        Text(profile.localizedMission(language: state.language))
                             .font(.system(size: 11, weight: .medium))
                             .foregroundStyle(Color.lingFg.opacity(0.5))
                             .lineLimit(1)
@@ -295,7 +295,7 @@ struct LingShuConnectorsPanel: View {
             if registry.servers.isEmpty {
                 Text(state.loc(
                     "还没有连接器。MCP server 可以让灵枢读取 Issue、查询数据库或调用外部服务。",
-                    "No connectors yet. MCP servers can let LingShu read issues, query databases, or call external services."
+                    "No connectors yet. MCP servers can let Nous read issues, query databases, or call external services."
                 ))
                     .font(.system(size: 11.5, weight: .medium)).foregroundStyle(Color.lingFg.opacity(0.4))
             } else {

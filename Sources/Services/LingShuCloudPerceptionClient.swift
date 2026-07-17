@@ -84,9 +84,12 @@ struct LingShuCloudPerceptionClient {
     ) async throws -> LingShuCloudPerceptionResult {
         // 单图视觉理解走 swds-vision-fast,但显式指定 model=qwen2.5-vl(实测它给出更扎实的场景/版式语义;
         // deep 端点是视频专用、不收单图)。深度=视频 + 周期性态势感知里用 analyzeVideo→swds-vision-deep。
+        let localizedPrompt = LingShuLanguagePreferenceStore.modelPrompt(
+            applyingHighestPriorityLanguageTo: prompt
+        )
         var body: [String: Any] = [
             "model": model,
-            "prompt": prompt,
+            "prompt": localizedPrompt,
             "include_ocr": includeOCR,
             "include_grounding": includeGrounding,
             "detection_queries": detectionQueries,
@@ -122,8 +125,11 @@ struct LingShuCloudPerceptionClient {
         detectionQueries: [String] = LingShuCloudPerceptionClient.defaultDetectionQueries,
         includeQwenSemantics: Bool = true
     ) async throws -> LingShuCloudPerceptionResult {
+        let localizedPrompt = LingShuLanguagePreferenceStore.modelPrompt(
+            applyingHighestPriorityLanguageTo: prompt
+        )
         var body: [String: Any] = [
-            "prompt": prompt,
+            "prompt": localizedPrompt,
             "sample_interval_sec": sampleIntervalSec,
             "max_keyframes": maxKeyframes,
             "include_ocr": includeOCR,

@@ -127,17 +127,22 @@ enum LingShuResidencyService {
     }
 
     @discardableResult
-    static func setLaunchAtLogin(_ enabled: Bool) -> String {
+    static func setLaunchAtLogin(
+        _ enabled: Bool,
+        language: LingShuVoiceLanguage = LingShuLanguagePreferenceStore.currentLanguage()
+    ) -> String {
         do {
             if enabled {
                 try SMAppService.mainApp.register()
-                return "已设置开机自启。"
+                return language == .english ? "Launch at Login is enabled." : "已设置开机自启。"
             } else {
                 try SMAppService.mainApp.unregister()
-                return "已取消开机自启。"
+                return language == .english ? "Launch at Login is disabled." : "已取消开机自启。"
             }
         } catch {
-            return "开机自启设置失败：\(error.localizedDescription)"
+            return language == .english
+                ? "Could not update Launch at Login: \(error.localizedDescription)"
+                : "开机自启设置失败：\(error.localizedDescription)"
         }
     }
 }

@@ -56,7 +56,7 @@ struct LingShuOwnerIdentityPanel: View {
                 IdentityMetric(title: LingShuLanguagePreferenceStore.localized("综合", "Combined"), value: snapshot.isLocked ? LingShuLanguagePreferenceStore.localized("通过", "Verified") : LingShuLanguagePreferenceStore.localized("待确认", "Pending"), confidence: snapshot.combinedConfidence)
             }
 
-            Text(snapshot.detailText)
+            Text(snapshot.localizedDetailText(language: LingShuLanguagePreferenceStore.currentLanguage()))
                 .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(Color.lingFg.opacity(0.55))
                 .fixedSize(horizontal: false, vertical: true)

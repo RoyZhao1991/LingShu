@@ -71,6 +71,8 @@ final class ShellCommandPolicyTests: XCTestCase {
             "rm /Users/example/app/tmp.txt",
             "mv out.pptx /Users/example/Desktop/",
             "cp a.txt /usr/local/share/x",      // /usr/local 不在敏感前缀里
+            "mkdir -p ~/bin && cp /tmp/weclaw ~/bin/weclaw && chmod +x ~/bin/weclaw",
+            "mkdir -p $HOME/bin && cp /tmp/tool $HOME/bin/tool",
             "touch ./build/marker",
             "echo done > result.txt"
         ]

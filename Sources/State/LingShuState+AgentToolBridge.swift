@@ -11,7 +11,8 @@ extension LingShuState {
         let defaultWorkingDir = agentWorkingDirectory
         let allowShell: Bool
         switch executionPolicy {
-        case .standard:       allowShell = developmentPhaseFullAccess || !requireHumanApproval || sessionShellAlwaysAllowed
+        // 会话完整权限在真正执行工具时动态读取，避免工具目录创建时把旧权限永久拍进闭包。
+        case .standard:       allowShell = developmentPhaseFullAccess || !requireHumanApproval
         case .readOnly:       allowShell = false
         case .autoAllowShell: allowShell = true
         }
@@ -64,7 +65,12 @@ extension LingShuState {
             defaultWorkingDirectory: defaultWorkingDir,
             workingDirectoryOverride: workingDirectoryOverride
         )
-        return builtinTools + externalTools + skillTools + longTools + recordedLocalKnowledgeTools + [listCapabilitiesTool(), selfInspectTool()]
+        let humanInteractionTool = Self.requestHumanInteractionTool { [weak self] request in
+            guard let self else { return request }
+            return await self.prepareHumanInteractionRequest(request)
+        }
+        return builtinTools + externalTools + skillTools + longTools + recordedLocalKnowledgeTools
+            + [humanInteractionTool, listCapabilitiesTool(), selfInspectTool()]
     }
 
     /// 给非原语 Agent 工具补一层结构化执行记录。
@@ -132,7 +138,8 @@ extension LingShuState {
         let hardFailures = [
             "执行环境不可用", "缺少 ", "目录不存在", "不是文件夹", "尚未指定",
             "没指定", "没读到", "没找到图片", "未授权", "需要授权", "需系统",
-            "permission denied", "not permitted", "operation not permitted", "error:", "失败"
+            "permission denied", "not permitted", "operation not permitted", "error:", "失败",
+            "interaction_not_ready"
         ]
         return !hardFailures.contains { text.contains($0.lowercased()) }
     }

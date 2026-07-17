@@ -25,8 +25,8 @@ struct LingShuOperationsSurface: View {
                 LazyVGrid(columns: gridColumns, spacing: 12) {
                     ForEach(state.agents) { agent in
                         LingShuDualLayerCell(
-                            label: agent.shortName,
-                            value: agent.domain,
+                            label: agent.displayShortName(language: state.language),
+                            value: agent.displayDomain(language: state.language),
                             stateText: agentStateText(agent.state),
                             stateColor: agentStateColor(agent.state),
                             load: agent.load
@@ -45,13 +45,13 @@ struct LingShuOperationsSurface: View {
                     policyCell(state.loc("流式多轮", "Streaming"), on: state.localStreamingDialogueEnabled, onText: state.loc("流式", "Streaming"), offText: state.loc("整段", "Buffered"))
                     LingShuDualLayerCell(
                         label: state.loc("会话池", "Session pool"),
-                        value: state.remoteSessionStatus,
+                        value: state.remoteSessionStatusDisplay,
                         stateText: state.remoteSessionPool.stats().running > 0 ? state.loc("运行中", "Running") : state.loc("空闲", "Idle"),
                         stateColor: state.remoteSessionPool.stats().running > 0 ? .lingHolo : Color.lingFg.opacity(0.45)
                     )
                     LingShuDualLayerCell(
                         label: state.loc("主通道", "Brain channel"),
-                        value: state.modelProvider,
+                        value: state.modelProviderDisplay,
                         stateText: state.isModelConnected ? state.loc("已接入", "Connected") : state.loc("未接入", "Disconnected"),
                         stateColor: state.isModelConnected ? .lingHolo : .orange
                     )
@@ -65,7 +65,7 @@ struct LingShuOperationsSurface: View {
                     ForEach(Array(state.eventLog.prefix(12).enumerated()), id: \.offset) { _, item in
                         HStack(spacing: 8) {
                             Circle().fill(Color.lingHolo.opacity(0.7)).frame(width: 4, height: 4)
-                            Text(item)
+                            Text(state.localizedEventLogItem(item))
                                 .font(.system(size: 12, weight: .medium, design: .monospaced))
                                 .foregroundStyle(Color.lingFg.opacity(0.66))
                                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -215,7 +215,8 @@ struct LingShuModelGatewaySurface: View {
             } else {
                 Menu {
                     ForEach(pending) { d in
-                        Button(d.displayName) { sheet = .channel(key: LingShuState.ttsChannelKey(d.id), title: d.displayName, endpoint: d.defaultEndpoint, model: "") }
+                        let name = d.localizedDisplayName(language: state.language)
+                        Button(name) { sheet = .channel(key: LingShuState.ttsChannelKey(d.id), title: name, endpoint: d.defaultEndpoint, model: "") }
                     }
                 } label: {
                     Label(state.loc("新增声音", "Add Voice"), systemImage: "plus.circle.fill").font(.system(size: 12, weight: .semibold))
@@ -280,8 +281,8 @@ struct LingShuModelGatewaySurface: View {
                 VStack(spacing: 6) {
                     LingShuChannelRow(
                         state: state,
-                        title: preset.name,
-                        subtitle: "\(preset.region) · \(preset.name == state.modelProvider ? state.modelName : (preset.defaultModels.first ?? "")) · \(state.prefixCacheStrategy(for: preset).shortLabel)",
+                        title: preset.localizedName(language: state.language),
+                        subtitle: "\(preset.localizedRegion(language: state.language)) · \(preset.name == state.modelProvider ? state.modelName : (preset.defaultModels.first ?? "")) · \(state.prefixCacheStrategy(for: preset).shortLabel(language: state.language))",
                         channelKey: LingShuState.brainChannelKey(preset.name),
                         isActive: preset.name == state.modelProvider,
                         onValidate: { await state.validateBrainChannel(preset.name) },
@@ -360,8 +361,9 @@ struct LingShuModelGatewaySurface: View {
     /// **实际在用(地面真相,2026-06-29)**:最近一次真实请求实际用的脑——和"选中的通道"分开,治"显示的≠真用的"。
     /// 与选中一致=绿勾;不一致=橙色告警(选中后还没发请求/会话快照滞后)。还没发过请求则提示"发一条消息后显示"。
     @ViewBuilder private var actualBrainStatus: some View {
-        let selected = "\(state.modelProvider) / \(state.modelName)"
-        let actual = state.actualBrainModel.isEmpty ? "" : "\(state.actualBrainProvider) / \(state.actualBrainModel)"
+        let selected = "\(state.modelProviderDisplay) / \(state.modelName)"
+        let actualProvider = state.localizedModelProviderName(state.actualBrainProvider)
+        let actual = state.actualBrainModel.isEmpty ? "" : "\(actualProvider) / \(state.actualBrainModel)"
         let matches = !actual.isEmpty && state.actualBrainProvider == state.modelProvider && state.actualBrainModel == state.modelName
         let fmt: (Date) -> String = { let f = DateFormatter(); f.dateFormat = "HH:mm:ss"; return f.string(from: $0) }
         HStack(spacing: 12) {
@@ -400,7 +402,7 @@ struct LingShuModelGatewaySurface: View {
             let key = LingShuState.ttsChannelKey(d.id)
             LingShuChannelRow(
                 state: state, title: state.ttsDisplayName(d),
-                subtitle: state.channelConfig(key).model.isEmpty ? d.deployment : state.channelConfig(key).model,
+                subtitle: state.channelConfig(key).model.isEmpty ? d.localizedDeployment(language: state.language) : state.channelConfig(key).model,
                 channelKey: key,
                 isActive: state.voiceManager?.speechOutputProvider.id == d.id,
                 onValidate: { await state.validateTTSChannel(d) },
@@ -604,7 +606,7 @@ struct LingShuSystemPermissionsPanel: View {
             permissionRow(
                 icon: "bell.badge",
                 title: state.loc("系统通知", "Notifications"),
-                detail: state.loc("灵枢主动推送横幅(纪要完成 / 异常提醒)", "Lets 灵枢 push banners (minutes done / alerts)"),
+                detail: state.loc("灵枢主动推送横幅(纪要完成 / 异常提醒)", "Lets Nous push banners (minutes complete / alerts)"),
                 granted: notifications.authorized,
                 grantTitle: state.loc("授予", "Grant")
             ) {
@@ -709,7 +711,9 @@ struct LingShuChannelRow: View {
         let (text, color): (String, Color) = {
             if validating { return (state.loc("校验中…", "Validating…"), .orange) }
             guard let v = validation else { return (state.loc("未校验", "Not validated"), Color.lingFg.opacity(0.4)) }
-            return v.ok ? (state.loc("✅ 校验通过", "✅ Valid"), .green) : ("❌ " + String(v.detail.prefix(12)), .red)
+            return v.ok
+                ? (state.loc("✅ 校验通过", "✅ Valid"), .green)
+                : (state.language == .english ? "❌ Validation failed" : "❌ " + String(v.detail.prefix(12)), .red)
         }()
         pill(text, color)
     }
@@ -765,7 +769,9 @@ struct LingShuModelChannelSheet: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack {
-                Text(isAdd ? state.loc("新增模型", "Add Model") : state.loc("修改 · \(provider)", "Edit · \(provider)"))
+                Text(isAdd
+                     ? state.loc("新增模型", "Add Model")
+                     : state.loc("修改 · \(provider)", "Edit · \(state.localizedModelProviderName(provider))"))
                     .font(.system(size: 15, weight: .bold)).foregroundStyle(Color.lingFg)
                 Spacer()
                 Button { dismiss() } label: { Image(systemName: "xmark.circle.fill").font(.system(size: 17)).foregroundStyle(Color.lingFg.opacity(0.5)) }.buttonStyle(.plain)
@@ -774,7 +780,9 @@ struct LingShuModelChannelSheet: View {
             if isAdd {
                 Picker(state.loc("供应商", "Provider"), selection: $provider) {
                     Text(state.loc("选择供应商", "Choose provider")).tag("")
-                    ForEach(ModelProviderPreset.apiCatalog) { Text($0.displayName).tag($0.name) }
+                    ForEach(ModelProviderPreset.apiCatalog) {
+                        Text($0.displayName(language: state.language)).tag($0.name)
+                    }
                 }
                 .pickerStyle(.menu)
                 .onChange(of: provider) { _ in
@@ -791,8 +799,12 @@ struct LingShuModelChannelSheet: View {
                 }
                 TextField("deepseek-chat / gpt-5.5 / ...", text: $model).textFieldStyle(.roundedBorder)
                 fieldLabel(state.loc("访问密钥", "Access key"))
-                SecureField(isAdd ? (preset?.authMode ?? "API Key") : state.loc("已配置（留空保持不变）", "Configured (leave blank to keep)"), text: $key).textFieldStyle(.roundedBorder)
-                if let note = preset?.note {
+                SecureField(
+                    isAdd ? (preset?.localizedAuthMode(language: state.language) ?? "API Key") : state.loc("已配置（留空保持不变）", "Configured (leave blank to keep)"),
+                    text: $key
+                ).textFieldStyle(.roundedBorder)
+                if let preset {
+                    let note = preset.localizedNote(language: state.language)
                     Text(note).font(.system(size: 11, weight: .medium)).foregroundStyle(Color.lingFg.opacity(0.45)).fixedSize(horizontal: false, vertical: true)
                 }
             }

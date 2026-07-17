@@ -25,6 +25,17 @@ extension LingShuState {
 
         guard let envelope = LingShuHumanInputEnvelope.decode(from: raw) else { return false }
 
+        if let interaction = legacyHumanInteractionRequest(envelope, recordID: recordID) {
+            return renderGenericHumanInteraction(
+                interaction,
+                bubbleID: bubbleID,
+                recordID: recordID,
+                context: context,
+                prompt: prompt,
+                elapsed: elapsed
+            )
+        }
+
         switch envelope.tool {
         case "ask_form":
             return renderFormBlock(envelope.argumentsJSON, bubbleID: bubbleID, recordID: recordID, context: context, prompt: prompt, elapsed: elapsed)
@@ -35,6 +46,34 @@ extension LingShuState {
         default:
             return false
         }
+    }
+
+    /// Preserve the typed OAuth/prerequisite decision while moving legacy blocking tools
+    /// onto the app-native interaction surface. Presentation is unified; authorization
+    /// detection remains driven only by the existing structured marker.
+    func legacyHumanInteractionRequest(
+        _ envelope: LingShuHumanInputEnvelope,
+        recordID: String?
+    ) -> LingShuHumanInteractionRequest? {
+        guard let base = envelope.humanInteractionRequest else { return nil }
+        guard ["ask_user", "ask_choice"].contains(envelope.tool) else { return base }
+
+        let displayText = LingShuHumanInputEnvelope.userFacingText(for: envelope)
+        guard let prerequisite = userPrerequisiteChoicePromptIfNeeded(
+            resultText: displayText,
+            taskRecordID: recordID
+        ) else { return base }
+
+        return LingShuHumanInteractionRequest(
+            kind: .choice,
+            title: prerequisite.question,
+            prompt: prerequisite.question,
+            payload: ["semantic_context": "prerequisite_choice"],
+            options: prerequisite.options.map {
+                .init(label: $0.label, detail: $0.detail ?? "", value: $0.label)
+            },
+            source: envelope.tool
+        ).normalized
     }
 
     private func renderUserQuestionBlock(_ argsJSON: String, bubbleID: UUID, recordID: String?, context: LingShuPendingHumanInputContext, prompt: String, elapsed: TimeInterval) -> Bool {

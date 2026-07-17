@@ -100,7 +100,10 @@ extension LingShuState {
         return ttsCloudCatalog.filter { !configured.contains($0.id) }
     }
     func ttsDisplayName(_ descriptor: LingShuSpeechOutputProviderDescriptor) -> String {
-        channelDisplayName(Self.ttsChannelKey(descriptor.id), default: descriptor.displayName)
+        channelDisplayName(
+            Self.ttsChannelKey(descriptor.id),
+            default: descriptor.localizedDisplayName(language: language)
+        )
     }
 
     // MARK: - 中枢模型快速切换(多模型下拉框,2026-06-29 用户要)

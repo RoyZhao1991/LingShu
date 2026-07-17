@@ -114,7 +114,21 @@ enum LingShuShellCommandPolicy {
             lowered.contains(cmd + " ") || lowered.hasSuffix(cmd)
         }
         guard hasMutator else { return false }
-        return systemSensitivePrefixes.contains { lowered.contains($0) }
+        return systemSensitivePrefixes.contains { containsAbsolutePathPrefix($0, in: lowered) }
+    }
+
+    /// 只把真正的绝对系统路径视为红线。`~/bin`、`$HOME/bin` 等用户目录也包含 `/bin/` 字面量，
+    /// 不能因为子串相同就误报为根目录 `/bin/`。
+    private static func containsAbsolutePathPrefix(_ prefix: String, in command: String) -> Bool {
+        var searchStart = command.startIndex
+        while searchStart < command.endIndex,
+              let range = command.range(of: prefix, range: searchStart..<command.endIndex) {
+            if range.lowerBound == command.startIndex { return true }
+            let before = command[command.index(before: range.lowerBound)]
+            if before.isWhitespace || "'\"=><(;|&".contains(before) { return true }
+            searchStart = range.upperBound
+        }
+        return false
     }
 
     // MARK: - 工具

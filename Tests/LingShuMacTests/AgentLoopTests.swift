@@ -6,11 +6,13 @@ private final class ScriptedAgentModel: LingShuAgentModel, @unchecked Sendable {
     private let script: [LingShuAgentModelResponse]
     private var index = 0
     private(set) var sawToolResults: [String] = []
+    private(set) var exposedToolCounts: [Int] = []
 
     init(_ script: [LingShuAgentModelResponse]) { self.script = script }
 
     // 由 LingShuAgentSession(actor)串行调用,无并发,无需加锁。
     func respond(messages: [LingShuAgentMessage], tools: [LingShuAgentTool]) async -> LingShuAgentModelResponse {
+        exposedToolCounts.append(tools.count)
         // 记录上一轮回灌的工具结果,证明结果确实回到了模型上下文。
         if let last = messages.last, last.role == .tool {
             sawToolResults.append(last.content)
@@ -368,19 +370,25 @@ final class AgentLoopTests: XCTestCase {
         XCTAssertTrue(messages.contains { $0.role == .user && $0.content.contains("不要把说明文字") })
     }
 
-    func testReadOnlyStallHandsBackWhenNeverMutating() async {
-        // 弱模型只反复读/查看、从不动手改:停滞检测抓不到(每次参数不同),但「只读空转门」应在阈值处诚实交还,
-        // 而非跑满天花板。证明对各种模型的犹豫空转有兜底。
+    func testReadOnlyStallHandsFinalResolutionToBrainWithoutTools() async {
+        // 弱模型只反复读/查看、从不动手改:到强制阈值后应关闭工具,把完整上下文交给大脑生成干净结论,
+        // 不能由宿主拼接最后一次工具输出直接展示给用户。
         var script: [LingShuAgentModelResponse] = []
-        for i in 0..<40 { script.append(.toolCalls([.init(id: "c\(i)", name: "read_file", argumentsJSON: "{\"path\":\"/f\",\"offset\":\(i)}")])) }
+        for i in 0..<LingShuAgentSession.readOnlyStallForceAt {
+            script.append(.toolCalls([.init(id: "c\(i)", name: "read_file", argumentsJSON: "{\"path\":\"/f\",\"offset\":\(i)}")]))
+        }
+        script.append(.text("根据已有上下文，当前缺少目标文件路径；请提供该路径后继续。"))
         let model = ScriptedAgentModel(script)
-        let readTool = LingShuAgentTool(name: "read_file", description: "读") { _ in "文件内容若干…" }
+        let readTool = LingShuAgentTool(name: "read_file", description: "读") { _ in "PRIVATE_PROCESS_OUTPUT" }
         let session = LingShuAgentSession(id: "s-ro", tools: [readTool], model: model, maxTurns: 40)
         let result = await session.send("迭代这个文件")
-        guard case .maxTurnsReached = result else { return XCTFail("只读空转应触发交还") }
+        XCTAssertEqual(result, .completed(text: "根据已有上下文，当前缺少目标文件路径；请提供该路径后继续。"))
         let used = await session.turnsUsed
-        XCTAssertLessThanOrEqual(used, LingShuAgentSession.readOnlyStallForceAt, "应在只读空转阈值处停,而非跑满天花板")
-        XCTAssertLessThan(used, 40)
+        XCTAssertEqual(used, LingShuAgentSession.readOnlyStallForceAt + 1)
+        XCTAssertEqual(model.exposedToolCounts.last, 0, "最终收敛回合必须关闭工具,避免继续只读绕圈")
+        let messages = await session.messages
+        XCTAssertTrue(messages.contains { $0.role == .user && $0.content.contains("禁止复述工具原始输出") })
+        XCTAssertFalse(LingShuState.runResultText(result).contains("PRIVATE_PROCESS_OUTPUT"))
     }
 
     func testToolReceivesArgumentsJSON() async {

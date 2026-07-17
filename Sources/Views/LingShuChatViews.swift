@@ -312,7 +312,9 @@ struct ChatBubbleView: View {
 
                 // **气泡内追加信息**:这条任务在等用户输入 → 从气泡直接回复(选项上方/无选项时单独),
                 // 答复**直达该任务隔离会话**(不经主输入/分诊),不怕被后续聊天淹没。
-                if !message.isUser, let rid = message.awaitingInputForRecordID {
+                if !message.isUser,
+                   let rid = message.awaitingInputForRecordID,
+                   !(message.humanInteraction.map(LingShuState.requiresHardHumanInteractionPresentation) ?? false) {
                     HStack(spacing: 6) {
                         TextField(state.loc("回复这条任务(如 A / B,或补充信息)…", "Reply to this task…"),
                                   text: $taskReplyText)

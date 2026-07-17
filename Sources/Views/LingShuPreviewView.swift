@@ -28,7 +28,7 @@ struct LingShuPreviewHost: NSViewRepresentable {
             if controller.isPresented, window == nil {
                 let host = NSHostingController(rootView: LingShuPreviewSheet(controller: controller, presentation: presentation))
                 let w = NSWindow(contentViewController: host)
-                w.title = LingShuLanguagePreferenceStore.localized("灵枢演示", "LingShu Presentation")
+                w.title = LingShuLanguagePreferenceStore.localized("灵枢演示", "Nous Presentation")
                 w.setContentSize(NSSize(width: 1040, height: 720))
                 w.styleMask = [.titled, .closable, .resizable, .miniaturizable, .fullSizeContentView]
                 w.collectionBehavior.insert(.fullScreenPrimary)

@@ -68,18 +68,18 @@ These candidates create concrete contribution paths before the repository become
 
 **Labels:** `enhancement`, `help wanted`
 
-### 5. Split CI into fast pull-request checks and the complete 1,526-test suite
+### 5. Split CI into fast pull-request checks and the complete 1,500+ test suite
 
 **Goal:** Keep pull-request feedback fast while preserving the complete suite as a mandatory main-branch, scheduled, or manually triggered verification path.
 
 **Acceptance:**
 
 - The fast lane covers architecture guards, model protocols, task lifecycle, permissions, and acceptance gates.
-- The complete lane discovers and executes the full SwiftPM suite.
+- The complete lane discovers and executes the full SwiftPM suite without relying on a hard-coded test count.
 - Neither lane silently converts failures into skips or success.
 - CI documentation explains when each lane runs.
 
-**中文摘要：**拆分 PR 快速门和完整测试门；快速门覆盖关键内核，完整门保留全部 1,526 项测试，任何失败都不能静默跳过。
+**中文摘要：**拆分 PR 快速门和完整测试门；快速门覆盖关键内核，完整门动态发现并保留全部 1,500+ 项测试，任何失败都不能静默跳过。
 
 **Labels:** `enhancement`, `help wanted`
 

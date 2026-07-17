@@ -159,7 +159,7 @@ struct TaskDevToolsPanel: View {
                 }
                 commitButton(fileCount: code.files.count)
             } else {
-                Text(state.loc("尚未捕获 Git 改动（任务收尾后扫描）。", "No Git changes captured yet; LingShu scans them at task completion."))
+                Text(state.loc("尚未捕获 Git 改动（任务收尾后扫描）。", "No Git changes captured yet; Nous scans them at task completion."))
                     .font(.system(size: 10.5, weight: .medium)).foregroundStyle(Color.lingFg.opacity(0.36))
                     .fixedSize(horizontal: false, vertical: true)
             }

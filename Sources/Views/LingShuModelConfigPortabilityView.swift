@@ -24,7 +24,7 @@ struct LingShuModelConfigPortabilityBar: View {
                 Spacer()
             }
             if !status.isEmpty {
-                Text(status)
+                Text(state.localizedRuntimeText(status, fallback: statusOK ? state.loc("配置已更新", "Configuration updated") : state.loc("配置操作失败", "Configuration operation failed")))
                     .font(.system(size: 11.5))
                     .foregroundStyle(statusOK ? Color.green.opacity(0.9) : Color.orange.opacity(0.95))
             }
@@ -60,7 +60,7 @@ struct LingShuModelConfigPortabilityBar: View {
 
     private func beginImport() {
         let panel = NSOpenPanel()
-        panel.title = state.loc("选择灵枢加密配置文件", "Choose an Encrypted LingShu Configuration")
+        panel.title = state.loc("选择灵枢加密配置文件", "Choose an Encrypted Nous Configuration")
         panel.allowedContentTypes = []
         panel.allowsMultipleSelection = false
         panel.canChooseDirectories = false
@@ -74,7 +74,7 @@ struct LingShuModelConfigPortabilityBar: View {
         case .export:
             let panel = NSSavePanel()
             panel.title = state.loc("保存加密配置", "Save Encrypted Configuration")
-            panel.nameFieldStringValue = state.loc("灵枢模型配置.lingshucfg", "LingShu-model-config.lingshucfg")
+            panel.nameFieldStringValue = state.loc("灵枢模型配置.lingshucfg", "Nous-model-config.lingshucfg")
             sheet = nil
             guard panel.runModal() == .OK, let url = panel.url else { return }
             switch state.exportModelConfig(passphrase: passphrase, to: url) {
@@ -83,7 +83,7 @@ struct LingShuModelConfigPortabilityBar: View {
                 status = state.loc("✅ 已加密导出(\(r.summary))→ \(url.lastPathComponent)。用同一口令即可在别处一键导入。", "✅ Encrypted export complete (\(r.summary)) → \(url.lastPathComponent). Use the same passphrase to import it elsewhere.")
             case .failure(let e):
                 statusOK = false
-                status = state.loc("导出失败:", "Export failed: ") + ((e as? LingShuModelConfigPortability.PortError)?.errorDescription ?? e.localizedDescription)
+                status = state.loc("导出失败:", "Export failed: ") + localizedError(e)
             }
         case .importing(let url):
             sheet = nil
@@ -93,9 +93,21 @@ struct LingShuModelConfigPortabilityBar: View {
                 status = state.loc("✅ 已导入并启用:脑=\(b.provider)/\(b.model) · 通道 \(b.channels.count) 个 · 密钥 \(b.credentials.count) 条。下一回合即用新配置。", "✅ Imported and enabled: brain \(b.provider)/\(b.model) · \(b.channels.count) channels · \(b.credentials.count) credentials. The new configuration applies next turn.")
             case .failure(let e):
                 statusOK = false
-                status = state.loc("导入失败:", "Import failed: ") + ((e as? LingShuModelConfigPortability.PortError)?.errorDescription ?? e.localizedDescription)
+                status = state.loc("导入失败:", "Import failed: ") + localizedError(e)
             }
         }
+    }
+
+    private func localizedError(_ error: Error) -> String {
+        if let error = error as? LingShuModelConfigPortability.PortError {
+            switch error {
+            case .weakPassphrase: return state.loc("口令太短（至少 \(LingShuModelConfigPortability.minPassphraseLength) 位）", "The passphrase is too short (minimum \(LingShuModelConfigPortability.minPassphraseLength) characters).")
+            case .encodeFailed: return state.loc("配置序列化失败", "The configuration could not be encoded.")
+            case .badFile: return state.loc("不是合法的灵枢配置文件", "This is not a valid Nous configuration file.")
+            case .wrongPassphraseOrCorrupt: return state.loc("口令错误或文件已损坏", "The passphrase is incorrect or the file is damaged.")
+            }
+        }
+        return state.language == .english ? "Unexpected configuration error." : error.localizedDescription
     }
 }
 

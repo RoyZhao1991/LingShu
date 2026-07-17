@@ -10,7 +10,9 @@ let package = Package(
     products: [
         // 可执行产物（进程名/菜单栏应用名）用中文「灵枢」；内部模块名仍是 LingShuMac，
         // 以保持 @testable import 与测试目标不变。
-        .executable(name: "灵枢", targets: ["LingShuMac"])
+        .executable(name: "灵枢", targets: ["LingShuMac"]),
+        // 外部自动化只通过本机控制面进入同一条主会话，不复制分诊、记忆或执行逻辑。
+        .executable(name: "lingshu", targets: ["LingShuCLI"])
     ],
     targets: [
         .executableTarget(
@@ -34,9 +36,18 @@ let package = Package(
             path: "SourcesObjC/LingShuAudioExceptionCatcher",
             publicHeadersPath: "include"
         ),
+        .target(
+            name: "LingShuCLIKit",
+            path: "SourcesCLIKit"
+        ),
+        .executableTarget(
+            name: "LingShuCLI",
+            dependencies: ["LingShuCLIKit"],
+            path: "SourcesCLI"
+        ),
         .testTarget(
             name: "LingShuMacTests",
-            dependencies: ["LingShuMac"],
+            dependencies: ["LingShuMac", "LingShuCLIKit"],
             path: "Tests/LingShuMacTests"
         )
     ]

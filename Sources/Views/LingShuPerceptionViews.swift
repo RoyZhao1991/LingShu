@@ -17,7 +17,12 @@ struct LingShuTopPerceptionStrip: View {
                 PerceptionDotStatus(title: state.loc("耳", "Ear"), value: earStatusText, isActive: state.voiceWakeListeningEnabled, compact: compact)
                 PerceptionDotStatus(title: state.loc("嘴", "Voice"), value: mouthStatusText, isActive: mouthIsActive, compact: compact)
                 PerceptionDotStatus(title: state.loc("眼", "Eye"), value: vision.isCameraRunning ? state.loc("看", "On") : state.loc("待机", "Idle"), isActive: vision.isCameraRunning, compact: compact)
-                PerceptionDotStatus(title: state.loc("主", "Owner"), value: perceptionGateway.ownerIdentitySnapshot.shortStatus, isActive: perceptionGateway.isOwnerIdentityLocked, compact: compact)
+                PerceptionDotStatus(
+                    title: state.loc("主", "Owner"),
+                    value: perceptionGateway.ownerIdentitySnapshot.shortStatus(language: state.language),
+                    isActive: perceptionGateway.isOwnerIdentityLocked,
+                    compact: compact
+                )
                 PerceptionDotStatus(
                     title: state.loc("析", "Sense"),
                     value: perceptionGateway.isRemoteRouteActive ? state.loc("模型", "Cloud") : state.loc("本地", "Local"),
@@ -25,6 +30,8 @@ struct LingShuTopPerceptionStrip: View {
                     compact: compact
                 )
             }
+            .fixedSize(horizontal: true, vertical: false)
+            .layoutPriority(2)
             .padding(.horizontal, 10)
             .frame(height: 34)
             .background(Color.lingFg.opacity(0.065), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
@@ -89,6 +96,10 @@ struct PerceptionDotStatus: View {
     /// 空间不足时只保留圆点+单字标题，隐藏状态值文字（避免被压缩/换行）。
     var compact: Bool = false
 
+    static func displayTitle(_ title: String, compact: Bool) -> String {
+        compact ? String(title.prefix(1)) : title
+    }
+
     var body: some View {
         HStack(spacing: 5) {
             Circle()
@@ -96,17 +107,26 @@ struct PerceptionDotStatus: View {
                 .frame(width: 7, height: 7)
                 .shadow(color: isActive ? Color.green.opacity(0.55) : .clear, radius: 4)
 
-            Text(title)
+            Text(Self.displayTitle(title, compact: compact))
                 .font(.system(size: 11.5, weight: .bold))
                 .foregroundStyle(Color.lingFg.opacity(0.86))
+                .lineLimit(1)
+                .minimumScaleFactor(0.82)
+                .allowsTightening(true)
+                .fixedSize(horizontal: true, vertical: false)
 
             if !compact {
                 Text(value)
                     .font(.system(size: 10.5, weight: .semibold))
                     .foregroundStyle(Color.lingFg.opacity(0.48))
                     .lineLimit(1)
+                    .minimumScaleFactor(0.82)
+                    .allowsTightening(true)
+                    .fixedSize(horizontal: true, vertical: false)
             }
         }
+        .fixedSize(horizontal: true, vertical: false)
+        .layoutPriority(2)
     }
 }
 
@@ -125,17 +145,39 @@ struct LingShuPerceptionPopoverContent: View {
 
                 Spacer()
 
-                Text(perceptionGateway.activeRoute.displayName)
+                Text(perceptionGateway.activeRoute.localizedDisplayName(language: state.language))
                     .font(.system(size: 11.5, weight: .semibold))
                     .foregroundStyle(Color.lingHolo)
             }
 
             VStack(alignment: .leading, spacing: 8) {
-                PerceptionDetailRow(label: state.loc("耳朵", "Audio In"), value: voice.inputStatusMessage, isActive: voice.isRecording)
-                PerceptionDetailRow(label: state.loc("嘴巴", "Audio Out"), value: state.voiceOutputEnabled ? voice.outputStatusMessage : state.loc("静音", "Muted"), isActive: state.voiceOutputEnabled)
-                PerceptionDetailRow(label: state.loc("眼睛", "Vision"), value: vision.statusMessage, isActive: vision.isCameraRunning)
-                PerceptionDetailRow(label: state.loc("认主", "Owner"), value: perceptionGateway.ownerIdentitySnapshot.statusText, isActive: perceptionGateway.isOwnerIdentityLocked)
-                PerceptionDetailRow(label: state.loc("解析", "Analysis"), value: perceptionGateway.statusText, isActive: !perceptionGateway.statusText.contains("中断"))
+                PerceptionDetailRow(
+                    label: state.loc("耳朵", "Audio In"),
+                    value: state.localizedRuntimeText(voice.inputStatusMessage, fallback: voice.isRecording ? "Listening" : "Audio input idle"),
+                    isActive: voice.isRecording
+                )
+                PerceptionDetailRow(
+                    label: state.loc("嘴巴", "Audio Out"),
+                    value: state.voiceOutputEnabled
+                        ? state.localizedRuntimeText(voice.outputStatusMessage, fallback: voice.isSpeaking ? "Speaking" : "Audio output ready")
+                        : state.loc("静音", "Muted"),
+                    isActive: state.voiceOutputEnabled
+                )
+                PerceptionDetailRow(
+                    label: state.loc("眼睛", "Vision"),
+                    value: state.localizedRuntimeText(vision.statusMessage, fallback: vision.isCameraRunning ? "Vision online" : "Vision idle"),
+                    isActive: vision.isCameraRunning
+                )
+                PerceptionDetailRow(
+                    label: state.loc("认主", "Owner"),
+                    value: perceptionGateway.ownerIdentitySnapshot.localizedStatusText(language: state.language),
+                    isActive: perceptionGateway.isOwnerIdentityLocked
+                )
+                PerceptionDetailRow(
+                    label: state.loc("解析", "Analysis"),
+                    value: state.localizedRuntimeText(perceptionGateway.statusText, fallback: "Perception ready"),
+                    isActive: !perceptionGateway.statusText.contains("中断")
+                )
             }
 
             LingShuOwnerIdentityPanel(perceptionGateway: perceptionGateway, voice: voice, vision: vision)
@@ -155,7 +197,7 @@ struct LingShuPerceptionPopoverContent: View {
                         }
                     )) {
                         ForEach(voice.availableTranscriptionProviders) { provider in
-                            Text(provider.displayName).tag(provider.id)
+                            Text(provider.localizedDisplayName(language: state.language)).tag(provider.id)
                                 .disabled(!provider.isRuntimeAvailable)
                         }
                     }
@@ -175,7 +217,7 @@ struct LingShuPerceptionPopoverContent: View {
                     .help(state.loc("重新检测本地语音模型", "Check local speech model again"))
                 }
 
-                Text(voice.transcriptionProvider.note)
+                Text(voice.transcriptionProvider.localizedNote(language: state.language))
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(Color.lingFg.opacity(0.48))
                     .fixedSize(horizontal: false, vertical: true)
@@ -189,7 +231,7 @@ struct LingShuPerceptionPopoverContent: View {
                         .font(.system(size: 11, weight: .semibold))
                         .foregroundStyle(Color.lingFg.opacity(0.56))
 
-                    Text(voice.embeddedASRStatus.compactDiagnostic)
+                    Text(voice.embeddedASRStatus.localizedCompactDiagnostic(language: state.language))
                         .font(.system(size: 11, weight: .semibold))
                         .foregroundStyle(voice.embeddedASRStatus.isAvailable ? Color.green.opacity(0.85) : Color.lingFg.opacity(0.46))
                         .lineLimit(1)
@@ -218,7 +260,7 @@ struct LingShuPerceptionPopoverContent: View {
                         }
                     )) {
                         ForEach(voice.availableSpeechOutputProviders) { provider in
-                            Text(provider.displayName).tag(provider.id)
+                            Text(provider.localizedDisplayName(language: state.language)).tag(provider.id)
                                 .disabled(!provider.isRuntimeAvailable)
                         }
                     }
@@ -241,7 +283,7 @@ struct LingShuPerceptionPopoverContent: View {
                         }
                     )) {
                         ForEach(voice.availableSpeechPersonas) { persona in
-                            Text(persona.displayName).tag(persona.id)
+                            Text(persona.localizedDisplayName(language: state.language)).tag(persona.id)
                         }
                     }
                     .labelsHidden()
@@ -265,7 +307,7 @@ struct LingShuPerceptionPopoverContent: View {
                         }
                 }
 
-                Text(voice.speechOutputProvider.note)
+                Text(voice.speechOutputProvider.localizedNote(language: state.language))
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(Color.lingFg.opacity(0.48))
                     .fixedSize(horizontal: false, vertical: true)
@@ -307,7 +349,7 @@ struct LingShuPerceptionPopoverContent: View {
                         .foregroundStyle(Color.lingFg.opacity(0.48))
                         .frame(width: 42, alignment: .leading)
 
-                    TextField(state.loc("灵枢", "LingShu"), text: $state.voiceWakeWord)
+                    TextField(state.loc("灵枢", "Nous"), text: $state.voiceWakeWord)
                         .textFieldStyle(.plain)
                         .font(.system(size: 12.5, weight: .semibold))
                         .foregroundStyle(Color.lingFg)
@@ -386,7 +428,7 @@ struct LingShuPerceptionPopoverContent: View {
                     Button {
                         appendVisionContext(observation)
                     } label: {
-                        Text(state.loc("交给灵枢", "Send to LingShu"))
+                        Text(state.loc("交给灵枢", "Send to Nous"))
                             .font(.system(size: 11.5, weight: .semibold))
                             .foregroundStyle(Color.lingVoid)
                             .padding(.horizontal, 9)
@@ -416,7 +458,7 @@ struct LingShuPerceptionPopoverContent: View {
         }
 
         let wakeWord = state.voiceWakeWord.trimmingCharacters(in: .whitespacesAndNewlines)
-        let fallbackWakeWord = state.loc("灵枢", "LingShu")
+        let fallbackWakeWord = state.loc("灵枢", "Nous")
         return state.loc(
             "先说“\(wakeWord.isEmpty ? fallbackWakeWord : wakeWord)”唤醒，再说具体指令。",
             "Say “\(wakeWord.isEmpty ? fallbackWakeWord : wakeWord)” first, then give your instruction."
@@ -429,58 +471,5 @@ struct LingShuPerceptionPopoverContent: View {
         }
 
         state.prompt += observation.promptContext
-    }
-}
-
-struct PerceptionActionButton: View {
-    let title: String
-    let icon: String
-    let isActive: Bool
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            Label(title, systemImage: icon)
-                .font(.system(size: 11.5, weight: .semibold))
-                .foregroundStyle(isActive ? Color.lingVoid : Color.lingFg.opacity(0.82))
-                .frame(maxWidth: .infinity)
-                .frame(height: 30)
-                .background(
-                    isActive ? Color.lingHolo : Color.lingFg.opacity(0.075),
-                    in: RoundedRectangle(cornerRadius: 7, style: .continuous)
-                )
-                .overlay {
-                    RoundedRectangle(cornerRadius: 7, style: .continuous)
-                        .stroke(Color.lingHolo.opacity(isActive ? 0 : 0.16))
-                }
-        }
-        .buttonStyle(.plain)
-        .help(title)
-    }
-}
-
-struct PerceptionDetailRow: View {
-    let label: String
-    let value: String
-    let isActive: Bool
-
-    var body: some View {
-        HStack(spacing: 8) {
-            Circle()
-                .fill(isActive ? Color.green : Color.gray.opacity(0.62))
-                .frame(width: 8, height: 8)
-
-            Text(label)
-                .font(.system(size: 11.5, weight: .semibold))
-                .foregroundStyle(Color.lingFg.opacity(0.58))
-                .frame(width: 36, alignment: .leading)
-
-            Text(value)
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(Color.lingFg.opacity(0.82))
-                .lineLimit(1)
-
-            Spacer(minLength: 0)
-        }
     }
 }

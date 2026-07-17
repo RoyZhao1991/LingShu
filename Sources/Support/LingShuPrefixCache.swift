@@ -31,6 +31,24 @@ enum LingShuPrefixCacheStrategy: String, Equatable, Sendable {
         case .unsupported: return "缓存·—"
         }
     }
+
+    func label(language: LingShuVoiceLanguage) -> String {
+        guard language == .english else { return label }
+        switch self {
+        case .automatic: return "Prefix cache · Automatic"
+        case .anthropicExplicit: return "Prefix cache · Explicit cache_control"
+        case .unsupported: return "Prefix cache · Not available"
+        }
+    }
+
+    func shortLabel(language: LingShuVoiceLanguage) -> String {
+        guard language == .english else { return shortLabel }
+        switch self {
+        case .automatic: return "Cache · Auto"
+        case .anthropicExplicit: return "Cache · Explicit"
+        case .unsupported: return "Cache · —"
+        }
+    }
 }
 
 enum LingShuPrefixCache {

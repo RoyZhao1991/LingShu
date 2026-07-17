@@ -122,6 +122,139 @@ final class HumanInteractionControlTests: XCTestCase {
         XCTAssertEqual(invocations, ["prepare_import"])
     }
 
+    func testAllStructuredHumanInteractionsAlwaysUseAppModal() {
+        let qr = LingShuHumanInteractionRequest(kind: .qrCode, prompt: "扫码")
+        let login = LingShuHumanInteractionRequest(kind: .externalLogin, prompt: "登录")
+        let physical = LingShuHumanInteractionRequest(kind: .physicalAction, prompt: "按下设备按钮")
+        let file = LingShuHumanInteractionRequest(kind: .fileSelection, prompt: "选择文件")
+        let question = LingShuHumanInteractionRequest(kind: .question, prompt: "请输入名称")
+        let inline = LingShuHumanInteractionRequest(
+            kind: .question,
+            prompt: "请输入名称",
+            payload: ["presentation": "inline"]
+        )
+        let forced = LingShuHumanInteractionRequest(
+            kind: .custom,
+            prompt: "完成现场操作",
+            payload: ["presentation": "blocking"]
+        )
+
+        XCTAssertTrue(LingShuState.requiresHardHumanInteractionPresentation(qr))
+        XCTAssertTrue(LingShuState.requiresHardHumanInteractionPresentation(login))
+        XCTAssertTrue(LingShuState.requiresHardHumanInteractionPresentation(physical))
+        XCTAssertTrue(LingShuState.requiresHardHumanInteractionPresentation(file))
+        XCTAssertTrue(LingShuState.requiresHardHumanInteractionPresentation(question))
+        XCTAssertTrue(LingShuState.requiresHardHumanInteractionPresentation(inline))
+        XCTAssertTrue(LingShuState.requiresHardHumanInteractionPresentation(forced))
+    }
+
+    func testRequestHumanInteractionToolEmitsTypedControlEvent() async {
+        let tool = LingShuState.requestHumanInteractionTool()
+        let output = await tool.handler(#"""
+        {
+          "kind": "qr_code",
+          "title": "微信登录",
+          "prompt": "请扫描二维码",
+          "payload": {"qr_text": "ASCII-QR"},
+          "completion_probe": {
+            "kind": "http_status",
+            "target": "http://127.0.0.1:18011/health",
+            "expected_status": 200
+          }
+        }
+        """#)
+
+        let request = LingShuWorkflowControlEnvelope.decode(from: output)?.humanInteraction
+        XCTAssertEqual(request?.kind, .qrCode)
+        XCTAssertEqual(request?.payload["qr_text"], "ASCII-QR")
+        XCTAssertEqual(request?.completionProbe?.kind, .httpStatus)
+        XCTAssertEqual(request?.source, "agent")
+    }
+
+    func testRequestHumanInteractionRejectsQRCodeWithoutVisibleMaterial() async {
+        let tool = LingShuState.requestHumanInteractionTool()
+        let output = await tool.handler(#"{"kind":"qr_code","prompt":"请扫码"}"#)
+
+        XCTAssertTrue(output.hasPrefix("INTERACTION_NOT_READY:"))
+        XCTAssertNil(LingShuWorkflowControlEnvelope.decode(from: output))
+        XCTAssertTrue(output.contains("source_job_id"))
+        XCTAssertTrue(output.contains("Do not tell the user to use a terminal"))
+    }
+
+    func testTypedMaterialsRoundTripAndQRCodeLogExtraction() {
+        let rawLog = #"""
+        Starting login
+        Scan this QR code with WeChat:
+        █ ▄▄▄▄▄ █
+        █ █   █ █
+        █ █▄▄▄█ █
+        █▄▄▄▄▄▄▄█
+        █ ▄ █ ▄ █
+
+        QR URL: https://example.test/login/session-123
+        Waiting for scan...
+        """#
+        let empty = LingShuHumanInteractionRequest(kind: .qrCode, prompt: "扫描终端中显示的二维码")
+        let enriched = LingShuHumanInteractionMaterialExtractor.enriching(empty, sourceText: rawLog)
+        let qr = enriched.displayMaterials.first(where: { $0.kind == .qrCode })
+        XCTAssertEqual(qr?.value, "https://example.test/login/session-123")
+        XCTAssertNil(enriched.presentationIssue)
+
+        let envelope = LingShuWorkflowControlEnvelope(event: .requiresHumanInteraction(enriched))
+        let decoded = LingShuWorkflowControlEnvelope.decode(from: envelope.encodedPrompt)?.humanInteraction
+        XCTAssertEqual(decoded?.displayMaterials.first(where: { $0.kind == .qrCode })?.value, qr?.value)
+    }
+
+    @MainActor
+    func testHostResolvesQRCodeFromReferencedLongCommand() async {
+        let state = LingShuState()
+        let snapshot = state.longCommandRegistry.start(
+            command: #"/usr/bin/printf 'QR URL: https://example.test/live-qr\n'; /bin/sleep 2"#,
+            workingDirectory: NSTemporaryDirectory(),
+            label: "login helper",
+            timeoutSeconds: 10
+        )
+        try? await Task.sleep(nanoseconds: 250_000_000)
+
+        let request = LingShuHumanInteractionRequest(
+            kind: .qrCode,
+            prompt: "请扫描终端中显示的二维码",
+            payload: ["source_job_id": snapshot.id]
+        )
+        let prepared = state.prepareHumanInteractionRequest(request)
+
+        XCTAssertNil(prepared.presentationIssue)
+        XCTAssertEqual(
+            prepared.displayMaterials.first(where: { $0.kind == .qrCode })?.value,
+            "https://example.test/live-qr"
+        )
+        XCTAssertEqual(prepared.prompt, "请扫描下方展示的二维码")
+        _ = state.longCommandRegistry.cancel(id: snapshot.id)
+    }
+
+    @MainActor
+    func testHardInteractionDeferralKeepsTaskPausedAndQueuePromotesNextRequest() {
+        let state = LingShuState()
+        let first = LingShuHumanInteractionRequest(id: "hard-1", kind: .qrCode, prompt: "扫码")
+        let second = LingShuHumanInteractionRequest(id: "hard-2", kind: .physicalAction, prompt: "按下按钮")
+        state.pendingDispatchedHumanInteractions["record-1"] = first
+        state.pendingDispatchedHumanInteractions["record-2"] = second
+
+        state.presentHardHumanInteraction(first, target: .dispatched(recordID: "record-1"))
+        state.presentHardHumanInteraction(second, target: .dispatched(recordID: "record-2"))
+        XCTAssertEqual(state.pendingHardHumanInteraction?.request.id, "hard-1")
+        XCTAssertEqual(state.queuedHardHumanInteractions.map(\.request.id), ["hard-2"])
+
+        state.deferHardHumanInteraction()
+        XCTAssertEqual(state.pendingHardHumanInteraction?.request.id, "hard-2")
+        XCTAssertNotNil(state.pendingDispatchedHumanInteractions["record-1"], "稍后处理不能解除任务暂停")
+
+        state.clearHardHumanInteraction(requestID: "hard-2")
+        XCTAssertNil(state.pendingHardHumanInteraction)
+        state.presentHardHumanInteraction(first)
+        XCTAssertEqual(state.pendingHardHumanInteraction?.target, .dispatched(recordID: "record-1"))
+    }
+
     func testPlainProseAboutQRCodeOrOAuthDoesNotTriggerControlFlow() async {
         let prose = "OAuth 登录常见做法是显示二维码供用户扫码，这里只是解释概念。"
         let session = LingShuAgentSession(

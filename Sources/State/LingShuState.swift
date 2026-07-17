@@ -9,6 +9,7 @@ private enum LingShuPreferenceKeys {
     static let modelName = "lingshu.model.name"
     static let modelEndpoint = "lingshu.model.endpoint"
     static let agentWorkingDirectory = "lingshu.agent.workdir"
+    static let executionPermissionMode = "lingshu.execution.permissionMode"
     static let asrLocalMode = "lingshu.perception.asrLocalMode"
     static let ttsLocalMode = "lingshu.perception.ttsLocalMode"
 }
@@ -154,7 +155,14 @@ final class LingShuState: ObservableObject {
     /// 常驻主会话的工具不能在创建时把目录拍死,而要在工具真正执行时读这个值。
     /// 回合结束会恢复旧值;没有明确目录时回落到 `agentWorkingDirectory`。
     var currentAgentWorkingDirectoryOverride: String?
-    @Published var executionPermissionMode: LingShuExecutionPermissionMode = .sandbox
+    @Published var executionPermissionMode: LingShuExecutionPermissionMode = UserDefaults.standard
+        .string(forKey: LingShuPreferenceKeys.executionPermissionMode)
+        .flatMap(LingShuExecutionPermissionMode.init(rawValue:)) ?? .sandbox {
+        didSet {
+            UserDefaults.standard.set(executionPermissionMode.rawValue, forKey: LingShuPreferenceKeys.executionPermissionMode)
+            sessionShellAlwaysAllowed = executionPermissionMode == .fullAccess
+        }
+    }
     @Published var modelTimeoutSeconds = 180.0
     var isModelReplying: Bool {
         get { runtimeStore.isModelReplying }
@@ -638,6 +646,10 @@ final class LingShuState: ObservableObject {
     /// OAuth 卡不进入这里，仍只由结构化 auth/OAuth 标识驱动。
     var pendingHumanInteractionContexts: [UUID: LingShuPendingHumanInteractionContext] = [:]
     var pendingDispatchedHumanInteractions: [String: LingShuHumanInteractionRequest] = [:]
+    /// 扫码、外部登录、实体操作、选文件等硬人机步骤必须在 App 内呈现。
+    /// 同时到达的请求排队显示，绝不把交互落回易误关的终端窗口。
+    @Published var pendingHardHumanInteraction: LingShuPendingHardHumanInteraction?
+    var queuedHardHumanInteractions: [LingShuPendingHardHumanInteraction] = []
     /// Checker/verifier 人机协作断点。内部会话原地保留；外部一次性 checker 则保留同一验收节点，
     /// 人工结果回来后只重放该节点，不把答案误发给 maker。
     var pendingVerificationInteractions: [String: LingShuPendingVerificationInteraction] = [:]
@@ -681,6 +693,8 @@ final class LingShuState: ObservableObject {
     var prerequisitePauseReplyComposerOverride: ((LingShuPrerequisitePauseReplyContext) async -> String?)?
 
     init() {
+        // 设置页、输入坞和审批弹窗共用同一权限档；启动时把持久档同步到本次会话裁决核。
+        sessionShellAlwaysAllowed = executionPermissionMode == .fullAccess
         chatStore.onMessagesChanged = { [weak self] messages in
             guard let self else { return }
             LingShuInputRenderDiagnostics.log(
@@ -1670,7 +1684,16 @@ final class LingShuState: ObservableObject {
                 hasAttachments: isGroundedEvidenceInput,
                 visiblePrompt: userFacingPrompt
             )
-            let isNewActiveTurn = triage.kind != .reply
+            let replyTargetIsContinuable = self.dispatchReplyTargetIsContinuable(triage)
+            let isNewActiveTurn = triage.kind != .reply || !replyTargetIsContinuable
+            if triage.kind == .reply, !replyTargetIsContinuable {
+                self.appendTrace(
+                    kind: .warning,
+                    actor: "上下文归属",
+                    title: "终态线程拒绝接管",
+                    detail: "归属结果指向不可继续的旧线程；本轮按新 Active Turn 生成 GoalSpec，不复用旧任务上下文。"
+                )
+            }
             let shouldDeriveGoalSpec = self.goalSpecEnabled && isNewActiveTurn
             let goalSpec: LingShuGoalSpec? = shouldDeriveGoalSpec
                 ? await self.deriveGoalSpec(
@@ -1695,7 +1718,7 @@ final class LingShuState: ObservableObject {
                 return
             }
             let needsCapabilityPreflight = self.goalSpecEnabled && Self.goalKindNeedsCapabilityPreflight(goalSpec?.kind)
-            let activeTurnRoute = triage.kind == .reply ? "reply" : "active_turn"
+            let activeTurnRoute = replyTargetIsContinuable ? "reply" : "active_turn"
             let goalSpecTraceReason: String = {
                 if !self.goalSpecEnabled { return "goal_spec_disabled" }
                 if !isNewActiveTurn { return "reply_reuses_existing_context" }
@@ -1782,9 +1805,7 @@ final class LingShuState: ObservableObject {
                 // 只续接**仍在进行/等待**的派发任务。已完成(completed)/已直答(answered)的任务不该被"回复"再续跑——
                 // 否则会把已收尾的隔离会话再跑进垃圾态(如 demo 脚本子会话耗尽 → 泄出内部占位符"(脚本耗尽)")。
                 // 问一件**已完成**派发任务的后续 = 普通提问,留主线程(其结论已经记忆/子→主可召回)。通用,不限 demo。
-                let replyActive = triage.replyRecordID
-                    .flatMap { id in self.taskExecutionRecords.first(where: { $0.id == id }) }
-                    .map { $0.status != .completed && $0.status != .answered } ?? false
+                let replyActive = self.dispatchReplyTargetIsContinuable(triage)
                 if let rid = triage.replyRecordID, rid == self.pendingMainQuestionRecordID, replyActive {
                     // 续答**主会话**的提问:接回主会话(同一条记录,把答复喂回去),不另起新任务。
                     self.pendingMainQuestionRecordID = nil

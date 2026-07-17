@@ -67,7 +67,7 @@ enum LingShuToolCatalog {
         "read_file", "write_file", "edit_file", "apply_patch", "run_command",
         "start_long_command", "check_long_command", "cancel_long_command", "list_long_commands",
         "web_search",
-        "ask_user", "ask_form", "speak", "recall_memory", "recall_local", "update_plan", "spawn_task",
+        "ask_user", "ask_form", "request_human_interaction", "speak", "recall_memory", "recall_local", "update_plan", "spawn_task",
         "computer_list_apps", "computer_get_state", "computer_click_element", "computer_set_text",
         "computer_press_key", "computer_scroll_element", "computer_drag_element", "computer_perform_action",
         "present_documents",   // 「演示与答疑」插件:恒可见,做正式文档演示时大脑直接用

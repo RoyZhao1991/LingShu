@@ -9,14 +9,20 @@ extension LingShuState {
         brainSetupPhase = .checking
 
         guard let preset = selectedModelPreset else {
-            brainSetupPhase = .required(reason: "当前主脑配置无法识别，请重新选择服务。")
+            brainSetupPhase = .required(reason: loc(
+                "当前主脑配置无法识别，请重新选择服务。",
+                "The current brain configuration is not recognized. Choose a provider again."
+            ))
             return false
         }
 
         let keyless = preset.authMode.contains("无") || preset.authMode.contains("本地") || preset.authMode.contains("登录")
         let trimmedKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
         guard keyless || !trimmedKey.isEmpty else {
-            brainSetupPhase = .required(reason: "尚未配置可用的主脑 Token。")
+            brainSetupPhase = .required(reason: loc(
+                "尚未配置可用的主脑 Token。",
+                "No usable brain token is configured."
+            ))
             return false
         }
 
@@ -39,7 +45,7 @@ extension LingShuState {
             brainSetupPhase = .ready
             return true
         }
-        brainSetupPhase = .required(reason: "当前主脑不可用：\(result.detail)")
+        brainSetupPhase = .required(reason: loc("当前主脑不可用：", "The current brain is unavailable: ") + result.detail)
         return false
     }
 
@@ -120,14 +126,22 @@ extension LingShuState {
         switch result {
         case .completed(let text):
             let clean = LingShuReasoningText.stripThinkTags(text).trimmingCharacters(in: .whitespacesAndNewlines)
-            return .init(ok: !clean.isEmpty, detail: clean.isEmpty ? "模型没有返回正文" : "连接成功，模型已响应", at: Date())
+            return .init(
+                ok: !clean.isEmpty,
+                detail: clean.isEmpty ? loc("模型没有返回正文", "The model returned no response body") : loc("连接成功，模型已响应", "Connected; the model responded"),
+                at: Date()
+            )
         case .interrupted(let reason):
             return .init(ok: false, detail: String(reason.prefix(160)), at: Date())
         case .blocked:
-            return .init(ok: false, detail: "连接校验被意外阻塞", at: Date())
+            return .init(ok: false, detail: loc("连接校验被意外阻塞", "Connection verification was unexpectedly blocked"), at: Date())
         case .maxTurnsReached(let lastText):
             let clean = LingShuReasoningText.stripThinkTags(lastText).trimmingCharacters(in: .whitespacesAndNewlines)
-            return .init(ok: !clean.isEmpty, detail: clean.isEmpty ? "连接校验未得到回复" : "连接成功，模型已响应", at: Date())
+            return .init(
+                ok: !clean.isEmpty,
+                detail: clean.isEmpty ? loc("连接校验未得到回复", "Connection verification received no reply") : loc("连接成功，模型已响应", "Connected; the model responded"),
+                at: Date()
+            )
         }
     }
 }

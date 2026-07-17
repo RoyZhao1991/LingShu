@@ -4,28 +4,20 @@ import Foundation
 extension LingShuState {
     /// 任务卡住等用户输入时，把原气泡变成可交互的续跑入口。
     func markDispatchedBubbleAwaitingInput(recordID: String, question: String) {
-        let interaction = LingShuWorkflowControlEnvelope.extract(from: question)?.humanInteraction?.normalized
+        let legacyEnvelope = LingShuHumanInputEnvelope.decode(from: question)
+        let interaction = (LingShuWorkflowControlEnvelope.extract(from: question)?.humanInteraction
+            ?? legacyEnvelope.flatMap { legacyHumanInteractionRequest($0, recordID: recordID) })?.normalized
+            .map(prepareHumanInteractionRequest)
         let cleanQuestion = LingShuHumanInputEnvelope.userFacingText(from: question)
         let text = interaction.map { "⏸ 等待人机协作:\($0.prompt)" } ?? "⏸ 等待前提:\(cleanQuestion)"
-        var choices = interaction?.choicePrompt
-            ?? LingShuChoiceParsing.parse(question)
-            ?? LingShuChoiceParsing.parse(cleanQuestion)
-            ?? userPrerequisiteChoicePromptIfNeeded(resultText: cleanQuestion, taskRecordID: recordID)
-        if choices == nil,
-           let interaction,
-           [.qrCode, .externalLogin, .physicalAction, .confirmation].contains(interaction.kind) {
-            choices = .init(
-                question: interaction.prompt,
-                options: [
-                    .init(label: "已完成，继续", detail: "我已经完成这一步，继续原任务。"),
-                    .init(label: "先暂停", detail: "保留当前进度，稍后再继续。")
-                ]
-            )
-        }
-        let form = interaction.flatMap { request -> LingShuConfirmForm? in
-            guard request.kind == .form, let json = request.payload["form_json"] else { return nil }
-            return LingShuConfirmForm.parse(json)
-        }
+        let isHard = interaction.map(Self.requiresHardHumanInteractionPresentation) ?? false
+        let choices = isHard ? nil : (
+            interaction?.choicePrompt
+                ?? LingShuChoiceParsing.parse(question)
+                ?? LingShuChoiceParsing.parse(cleanQuestion)
+                ?? userPrerequisiteChoicePromptIfNeeded(resultText: cleanQuestion, taskRecordID: recordID)
+        )
+        let form = isHard ? nil : interaction?.confirmForm
         if let bid = dispatchedTaskBubbles[recordID], let idx = chatMessages.firstIndex(where: { $0.id == bid }) {
             chatMessages[idx].text = text
             chatMessages[idx].isLoading = false
@@ -47,6 +39,7 @@ extension LingShuState {
         }
         if let interaction {
             pendingDispatchedHumanInteractions[recordID] = interaction
+            presentHardHumanInteraction(interaction, target: .dispatched(recordID: recordID))
             startHumanInteractionProbeIfNeeded(
                 interaction,
                 bubbleID: dispatchedTaskBubbles[recordID] ?? UUID(),
@@ -63,6 +56,7 @@ extension LingShuState {
         let interaction = pendingDispatchedHumanInteractions.removeValue(forKey: recordID)
         if let request = interaction {
             humanInteractionProbeTasks.removeValue(forKey: request.id)?.cancel()
+            clearHardHumanInteraction(requestID: request.id)
         }
         let visibleAnswer = (displayAnswer ?? trimmed).trimmingCharacters(in: .whitespacesAndNewlines)
         if let index = chatMessages.firstIndex(where: { $0.awaitingInputForRecordID == recordID }) {
@@ -75,17 +69,36 @@ extension LingShuState {
         requestChatScrollToLatestForUserSend()
         appendTaskRecordMessage(recordID, actor: "你", role: "答复", kind: .user, text: visibleAnswer)
         if recordID == blockedDispatchedRecordID { blockedDispatchedRecordID = nil }
+        let prerequisiteOption: LingShuRouteChoiceOption?
+        if let interaction {
+            prerequisiteOption = selectedPrerequisiteOption(for: interaction, answer: trimmed)
+        } else {
+            prerequisiteOption = nil
+        }
+        let wasWaiting = taskExecutionRecords.first { $0.id == recordID }?.taskOutcome == .waitingForUser
+        if let prerequisiteOption,
+           Self.prerequisiteChoiceSemantics(prerequisiteOption) == .denyOrStop,
+           wasWaiting {
+            closeDispatchedTaskForDeniedPrerequisite(recordID: recordID, answer: visibleAnswer, appendChatUser: false)
+            return
+        }
+        let semanticAnswer: String
+        if let prerequisiteOption,
+           Self.prerequisiteChoiceSemantics(prerequisiteOption) == .alternative {
+            semanticAnswer = Self.framedAlternativePrerequisiteInput(trimmed)
+        } else {
+            semanticAnswer = trimmed
+        }
         guard let subID = agentSubTaskRecords.first(where: { $0.value == recordID })?.key else {
-            _ = runMainAgentTurn(prompt: trimmed, taskRecordID: recordID, resumeBlocked: true)
+            _ = runMainAgentTurn(prompt: semanticAnswer, taskRecordID: recordID, resumeBlocked: true)
             return
         }
         installAgentEventSinkIfNeeded()
-        let wasWaiting = taskExecutionRecords.first { $0.id == recordID }?.taskOutcome == .waitingForUser
-        let providesPrerequisite = Self.userInputProvidesPrerequisite(trimmed)
+        let providesPrerequisite = Self.userInputProvidesPrerequisite(semanticAnswer)
         if wasWaiting && providesPrerequisite { resolveUserProvidedGaps(recordID: recordID) }
         let resumeInput = wasWaiting && providesPrerequisite
-            ? trimmed + "\n\n" + capabilityResumePreamble(recordID: recordID)
-            : trimmed
+            ? semanticAnswer + "\n\n" + capabilityResumePreamble(recordID: recordID)
+            : semanticAnswer
         let pending = ChatMessage(
             speaker: "灵枢",
             text: dialogueAcknowledgement.intake(for: visibleAnswer),

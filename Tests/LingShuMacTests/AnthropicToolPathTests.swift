@@ -156,6 +156,14 @@ final class AnthropicToolPathTests: XCTestCase {
     /// **真 bug 回归(2026-06-28)**:子会话把指令放在 `role=system` 消息里、request.systemPrompt 为空时,
     /// Anthropic 必须把 system 消息**收进 system 字段**(不能 filter 掉又用空 systemPrompt → 模型收不到任何指令、客套乱答)。
     func testAnthropicCollectsSystemFromMessagesNotDropped() throws {
+        let defaults = UserDefaults.standard
+        let oldValue = defaults.object(forKey: LingShuLanguagePreferenceStore.languageKey)
+        defer {
+            if let oldValue { defaults.set(oldValue, forKey: LingShuLanguagePreferenceStore.languageKey) }
+            else { defaults.removeObject(forKey: LingShuLanguagePreferenceStore.languageKey) }
+        }
+        defaults.set(LingShuVoiceLanguage.english.rawValue, forKey: LingShuLanguagePreferenceStore.languageKey)
+
         let contract = try LingShuModelGateway().makeInvocationContract(
             provider: "Anthropic Claude", model: "claude-sonnet-4-6",
             endpoint: "https://api.anthropic.com/v1", protocolName: "Anthropic", apiKey: "sk-x",
@@ -167,6 +175,8 @@ final class AnthropicToolPathTests: XCTestCase {
         let body = obj(contract.body)
         let sys = body["system"]
         let sysText = (sys as? String) ?? ((sys as? [[String: Any]])?.first?["text"] as? String) ?? ""
+        XCTAssertTrue(sysText.hasPrefix("ANSWER IN ENGLISH."), "语言要求必须是 Anthropic system 的第一句话")
+        XCTAssertEqual(sysText.components(separatedBy: "ANSWER IN ENGLISH.").count - 1, 1, "语言要求不应重复注入")
         XCTAssertTrue(sysText.contains("只输出一行 JSON"), "system 消息必须进 Anthropic 的 system 字段,不能被丢")
         XCTAssertEqual((body["messages"] as? [[String: Any]])?.count, 1, "system 不该留在 messages 里(走 system 字段)")
     }

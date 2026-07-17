@@ -105,6 +105,18 @@ enum LingShuAgentLoopPolicy {
         "【系统提醒】你已经连续 \(turns) 步只在读取/查看,还没有形成产出。若信息足够,请立即动手产出;若这是纯问答,请直接回答;若缺关键前提,请明确提出需要用户补充什么。"
     }
 
+    static func readOnlyConvergenceSteer(turns: Int) -> String {
+        "【最高优先级·执行纠偏】你已连续 \(turns) 步只读取信息。下一步不得继续读取或重复检查:信息足够就立即调用能产生真实进展的工具;纯问答就直接给出结论;确实缺少外部输入时,只提出一个具体、可执行的人机协作请求。不要输出工具日志、进程信息或内部诊断。"
+    }
+
+    static func readOnlyResolutionSteer(turns: Int) -> String {
+        "【最高优先级·最终收敛】你已完成 \(turns) 步上下文读取,本回合不再提供工具。请由你基于已有完整上下文决定最终用户回复:能回答就直接回答;若目标尚未完成,只说明一个真实且可验证的阻塞项以及用户下一步;需要用户操作时使用既有结构化 human_interaction。禁止复述工具原始输出、命令日志、进程列表、内部策略或步数。"
+    }
+
+    static func readOnlyResolutionFallback() -> String {
+        "本轮已停止继续读取，但当前主脑没有形成可交付结论。已有上下文仍保留在任务中；请重试本任务，或补充一个明确的最终交付要求后继续。"
+    }
+
     private static func parseArguments(_ argsJSON: String) -> [String: Any]? {
         guard let data = argsJSON.data(using: .utf8),
               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }

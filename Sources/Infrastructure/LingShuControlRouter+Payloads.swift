@@ -101,6 +101,9 @@ extension LingShuControlRouter {
             "objective": objective,
             "prompt": record.prompt,
             "status": record.status.rawValue,
+            "isTerminal": record.status.isTerminal,
+            "isSuccessful": record.status.isSuccessfulCompletion,
+            "isResumable": record.status.isResumableUnfinished,
             "summary": record.summary,
             "feedback": state.taskRecordFeedback[record.id].map { $0 ? "up" : "down" } ?? "none",
             "plan": record.plan.map { ["title": $0.title, "status": $0.status.rawValue] },
@@ -198,8 +201,44 @@ extension LingShuControlRouter {
             if let resolvedChoice = message.resolvedChoice { object["resolvedChoice"] = resolvedChoice }
             if let attachmentNames = message.attachmentNames, !attachmentNames.isEmpty { object["attachmentNames"] = attachmentNames }
             if let thinkingPreview = message.thinkingPreview, !thinkingPreview.isEmpty { object["thinkingPreview"] = thinkingPreview }
+            if let interaction = message.humanInteraction {
+                object["humanInteraction"] = Self.humanInteractionPayload(interaction)
+            }
             return object
         }
+    }
+
+    private static func humanInteractionPayload(_ request: LingShuHumanInteractionRequest) -> [String: Any] {
+        var object: [String: Any] = [
+            "id": request.id,
+            "kind": request.kind.rawValue,
+            "title": request.title,
+            "prompt": request.prompt,
+            "payload": request.payload,
+            "options": request.options.map {
+                ["id": $0.id, "label": $0.label, "detail": $0.detail, "value": $0.value]
+            },
+            "materials": request.displayMaterials.map {
+                [
+                    "id": $0.id,
+                    "kind": $0.kind.rawValue,
+                    "title": $0.title,
+                    "value": $0.value,
+                    "mimeType": $0.mimeType ?? ""
+                ]
+            }
+        ]
+        if let source = request.source { object["source"] = source }
+        if let probe = request.completionProbe {
+            object["completionProbe"] = [
+                "kind": probe.kind.rawValue,
+                "target": probe.target,
+                "expectedStatus": probe.expectedStatus as Any,
+                "intervalSeconds": probe.intervalSeconds,
+                "timeoutSeconds": probe.timeoutSeconds
+            ]
+        }
+        return object
     }
 
     func tracePayload(limit: Int) -> [[String: Any]] {

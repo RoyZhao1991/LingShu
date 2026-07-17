@@ -37,7 +37,7 @@ struct LingShuExtensionsPanel: View {
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 6) {
                     Text(ext.name).font(.callout.weight(.medium)).lineLimit(1)
-                    Text(ext.kind.rawValue).font(.caption2)
+                    Text(ext.kind.displayName(language: state.language)).font(.caption2)
                         .padding(.horizontal, 5).padding(.vertical, 1)
                         .background(.quaternary, in: Capsule())
                     if ext.kind == .skill { Text("v\(ext.version)").font(.caption2).foregroundStyle(.secondary) }
@@ -49,7 +49,7 @@ struct LingShuExtensionsPanel: View {
                         Text(state.loc("建议降级", "Demotion Suggested")).font(.caption2).foregroundStyle(.orange)
                     }
                 }
-                Text(ext.permissionSummary).font(.caption2).foregroundStyle(.secondary).lineLimit(2)
+                Text(ext.localizedPermissionSummary(language: state.language)).font(.caption2).foregroundStyle(.secondary).lineLimit(2)
                 if let rate = ext.successRate {
                     Text(state.loc("成功率 \(Int(rate * 100))%(\(ext.successCount)/\(ext.successCount + ext.failCount))", "Success \(Int(rate * 100))% (\(ext.successCount)/\(ext.successCount + ext.failCount))"))
                         .font(.caption2).foregroundStyle(.secondary)

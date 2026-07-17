@@ -2,6 +2,49 @@ import Foundation
 
 @MainActor
 extension LingShuControlRouter {
+    static let externalSessionToolManifest: [[String: Any]] = [
+        [
+            "name": "lingshu_submit_human_interaction",
+            "description": "提交主会话中一条通用人机协作卡的结果，并从原暂停点续跑。适用于二维码/外部登录/实体操作/选文件/确认/选择/表单等统一协议。args: messageId、answer。",
+            "inputSchema": [
+                "type": "object",
+                "properties": [
+                    "messageId": ["type": "string", "description": "lingshu_get_chat 返回的待处理消息 id"],
+                    "answer": ["type": "string", "description": "用户操作结果或选择值"]
+                ],
+                "required": ["messageId", "answer"]
+            ]
+        ]
+    ]
+
+    func submitExternalHumanInteraction(_ arguments: [String: Any]) -> (text: String, isError: Bool) {
+        guard let rawID = arguments["messageId"] as? String,
+              let messageID = UUID(uuidString: rawID),
+              let answer = arguments["answer"] as? String,
+              !answer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return (jsonText(["submitted": false, "reason": "messageId 或 answer 无效"]), true)
+        }
+        guard let message = state.chatMessages.first(where: { $0.id == messageID }),
+              let request = message.humanInteraction,
+              state.isHumanInteractionPending(request) else {
+            return (jsonText(["submitted": false, "reason": "该人机协作已完成或不存在"]), true)
+        }
+        let recordID = message.taskRecordID ?? message.awaitingInputForRecordID ?? ""
+        if state.pendingHumanInteractionContexts[messageID] != nil {
+            state.resolveMainHumanInteraction(messageID: messageID, answer: answer)
+        } else if !recordID.isEmpty, state.pendingDispatchedHumanInteractions[recordID] != nil {
+            state.answerDispatchedTask(recordID: recordID, answer: answer)
+        } else {
+            return (jsonText(["submitted": false, "reason": "找不到对应的暂停会话"]), true)
+        }
+        return (jsonText([
+            "submitted": true,
+            "messageId": rawID,
+            "recordId": recordID,
+            "interactionId": request.id
+        ]), false)
+    }
+
     func submitPromptAndDescribe(
         text: String,
         source: LingShuDialogueInputSource,

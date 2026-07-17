@@ -61,6 +61,41 @@ struct LingShuOwnerIdentitySnapshot: Codable, Equatable, Sendable {
         return "未启用"
     }
 
+    func shortStatus(language: LingShuVoiceLanguage) -> String {
+        guard language == .english else { return shortStatus }
+        if isLocked { return "Locked" }
+        if lockEnabled {
+            return enrollmentState == .enrolled ? "Verify" : "Not enrolled"
+        }
+        return "Off"
+    }
+
+    func localizedStatusText(language: LingShuVoiceLanguage) -> String {
+        guard language == .english else { return statusText }
+        if isLocked { return "Owner verified" }
+        if lockEnabled {
+            switch enrollmentState {
+            case .notEnrolled: return "Not enrolled"
+            case .enrolling: return "Enrolling"
+            case .enrolled: return "Awaiting verification"
+            }
+        }
+        return "Owner lock disabled"
+    }
+
+    func localizedDetailText(language: LingShuVoiceLanguage) -> String {
+        guard language == .english else { return detailText }
+        if enrollmentState == .enrolling {
+            return "Capture face and voice samples to finish owner enrollment."
+        }
+        if lockEnabled {
+            return isLocked
+                ? "Face and voice verification passed."
+                : "Face and voice verification is required before protected actions."
+        }
+        return "Enable owner recognition to use face and voice samples as an identity lock."
+    }
+
     var promptContext: String {
         guard lockEnabled else {
             return "身份锁未启用。"

@@ -15,7 +15,7 @@
     <img alt="Swift 6" src="https://img.shields.io/badge/Swift-6-F05138?logo=swift&logoColor=white">
     <img alt="Apache-2.0" src="https://img.shields.io/badge/license-Apache--2.0-2C8C7F">
     <img alt="Project status: alpha" src="https://img.shields.io/badge/status-alpha-E9A23B">
-    <img alt="1,548 tests passing" src="https://img.shields.io/badge/tests-1%2C548%20passing-2C8C7F">
+    <img alt="1,500+ tests" src="https://img.shields.io/badge/tests-1%2C500%2B-2C8C7F">
     <a href="https://github.com/RoyZhao1991/LingShu/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/RoyZhao1991/LingShu/actions/workflows/ci.yml/badge.svg"></a>
   </p>
 </div>
@@ -64,13 +64,13 @@ The result is a local file that remains openable, editable, previewable, and ava
 | Multimodal input | Try native model vision first; remember unsupported channels and fall back to image parsing |
 | Perception | Microphone, system audio, camera, screen, voice output, and pluggable sensory sources |
 | Memory | Local knowledge graph, preference recall, task history, and distilled experience |
-| Integrations | Local HTTP JSON-RPC control plane and registered external-agent capabilities |
+| Integrations | Bundled `lingshu` CLI, local HTTP JSON-RPC control plane, and registered external-agent capabilities |
 
 ## How It Works
 
 ```mermaid
 flowchart LR
-    U["User goal"] --> B["LingShu main agent"]
+    U["App / CLI / connector"] --> B["LingShu main agent"]
     B --> G["Structured GoalSpec"]
     G --> R["Mutable runtime workflow"]
     R --> Q["Serial task queue"]
@@ -110,6 +110,34 @@ Run the packaged `.app`, not the bare Swift executable, so macOS can associate t
 
 On first launch, LingShu checks whether a working brain channel exists. If not, the setup guide lets you choose a provider and enter its token. Custom providers additionally require an endpoint and model name.
 
+### CLI and External Connectors
+
+Every app build includes a `lingshu` command-line client. It is a thin entrance to the **same serialized main conversation**: it does not create a second agent runtime or bypass model selection, memory, authorization, task records, or human-interaction gates.
+
+After moving the app to `/Applications`, expose the bundled client on your path:
+
+```bash
+mkdir -p "$HOME/.local/bin"
+ln -sf "/Applications/灵枢.app/Contents/MacOS/lingshu" "$HOME/.local/bin/lingshu"
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+Then use one-request/one-response mode from a terminal, Feishu bot, webhook worker, Shortcut, or another local process:
+
+```bash
+lingshu ask "Summarize today's project status"
+echo "Create a one-page report" | lingshu ask --json
+lingshu status --json
+```
+
+If the exact task pauses for login, QR scanning, file selection, confirmation, or another human step, JSON output returns `needs_user_action`, typed materials, and a message ID. Resume that same checkpoint with:
+
+```bash
+lingshu answer <message-id> "completed"
+```
+
+The client talks only to LingShu's loopback control service by default. See [CLI and connector guide](./Docs/CLI.md) for exit codes, JSON fields, environment variables, and a Feishu/webhook integration pattern.
+
 ### Supported Brain Presets
 
 | Provider | What you enter | Protocol |
@@ -148,7 +176,7 @@ LingShu is usable for development and controlled local workflows, but it is not 
 | HAL virtual microphone | Experimental; device appearance is not yet stable |
 | Signed and notarized public release | Release pipeline exists; first public release pending |
 
-The repository currently contains more than 100,000 lines of source and test code, 187 Swift test files, and 1,548 tests passing in the latest full local SwiftPM run (3 skipped). These numbers describe engineering depth, not a guarantee that every environment-dependent test passes on every Mac.
+The repository contains more than 100,000 lines of source and test code, more than 180 Swift test files, and more than 1,500 tests. These numbers describe engineering depth, not a guarantee that every environment-dependent test passes on every Mac.
 
 ## Development
 

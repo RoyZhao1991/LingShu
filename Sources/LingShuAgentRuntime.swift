@@ -10,8 +10,20 @@ struct LingShuAgentRuntimeCounts: Equatable {
         "在线 \(online) · 运行 \(running) · 待启动 \(pendingStart)"
     }
 
+    func subtitle(language: LingShuVoiceLanguage) -> String {
+        language == .english
+            ? "Online \(online) · Running \(running) · Standby \(pendingStart)"
+            : subtitle
+    }
+
     var statusText: String {
         "当前在线 \(online) 个 agent，运行 \(running) 个，待启动 \(pendingStart) 个。"
+    }
+
+    func statusText(language: LingShuVoiceLanguage) -> String {
+        language == .english
+            ? "\(online) agents online, \(running) running, \(pendingStart) on standby."
+            : statusText
     }
 
     static func make(

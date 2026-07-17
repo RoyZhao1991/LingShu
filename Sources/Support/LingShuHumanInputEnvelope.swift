@@ -51,6 +51,52 @@ struct LingShuHumanInputEnvelope: Codable, Equatable, Sendable {
         }
     }
 
+    /// Legacy blocking tools are normalized into the same app-native interaction
+    /// protocol as workers, checkers and dynamic workflow nodes.
+    var humanInteractionRequest: LingShuHumanInteractionRequest? {
+        let args = Self.jsonObject(argumentsJSON)
+        let prompt = Self.userFacingText(for: self)
+        switch tool {
+        case "ask_form":
+            return LingShuHumanInteractionRequest(
+                kind: .form,
+                title: prompt,
+                prompt: prompt,
+                payload: ["form_json": argumentsJSON],
+                source: tool
+            ).normalized
+        case "ask_choice":
+            let rawOptions = (args["options"] as? [Any]) ?? []
+            let options = rawOptions.compactMap { raw -> LingShuHumanInteractionRequest.Option? in
+                if let label = raw as? String { return .init(label: label) }
+                guard let object = raw as? [String: Any],
+                      let label = object["label"] as? String else { return nil }
+                return .init(
+                    id: (object["id"] as? String) ?? UUID().uuidString,
+                    label: label,
+                    detail: (object["detail"] as? String) ?? "",
+                    value: object["value"] as? String
+                )
+            }
+            return LingShuHumanInteractionRequest(
+                kind: .choice,
+                title: prompt,
+                prompt: prompt,
+                options: options,
+                source: tool
+            ).normalized
+        case "ask_user":
+            return LingShuHumanInteractionRequest(
+                kind: .question,
+                title: prompt,
+                prompt: prompt,
+                source: tool
+            ).normalized
+        default:
+            return nil
+        }
+    }
+
     static func firstEmbedded(in text: String) -> (range: Range<String.Index>, envelope: LingShuHumanInputEnvelope)? {
         guard let prefixRange = text.range(of: prefix) else { return nil }
         var end = prefixRange.upperBound

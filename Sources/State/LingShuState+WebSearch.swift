@@ -65,6 +65,26 @@ extension LingShuState {
 
     /// 用 **OpenRouter 的 web 插件**做联网搜索:它服务端先搜网页、把结果喂模型,返回带**真实时数据 + 来源链接**的摘要。
     /// 无密钥 DDG 抓取已被搜索引擎封死(返回空),这是当前真正能用的搜索路径。返回 nil = 没拿到(调用方回退 DDG)。
+    nonisolated static func openRouterWebSearchMessages(
+        _ query: String,
+        language: LingShuVoiceLanguage
+    ) -> [[String: String]] {
+        let searchPrompt: String
+        switch language {
+        case .chinese:
+            searchPrompt = "联网搜索并简要汇总关于「\(query)」的最新信息：给出关键事实、数字和日期，不要凭记忆回答。"
+        case .english:
+            searchPrompt = "Search the web and briefly summarize the latest information about \"\(query)\". Include key facts, figures, and dates; do not answer from memory."
+        }
+        return [
+            [
+                "role": "system",
+                "content": LingShuLanguagePreferenceStore.highestPriorityModelInstruction(for: language)
+            ],
+            ["role": "user", "content": searchPrompt]
+        ]
+    }
+
     nonisolated static func openRouterWebSearch(_ query: String, key: String) async -> String? {
         guard let url = URL(string: "https://openrouter.ai/api/v1/chat/completions") else { return nil }
         var req = URLRequest(url: url)
@@ -72,11 +92,12 @@ extension LingShuState {
         req.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.timeoutInterval = 40
+        let language = LingShuLanguagePreferenceStore.currentLanguage()
         // 省钱:搜索包装用便宜模型(deepseek-chat,只需汇总搜索结果,不必上 Kimi)+ 结果数 5→3(OpenRouter 按结果收费)。
         let body: [String: Any] = [
             "model": "deepseek/deepseek-chat",
             "plugins": [["id": "web", "max_results": 3]],
-            "messages": [["role": "user", "content": "联网搜索并用中文简要汇总关于「\(query)」的**最新**信息:给关键事实/数字/日期,别凭记忆。"]],
+            "messages": openRouterWebSearchMessages(query, language: language),
             "max_tokens": 600
         ]
         guard let data = try? JSONSerialization.data(withJSONObject: body) else { return nil }
@@ -87,10 +108,15 @@ extension LingShuState {
               let msg = choices.first?["message"] as? [String: Any],
               let content = (msg["content"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
               !content.isEmpty else { return nil }
-        var out = "联网搜索「\(query)」结果(实时):\n" + content
+        var out = language == .english
+            ? "Live web results for \"\(query)\":\n" + content
+            : "联网搜索「\(query)」结果(实时):\n" + content
         if let ann = msg["annotations"] as? [[String: Any]] {
             let urls = ann.compactMap { ($0["url_citation"] as? [String: Any])?["url"] as? String }.prefix(5)
-            if !urls.isEmpty { out += "\n\n来源:\n" + urls.map { "- \($0)" }.joined(separator: "\n") }
+            if !urls.isEmpty {
+                out += language == .english ? "\n\nSources:\n" : "\n\n来源:\n"
+                out += urls.map { "- \($0)" }.joined(separator: "\n")
+            }
         }
         return out
     }

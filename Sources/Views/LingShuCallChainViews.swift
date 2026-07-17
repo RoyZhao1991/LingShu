@@ -11,10 +11,10 @@ struct LingShuCallChainPanel: View {
                 SectionHeader(icon: "point.3.connected.trianglepath.dotted", title: state.loc("本轮进展", "Live Progress"), subtitle: state.hasLiveProgress ? state.loc("实时执行中", "Running") : state.loc("空闲待命", "Idle"))
 
                 VStack(alignment: .leading, spacing: 8) {
-                    Text(state.missionTitle)
+                    Text(state.missionTitleDisplay)
                         .font(.system(size: 20, weight: .semibold))
                         .foregroundStyle(Color.lingFg)
-                    Text(state.missionStatus)
+                    Text(state.missionStatusDisplay)
                         .font(.system(size: 12.5, weight: .medium))
                         .foregroundStyle(Color.lingFg.opacity(0.58))
                         .fixedSize(horizontal: false, vertical: true)
@@ -61,7 +61,12 @@ struct LingShuCallChainPanel: View {
                     HoloMetricRow(label: state.loc("已用时", "Elapsed"), value: elapsed, icon: "timer", color: .lingHolo)
                 }
                 if let tool = state.currentToolDisplay {
-                    HoloMetricRow(label: state.loc("当前动作", "Action"), value: tool, icon: "cursorarrow.motionlines", color: .cyan)
+                    HoloMetricRow(
+                        label: state.loc("当前动作", "Action"),
+                        value: state.localizedRuntimeText(tool, fallback: "Tool activity"),
+                        icon: "cursorarrow.motionlines",
+                        color: .cyan
+                    )
                 }
                 if state.autonomousRun.isActive {
                     HoloMetricRow(label: state.loc("权限", "Permission"), value: state.loc(state.autonomousRun.permissionLevel.rawValue, state.autonomousRun.permissionLevel.englishName), icon: "lock.shield", color: .orange)
@@ -131,8 +136,8 @@ struct LingShuCallChainPanel: View {
                 .font(.system(size: 11.5, weight: .medium))
                 .foregroundStyle(Color.lingFg.opacity(0.55))
                 .fixedSize(horizontal: false, vertical: true)
-            HoloMetricRow(label: state.loc("主记忆", "Memory"), value: state.mainMemoryStatus, icon: "memorychip", color: .cyan)
-            HoloMetricRow(label: state.loc("冷备库", "Cold store"), value: state.coldMemoryStatus, icon: "externaldrive", color: .orange)
+            HoloMetricRow(label: state.loc("主记忆", "Memory"), value: state.mainMemoryStatusDisplay, icon: "memorychip", color: .cyan)
+            HoloMetricRow(label: state.loc("冷备库", "Cold store"), value: state.coldMemoryStatusDisplay, icon: "externaldrive", color: .orange)
         }
     }
 }

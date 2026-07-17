@@ -18,7 +18,7 @@ struct LingShuInitialLanguageSelectionView: View {
                     .frame(width: 112, height: 112)
                     .accessibilityHidden(true)
 
-                Text("灵枢 · LingShu")
+                Text("灵枢 · Nous")
                     .font(.system(size: 34, weight: .semibold))
                     .padding(.top, 22)
 

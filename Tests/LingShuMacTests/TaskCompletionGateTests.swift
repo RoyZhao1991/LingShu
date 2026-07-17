@@ -589,7 +589,7 @@ final class TaskCompletionGateTests: XCTestCase {
     }
 
     @MainActor
-    func testAskUserProtectedBoundaryRendersAuthorizationChoices() throws {
+    func testAskUserProtectedBoundaryPresentsAuthorizationChoicesInApp() throws {
         let state = LingShuState()
         let rid = state.createTaskExecutionRecord(for: "同步到外部知识库")
         defer {
@@ -628,12 +628,16 @@ final class TaskCompletionGateTests: XCTestCase {
         XCTAssertTrue(rendered)
         let bubble = try XCTUnwrap(state.chatMessages.first(where: { $0.id == pending.id }))
         XCTAssertFalse(bubble.isLoading)
-        XCTAssertNotNil(bubble.choices, "主动 ask_user 触达受保护边界时也必须升级成结构化授权入口")
-        XCTAssertTrue(bubble.choices?.options.contains(where: { $0.label.contains("确认授权") }) ?? false)
+        XCTAssertNil(bubble.choices, "硬人机交互不应遗留气泡内入口。")
+        let interaction = try XCTUnwrap(state.pendingHardHumanInteraction)
+        XCTAssertEqual(interaction.target, .main(messageID: pending.id))
+        XCTAssertEqual(interaction.request.kind, .choice)
+        XCTAssertEqual(interaction.request.payload["semantic_context"], "prerequisite_choice")
+        XCTAssertTrue(interaction.request.options.contains(where: { $0.label.contains("确认授权") }))
     }
 
     @MainActor
-    func testDispatchedAskUserProtectedBoundaryGetsAuthorizationChoices() throws {
+    func testDispatchedAskUserProtectedBoundaryPresentsAuthorizationChoicesInApp() throws {
         let state = LingShuState()
         let rid = state.createTaskExecutionRecord(for: "同步到外部知识库")
         defer {
@@ -667,8 +671,12 @@ final class TaskCompletionGateTests: XCTestCase {
 
         let bubble = try XCTUnwrap(state.chatMessages.first(where: { $0.id == pending.id }))
         XCTAssertEqual(bubble.awaitingInputForRecordID, rid)
-        XCTAssertNotNil(bubble.choices, "派发任务主动 ask_user 时也必须给可点击授权入口")
-        XCTAssertTrue(bubble.choices?.options.contains(where: { $0.label.contains("确认授权") }) ?? false)
+        XCTAssertNil(bubble.choices, "派发任务的硬人机交互也必须走应用内统一入口。")
+        let interaction = try XCTUnwrap(state.pendingHardHumanInteraction)
+        XCTAssertEqual(interaction.target, .dispatched(recordID: rid))
+        XCTAssertEqual(interaction.request.kind, .choice)
+        XCTAssertEqual(interaction.request.payload["semantic_context"], "prerequisite_choice")
+        XCTAssertTrue(interaction.request.options.contains(where: { $0.label.contains("确认授权") }))
     }
 
     @MainActor

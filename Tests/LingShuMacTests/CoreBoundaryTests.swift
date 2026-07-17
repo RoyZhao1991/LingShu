@@ -614,6 +614,41 @@ final class CoreBoundaryTests: XCTestCase {
         XCTAssertEqual(messages.count, 2)
     }
 
+    func testModelGatewayPrependsSelectedLanguageBeforeEverySystemPrompt() throws {
+        let defaults = UserDefaults.standard
+        let oldValue = defaults.object(forKey: LingShuLanguagePreferenceStore.languageKey)
+        defer {
+            if let oldValue { defaults.set(oldValue, forKey: LingShuLanguagePreferenceStore.languageKey) }
+            else { defaults.removeObject(forKey: LingShuLanguagePreferenceStore.languageKey) }
+        }
+        defaults.set(LingShuVoiceLanguage.english.rawValue, forKey: LingShuLanguagePreferenceStore.languageKey)
+
+        let contract = try LingShuModelGateway().makeInvocationContract(
+            provider: "DeepSeek",
+            model: "deepseek-chat",
+            endpoint: "https://api.deepseek.com/v1",
+            protocolName: "OpenAI compatible",
+            apiKey: "test-key",
+            systemPrompt: "你是灵枢。",
+            userPrompt: "Who are you?",
+            temperature: 0.2,
+            stream: false,
+            conversationMessages: [
+                .init(role: "system", content: "内部工作流说明。"),
+                .init(role: "user", content: "Who are you?")
+            ]
+        )
+        let body = try XCTUnwrap(JSONSerialization.jsonObject(with: contract.body) as? [String: Any])
+        let messages = try XCTUnwrap(body["messages"] as? [[String: Any]])
+        let first = try XCTUnwrap(messages.first?["content"] as? String)
+
+        XCTAssertEqual(messages.first?["role"] as? String, "system")
+        XCTAssertTrue(first.hasPrefix("ANSWER IN ENGLISH."))
+        XCTAssertEqual(first.components(separatedBy: "ANSWER IN ENGLISH.").count - 1, 1)
+        XCTAssertTrue(first.contains("你是灵枢。"))
+        XCTAssertTrue(first.contains("内部工作流说明。"))
+    }
+
     func testModelGatewayBuildsResponsesContract() throws {
         let gateway = LingShuModelGateway()
 

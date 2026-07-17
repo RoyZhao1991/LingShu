@@ -219,7 +219,7 @@ struct LingShuModelGateway {
             // 显式给足(按模型上下文动态算、夹在该模型硬上限内),别让大回答/大写入被默认值砍掉。
             let chatMaxTokens = LingShuModelOutputBudget.dynamicMaxTokens(
                 model: model,
-                estimatedInputChars: Self.estimatedInputChars(systemPrompt: systemPrompt, messages: messages, tools: tools))
+                estimatedInputChars: Self.estimatedInputChars(systemPrompt: "", messages: messages, tools: tools))
             if tools.isEmpty && !hasInlineImages {
                 body = try encoder.encode(LingShuChatCompletionsRequest(
                     model: model,
@@ -249,8 +249,7 @@ struct LingShuModelGateway {
             // 又把 system 消息 filter 掉,Anthropic 就**一条系统指令都收不到** → 模型不知道要"只出JSON/据本页讲",于是客套乱答
             // (实测:演示分类器丢了指令、把「从第二页开始讲解」回成"请上传文件"的 markdown,jsonField 抽不到→落 question)。
             // OpenAI 形态把 system 留在 messages 里所以没事;只有 Anthropic 走单独 system 字段,必须在这里把 system 消息收上来。
-            let systemFromMessages = messages.filter { $0.role == "system" }.map(\.content)
-            let combinedSystem = ([systemPrompt] + systemFromMessages)
+            let combinedSystem = messages.filter { $0.role == "system" }.map(\.content)
                 .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
                 .joined(separator: "\n\n")
             body = try Self.anthropicMessagesBody(
@@ -690,15 +689,20 @@ struct LingShuModelGateway {
             return .init(role: role, content: message.content, toolCalls: message.toolCalls, toolCallID: message.toolCallID, imageDataURLs: message.imageDataURLs)
         }
 
-        if !cleanedConversation.isEmpty {
-            let hasSystem = cleanedConversation.contains { $0.role == "system" }
-            return hasSystem
-                ? cleanedConversation
-                : [.init(role: "system", content: systemPrompt)] + cleanedConversation
+        let systemParts = ([systemPrompt] + cleanedConversation.filter { $0.role == "system" }.map(\.content))
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        let systemContent = LingShuLanguagePreferenceStore.modelPrompt(
+            applyingHighestPriorityLanguageTo: systemParts.joined(separator: "\n\n")
+        )
+        let dialogue = cleanedConversation.filter { $0.role != "system" }
+
+        if !dialogue.isEmpty {
+            return [.init(role: "system", content: systemContent)] + dialogue
         }
 
         return [
-            .init(role: "system", content: systemPrompt),
+            .init(role: "system", content: systemContent),
             .init(role: "user", content: userPrompt)
         ]
     }

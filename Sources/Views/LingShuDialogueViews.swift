@@ -136,12 +136,12 @@ struct LingShuCoreHeader: View {
     var body: some View {
         HStack(alignment: .center, spacing: 18) {
             VStack(alignment: .leading, spacing: 10) {
-                LingShuHUDReadout(label: "MISSION", value: state.missionTitle, color: state.coreState.color)
+                LingShuHUDReadout(label: "MISSION", value: state.missionTitleDisplay, color: state.coreState.color)
                 LingShuHUDReadout(
                     label: "THREADS",
                     value: state.loc("\(state.taskThreads.count) 条任务线程", "\(state.taskThreads.count) task threads")
                 )
-                LingShuHUDReadout(label: "MEMORY", value: state.mainMemoryStatus)
+                LingShuHUDReadout(label: "MEMORY", value: state.mainMemoryStatusDisplay)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
 
@@ -175,8 +175,8 @@ struct LingShuCoreHeader: View {
             }
 
             VStack(alignment: .trailing, spacing: 10) {
-                LingShuHUDReadout(label: "CHANNEL", value: state.modelProvider, color: state.isModelConnected ? .lingHolo : .orange)
-                LingShuHUDReadout(label: "SESSIONS", value: state.remoteSessionStatus)
+                LingShuHUDReadout(label: "CHANNEL", value: state.modelProviderDisplay, color: state.isModelConnected ? .lingHolo : .orange)
+                LingShuHUDReadout(label: "SESSIONS", value: state.remoteSessionStatusDisplay)
                 LingShuBrainScoreChip(state: state)   // 可点:看具体评分 + 一键检测脑力分
             }
             .frame(maxWidth: .infinity, alignment: .trailing)
@@ -912,6 +912,7 @@ struct LingShuInputDock: View {
             .animation(.easeInOut(duration: 0.2), value: voice.isSpeaking)
 
             HStack(spacing: 12) {
+                permissionModeMenu
                 Text(state.loc("Return 发送", "Return to send"))
                 Spacer(minLength: 8)
                 if !activeAlerts.isEmpty {
@@ -935,6 +936,36 @@ struct LingShuInputDock: View {
         .sheet(isPresented: $showHistorySearch) {
             LingShuHistorySearchSheet(state: state)
         }
+    }
+
+    private var permissionModeMenu: some View {
+        Menu {
+            ForEach(LingShuExecutionPermissionMode.allCases) { mode in
+                Button {
+                    state.setExecutionPermissionMode(mode)
+                } label: {
+                    Label {
+                        Text(state.loc(mode.rawValue, mode.englishName))
+                    } icon: {
+                        Image(systemName: state.executionPermissionMode == mode ? "checkmark.circle.fill" : "circle")
+                    }
+                }
+            }
+        } label: {
+            HStack(spacing: 5) {
+                Image(systemName: state.executionPermissionMode == .fullAccess ? "bolt.shield.fill" : "shield.lefthalf.filled")
+                Text(state.loc(state.executionPermissionMode.rawValue, state.executionPermissionMode.englishName))
+                    .lineLimit(1)
+            }
+            .font(.system(size: 11.5, weight: .bold))
+            .foregroundStyle(state.executionPermissionMode == .fullAccess ? Color.orange : Color.lingFg.opacity(0.64))
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .help(state.loc(
+            "选择本会话执行权限；系统红线与未审来源首次执行仍需确认",
+            "Choose the execution permission for this session; system red lines and first use of unreviewed sources still require approval"
+        ))
     }
 
     /// 底部告警栏的数据源：把分散在各处、用户容易忽略的"降级/不可用"状态收集起来集中提示。
@@ -994,7 +1025,7 @@ struct LingShuInputDock: View {
                     }
                 }
             }
-            Section(state.loc("灵枢插件", "LingShu Plugins")) {
+            Section(state.loc("灵枢插件", "Nous Plugins")) {
                 ForEach(all.filter { $0.kind == .plugin }) { p in
                     Button { insertMention(p.displayName) } label: { Label(p.displayName, systemImage: p.icon) }
                 }

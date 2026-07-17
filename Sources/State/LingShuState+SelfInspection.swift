@@ -10,40 +10,49 @@ extension LingShuState {
         var capabilities: [LingShuSelfInspection.Section] = []
 
         // 大脑(可换)。
-        var brainItems = ["当前大脑:\(modelProvider) / \(modelName)"]
+        var brainItems = [loc("当前大脑:\(modelProvider) / \(modelName)", "Current brain: \(modelProviderDisplay) / \(modelName)")]
         if shouldAttemptNativeMultimodalForCurrentModel() {
-            brainItems.append("原生多模态:本通道默认尝试 image_url 直发")
+            brainItems.append(loc("原生多模态:本通道默认尝试 image_url 直发", "Native multimodal: this channel tries direct image_url input first"))
         } else if isCurrentModelMarkedNativeMultimodalUnsupported() {
-            brainItems.append("原生多模态:已确认不可用，附件走图片解析降级")
+            brainItems.append(loc("原生多模态:已确认不可用，附件走图片解析降级", "Native multimodal: unavailable; attachments fall back to image parsing"))
         }
-        brainItems.append("大脑可热切换、换脑后记忆延续(codex/claude 是 agent 插件,不是大脑)")
-        capabilities.append(.init(title: "🧠 大脑", items: brainItems))
+        brainItems.append(loc("大脑可热切换、换脑后记忆延续(codex/claude 是 agent 插件,不是大脑)", "The brain is hot-swappable while memory continues; Codex and Claude are Agent plugins"))
+        capabilities.append(.init(title: loc("🧠 大脑", "🧠 Brain"), items: brainItems))
 
         // 工具(核心恒可用 + 长尾按需 search_tools 激活)。
         let core = LingShuToolCatalog.coreToolNames.sorted().joined(separator: "、")
-        capabilities.append(.init(title: "🛠 工具", items: [
-            "核心(恒可用):\(core)",
-            "原生 Computer Use:按应用读取 AX 语义快照、用元素索引操作、动作后回读验证；不依赖 Codex",
-            "按需激活(search_tools):浏览器自动化、坐标截屏兜底、演示放映、会议纪要、定时调度、外设/家电控制、author_component 自造工具 等",
+        capabilities.append(.init(title: loc("🛠 工具", "🛠 Tools"), items: [
+            loc("核心(恒可用):\(core)", "Always available: \(core)"),
+            loc("原生 Computer Use:按应用读取 AX 语义快照、用元素索引操作、动作后回读验证；不依赖 Codex", "Native Computer Use reads app accessibility snapshots, operates indexed elements, and verifies actions without Codex"),
+            loc("按需激活(search_tools):浏览器自动化、坐标截屏兜底、演示放映、会议纪要、定时调度、外设/家电控制、author_component 自造工具 等", "On-demand tools include browser automation, visual fallback, presentations, meeting minutes, scheduling, peripherals, and authored components"),
         ]))
 
         // 已注册的 agent 插件(被告知本机有→注册)。自检展示的是**运行时状态**:
         // 可用 / 不可用 / 未探活分清楚,避免把"登记过"误读成"当前可调度"。
         let agents = LingShuAgentPluginStore.load()
         if agents.isEmpty {
-            capabilities.append(.init(title: "🤝 agent 插件状态", items: ["(暂无;跟我说『本机有 X,可执行…,调用…』即注册)"]))
+            capabilities.append(.init(
+                title: loc("🤝 agent 插件状态", "🤝 Agent Plugin Status"),
+                items: [loc("(暂无;跟我说『本机有 X,可执行…,调用…』即注册)", "None registered. Tell Nous which local Agent is installed and how to invoke it.")]
+            ))
         } else {
             // 每个 agent 后挂上它**自带的已启用子能力**(适配器发现的,如 codex 的 picsart/film-visual-pipeline 出图)——
             // 让大脑自检/路由时知道"该 agent 能干这些专长事",而不是自己硬扛(如出图)。
             let availableCount = agents.filter { $0.available == true && $0.isAvailableNow }.count
             let unavailableCount = agents.filter { !$0.isAvailableNow }.count
             let unverifiedCount = agents.filter { $0.available == nil && $0.executableExists }.count
-            capabilities.append(.init(title: "🤝 agent 插件状态(\(availableCount) 可用 / \(unverifiedCount) 未探活 / \(unavailableCount) 不可用)",
+            capabilities.append(.init(title: loc(
+                "🤝 agent 插件状态(\(availableCount) 可用 / \(unverifiedCount) 未探活 / \(unavailableCount) 不可用)",
+                "🤝 Agent Plugin Status (\(availableCount) available / \(unverifiedCount) unchecked / \(unavailableCount) unavailable)"
+            ),
                 items: agents.map { agent in
                     let caps = agent.isCallableNow
                         ? agentCapabilities(for: agent.id).filter { $0.enabled && $0.installed }.map(\.name)
                         : []
-                    let suffix = caps.isEmpty ? "" : " · 自带能力:\(caps.prefix(8).joined(separator: "、"))" + (caps.count > 8 ? "…" : "")
+                    let suffix = caps.isEmpty ? "" : loc(
+                        " · 自带能力:\(caps.prefix(8).joined(separator: "、"))" + (caps.count > 8 ? "…" : ""),
+                        " · Capabilities: \(caps.prefix(8).joined(separator: ", "))" + (caps.count > 8 ? "…" : "")
+                    )
                     return agentInspectionLine(agent, suffix: suffix)
                 }))
         }
@@ -51,37 +60,42 @@ extension LingShuState {
         // 已学会的过程技能。
         let skills = LingShuProcedureSkillRouter.loadProcedures()
         if !skills.isEmpty {
-            capabilities.append(.init(title: "🎯 已学技能(\(skills.count))",
+            capabilities.append(.init(title: loc("🎯 已学技能(\(skills.count))", "🎯 Learned Skills (\(skills.count))"),
                                       items: skills.prefix(10).map { $0.title }))
         }
 
         // 记忆规模。
-        capabilities.append(.init(title: "🧩 记忆(知识图谱)", items: [
-            "\(knowledgeGraph.count) 条原子知识(别名归一 + 双链 + 园丁自维护);additive 召回",
+        capabilities.append(.init(title: loc("🧩 记忆(知识图谱)", "🧩 Memory (Knowledge Graph)"), items: [
+            loc("\(knowledgeGraph.count) 条原子知识(别名归一 + 双链 + 园丁自维护);additive 召回", "\(knowledgeGraph.count) atomic knowledge items with alias normalization, backlinks, gardening, and additive retrieval"),
         ]))
 
         // 感知通道(可插拔)。
-        capabilities.append(.init(title: "👁 感知通道", items: [
-            "视觉:屏幕 / 摄像头;听觉:麦克风 / 系统声音;外接:可插拔传感汇聚",
-            "实时流默认不归档;启用远程模型/感知服务时,数据处理遵循对应服务商条款",
+        capabilities.append(.init(title: loc("👁 感知通道", "👁 Perception Channels"), items: [
+            loc("视觉:屏幕 / 摄像头;听觉:麦克风 / 系统声音;外接:可插拔传感汇聚", "Vision: screen/camera; audio: microphone/system audio; external: pluggable sensors"),
+            loc("实时流默认不归档;启用远程模型/感知服务时,数据处理遵循对应服务商条款", "Live streams are not archived by default; remote processing follows the configured provider's terms"),
         ]))
 
         // 自主 / 在岗 / 运行态。
         let onDuty = isStandingPersonOnDuty
-        capabilities.append(.init(title: "⚙️ 运行态", items: [
-            onDuty ? "在岗常驻中(听屏看屏、定时与无人值守)" : "待命(可上岗独立运行 / 挂定时 / 无人值守)",
-            "自主阶段:\(autonomousRun.phase.rawValue);断网自动暂停→联网续跑",
+        capabilities.append(.init(title: loc("⚙️ 运行态", "⚙️ Runtime"), items: [
+            onDuty
+                ? loc("在岗常驻中(听屏看屏、定时与无人值守)", "On duty with sensing, schedules, and unattended execution")
+                : loc("待命(可上岗独立运行 / 挂定时 / 无人值守)", "Standby; autonomous, scheduled, and unattended execution are available"),
+            loc("自主阶段:\(autonomousRun.phase.rawValue);断网自动暂停→联网续跑", "Autonomous phase: \(autonomousRun.phase.englishName); network-dependent work pauses offline and resumes online"),
         ]))
 
         return LingShuSelfInspection(
-            oneLiner: "我是灵枢,由 Roy Zhao 打造的贾维斯式通用智能中枢——你说目标,判断 / 分派 / 执行 / 验收交给我。",
-            architecture: LingShuSelfInspection.architectureOverview(),
+            oneLiner: loc(
+                "我是灵枢,由 Roy Zhao 打造的贾维斯式通用智能中枢——你说目标,判断 / 分派 / 执行 / 验收交给我。",
+                "I am Nous, a general AI agent hub built by Roy Zhao. Give me a goal and I coordinate judgment, delegation, execution, and verification."
+            ),
+            architecture: LingShuSelfInspection.architectureOverview(language: language),
             capabilities: capabilities
         )
     }
 
     /// 完整自检报告(markdown,面板/工具共用)。
-    var selfInspectionReport: String { assembleSelfInspection().markdown() }
+    var selfInspectionReport: String { assembleSelfInspection().markdown(language: language) }
 
     /// **架构/能力/自检类问题 → 注入真实自我认知作引导**(grounding)。
     /// 因为弱脑(如 GLM)不会自动调 `self_inspect` 工具,这里确定性把真实架构 + 实时能力喂进上下文,
@@ -93,7 +107,7 @@ extension LingShuState {
         guard signals.contains(where: { n.contains($0) }) else { return nil }
         return """
         【你的真实自我认知·grounded(据此自然真诚地答,别背模板也别瞎编)】
-        \(assembleSelfInspection().markdown())
+        \(assembleSelfInspection().markdown(language: language))
 
         回答时:结合上面**真实的架构与当前能力**,用户问得多细就答多细;**别暴露底层模型名**;别逐条干巴巴复述,像个真正的 AGI 助理那样组织成自然、有条理的介绍。
         """
@@ -108,25 +122,40 @@ extension LingShuState {
             parametersJSON: "{\"type\":\"object\",\"properties\":{},\"required\":[]}"
         ) { [weak self] _ in
             guard let self else { return "自检环境不可用。" }
-            return await MainActor.run { self.assembleSelfInspection().markdown() }
+            return await MainActor.run { self.assembleSelfInspection().markdown(language: self.language) }
         }
     }
 
     /// 自检面板/工具展示用的 agent 状态文案。这里不发起子进程,只读持久健康状态与可执行文件事实。
     func agentInspectionLine(_ agent: LingShuAgentPlugin, suffix: String = "") -> String {
         let role = agent.role.rawValue
-        let checked = agent.lastCheckedAt.map { " · 上次探活:\(Self.agentHealthDateFormatter.string(from: $0))" } ?? ""
+        let checked = agent.lastCheckedAt.map {
+            loc(" · 上次探活:\(Self.agentHealthDateFormatter.string(from: $0))", " · Last checked: \(Self.agentHealthDateFormatter.string(from: $0))")
+        } ?? ""
         if !agent.executableExists {
-            return "❌ @\(agent.displayName)(\(role)) · 不可用:找不到可执行文件 \(agent.executable)\(checked)\(suffix)"
+            return loc(
+                "❌ @\(agent.displayName)(\(role)) · 不可用:找不到可执行文件 \(agent.executable)\(checked)\(suffix)",
+                "❌ @\(agent.displayName) (\(role)) · Unavailable: executable not found at \(agent.executable)\(checked)\(suffix)"
+            )
         }
         if agent.available == false {
-            let reason = (agent.unavailableReason?.trimmingCharacters(in: .whitespacesAndNewlines)).flatMap { $0.isEmpty ? nil : $0 } ?? "探活/运行失败"
-            return "❌ @\(agent.displayName)(\(role)) · 不可用:\(reason)\(checked)\(suffix)"
+            let reason = (agent.unavailableReason?.trimmingCharacters(in: .whitespacesAndNewlines)).flatMap { $0.isEmpty ? nil : $0 }
+                ?? loc("探活/运行失败", "Health check or execution failed")
+            return loc(
+                "❌ @\(agent.displayName)(\(role)) · 不可用:\(reason)\(checked)\(suffix)",
+                "❌ @\(agent.displayName) (\(role)) · Unavailable: \(reason)\(checked)\(suffix)"
+            )
         }
         if agent.available == true {
-            return "✅ @\(agent.displayName)(\(role)) · 可用\(checked)\(suffix)"
+            return loc(
+                "✅ @\(agent.displayName)(\(role)) · 可用\(checked)\(suffix)",
+                "✅ @\(agent.displayName) (\(role)) · Available\(checked)\(suffix)"
+            )
         }
-        return "⚪️ @\(agent.displayName)(\(role)) · 未探活:可执行文件存在,尚未完成运行验证\(suffix)"
+        return loc(
+            "⚪️ @\(agent.displayName)(\(role)) · 未探活:可执行文件存在,尚未完成运行验证\(suffix)",
+            "⚪️ @\(agent.displayName) (\(role)) · Not checked: executable exists but runtime verification is pending\(suffix)"
+        )
     }
 
     /// 自检 live 刷新:对已注册 agent 做一次短探活,把认证/额度/令牌/文件缺失等通用故障回写到插件库。

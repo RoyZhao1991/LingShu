@@ -14,8 +14,8 @@ struct LingShuPermissionApprovalView: View {
                     .foregroundStyle(Color.lingHolo)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(pending.riskNotes.isEmpty
-                         ? LingShuLanguagePreferenceStore.localized("灵枢 请求执行系统命令", "LingShu Requests to Run a System Command")
-                         : LingShuLanguagePreferenceStore.localized("⚠️ 灵枢 请求执行高风险来源脚本", "⚠️ LingShu Requests to Run a High-risk Script"))
+                         ? LingShuLanguagePreferenceStore.localized("灵枢 请求执行系统命令", "Nous Requests to Run a System Command")
+                         : LingShuLanguagePreferenceStore.localized("⚠️ 灵枢 请求执行高风险来源脚本", "⚠️ Nous Requests to Run a High-risk Script"))
                         .font(.system(size: 15.5, weight: .bold))
                         .foregroundStyle(pending.riskNotes.isEmpty ? .white : Color.orange)
                     Text(pending.riskNotes.isEmpty
@@ -92,7 +92,7 @@ struct LingShuPermissionApprovalView: View {
 
                 approvalButton(
                     title: LingShuLanguagePreferenceStore.localized("拒绝", "Deny"),
-                    subtitle: LingShuLanguagePreferenceStore.localized("不执行，灵枢改用其它方式", "Do not run it; LingShu will try another approach"),
+                    subtitle: LingShuLanguagePreferenceStore.localized("不执行，灵枢改用其它方式", "Do not run it; Nous will try another approach"),
                     icon: "xmark.circle.fill",
                     tint: .red,
                     filled: false

@@ -145,9 +145,15 @@ LINGSHU_BUNDLE_HAL_DRIVER="$BUNDLE_HAL_DRIVER" \
 [ -d "$APP_PATH" ] || fail "app bundle was not produced: $APP_PATH"
 
 APP_BINARY="$APP_PATH/Contents/MacOS/$PRODUCT_NAME"
+CLI_BINARY="$APP_PATH/Contents/MacOS/lingshu"
 ARCHS="$(lipo -archs "$APP_BINARY")"
 [[ " $ARCHS " == *" arm64 "* ]] || fail "app binary is missing arm64: $ARCHS"
 [[ " $ARCHS " == *" x86_64 "* ]] || fail "app binary is missing x86_64: $ARCHS"
+[ -x "$CLI_BINARY" ] || fail "bundled CLI was not produced: $CLI_BINARY"
+CLI_ARCHS="$(lipo -archs "$CLI_BINARY")"
+[[ " $CLI_ARCHS " == *" arm64 "* ]] || fail "CLI binary is missing arm64: $CLI_ARCHS"
+[[ " $CLI_ARCHS " == *" x86_64 "* ]] || fail "CLI binary is missing x86_64: $CLI_ARCHS"
+codesign --verify --strict --verbose=2 "$CLI_BINARY"
 
 codesign --verify --deep --strict --verbose=2 "$APP_PATH"
 codesign -d --verbose=4 "$APP_PATH" 2>&1 | grep -F "TeamIdentifier=$TEAM_ID" >/dev/null \
@@ -206,6 +212,8 @@ hdiutil attach "$DMG_PATH" -readonly -nobrowse -mountpoint "$MOUNT_POINT" >/dev/
 MOUNTED=1
 codesign --verify --deep --strict --verbose=2 "$MOUNT_POINT/$PRODUCT_NAME.app"
 spctl --assess --type execute --verbose=4 "$MOUNT_POINT/$PRODUCT_NAME.app"
+test -x "$MOUNT_POINT/$PRODUCT_NAME.app/Contents/MacOS/lingshu" \
+  || fail "installed payload is missing bundled CLI"
 hdiutil detach "$MOUNT_POINT" -quiet
 MOUNTED=0
 
