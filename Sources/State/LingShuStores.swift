@@ -5,9 +5,7 @@ import Foundation
 /// streaming bubble deltas should invalidate only the chat list, not the whole app shell or input field.
 @MainActor
 final class LingShuChatStore: ObservableObject {
-    @Published var messages: [ChatMessage] = [
-        .init(speaker: "灵枢", text: "我在。你只管说目标，剩下的判断、分派和推进交给我。", isUser: false)
-    ] {
+    @Published var messages: [ChatMessage] {
         didSet { onMessagesChanged?(messages) }
     }
 
@@ -15,6 +13,35 @@ final class LingShuChatStore: ObservableObject {
     @Published var hasMoreColdHistory = false
 
     var onMessagesChanged: (([ChatMessage]) -> Void)?
+
+    init(defaults: UserDefaults = .standard) {
+        let language = LingShuLanguagePreferenceStore.currentLanguage(in: defaults)
+        messages = [
+            .init(
+                speaker: LingShuLanguagePreferenceStore.assistantDisplayName(for: language),
+                text: LingShuLanguagePreferenceStore.initialGreeting(for: language),
+                isUser: false
+            )
+        ]
+    }
+
+    func localizePristineGreeting(for language: LingShuVoiceLanguage) {
+        guard messages.count == 1,
+              let existing = messages.first,
+              !existing.isUser,
+              LingShuLanguagePreferenceStore.isInitialGreeting(existing.text)
+        else { return }
+
+        messages = [
+            .init(
+                id: existing.id,
+                speaker: LingShuLanguagePreferenceStore.assistantDisplayName(for: language),
+                text: LingShuLanguagePreferenceStore.initialGreeting(for: language),
+                isUser: false,
+                createdAt: existing.createdAt
+            )
+        ]
+    }
 }
 
 /// Input lane state. It owns transient user input artifacts so the chat list can stream independently.

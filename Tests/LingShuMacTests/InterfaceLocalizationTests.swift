@@ -14,6 +14,40 @@ final class InterfaceLocalizationTests: XCTestCase {
         XCTAssertFalse(containsHan(state.localizedRuntimeText("尚未登记的新状态", fallback: "Status unavailable")))
     }
 
+    func testEnglishChatStoreStartsWithLocalizedGreeting() {
+        let suiteName = "cn.lingshu.tests.greeting.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        LingShuLanguagePreferenceStore.completeInitialSelection(.english, in: defaults)
+
+        let store = LingShuChatStore(defaults: defaults)
+
+        XCTAssertEqual(store.messages.count, 1)
+        XCTAssertEqual(store.messages[0].speaker, "Nous")
+        XCTAssertEqual(
+            store.messages[0].text,
+            LingShuLanguagePreferenceStore.initialGreeting(for: .english)
+        )
+        XCTAssertFalse(containsHan(store.messages[0].text))
+    }
+
+    func testPristineGreetingTracksLanguageButConversationContentDoesNot() {
+        let suiteName = "cn.lingshu.tests.greeting-switch.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        LingShuLanguagePreferenceStore.completeInitialSelection(.chinese, in: defaults)
+        let store = LingShuChatStore(defaults: defaults)
+
+        store.localizePristineGreeting(for: .english)
+        XCTAssertEqual(store.messages[0].speaker, "Nous")
+        XCTAssertFalse(containsHan(store.messages[0].text))
+
+        store.messages.append(.init(speaker: "You", text: "Keep this conversation.", isUser: true))
+        let existingMessages = store.messages
+        store.localizePristineGreeting(for: .chinese)
+        XCTAssertEqual(store.messages, existingMessages)
+    }
+
     func testUnknownUserContentIsPreservedWithoutSystemFallback() {
         let state = LingShuState()
         state.language = .english
