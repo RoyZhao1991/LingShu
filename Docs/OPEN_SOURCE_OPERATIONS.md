@@ -4,9 +4,11 @@
 
 ## 当前进度（2026-07-18）
 
-已完成：中英文首页、真实界面截图、GitHub 社交预览图、首发演示脚本与中英文发布文案、Apache-2.0、社区与安全文档、Issue/PR 模板、CI、仓库双语描述、12 个 Topics、贡献区域标签、GitHub Discussions、当前文件与可达历史的高置信度密钥扫描，以及超过 1,500 项 Swift 测试。当前 HEAD 已移除不应公开的运行时验证产物，并增加守卫测试防止再次误提交。动态运行图、通用人机协作、验收三态与断点续验已进入同一运行时协议；模型凭据由 macOS Keychain 保存并支持旧配置安全迁移。App 内已集成一问一答式 `lingshu` CLI，外部飞书/Webhook 连接器可以复用同一主会话、授权与人机交互断点。本机还已跑通过 Universal DMG、Developer ID 签名、Apple 公证、票据装订与 SHA-256 校验。
+已完成：中英文首页、真实界面截图、GitHub 社交预览图源文件、首发演示脚本与中英文发布文案、Apache-2.0、社区与安全文档、Issue/PR 模板、CI、仓库双语描述、16 个 Topics、贡献区域标签、GitHub Discussions、当前文件与可达历史的高置信度密钥扫描，以及超过 1,500 项 Swift 测试。当前 HEAD 已移除不应公开的运行时验证产物，并增加守卫测试防止再次误提交。动态运行图、通用人机协作、验收三态与断点续验已进入同一运行时协议；模型凭据由 macOS Keychain 保存并支持旧配置安全迁移。App 内已集成一问一答式 `lingshu` CLI，外部飞书/Webhook 连接器可以复用同一主会话、授权与人机交互断点。本机还已跑通过 Universal DMG、Developer ID 签名、Apple 公证、票据装订与 SHA-256 校验。
 
-本轮待完成：从最终绿色提交重建发布候选包，更新并发布首个 Release，公开仓库，开启私密漏洞报告并从未登录视角复核下载路径。干净 Mac 安装、60-90 秒演示视频和更多公开素材继续作为首发后的高优先级增强，不虚构为已经完成。
+首发状态：仓库已经公开；`v0.1.0-alpha` 已从最终绿色提交构建并发布，Universal DMG 完成 Developer ID 签名、Apple 公证、票据装订与 SHA-256 校验；私密漏洞报告已开启；仓库首页、Release 与校验文件已从匿名访问路径复核。干净 Mac 安装、60-90 秒演示视频和更多公开素材继续作为首发后的高优先级增强，不虚构为已经完成。
+
+首发时点的公开指标记录在 [`OPEN_SOURCE_BASELINE.md`](./OPEN_SOURCE_BASELINE.md)，后续周检只基于可核验数据做同比，不把下载次数直接等同于成功安装。
 
 ## 一、当前判断
 
@@ -26,11 +28,11 @@
 - [x] GitHub Discussions、双语描述、Topics、标签与贡献入口已配置。
 - [x] GitHub 社交预览图、60-90 秒演示镜头表与中英文首发文案已准备。
 - [ ] 在一台干净 Mac 上按 README 从源码构建成功。
-- [ ] 从最终绿色提交产出 Universal DMG，完成 Developer ID 签名、Apple 公证和 SHA-256 校验（相同流程此前已在本机跑通）。
+- [x] 从最终绿色提交产出 Universal DMG，完成 Developer ID 签名、Apple 公证、票据装订和 SHA-256 校验。
 - [ ] 用全新用户目录完成首次主脑配置和最小任务闭环。
 - [ ] 准备 60-90 秒真实演示视频和 3-5 张不含私人数据的产品截图。
-- [ ] 更新首个草稿 Release 的最终安装包、版本说明、已知限制和回滚下载入口。
-- [ ] 确认 Private vulnerability reporting 已开启。
+- [x] 更新并发布首个 Release 的最终安装包、版本说明、已知限制和回滚下载入口。
+- [x] 确认 Private vulnerability reporting 已开启。
 
 ## 三、首发叙事
 

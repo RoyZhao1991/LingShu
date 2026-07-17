@@ -17,6 +17,14 @@
     <img alt="项目阶段 Alpha" src="https://img.shields.io/badge/status-alpha-E9A23B">
     <img alt="1,500+ 项测试" src="https://img.shields.io/badge/tests-1%2C500%2B-2C8C7F">
     <a href="https://github.com/RoyZhao1991/LingShu/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/RoyZhao1991/LingShu/actions/workflows/ci.yml/badge.svg"></a>
+    <a href="https://github.com/RoyZhao1991/LingShu/releases/tag/v0.1.0-alpha"><img alt="最新版本" src="https://img.shields.io/github/v/release/RoyZhao1991/LingShu?include_prereleases&label=download"></a>
+  </p>
+
+  <p>
+    <a href="https://github.com/RoyZhao1991/LingShu/releases/tag/v0.1.0-alpha"><strong>下载已签名的 macOS Alpha</strong></a>
+    · <a href="#快速开始">快速开始</a>
+    · <a href="https://github.com/RoyZhao1991/LingShu/discussions">社区讨论</a>
+    · <a href="./README.md">English</a>
   </p>
 </div>
 
@@ -94,10 +102,25 @@ flowchart LR
 ### 环境要求
 
 - macOS 14 或更高版本
-- 带 Swift 6 的 Xcode Command Line Tools
 - 一个受支持模型服务的 API Token，或自定义兼容端点
 
+### 安装已签名版本（推荐）
+
+1. 从 [v0.1.0-alpha Release](https://github.com/RoyZhao1991/LingShu/releases/tag/v0.1.0-alpha) 下载 Universal DMG 与对应 `.sha256` 文件。
+2. 在终端校验下载文件：
+
+   ```bash
+   shasum -a 256 -c LingShu-0.1.0-4-macOS-universal.dmg.sha256
+   ```
+
+3. 打开 DMG，将 `灵枢.app` 拖入“应用程序”，然后启动。
+4. 选择界面语言、连接模型服务商，并发送一个小型任务完成首次验证。
+
+公开 DMG 同时支持 Apple 芯片和 Intel Mac，使用 Developer ID 签名，已通过 Apple 公证并附加公证票据。只有在所选能力确实需要时再授予对应 macOS 权限。
+
 ### 从源码构建
+
+从源码构建还需要带 Swift 6 的 Xcode Command Line Tools。
 
 ```bash
 git clone https://github.com/RoyZhao1991/LingShu.git
@@ -174,7 +197,7 @@ API 凭据保存在 macOS 钥匙串中，只属于本地运行配置，禁止提
 | PPT、文档与代码的端到端产物工作流 | 已实现 |
 | 实时感知与语音 | 可用；部分链路依赖环境并带降级策略 |
 | HAL 虚拟麦克风 | 实验性；设备出现仍不稳定 |
-| 官网签名与公证发布 | 发布脚本已具备；首个公开 Release 待发布 |
+| 官网签名与公证发布 | [v0.1.0-alpha 已发布](https://github.com/RoyZhao1991/LingShu/releases/tag/v0.1.0-alpha) |
 
 仓库包含超过 10 万行源码与测试代码、超过 180 个 Swift 测试文件以及超过 1,500 项测试。这些数字用于说明工程深度，并不等于所有依赖外部环境的测试都能在每一台 Mac 上通过。
 
@@ -193,6 +216,13 @@ bash Scripts/smoke-e2e.sh
 - [架构速查手册](./Docs/架构速查手册.md)
 - [路线图](./Docs/ROADMAP.md)
 - [变更记录](./CHANGELOG.md)
+
+## 社区
+
+- 在 [GitHub Discussions](https://github.com/RoyZhao1991/LingShu/discussions) 提问安装问题或分享工作流。
+- 通过 [Issue 列表](https://github.com/RoyZhao1991/LingShu/issues) 报告可复现问题。
+- 想参与代码或文档贡献，可以从 [`good first issue`](https://github.com/RoyZhao1991/LingShu/issues?q=is%3Aissue%20state%3Aopen%20label%3A%22good%20first%20issue%22) 开始。
+- 安全问题请按 [SECURITY.md](./SECURITY.md) 私密报告，不要创建公开 Issue。
 
 ## 参与贡献
 

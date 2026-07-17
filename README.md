@@ -17,6 +17,14 @@
     <img alt="Project status: alpha" src="https://img.shields.io/badge/status-alpha-E9A23B">
     <img alt="1,500+ tests" src="https://img.shields.io/badge/tests-1%2C500%2B-2C8C7F">
     <a href="https://github.com/RoyZhao1991/LingShu/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/RoyZhao1991/LingShu/actions/workflows/ci.yml/badge.svg"></a>
+    <a href="https://github.com/RoyZhao1991/LingShu/releases/tag/v0.1.0-alpha"><img alt="Latest release" src="https://img.shields.io/github/v/release/RoyZhao1991/LingShu?include_prereleases&label=download"></a>
+  </p>
+
+  <p>
+    <a href="https://github.com/RoyZhao1991/LingShu/releases/tag/v0.1.0-alpha"><strong>Download signed macOS alpha</strong></a>
+    · <a href="#quick-start">Quick start</a>
+    · <a href="https://github.com/RoyZhao1991/LingShu/discussions">Community</a>
+    · <a href="./README.zh-CN.md">中文</a>
   </p>
 </div>
 
@@ -94,10 +102,25 @@ The main conversation remains serialized to protect context. Long-running or del
 ### Requirements
 
 - macOS 14 or later
-- Xcode Command Line Tools with Swift 6
 - An API token for one supported model provider, or a compatible custom endpoint
 
+### Install the Signed Alpha (Recommended)
+
+1. Download the Universal DMG and its `.sha256` file from the [v0.1.0-alpha release](https://github.com/RoyZhao1991/LingShu/releases/tag/v0.1.0-alpha).
+2. In Terminal, verify the download:
+
+   ```bash
+   shasum -a 256 -c LingShu-0.1.0-4-macOS-universal.dmg.sha256
+   ```
+
+3. Open the DMG, drag `灵枢.app` to Applications, and launch it.
+4. Choose a language, connect a model provider, and send a small first request.
+
+The public DMG is Universal (`arm64` + `x86_64`), signed with a Developer ID certificate, notarized by Apple, and carries a stapled notarization ticket. Grant macOS permissions only when a capability you choose requires them.
+
 ### Build From Source
+
+Building from source additionally requires Xcode Command Line Tools with Swift 6.
 
 ```bash
 git clone https://github.com/RoyZhao1991/LingShu.git
@@ -174,7 +197,7 @@ LingShu is usable for development and controlled local workflows, but it is not 
 | End-to-end presentation, document, and code artifact workflow | Implemented |
 | Live perception and voice | Available with environment-dependent fallbacks |
 | HAL virtual microphone | Experimental; device appearance is not yet stable |
-| Signed and notarized public release | Release pipeline exists; first public release pending |
+| Signed and notarized public release | [v0.1.0-alpha available](https://github.com/RoyZhao1991/LingShu/releases/tag/v0.1.0-alpha) |
 
 The repository contains more than 100,000 lines of source and test code, more than 180 Swift test files, and more than 1,500 tests. These numbers describe engineering depth, not a guarantee that every environment-dependent test passes on every Mac.
 
@@ -193,6 +216,13 @@ Architecture references:
 - [Canonical architecture field guide (Chinese)](./Docs/架构速查手册.md)
 - [Roadmap](./Docs/ROADMAP.md)
 - [Changelog](./CHANGELOG.md)
+
+## Community
+
+- Ask setup questions and share workflows in [GitHub Discussions](https://github.com/RoyZhao1991/LingShu/discussions).
+- Report reproducible defects through the [issue tracker](https://github.com/RoyZhao1991/LingShu/issues).
+- Start with a [`good first issue`](https://github.com/RoyZhao1991/LingShu/issues?q=is%3Aissue%20state%3Aopen%20label%3A%22good%20first%20issue%22) if you want to contribute code or documentation.
+- Report security issues privately as described in [SECURITY.md](./SECURITY.md), not in a public issue.
 
 ## Contributing
 
