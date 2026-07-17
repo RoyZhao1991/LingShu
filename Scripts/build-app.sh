@@ -24,10 +24,17 @@ STRICT_DISTRIBUTION="${LINGSHU_REQUIRE_DISTRIBUTION_SIGNING:-0}"
 UNIVERSAL_BUILD="${LINGSHU_UNIVERSAL:-0}"
 BUNDLE_SENSEVOICE="${LINGSHU_BUNDLE_SENSEVOICE:-1}"
 BUNDLE_HAL_DRIVER="${LINGSHU_BUNDLE_HAL_DRIVER:-1}"
+SOURCE_REVISION="${LINGSHU_SOURCE_REVISION:-$(git rev-parse HEAD 2>/dev/null || printf 'development')}"
 APP_DIR="$ROOT_DIR/dist/${APP_NAME}.app"
 CONTENTS="$APP_DIR/Contents"
 MACOS_DIR="$CONTENTS/MacOS"
 RES_DIR="$CONTENTS/Resources"
+BUILD_TMP_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/lingshu-build.XXXXXX")"
+
+cleanup_build_temp() {
+  rm -rf "$BUILD_TMP_ROOT"
+}
+trap cleanup_build_temp EXIT
 
 [[ "$APP_VERSION" =~ ^[0-9]+(\.[0-9]+){1,2}$ ]] || {
   echo "invalid LINGSHU_VERSION: $APP_VERSION (expected 1.2 or 1.2.3)" >&2
@@ -48,11 +55,19 @@ RES_DIR="$CONTENTS/Resources"
 
 if [ "$UNIVERSAL_BUILD" = "1" ]; then
   echo "==> swift build ($CONFIG, universal arm64 + x86_64)"
-  UNIVERSAL_TMP="$(mktemp -d)"
+  UNIVERSAL_TMP="$BUILD_TMP_ROOT/universal"
+  mkdir -p "$UNIVERSAL_TMP"
   ARCH_BINARIES=()
   CLI_ARCH_BINARIES=()
   for ARCH in arm64 x86_64; do
-    SCRATCH_PATH="$ROOT_DIR/.build/website-$CONFIG-$ARCH"
+    if [ "$STRICT_DISTRIBUTION" = "1" ]; then
+      # A public binary must be compiled from the exact checked-out source. Fixed
+      # SwiftPM scratch paths can retain stale objects across release rehearsals,
+      # so distribution builds always start from an isolated empty graph.
+      SCRATCH_PATH="$BUILD_TMP_ROOT/scratch-$ARCH"
+    else
+      SCRATCH_PATH="$ROOT_DIR/.build/website-$CONFIG-$ARCH"
+    fi
     TRIPLE="$ARCH-apple-macosx14.0"
     swift build -c "$CONFIG" --triple "$TRIPLE" --scratch-path "$SCRATCH_PATH" >/dev/null
     ARCH_BIN="$(swift build -c "$CONFIG" --triple "$TRIPLE" --scratch-path "$SCRATCH_PATH" --show-bin-path)/${APP_NAME}"
@@ -82,7 +97,7 @@ cp "$BIN_PATH" "$MACOS_DIR/$APP_NAME"
 cp "$CLI_BIN_PATH" "$MACOS_DIR/$CLI_NAME"
 
 # 图标：从 appiconset 合成 .icns
-ICONSET="$(mktemp -d)/AppIcon.iconset"
+ICONSET="$BUILD_TMP_ROOT/AppIcon.iconset"
 mkdir -p "$ICONSET"
 ICON_SRC="$ROOT_DIR/Assets.xcassets/AppIcon.appiconset"
 sips -z 16 16     "$ICON_SRC/lingshu-16.png"   --out "$ICONSET/icon_16x16.png"      >/dev/null
@@ -168,6 +183,7 @@ cat > "$CONTENTS/Info.plist" <<PLIST
     <key>CFBundlePackageType</key><string>APPL</string>
     <key>CFBundleShortVersionString</key><string>${APP_VERSION}</string>
     <key>CFBundleVersion</key><string>${BUILD_NUMBER}</string>
+    <key>LingShuSourceRevision</key><string>${SOURCE_REVISION}</string>
     <key>LSMinimumSystemVersion</key><string>14.0</string>
     <key>NSHighResolutionCapable</key><true/>
     <key>NSPrincipalClass</key><string>NSApplication</string>
@@ -250,7 +266,7 @@ if security find-identity -v -p codesigning 2>/dev/null | grep -Fq "\"$SIGN_IDEN
     fi
     if [ -d "$DRIVER_BUNDLE" ] && [ "${#NOTARY_ARGS[@]}" -gt 0 ] && [[ "$SIGN_IDENTITY" == Developer\ ID* ]]; then
       echo "   ==> notarizing HAL driver (notarytool submit --wait)"
-      NZIP="$(mktemp -d)/LingShuAudioDriver.zip"
+      NZIP="$BUILD_TMP_ROOT/LingShuAudioDriver.zip"
       ditto -c -k --keepParent "$DRIVER_BUNDLE" "$NZIP"
       if xcrun notarytool submit "$NZIP" "${NOTARY_ARGS[@]}" --wait; then
         if xcrun stapler staple "$DRIVER_BUNDLE"; then

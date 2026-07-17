@@ -294,6 +294,14 @@ final class ArchitectureGuardTests: XCTestCase {
         XCTAssertTrue(releaseScript.contains("EXPECTED_CERT_SHA256="))
         XCTAssertTrue(releaseScript.contains("signing_certificate_sha256"))
         XCTAssertTrue(releaseScript.contains("signing certificate fingerprint mismatch"))
+        XCTAssertTrue(buildScript.contains("BUILD_TMP_ROOT="))
+        XCTAssertTrue(buildScript.contains(#"SCRATCH_PATH="$BUILD_TMP_ROOT/scratch-$ARCH""#))
+        XCTAssertTrue(buildScript.contains("distribution builds always start from an isolated empty graph"))
+        XCTAssertTrue(releaseScript.contains(#"LINGSHU_SOURCE_REVISION="$SOURCE_REVISION""#))
+        XCTAssertTrue(releaseScript.contains("bundled source revision mismatch"))
+        XCTAssertTrue(releaseScript.contains("source_archive_sha256"))
+        XCTAssertTrue(releaseScript.contains("app_binary_sha256"))
+        XCTAssertTrue(releaseScript.contains("cli_binary_sha256"))
     }
 
     func testArchitectureQuickReferenceStatesCurrentCodeReality() throws {

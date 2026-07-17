@@ -60,6 +60,7 @@ BUNDLED_HAL_DRIVER_BOOL=false
 [ "$BUNDLE_HAL_DRIVER" = "1" ] && BUNDLED_HAL_DRIVER_BOOL=true
 
 SOURCE_REVISION="$(git rev-parse HEAD 2>/dev/null)" || fail "release source is not a Git checkout"
+SOURCE_ARCHIVE_SHA256="$(git archive --format=tar "$SOURCE_REVISION" | shasum -a 256 | awk '{print $1}')"
 SOURCE_DIRTY=false
 if [ -n "$(git status --porcelain --untracked-files=normal 2>/dev/null)" ]; then
   SOURCE_DIRTY=true
@@ -114,6 +115,7 @@ echo "    notary profile: $NOTARY_PROFILE"
 echo "    bundled SenseVoice: $BUNDLE_SENSEVOICE"
 echo "    bundled HAL driver: $BUNDLE_HAL_DRIVER"
 echo "    source revision: $SOURCE_REVISION"
+echo "    source archive SHA-256: $SOURCE_ARCHIVE_SHA256"
 echo "    source dirty: $SOURCE_DIRTY"
 echo "    output: $RELEASE_DIR"
 
@@ -140,12 +142,16 @@ LINGSHU_REQUIRE_DISTRIBUTION_SIGNING=1 \
 LINGSHU_UNIVERSAL=1 \
 LINGSHU_BUNDLE_SENSEVOICE="$BUNDLE_SENSEVOICE" \
 LINGSHU_BUNDLE_HAL_DRIVER="$BUNDLE_HAL_DRIVER" \
+LINGSHU_SOURCE_REVISION="$SOURCE_REVISION" \
   bash "$ROOT_DIR/Scripts/build-app.sh" release
 
 [ -d "$APP_PATH" ] || fail "app bundle was not produced: $APP_PATH"
 
 APP_BINARY="$APP_PATH/Contents/MacOS/$PRODUCT_NAME"
 CLI_BINARY="$APP_PATH/Contents/MacOS/lingshu"
+BUNDLED_SOURCE_REVISION="$(plutil -extract LingShuSourceRevision raw -o - "$APP_PATH/Contents/Info.plist")"
+[ "$BUNDLED_SOURCE_REVISION" = "$SOURCE_REVISION" ] \
+  || fail "bundled source revision mismatch: expected $SOURCE_REVISION, got $BUNDLED_SOURCE_REVISION"
 ARCHS="$(lipo -archs "$APP_BINARY")"
 [[ " $ARCHS " == *" arm64 "* ]] || fail "app binary is missing arm64: $ARCHS"
 [[ " $ARCHS " == *" x86_64 "* ]] || fail "app binary is missing x86_64: $ARCHS"
@@ -154,6 +160,8 @@ CLI_ARCHS="$(lipo -archs "$CLI_BINARY")"
 [[ " $CLI_ARCHS " == *" arm64 "* ]] || fail "CLI binary is missing arm64: $CLI_ARCHS"
 [[ " $CLI_ARCHS " == *" x86_64 "* ]] || fail "CLI binary is missing x86_64: $CLI_ARCHS"
 codesign --verify --strict --verbose=2 "$CLI_BINARY"
+APP_BINARY_SHA256="$(shasum -a 256 "$APP_BINARY" | awk '{print $1}')"
+CLI_BINARY_SHA256="$(shasum -a 256 "$CLI_BINARY" | awk '{print $1}')"
 
 codesign --verify --deep --strict --verbose=2 "$APP_PATH"
 codesign -d --verbose=4 "$APP_PATH" 2>&1 | grep -F "TeamIdentifier=$TEAM_ID" >/dev/null \
@@ -235,6 +243,9 @@ plutil -insert team_id -string "$TEAM_ID" "$MANIFEST_PLIST"
 plutil -insert signing_identity -string "$IDENTITY" "$MANIFEST_PLIST"
 plutil -insert signing_certificate_sha256 -string "$CERTIFICATE_SHA256" "$MANIFEST_PLIST"
 plutil -insert source_revision -string "$SOURCE_REVISION" "$MANIFEST_PLIST"
+plutil -insert source_archive_sha256 -string "$SOURCE_ARCHIVE_SHA256" "$MANIFEST_PLIST"
+plutil -insert app_binary_sha256 -string "$APP_BINARY_SHA256" "$MANIFEST_PLIST"
+plutil -insert cli_binary_sha256 -string "$CLI_BINARY_SHA256" "$MANIFEST_PLIST"
 plutil -insert source_dirty -bool "$SOURCE_DIRTY" "$MANIFEST_PLIST"
 plutil -insert dmg_file -string "$DMG_NAME" "$MANIFEST_PLIST"
 plutil -insert dmg_sha256 -string "$SHA256" "$MANIFEST_PLIST"
