@@ -141,14 +141,16 @@ public final class LingShuCLIClient: @unchecked Sendable {
         )
     }
 
-    public func status() async throws -> [String: Any] {
+    public func status() async throws -> Data {
         try await ensureAvailable()
-        return try await callTool("lingshu_status", arguments: [:])
+        let payload = try await callTool("lingshu_status", arguments: [:])
+        return try Self.encodedPayload(payload)
     }
 
-    public func stop() async throws -> [String: Any] {
+    public func stop() async throws -> Data {
         try await ensureAvailable()
-        return try await callTool("lingshu_stop", arguments: [:])
+        let payload = try await callTool("lingshu_stop", arguments: [:])
+        return try Self.encodedPayload(payload)
     }
 
     public func ensureAvailable() async throws {
@@ -380,6 +382,13 @@ public final class LingShuCLIClient: @unchecked Sendable {
         if let value = value as? String { return value }
         if let value = value as? NSNumber { return value.stringValue }
         return ""
+    }
+
+    private static func encodedPayload(_ payload: [String: Any]) throws -> Data {
+        guard JSONSerialization.isValidJSONObject(payload) else {
+            throw LingShuCLIError.invalidResponse("The tool result could not be encoded.")
+        }
+        return try JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys, .withoutEscapingSlashes])
     }
 }
 

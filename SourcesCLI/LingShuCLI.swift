@@ -97,14 +97,15 @@ struct LingShuCLI {
         }
     }
 
-    private static func outputObject(_ object: [String: Any], json: Bool) {
-        guard JSONSerialization.isValidJSONObject(object),
-              let data = try? JSONSerialization.data(
+    private static func outputObject(_ data: Data, json: Bool) {
+        guard let object = try? JSONSerialization.jsonObject(with: data),
+              JSONSerialization.isValidJSONObject(object),
+              let rendered = try? JSONSerialization.data(
                   withJSONObject: object,
                   options: json ? [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes] : [.prettyPrinted, .sortedKeys]
               ),
-              let text = String(data: data, encoding: .utf8) else {
-            print(String(describing: object))
+              let text = String(data: rendered, encoding: .utf8) else {
+            print(String(data: data, encoding: .utf8) ?? "{}")
             return
         }
         print(text)
