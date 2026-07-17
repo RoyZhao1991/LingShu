@@ -237,10 +237,9 @@ public final class LingShuCLIClient: @unchecked Sendable {
                                 interaction: interaction
                             )
                         }
-                        if (detail["isTerminal"] as? Bool) == true {
-                            let successful = (detail["isSuccessful"] as? Bool) == true
+                        if let completion = Self.taskCompletion(from: detail), completion.isTerminal {
                             return .init(
-                                status: successful ? .completed : .failed,
+                                status: completion.isSuccessful ? .completed : .failed,
                                 reply: finalText,
                                 recordID: resolvedRecordID,
                                 messageID: messageID
@@ -347,6 +346,23 @@ public final class LingShuCLIClient: @unchecked Sendable {
             return byRecord
         }
         return messages.last(where: { ($0["isUser"] as? Bool) != true })
+    }
+
+    static func taskCompletion(from detail: [String: Any]) -> (isTerminal: Bool, isSuccessful: Bool)? {
+        if let isTerminal = detail["isTerminal"] as? Bool {
+            return (isTerminal, (detail["isSuccessful"] as? Bool) == true)
+        }
+
+        // Compatibility with app builds whose cached task-detail payload predates
+        // the canonical booleans. Status values are persisted protocol values, not UI text.
+        switch string(detail["status"]) {
+        case "已直接回答", "已完成", "已核验":
+            return (true, true)
+        case "未达标", "失败", "部分完成":
+            return (true, false)
+        default:
+            return nil
+        }
     }
 
     private static func parseInteraction(_ raw: Any?) -> LingShuCLIHumanInteraction? {

@@ -17,11 +17,11 @@
     <img alt="项目阶段 Alpha" src="https://img.shields.io/badge/status-alpha-E9A23B">
     <img alt="1,500+ 项测试" src="https://img.shields.io/badge/tests-1%2C500%2B-2C8C7F">
     <a href="https://github.com/RoyZhao1991/LingShu/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/RoyZhao1991/LingShu/actions/workflows/ci.yml/badge.svg"></a>
-    <a href="https://github.com/RoyZhao1991/LingShu/releases/tag/v0.1.0-alpha"><img alt="最新版本" src="https://img.shields.io/github/v/release/RoyZhao1991/LingShu?include_prereleases&label=download"></a>
+    <a href="https://github.com/RoyZhao1991/LingShu/releases/tag/v0.1.0-alpha.2"><img alt="最新版本" src="https://img.shields.io/github/v/release/RoyZhao1991/LingShu?include_prereleases&label=download"></a>
   </p>
 
   <p>
-    <a href="https://github.com/RoyZhao1991/LingShu/releases/tag/v0.1.0-alpha"><strong>下载已签名的 macOS Alpha</strong></a>
+    <a href="https://github.com/RoyZhao1991/LingShu/releases/tag/v0.1.0-alpha.2"><strong>下载已签名的 macOS Alpha</strong></a>
     · <a href="#快速开始">快速开始</a>
     · <a href="https://github.com/RoyZhao1991/LingShu/discussions">社区讨论</a>
     · <a href="./README.md">English</a>
@@ -106,11 +106,19 @@ flowchart LR
 
 ### 安装已签名版本（推荐）
 
-1. 从 [v0.1.0-alpha Release](https://github.com/RoyZhao1991/LingShu/releases/tag/v0.1.0-alpha) 下载 Universal DMG 与对应 `.sha256` 文件。
+使用 [Homebrew](https://brew.sh/) 可同时安装 App 与 `lingshu` CLI：
+
+```bash
+brew install --cask RoyZhao1991/tap/lingshu
+```
+
+也可以手动安装 Universal DMG：
+
+1. 从 [v0.1.0-alpha.2 Release](https://github.com/RoyZhao1991/LingShu/releases/tag/v0.1.0-alpha.2) 下载 DMG 与对应 `.sha256` 文件。
 2. 在终端校验下载文件：
 
    ```bash
-   shasum -a 256 -c LingShu-0.1.0-4-macOS-universal.dmg.sha256
+   shasum -a 256 -c LingShu-0.1.0-5-macOS-universal.dmg.sha256
    ```
 
 3. 打开 DMG，将 `灵枢.app` 拖入“应用程序”，然后启动。
@@ -137,7 +145,7 @@ open "dist/灵枢.app"
 
 每个 App 构建都包含 `lingshu` 命令行客户端。它只是**同一个串行主会话**的外部入口，不会另起一套 Agent，也不会绕过模型选择、记忆、授权、任务记录或人机交互闸门。
 
-把 App 移入“应用程序”后，可将内置客户端加入命令路径：
+Homebrew 会自动暴露内置 CLI；手动安装 DMG 时，可用下面的方式把它加入命令路径：
 
 ```bash
 mkdir -p "$HOME/.local/bin"
@@ -197,7 +205,7 @@ API 凭据保存在 macOS 钥匙串中，只属于本地运行配置，禁止提
 | PPT、文档与代码的端到端产物工作流 | 已实现 |
 | 实时感知与语音 | 可用；部分链路依赖环境并带降级策略 |
 | HAL 虚拟麦克风 | 实验性；设备出现仍不稳定 |
-| 官网签名与公证发布 | [v0.1.0-alpha 已发布](https://github.com/RoyZhao1991/LingShu/releases/tag/v0.1.0-alpha) |
+| 官网签名与公证发布 | [v0.1.0-alpha.2 已发布](https://github.com/RoyZhao1991/LingShu/releases/tag/v0.1.0-alpha.2) |
 
 仓库包含超过 10 万行源码与测试代码、超过 180 个 Swift 测试文件以及超过 1,500 项测试。这些数字用于说明工程深度，并不等于所有依赖外部环境的测试都能在每一台 Mac 上通过。
 

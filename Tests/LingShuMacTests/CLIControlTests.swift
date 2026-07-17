@@ -42,6 +42,59 @@ final class CLIControlTests: XCTestCase {
         XCTAssertFalse(custom.autoLaunchApp)
     }
 
+    func testCLIRecognizesCanonicalAndLegacyTaskCompletion() {
+        let canonical = LingShuCLIClient.taskCompletion(from: [
+            "status": "已直接回答",
+            "isTerminal": true,
+            "isSuccessful": true
+        ])
+        XCTAssertEqual(canonical?.isTerminal, true)
+        XCTAssertEqual(canonical?.isSuccessful, true)
+
+        let legacySuccess = LingShuCLIClient.taskCompletion(from: ["status": "已直接回答"])
+        XCTAssertEqual(legacySuccess?.isTerminal, true)
+        XCTAssertEqual(legacySuccess?.isSuccessful, true)
+
+        let legacyFailure = LingShuCLIClient.taskCompletion(from: ["status": "未达标"])
+        XCTAssertEqual(legacyFailure?.isTerminal, true)
+        XCTAssertEqual(legacyFailure?.isSuccessful, false)
+
+        XCTAssertNil(LingShuCLIClient.taskCompletion(from: ["status": "执行中"]))
+    }
+
+    func testCachedTaskDetailCarriesCanonicalCompletionState() throws {
+        let now = Date()
+        let record = LingShuTaskExecutionRecord(
+            id: "cli-completed-record",
+            title: "CLI check",
+            prompt: "Reply CLI_OK",
+            status: .answered,
+            summary: "CLI_OK",
+            participants: ["You", "LingShu"],
+            createdAt: now,
+            updatedAt: now,
+            messages: []
+        )
+        LingShuControlSnapshotStore.shared.update(
+            status: [:],
+            records: [record],
+            feedback: [:],
+            chat: [],
+            trace: []
+        )
+
+        let text = try XCTUnwrap(LingShuControlSnapshotStore.shared.cachedToolText(
+            name: "lingshu_task_detail",
+            arguments: ["recordId": record.id]
+        ))
+        let payload = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any]
+        )
+        XCTAssertEqual(payload["isTerminal"] as? Bool, true)
+        XCTAssertEqual(payload["isSuccessful"] as? Bool, true)
+        XCTAssertEqual(payload["isResumable"] as? Bool, false)
+    }
+
     @MainActor
     func testControlChatPayloadCarriesCompleteHumanInteractionMaterial() {
         let state = LingShuState()

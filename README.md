@@ -17,11 +17,11 @@
     <img alt="Project status: alpha" src="https://img.shields.io/badge/status-alpha-E9A23B">
     <img alt="1,500+ tests" src="https://img.shields.io/badge/tests-1%2C500%2B-2C8C7F">
     <a href="https://github.com/RoyZhao1991/LingShu/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/RoyZhao1991/LingShu/actions/workflows/ci.yml/badge.svg"></a>
-    <a href="https://github.com/RoyZhao1991/LingShu/releases/tag/v0.1.0-alpha"><img alt="Latest release" src="https://img.shields.io/github/v/release/RoyZhao1991/LingShu?include_prereleases&label=download"></a>
+    <a href="https://github.com/RoyZhao1991/LingShu/releases/tag/v0.1.0-alpha.2"><img alt="Latest release" src="https://img.shields.io/github/v/release/RoyZhao1991/LingShu?include_prereleases&label=download"></a>
   </p>
 
   <p>
-    <a href="https://github.com/RoyZhao1991/LingShu/releases/tag/v0.1.0-alpha"><strong>Download signed macOS alpha</strong></a>
+    <a href="https://github.com/RoyZhao1991/LingShu/releases/tag/v0.1.0-alpha.2"><strong>Download signed macOS alpha</strong></a>
     · <a href="#quick-start">Quick start</a>
     · <a href="https://github.com/RoyZhao1991/LingShu/discussions">Community</a>
     · <a href="./README.zh-CN.md">中文</a>
@@ -106,11 +106,19 @@ The main conversation remains serialized to protect context. Long-running or del
 
 ### Install the Signed Alpha (Recommended)
 
-1. Download the Universal DMG and its `.sha256` file from the [v0.1.0-alpha release](https://github.com/RoyZhao1991/LingShu/releases/tag/v0.1.0-alpha).
+With [Homebrew](https://brew.sh/), the app and `lingshu` CLI are installed together:
+
+```bash
+brew install --cask RoyZhao1991/tap/lingshu
+```
+
+Or install the Universal DMG manually:
+
+1. Download the DMG and its `.sha256` file from the [v0.1.0-alpha.2 release](https://github.com/RoyZhao1991/LingShu/releases/tag/v0.1.0-alpha.2).
 2. In Terminal, verify the download:
 
    ```bash
-   shasum -a 256 -c LingShu-0.1.0-4-macOS-universal.dmg.sha256
+   shasum -a 256 -c LingShu-0.1.0-5-macOS-universal.dmg.sha256
    ```
 
 3. Open the DMG, drag `灵枢.app` to Applications, and launch it.
@@ -137,7 +145,7 @@ On first launch, LingShu checks whether a working brain channel exists. If not, 
 
 Every app build includes a `lingshu` command-line client. It is a thin entrance to the **same serialized main conversation**: it does not create a second agent runtime or bypass model selection, memory, authorization, task records, or human-interaction gates.
 
-After moving the app to `/Applications`, expose the bundled client on your path:
+Homebrew exposes the bundled client automatically. For a manual DMG installation, add it to your path with:
 
 ```bash
 mkdir -p "$HOME/.local/bin"
@@ -197,7 +205,7 @@ LingShu is usable for development and controlled local workflows, but it is not 
 | End-to-end presentation, document, and code artifact workflow | Implemented |
 | Live perception and voice | Available with environment-dependent fallbacks |
 | HAL virtual microphone | Experimental; device appearance is not yet stable |
-| Signed and notarized public release | [v0.1.0-alpha available](https://github.com/RoyZhao1991/LingShu/releases/tag/v0.1.0-alpha) |
+| Signed and notarized public release | [v0.1.0-alpha.2 available](https://github.com/RoyZhao1991/LingShu/releases/tag/v0.1.0-alpha.2) |
 
 The repository contains more than 100,000 lines of source and test code, more than 180 Swift test files, and more than 1,500 tests. These numbers describe engineering depth, not a guarantee that every environment-dependent test passes on every Mac.
 

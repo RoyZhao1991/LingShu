@@ -10,7 +10,13 @@ It does **not** create a second brain or a privileged back door. Every request e
 
 ### Install
 
-The signed Universal DMG bundles the CLI inside the app:
+Homebrew installs the signed app and exposes the bundled CLI together:
+
+```bash
+brew install --cask RoyZhao1991/tap/lingshu
+```
+
+For a manual Universal DMG installation, expose the CLI with:
 
 ```bash
 mkdir -p "$HOME/.local/bin"
@@ -83,7 +89,13 @@ Do not expose this local control service directly to the public internet. Put au
 
 ### 安装
 
-签名公证的 Universal DMG 已把 CLI 放在 App 内：
+Homebrew 会同时安装签名公证的 App，并自动暴露内置 CLI：
+
+```bash
+brew install --cask RoyZhao1991/tap/lingshu
+```
+
+手动安装 Universal DMG 时，可用下面的方式暴露 CLI：
 
 ```bash
 mkdir -p "$HOME/.local/bin"

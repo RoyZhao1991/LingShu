@@ -34,7 +34,8 @@ Do not claim that LingShu is production-ready, fully autonomous, fully local, or
 
 - Repository screenshot: [`media/lingshu-overview.jpg`](./media/lingshu-overview.jpg)
 - GitHub social preview: [`media/lingshu-social-preview.png`](./media/lingshu-social-preview.png)
-- Release notes: [`releases/v0.1.0-alpha.md`](./releases/v0.1.0-alpha.md)
+- Current release notes: [`releases/v0.1.0-alpha.2.md`](./releases/v0.1.0-alpha.2.md)
+- First public alpha notes: [`releases/v0.1.0-alpha.md`](./releases/v0.1.0-alpha.md)
 - Public operations checklist: [`OPEN_SOURCE_OPERATIONS.md`](./OPEN_SOURCE_OPERATIONS.md)
 
 Upload `lingshu-social-preview.png` as the repository social preview when GitHub settings access is available. The source image is launch-ready, but do not claim the repository-level preview is configured until the upload is verified. Replace the current overview screenshot only after capturing an equally private, real run with a connected brain channel.

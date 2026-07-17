@@ -8,7 +8,7 @@ This file records public launch facts so later operating reviews compare against
 | --- | ---: |
 | Repository visibility | Public |
 | Default branch | `main` |
-| Latest release | `v0.1.0-alpha` |
+| Latest release | `v0.1.0-alpha.2` |
 | Stars | 0 |
 | Forks | 0 |
 | Watchers | 0 |
