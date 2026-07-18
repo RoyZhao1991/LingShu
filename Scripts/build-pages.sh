@@ -5,9 +5,10 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OUTPUT="${1:-$ROOT/.site-output}"
 
 rm -rf "$OUTPUT"
-mkdir -p "$OUTPUT/assets/project-aurora" "$OUTPUT/examples/project-aurora"
+mkdir -p "$OUTPUT/architecture" "$OUTPUT/assets/project-aurora" "$OUTPUT/examples/project-aurora"
 
 cp "$ROOT/site/index.html" "$OUTPUT/index.html"
+cp "$ROOT/site/architecture/index.html" "$OUTPUT/architecture/index.html"
 cp "$ROOT/site/styles.css" "$OUTPUT/styles.css"
 cp "$ROOT/site/app.js" "$OUTPUT/app.js"
 cp "$ROOT/site/robots.txt" "$OUTPUT/robots.txt"

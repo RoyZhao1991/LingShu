@@ -260,6 +260,7 @@ For a signed, notarized website build, see [`Scripts/release-website.sh`](./Scri
 
 Architecture references:
 
+- [Shareable bilingual architecture and value map](https://royzhao1991.github.io/LingShu/architecture/)
 - [Architecture overview](./Docs/ARCHITECTURE.md)
 - [Canonical architecture field guide (Chinese)](./Docs/架构速查手册.md)
 - [Roadmap](./Docs/ROADMAP.md)

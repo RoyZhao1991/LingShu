@@ -10,9 +10,10 @@
     languageButtons.forEach((button) => {
       button.setAttribute("aria-pressed", String(button.dataset.language === next));
     });
+    const pageTitle = document.body?.dataset;
     document.title = next === "zh-CN"
-      ? "LingShu - 纯开源、模型无关的 macOS Agent"
-      : "LingShu - Open-source, model-agnostic macOS agent";
+      ? (pageTitle?.titleZh || "LingShu - 纯开源、模型无关的 macOS Agent")
+      : (pageTitle?.titleEn || "LingShu - Open-source, model-agnostic macOS agent");
     document.querySelectorAll("[data-label-en][data-label-zh]").forEach((element) => {
       element.setAttribute("aria-label", next === "zh-CN" ? element.dataset.labelZh : element.dataset.labelEn);
     });

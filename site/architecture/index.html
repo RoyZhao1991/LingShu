@@ -1,0 +1,192 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LingShu Architecture - A replaceable brain on an open agent runtime</title>
+  <meta name="description" content="See how LingShu separates a replaceable model brain from an Apache-2.0 macOS agent runtime for isolated execution, human checkpoints, real artifacts, and independent verification.">
+  <meta name="theme-color" content="#07100f">
+  <meta name="robots" content="index,follow">
+  <link rel="canonical" href="https://royzhao1991.github.io/LingShu/architecture/">
+  <link rel="icon" type="image/png" href="../assets/lingshu-icon-preview.png">
+  <meta property="og:type" content="article">
+  <meta property="og:title" content="LingShu Architecture - The brain is replaceable. The runtime is open.">
+  <meta property="og:description" content="A model-agnostic macOS agent runtime for goal-preserving workflows, isolated workers, human checkpoints, real artifacts, and independent verification.">
+  <meta property="og:url" content="https://royzhao1991.github.io/LingShu/architecture/">
+  <meta property="og:image" content="https://royzhao1991.github.io/LingShu/assets/lingshu-social-preview.png">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="LingShu Architecture - A replaceable brain on an open agent runtime">
+  <meta name="twitter:description" content="The complete native app and runtime are Apache-2.0. Bring OpenAI, Claude, DeepSeek, MiniMax, or a compatible model endpoint.">
+  <meta name="twitter:image" content="https://royzhao1991.github.io/LingShu/assets/lingshu-social-preview.png">
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "TechArticle",
+    "headline": "LingShu Architecture: A replaceable brain on an open agent runtime",
+    "description": "A technical map of LingShu's model-agnostic native macOS agent runtime.",
+    "url": "https://royzhao1991.github.io/LingShu/architecture/",
+    "isPartOf": "https://royzhao1991.github.io/LingShu/",
+    "license": "https://www.apache.org/licenses/LICENSE-2.0",
+    "codeRepository": "https://github.com/RoyZhao1991/LingShu",
+    "author": {"@type": "Person", "name": "Roy Zhao", "url": "https://github.com/RoyZhao1991"}
+  }
+  </script>
+  <link rel="stylesheet" href="../styles.css">
+  <script src="../app.js" defer></script>
+</head>
+<body class="architecture-page" data-title-en="LingShu Architecture - A replaceable brain on an open agent runtime" data-title-zh="LingShu 架构 - 可替换主脑与完整开源 Agent 运行时">
+  <a class="skip-link copy-en" href="#main">Skip to content</a>
+  <a class="skip-link copy-zh" href="#main">跳到正文</a>
+
+  <header class="site-header">
+    <a class="brand" href="../" aria-label="LingShu home">
+      <img src="../assets/lingshu-icon-preview.png" alt="" width="42" height="42">
+      <span>LingShu</span>
+    </a>
+    <nav class="primary-nav" aria-label="Architecture navigation">
+      <a href="#runtime"><span class="copy-en">Runtime map</span><span class="copy-zh">运行图</span></a>
+      <a href="#invariants"><span class="copy-en">Invariants</span><span class="copy-zh">不变量</span></a>
+      <a href="#difference"><span class="copy-en">Difference</span><span class="copy-zh">差异</span></a>
+      <a href="#evidence"><span class="copy-en">Evidence</span><span class="copy-zh">证据</span></a>
+    </nav>
+    <div class="header-actions">
+      <div class="language-switch" role="group" aria-label="Language">
+        <button type="button" data-language="en" aria-pressed="true">EN</button>
+        <button type="button" data-language="zh-CN" aria-pressed="false">中文</button>
+      </div>
+      <a class="header-github" href="https://github.com/RoyZhao1991/LingShu" target="_blank" rel="noreferrer">GitHub</a>
+    </div>
+  </header>
+
+  <main id="main">
+    <section class="architecture-hero" aria-labelledby="architecture-title">
+      <div class="architecture-hero-inner">
+        <p class="eyebrow copy-en">Architecture, not a model wrapper</p>
+        <p class="eyebrow copy-zh">这不是一层模型外壳</p>
+        <h1 id="architecture-title"><span class="copy-en">The brain is replaceable.<br>The runtime is the product.</span><span class="copy-zh">主脑可以替换，<br>运行时才是产品。</span></h1>
+        <p class="architecture-lead copy-en">LingShu keeps model intelligence behind an adapter and puts durable agency in an Apache-2.0 native macOS runtime: goal preservation, mutable workflows, isolated workers, human checkpoints, artifact registration, memory, and independent verification.</p>
+        <p class="architecture-lead copy-zh">灵枢把模型智能放在适配器之后，把持久的 Agent 能力放进 Apache-2.0 原生 macOS 运行时：目标守恒、动态工作流、隔离子任务、人机检查点、产物登记、记忆与独立验收。</p>
+        <div class="hero-actions">
+          <a class="button button-primary" href="#runtime"><span class="copy-en">Inspect the runtime</span><span class="copy-zh">查看运行图</span></a>
+          <a class="button button-secondary" href="https://github.com/RoyZhao1991/LingShu" target="_blank" rel="noreferrer"><span class="copy-en">Read the source</span><span class="copy-zh">查看源码</span></a>
+        </div>
+        <ul class="architecture-facts" aria-label="Architecture facts">
+          <li><strong>Apache-2.0</strong><span class="copy-en">complete app + runtime</span><span class="copy-zh">完整 App + 运行时</span></li>
+          <li><strong>5</strong><span class="copy-en">execution stages</span><span class="copy-zh">个执行阶段</span></li>
+          <li><strong>1,581</strong><span class="copy-en">release tests</span><span class="copy-zh">项发布测试</span></li>
+          <li><strong>macOS 14+</strong><span class="copy-en">native Swift app</span><span class="copy-zh">原生 Swift App</span></li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="architecture-runtime" id="runtime" aria-label="LingShu runtime map" data-label-en="LingShu runtime map" data-label-zh="灵枢运行图">
+      <div class="architecture-content">
+        <div class="architecture-heading">
+          <p class="eyebrow copy-en">One open runtime, many brains</p>
+          <p class="eyebrow copy-zh">一套开放运行时，多种主脑</p>
+          <h2><span class="copy-en">The model proposes. The runtime preserves, executes, and verifies.</span><span class="copy-zh">模型负责提出判断，运行时负责守住目标、执行与验收。</span></h2>
+          <p class="copy-en">A provider can change without replacing the task ledger, permission boundary, local tools, memory, or delivery contract.</p>
+          <p class="copy-zh">切换模型服务商，不需要替换任务账本、权限边界、本地工具、记忆或交付契约。</p>
+        </div>
+
+        <div class="runtime-map" role="img" aria-label="Goal moves through the serialized main conversation, mutable runtime graph, isolated workers, human checkpoints, artifact registry, and independent checker">
+          <div class="runtime-brain">
+            <span class="runtime-tag copy-en">Replaceable brain</span><span class="runtime-tag copy-zh">可替换主脑</span>
+            <div class="provider-row"><span>OpenAI</span><span>Claude</span><span>DeepSeek</span><span>MiniMax</span><span class="copy-en">Compatible API</span><span class="copy-zh">兼容 API</span></div>
+          </div>
+          <div class="runtime-arrow" aria-hidden="true">↓</div>
+          <div class="runtime-kernel">
+            <span class="runtime-tag copy-en">Stable agent kernel</span><span class="runtime-tag copy-zh">稳定 Agent 内核</span>
+            <div class="kernel-flow">
+              <div><b>01</b><strong class="copy-en">GoalSpec</strong><strong class="copy-zh">核心目标</strong><small class="copy-en">Immutable acceptance boundary</small><small class="copy-zh">不可让步的验收边界</small></div>
+              <div><b>02</b><strong class="copy-en">Runtime graph</strong><strong class="copy-zh">运行图</strong><small class="copy-en">Pending steps may adapt</small><small class="copy-zh">仅待执行步骤可动态调整</small></div>
+              <div><b>03</b><strong class="copy-en">Isolated work</strong><strong class="copy-zh">隔离执行</strong><small class="copy-en">Workers, tools, native apps</small><small class="copy-zh">子任务、工具、原生应用</small></div>
+              <div><b>04</b><strong class="copy-en">Human checkpoint</strong><strong class="copy-zh">人机检查点</strong><small class="copy-en">Login, QR, choice, approval</small><small class="copy-zh">登录、扫码、选择、授权</small></div>
+              <div><b>05</b><strong class="copy-en">Verified delivery</strong><strong class="copy-zh">验收交付</strong><small class="copy-en">Real artifacts + checker</small><small class="copy-zh">真实产物 + 独立 checker</small></div>
+            </div>
+          </div>
+          <div class="runtime-arrow" aria-hidden="true">↓</div>
+          <div class="runtime-outputs">
+            <span class="runtime-tag copy-en">Durable outputs</span><span class="runtime-tag copy-zh">持久化输出</span>
+            <div class="output-row"><span>Code</span><span>PPTX</span><span>DOCX</span><span>PDF</span><span>Media</span><span class="copy-en">Mac actions</span><span class="copy-zh">Mac 操作</span></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="architecture-section" id="invariants" aria-label="Runtime invariants" data-label-en="Runtime invariants" data-label-zh="运行时不变量">
+      <div class="architecture-content">
+        <div class="architecture-heading narrow">
+          <p class="eyebrow copy-en">What the model cannot silently rewrite</p>
+          <p class="eyebrow copy-zh">模型不能静默改写什么</p>
+          <h2><span class="copy-en">Agency needs contracts, not a longer prompt.</span><span class="copy-zh">Agent 需要的是契约，不是更长的提示词。</span></h2>
+        </div>
+        <div class="invariant-grid">
+          <article><span>01</span><h3 class="copy-en">Goal stays fixed</h3><h3 class="copy-zh">目标保持不变</h3><p class="copy-en">If a valid GoalSpec cannot be generated, the task does not begin with a weaker substitute.</p><p class="copy-zh">如果不能生成完整 GoalSpec，就不以更弱的默认目标启动任务。</p></article>
+          <article><span>02</span><h3 class="copy-en">Plans may change</h3><h3 class="copy-zh">计划可以调整</h3><p class="copy-en">The brain may revise only pending steps as evidence and tool results arrive.</p><p class="copy-zh">随着证据和工具结果到达，主脑只能调整尚未执行的步骤。</p></article>
+          <article><span>03</span><h3 class="copy-en">Main context stays serialized</h3><h3 class="copy-zh">主上下文保持串行</h3><p class="copy-en">Long work runs in isolated child sessions; distilled completion memory returns to the main conversation.</p><p class="copy-zh">长任务在隔离子会话中运行，完成记忆再显式注入主会话。</p></article>
+          <article><span>04</span><h3 class="copy-en">Human action is typed</h3><h3 class="copy-zh">人机交互是结构化状态</h3><p class="copy-en">A login, QR scan, file choice, physical step, or approval pauses the exact session and resumes it later.</p><p class="copy-zh">登录、扫码、选文件、实体操作或授权会暂停精确会话，并从原处续接。</p></article>
+          <article><span>05</span><h3 class="copy-en">Artifacts must exist</h3><h3 class="copy-zh">产物必须真实存在</h3><p class="copy-en">The registry is built from actual file and Git changes, not from names claimed in model text.</p><p class="copy-zh">产物清单来自真实文件与 Git 变化，而不是模型文字中声称的文件名。</p></article>
+          <article><span>06</span><h3 class="copy-en">Verification is independent</h3><h3 class="copy-zh">验收必须独立</h3><p class="copy-en">A separate checker evaluates the delivery against the original acceptance boundary.</p><p class="copy-zh">独立 checker 按原始验收边界检查最终交付。</p></article>
+        </div>
+      </div>
+    </section>
+
+    <section class="architecture-difference" id="difference" aria-label="How LingShu differs" data-label-en="How LingShu differs" data-label-zh="灵枢的架构差异">
+      <div class="architecture-content difference-layout">
+        <div class="architecture-heading narrow">
+          <p class="eyebrow copy-en">Same execution-agent category</p>
+          <p class="eyebrow copy-zh">同属执行型 Agent 赛道</p>
+          <h2><span class="copy-en">LingShu changes the ownership boundary.</span><span class="copy-zh">灵枢改变的是能力归属边界。</span></h2>
+          <p class="copy-en">Codex and Claude Code are the relevant comparison, not chat applications. LingShu makes a different product choice: users can inspect and modify the complete native runtime while choosing the model behind it.</p>
+          <p class="copy-zh">相关对比对象是 Codex 与 Claude Code，而不是聊天应用。灵枢做了不同的产品选择：用户既能审阅和修改完整原生运行时，也能自行选择背后的模型。</p>
+        </div>
+        <dl class="difference-list">
+          <div><dt class="copy-en">Open surface</dt><dt class="copy-zh">开源范围</dt><dd class="copy-en">Complete Swift app and agent runtime under Apache-2.0.</dd><dd class="copy-zh">完整 Swift App 与 Agent 运行时采用 Apache-2.0。</dd></div>
+          <div><dt class="copy-en">Model ownership</dt><dt class="copy-zh">模型选择权</dt><dd class="copy-en">Bring OpenAI, Claude, DeepSeek, MiniMax, or a compatible endpoint.</dd><dd class="copy-zh">可接入 OpenAI、Claude、DeepSeek、MiniMax 或兼容端点。</dd></div>
+          <div><dt class="copy-en">Delivery boundary</dt><dt class="copy-zh">交付边界</dt><dd class="copy-en">Code, editable office files, media, and authorized Mac actions share one ledger.</dd><dd class="copy-zh">代码、可编辑 Office 文件、媒体与授权 Mac 操作共用同一任务账本。</dd></div>
+          <div><dt class="copy-en">Proof model</dt><dt class="copy-zh">验收方式</dt><dd class="copy-en">Files are registered, previewed, and independently checked before completion.</dd><dd class="copy-zh">文件在完成前会被登记、预览并接受独立验收。</dd></div>
+        </dl>
+      </div>
+      <p class="architecture-source copy-en">This is an architectural positioning statement, not a performance benchmark. Product surfaces change. See the official <a href="https://github.com/openai/codex">Codex repository</a> and <a href="https://github.com/anthropics/claude-code">Claude Code repository</a>.</p>
+      <p class="architecture-source copy-zh">这是架构定位说明，不是性能榜。产品形态会持续变化，参见官方 <a href="https://github.com/openai/codex">Codex 仓库</a>与 <a href="https://github.com/anthropics/claude-code">Claude Code 仓库</a>。</p>
+    </section>
+
+    <section class="architecture-evidence" id="evidence" aria-label="Inspectable evidence" data-label-en="Inspectable evidence" data-label-zh="可检查的证据">
+      <div class="architecture-content">
+        <div class="architecture-heading">
+          <p class="eyebrow copy-en">Do not take the diagram on faith</p>
+          <p class="eyebrow copy-zh">不要只相信这张图</p>
+          <h2><span class="copy-en">Inspect the code, run a sample, open the artifacts.</span><span class="copy-zh">检查源码、复跑样例、打开真实产物。</span></h2>
+        </div>
+        <div class="evidence-grid">
+          <a href="https://github.com/RoyZhao1991/LingShu/blob/main/Docs/ARCHITECTURE.md" target="_blank" rel="noreferrer"><span>01</span><strong class="copy-en">Architecture document</strong><strong class="copy-zh">总体架构文档</strong><small class="copy-en">System boundaries and module map</small><small class="copy-zh">系统边界与模块地图</small></a>
+          <a href="https://github.com/RoyZhao1991/LingShu/tree/main/Examples/project-aurora" target="_blank" rel="noreferrer"><span>02</span><strong class="copy-en">Project Aurora sample</strong><strong class="copy-zh">Project Aurora 样例</strong><small class="copy-en">Editable PPTX, DOCX, PDF, and rendered slides</small><small class="copy-zh">可编辑 PPTX、DOCX、PDF 与渲染页</small></a>
+          <a href="https://royzhao1991.github.io/LingShu/#deliverables"><span>03</span><strong class="copy-en">Real task replay</strong><strong class="copy-zh">真实任务回放</strong><small class="copy-en">Goal, artifact ledger, and checker result</small><small class="copy-zh">目标、产物账本与验收结果</small></a>
+          <a href="https://github.com/RoyZhao1991/LingShu/actions/workflows/ci.yml" target="_blank" rel="noreferrer"><span>04</span><strong class="copy-en">Build and test history</strong><strong class="copy-zh">构建与测试记录</strong><small class="copy-en">Public CI for the open runtime</small><small class="copy-zh">开放运行时的公开 CI</small></a>
+        </div>
+        <div class="architecture-cta">
+          <div><h2><span class="copy-en">Bring your model. Keep the agent layer.</span><span class="copy-zh">带上你的模型，保留你的 Agent 能力层。</span></h2><p class="copy-en">Install the signed Alpha or read the source before trusting the claim.</p><p class="copy-zh">安装签名公测版，或先读源码再判断。</p></div>
+          <div class="hero-actions">
+            <a class="button button-primary" href="https://github.com/RoyZhao1991/LingShu/releases/download/v0.1.0-alpha.6/LingShu-0.1.0-9-macOS-universal.dmg"><span class="copy-en">Download signed Alpha</span><span class="copy-zh">下载签名公测版</span></a>
+            <a class="button button-secondary" href="https://github.com/RoyZhao1991/LingShu" target="_blank" rel="noreferrer"><span class="copy-en">Star on GitHub</span><span class="copy-zh">在 GitHub 点 Star</span></a>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer architecture-footer">
+    <div class="footer-brand"><img src="../assets/lingshu-icon-preview.png" alt="" width="30" height="30"><strong>LingShu</strong></div>
+    <p class="copy-en">A replaceable model brain on a complete open macOS agent runtime.</p>
+    <p class="copy-zh">可替换模型主脑之下，是一套完整开放的 macOS Agent 运行时。</p>
+    <nav aria-label="Footer navigation">
+      <a href="../"><span class="copy-en">Home</span><span class="copy-zh">首页</span></a>
+      <a href="https://github.com/RoyZhao1991/LingShu">GitHub</a>
+      <a href="https://github.com/RoyZhao1991/LingShu/releases">Releases</a>
+      <a href="https://github.com/RoyZhao1991/LingShu/blob/main/SECURITY.md">Security</a>
+    </nav>
+    <span>&copy; <span data-current-year>2026</span> LingShu contributors</span>
+  </footer>
+</body>
+</html>

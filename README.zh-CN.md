@@ -260,6 +260,7 @@ bash Scripts/smoke-e2e.sh
 
 架构资料：
 
+- [可单独分享的中英文架构与价值图](https://royzhao1991.github.io/LingShu/architecture/)
 - [总体架构](./Docs/ARCHITECTURE.md)
 - [架构速查手册](./Docs/架构速查手册.md)
 - [路线图](./Docs/ROADMAP.md)
