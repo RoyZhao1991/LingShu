@@ -76,6 +76,46 @@ final class InterfaceLocalizationTests: XCTestCase {
         XCTAssertTrue(values.allSatisfy { !containsHan($0) }, values.joined(separator: "\n"))
     }
 
+    func testTaskParticipantCategoriesFollowInterfaceLanguage() {
+        let internalActors = [
+            "灵枢", "目标认知", "能力探测", "工具", "审查员", "长命令",
+            "角色规划", "主线程记忆", "计算机操作", "独立验收"
+        ]
+        let english = internalActors.map {
+            LingShuTaskParticipantLocalization.actor($0, language: .english)
+        }
+
+        XCTAssertEqual(Array(english.prefix(4)), ["Nous", "Goal Cognition", "Capability Discovery", "Tools"])
+        XCTAssertTrue(english.allSatisfy { !containsHan($0) }, english.joined(separator: "\n"))
+        XCTAssertEqual(
+            LingShuTaskParticipantLocalization.actor("能力探测", language: .chinese),
+            "能力探测"
+        )
+    }
+
+    func testTaskRoleSlotsUseLocalizedBuiltInRoleTitles() {
+        XCTAssertEqual(
+            LingShuTaskParticipantLocalization.roleTitle(
+                "工程执行专家",
+                roleID: "expert-engineer",
+                language: .english
+            ),
+            "Engineering Executor"
+        )
+        XCTAssertEqual(
+            LingShuTaskParticipantLocalization.roleTitle(
+                "评审官",
+                roleID: "expert-reviewer",
+                language: .english
+            ),
+            "Reviewer"
+        )
+        XCTAssertEqual(
+            LingShuTaskParticipantLocalization.semanticRole("checker", language: .english),
+            "Checker"
+        )
+    }
+
     func testTopBarSwitchesBeforeLabelsCanWrap() {
         XCTAssertEqual(LingShuTopBarLayoutPolicy.resolve(for: 1600), .init(dense: false, compact: false))
         XCTAssertEqual(LingShuTopBarLayoutPolicy.resolve(for: 1499), .init(dense: true, compact: false))

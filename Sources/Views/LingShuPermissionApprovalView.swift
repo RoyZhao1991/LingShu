@@ -17,7 +17,7 @@ struct LingShuPermissionApprovalView: View {
                          ? LingShuLanguagePreferenceStore.localized("灵枢 请求执行系统命令", "Nous Requests to Run a System Command")
                          : LingShuLanguagePreferenceStore.localized("⚠️ 灵枢 请求执行高风险来源脚本", "⚠️ Nous Requests to Run a High-risk Script"))
                         .font(.system(size: 15.5, weight: .bold))
-                        .foregroundStyle(pending.riskNotes.isEmpty ? .white : Color.orange)
+                        .foregroundStyle(pending.riskNotes.isEmpty ? Color.lingFg : Color.orange)
                     Text(pending.riskNotes.isEmpty
                          ? LingShuLanguagePreferenceStore.localized("需要你授权才会在本机运行", "Your approval is required before it runs locally")
                          : LingShuLanguagePreferenceStore.localized("自发现 skill 的脚本经风险审被标记,首次运行需你裁决", "A discovered skill was flagged by risk review and needs approval before its first run"))
@@ -122,7 +122,7 @@ struct LingShuPermissionApprovalView: View {
                 VStack(alignment: .leading, spacing: 1) {
                     Text(title)
                         .font(.system(size: 14, weight: .bold))
-                        .foregroundStyle(filled ? Color.lingVoid : .white)
+                        .foregroundStyle(filled ? Color.lingVoid : Color.lingFg.opacity(0.92))
                     Text(subtitle)
                         .font(.system(size: 10.5, weight: .medium))
                         .foregroundStyle(filled ? Color.lingVoid.opacity(0.7) : Color.lingFg.opacity(0.5))

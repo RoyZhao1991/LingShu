@@ -47,13 +47,27 @@ struct TaskExecutionRecordSheet: View {
         if !record.roleSlots.isEmpty {
             var filters: [ParticipantFilter] = []
             for slot in record.roleSlots {
+                let localizedRoleTitle = LingShuTaskParticipantLocalization.roleTitle(
+                    slot.roleTitle,
+                    roleID: slot.roleID,
+                    language: state.language
+                )
+                let localizedAgentName = LingShuTaskParticipantLocalization.actor(
+                    slot.agentName,
+                    language: state.language
+                )
                 let semanticLabel: String
                 switch slot.semanticRole {
-                case "checker": semanticLabel = "checker"
-                case "maker": semanticLabel = "maker"
-                default: semanticLabel = slot.roleTitle
+                case "checker", "maker":
+                    semanticLabel = LingShuTaskParticipantLocalization.semanticRole(
+                        slot.semanticRole,
+                        language: state.language
+                    )
+                default: semanticLabel = localizedRoleTitle
                 }
-                let label = slot.agentName == "灵枢" ? "\(slot.roleTitle)" : "\(slot.agentName) \(semanticLabel)"
+                let label = slot.agentName == "灵枢"
+                    ? localizedRoleTitle
+                    : "\(localizedAgentName) \(semanticLabel)"
                 let provisional = ParticipantFilter(
                     id: slot.id,
                     label: label,
@@ -81,7 +95,9 @@ struct TaskExecutionRecordSheet: View {
                 extraCounts[actor, default: 0] += 1
             }
             filters.append(contentsOf: extraOrder.map {
-                ParticipantFilter(id: "actor-\($0)", label: $0, actor: $0, roleTitle: nil, semanticRole: nil,
+                ParticipantFilter(id: "actor-\($0)",
+                                  label: LingShuTaskParticipantLocalization.actor($0, language: state.language),
+                                  actor: $0, roleTitle: nil, semanticRole: nil,
                                   count: extraCounts[$0] ?? 0, icon: "person.fill")
             })
             return filters
@@ -95,7 +111,9 @@ struct TaskExecutionRecordSheet: View {
             counts[a, default: 0] += 1
         }
         return order.map {
-            ParticipantFilter(id: "actor-\($0)", label: $0, actor: $0, roleTitle: nil, semanticRole: nil,
+            ParticipantFilter(id: "actor-\($0)",
+                              label: LingShuTaskParticipantLocalization.actor($0, language: state.language),
+                              actor: $0, roleTitle: nil, semanticRole: nil,
                               count: counts[$0] ?? 0, icon: "person.fill")
         }
     }
