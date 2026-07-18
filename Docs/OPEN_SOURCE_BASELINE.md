@@ -72,3 +72,22 @@ Initial distribution anchors:
 - First curated-directory experiment: https://github.com/jaywcjlove/awesome-swift-macos-apps/pull/76
 
 The directory submission is intentionally the only external listing experiment in this checkpoint. Measure referred visits and qualified feedback before repeating the same tactic elsewhere.
+
+## 2026-07-18 — Real Task Replay Published
+
+| Signal | Checkpoint |
+| --- | ---: |
+| Stars | 1 |
+| Forks | 0 |
+| Watchers | 0 |
+| Open public issues | 9 |
+| `v0.1.0-alpha.6` DMG downloads | 2 |
+| GitHub clones in available window | 7 total / 3 unique |
+| GitHub views in available window | 0 reported |
+| Referrers | None reported |
+| Replay | 16.2 seconds, H.264, 1600×900 |
+| Replay source | Real Project Aurora task record and rendered deliverables |
+
+The README now embeds a lightweight replay loop, and the project website serves the full replay at https://royzhao1991.github.io/LingShu/#deliverables. Captions and timing were added, but no task steps or outputs were fabricated; it is explicitly labeled as a replay rather than a continuous live run.
+
+The proof update was published in the canonical launch discussion: https://github.com/RoyZhao1991/LingShu/discussions/12#discussioncomment-17679576. Treat the counts above as the pre-distribution baseline for this asset. GitHub traffic reporting may lag, and a clone or download still does not prove a successful first run.
