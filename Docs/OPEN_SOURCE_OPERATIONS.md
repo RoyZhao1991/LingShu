@@ -4,7 +4,9 @@
 
 ## 当前进度（2026-07-18）
 
-已完成：中英文首页、真实界面截图、GitHub 社交预览图源文件、首发演示脚本与中英文发布文案、Apache-2.0、社区与安全文档、Issue/PR 模板、CI、仓库双语描述、16 个 Topics、贡献区域标签、GitHub Discussions、当前文件与可达历史的高置信度密钥扫描，以及超过 1,500 项 Swift 测试。当前 HEAD 已移除不应公开的运行时验证产物，并增加守卫测试防止再次误提交。动态运行图、通用人机协作、验收三态与断点续验已进入同一运行时协议；模型凭据由 macOS Keychain 保存并支持旧配置安全迁移。App 内已集成一问一答式 `lingshu` CLI，外部飞书/Webhook 连接器可以复用同一主会话、授权与人机交互断点。本机还已跑通过 Universal DMG、Developer ID 签名、Apple 公证、票据装订与 SHA-256 校验。
+已完成：中英文 README、真实界面截图、GitHub 社交预览图源文件、首发演示脚本与中英文发布文案、Apache-2.0、社区与安全文档、Issue/PR 模板、CI、仓库双语描述、16 个 Topics、贡献区域标签、GitHub Discussions、当前文件与可达历史的高置信度密钥扫描，以及超过 1,500 项 Swift 测试。当前 HEAD 已移除不应公开的运行时验证产物，并增加守卫测试防止再次误提交。动态运行图、通用人机协作、验收三态与断点续验已进入同一运行时协议；模型凭据由 macOS Keychain 保存并支持旧配置安全迁移。App 内已集成一问一答式 `lingshu` CLI，外部飞书/Webhook 连接器可以复用同一主会话、授权与人机交互断点。本机还已跑通过 Universal DMG、Developer ID 签名、Apple 公证、票据装订与 SHA-256 校验。
+
+官方中英双语网站已上线：<https://royzhao1991.github.io/LingShu/>。首屏使用隔离数据的真实产品界面，集中提供签名 DMG、Homebrew、源码、三分钟首个任务路径、安全边界和旗舰汇报交付说明；GitHub Pages 由 `main` 自动部署，仓库 Homepage 已指向官网。上线提交 `8e11fdf` 的 Pages 部署与完整 Swift CI 均通过，桌面和手机视口、双语切换、安装命令复制、公开资源与下载链接已完成验收。
 
 首发状态：仓库已经公开；`v0.1.0-alpha.5` 从提交 `9e36b69` 的全新隔离编译目录生成。Build 8 补齐英文首屏中的模型连接状态本地化，并继续完成 Universal DMG、Developer ID 签名、App 与 DMG 两次 Apple 公证、票据装订、包内源码版本校验和四类 SHA-256 登记；私密漏洞报告已开启。干净 Mac 安装、60-90 秒演示视频和更多公开素材继续作为首发后的高优先级增强，不虚构为已经完成。
 
@@ -26,6 +28,7 @@
 - [x] README 中英文内容与当前代码一致，没有把实验能力写成稳定能力。
 - [x] README 使用隔离演示数据的真实产品截图，不含用户历史、凭据或私人文件。
 - [x] GitHub Discussions、双语描述、Topics、标签与贡献入口已配置。
+- [x] 官方中英双语 GitHub Pages 已上线，首页、安装、下载、源码与安全入口均可达，并由 `main` 自动部署。
 - [x] GitHub 社交预览图、60-90 秒演示镜头表与中英文首发文案已准备。
 - [ ] 在一台干净 Mac 上按 README 从源码构建成功。
 - [x] 从最终绿色提交产出 Universal DMG，完成 Developer ID 签名、Apple 公证、票据装订和 SHA-256 校验。
