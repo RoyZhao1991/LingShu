@@ -8,7 +8,7 @@ This file records public launch facts so later operating reviews compare against
 | --- | ---: |
 | Repository visibility | Public |
 | Default branch | `main` |
-| Latest release | `v0.1.0-alpha.3` |
+| Latest release | `v0.1.0-alpha.5` |
 | Stars | 0 |
 | Forks | 0 |
 | Watchers | 0 |
@@ -16,6 +16,6 @@ This file records public launch facts so later operating reviews compare against
 | DMG downloads | 0 |
 | CI on release commit | Passing |
 
-Release commit: `9c5aeec7c77e23891acf8d3606023058ffffd05a`
+Release commit: `9e36b69664db168a3d4954de2bdc5ee684fedec0`
 
 The checksum download performed during anonymous launch verification is not counted as a user installation. Future weekly reviews should record release downloads, stars, forks, issue response time, reproducible installation feedback, and external pull requests. Never infer successful installations from asset-download counts alone.

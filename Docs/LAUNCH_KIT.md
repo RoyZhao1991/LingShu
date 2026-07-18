@@ -34,7 +34,7 @@ Do not claim that LingShu is production-ready, fully autonomous, fully local, or
 
 - Repository screenshot: [`media/lingshu-overview.jpg`](./media/lingshu-overview.jpg)
 - GitHub social preview: [`media/lingshu-social-preview.png`](./media/lingshu-social-preview.png)
-- Current release notes: [`releases/v0.1.0-alpha.3.md`](./releases/v0.1.0-alpha.3.md)
+- Current release notes: [`releases/v0.1.0-alpha.5.md`](./releases/v0.1.0-alpha.5.md)
 - First public alpha notes: [`releases/v0.1.0-alpha.md`](./releases/v0.1.0-alpha.md)
 - Public operations checklist: [`OPEN_SOURCE_OPERATIONS.md`](./OPEN_SOURCE_OPERATIONS.md)
 
