@@ -7,6 +7,7 @@ Canonical public anchors:
 - Repository: https://github.com/RoyZhao1991/LingShu
 - Website and reproducible sample: https://royzhao1991.github.io/LingShu/
 - Alpha announcement and feedback thread: https://github.com/RoyZhao1991/LingShu/discussions/12
+- 15-minute Alpha tester invitation: https://github.com/RoyZhao1991/LingShu/discussions/13
 - Latest signed release: https://github.com/RoyZhao1991/LingShu/releases/tag/v0.1.0-alpha.6
 - Privacy-safe first-run report: https://github.com/RoyZhao1991/LingShu/issues/new?template=first_run_report.yml
 
@@ -195,5 +196,6 @@ The durable growth loop is: **clear category → inspectable proof → successfu
 | 2026-07-19 | `awesome-mac` maintainer amplification | Maintainer [publicly shared LingShu on X](https://x.com/jaywcjlove/status/2078476842005356908) while reviewing [PR #2355](https://github.com/jaywcjlove/awesome-mac/pull/2355); shortened all four localized descriptions in response | Treat as one verified external amplification; track referred visits and first-run reports without attributing unrelated traffic |
 | 2026-07-19 | `Jenqyang/Awesome-AI-Agents` | [PR #388](https://github.com/Jenqyang/Awesome-AI-Agents/pull/388) closed without merge because the two-day-old Alpha lacked independent usage and maintenance history | Record as channel feedback, not a success; resubmit only after meaningful outside usage exists |
 | 2026-07-19 | Repository, README, and website | Added a privacy-safe 15-minute Alpha first-run Issue form and linked it directly after the canonical first task | Count explicit successful, partial, and failed outside reports; do not infer success from downloads or clones |
+| 2026-07-19 | GitHub Discussions | Published [Discussion #13](https://github.com/RoyZhao1991/LingShu/discussions/13), inviting outside users to run one exact verified DOCX task and report every outcome through the same form | Track outside participants and completed reports; answer substantive setup feedback within 24 hours |
 
 Daily open-source growth operations now check metrics, distribution gates, review feedback, and one concrete channel action. Do not submit another general-purpose directory pull request until PR #76 and PR #2355 are reviewed or seven days have elapsed. E2B PR #1271 is the separate agent-product submission surface, and community launches must not reuse directory wording verbatim.
