@@ -8,6 +8,7 @@ Canonical public anchors:
 - Website and reproducible sample: https://royzhao1991.github.io/LingShu/
 - Alpha announcement and feedback thread: https://github.com/RoyZhao1991/LingShu/discussions/12
 - Latest signed release: https://github.com/RoyZhao1991/LingShu/releases/tag/v0.1.0-alpha.6
+- Privacy-safe first-run report: https://github.com/RoyZhao1991/LingShu/issues/new?template=first_run_report.yml
 
 ## 1. Category and Message
 
@@ -72,7 +73,7 @@ The first wave uses three channels with different audiences instead of repeating
 | Channel | Why it fits | Native message | State |
 | --- | --- | --- | --- |
 | [`awesome-mac`](https://github.com/jaywcjlove/awesome-mac) | More than 100,000 developers and macOS users; active AI Tools curation and frequent merges | Native macOS execution agent, signed app, complete Apache-2.0 source | [PR #2355](https://github.com/jaywcjlove/awesome-mac/pull/2355) open and mergeable |
-| [E2B Awesome AI Agents](https://github.com/e2b-dev/awesome-ai-agents) | Agent-specific discovery surface with more than 28,000 GitHub Stars | Open, model-agnostic execution runtime with real artifact delivery and human checkpoints | [PR #1271](https://github.com/e2b-dev/awesome-ai-agents/pull/1271) open and mergeable; contributor CLA requires owner signature |
+| [E2B Awesome AI Agents](https://github.com/e2b-dev/awesome-ai-agents) | Agent-specific discovery surface with more than 28,000 GitHub Stars | Open, model-agnostic execution runtime with real artifact delivery and human checkpoints | [PR #1271](https://github.com/e2b-dev/awesome-ai-agents/pull/1271) open and mergeable; owner CLA signed and bot recheck completed |
 | Hacker News | Strong fit for architecture, open-source runtime, and model-provider discussion | Founder narrative: what changes when the native app and runtime are open and the model becomes replaceable | Founder must write the final post personally; HN disallows generated or AI-edited submission text |
 | `r/LLMDevs` | Explicitly permits free open-source projects and reaches developers working on LLM infrastructure | Provider-neutral runtime, human checkpoints, and artifact verification | Native draft prepared; account confirmation required before posting |
 | V2EX `分享创造` | Explicitly welcomes independent developers sharing new work with early adopters | Complete runtime open source, domestic and overseas model endpoints, and real PPTX/DOCX delivery | Native draft prepared; account confirmation required before posting |
@@ -91,6 +92,7 @@ The second wave improves the path from an organic search or profile visit to a s
 - The maintainer profile at [`RoyZhao1991/RoyZhao1991`](https://github.com/RoyZhao1991/RoyZhao1991) gives visitors a direct, factual route to LingShu.
 - The official site publishes `SoftwareApplication` structured data and [`llms.txt`](https://royzhao1991.github.io/LingShu/llms.txt) with verified facts, boundaries, and reproducible evidence.
 - Both READMEs give new users one small first task that exercises file creation, artifact registration, preview, and independent verification before broad computer permissions are granted.
+- The first task now ends in one structured [Alpha first-run report](https://github.com/RoyZhao1991/LingShu/issues/new?template=first_run_report.yml), including success, partial success, and failure instead of counting downloads as installations.
 - The repository social preview asset is ready at [`Docs/media/lingshu-social-preview.png`](./media/lingshu-social-preview.png); GitHub requires a repository owner to upload it from Settings.
 
 #### E2B directory submission
@@ -190,5 +192,8 @@ The durable growth loop is: **clear category → inspectable proof → successfu
 | 2026-07-18 | Community launch operations | Prepared channel-native publication gates and drafts for `r/LLMDevs` and V2EX `分享创造`, plus a founder-only Show HN worksheet in [`COMMUNITY_LAUNCH_PACK.md`](./COMMUNITY_LAUNCH_PACK.md) | Publish one channel at a time with account confirmation; measure each for seven full days |
 | 2026-07-18 | GitHub discovery | Replaced vendor-like Topics with execution-agent and native macOS discovery terms; published a maintainer profile README that routes visitors to LingShu | Compare profile and search referrers over seven days; keep only accurate category terms |
 | 2026-07-18 | Website and first run | Added verifiable `SoftwareApplication` metadata, `llms.txt`, and a one-document first-task path in both READMEs | Confirm Pages deployment, then track sample opens, installation questions, and first-task reports rather than impressions alone |
+| 2026-07-19 | `awesome-mac` maintainer amplification | Maintainer [publicly shared LingShu on X](https://x.com/jaywcjlove/status/2078476842005356908) while reviewing [PR #2355](https://github.com/jaywcjlove/awesome-mac/pull/2355); shortened all four localized descriptions in response | Treat as one verified external amplification; track referred visits and first-run reports without attributing unrelated traffic |
+| 2026-07-19 | `Jenqyang/Awesome-AI-Agents` | [PR #388](https://github.com/Jenqyang/Awesome-AI-Agents/pull/388) closed without merge because the two-day-old Alpha lacked independent usage and maintenance history | Record as channel feedback, not a success; resubmit only after meaningful outside usage exists |
+| 2026-07-19 | Repository, README, and website | Added a privacy-safe 15-minute Alpha first-run Issue form and linked it directly after the canonical first task | Count explicit successful, partial, and failed outside reports; do not infer success from downloads or clones |
 
 Daily open-source growth operations now check metrics, distribution gates, review feedback, and one concrete channel action. Do not submit another general-purpose directory pull request until PR #76 and PR #2355 are reviewed or seven days have elapsed. E2B PR #1271 is the separate agent-product submission surface, and community launches must not reuse directory wording verbatim.

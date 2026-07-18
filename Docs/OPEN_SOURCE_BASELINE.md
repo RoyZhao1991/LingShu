@@ -107,3 +107,23 @@ The proof update was published in the canonical launch discussion: https://githu
 GitHub Topics now emphasize accurate discovery terms such as `coding-agent`, `ai-agent`, `computer-use`, and `macos-app`. The maintainer profile gives profile visitors a direct route to LingShu, while the website publishes verified software metadata and an `llms.txt` facts surface. Both READMEs now direct a new user to one small, traceable document task before broad computer permissions are granted.
 
 This checkpoint is a conversion experiment, not a growth claim. Recheck after seven full days using repository visitors, relevant referrers, first-task reports, release downloads, external Issues, and outside contributions. Do not attribute normal background traffic to these changes without referrer or timing evidence.
+
+## 2026-07-19 — First External Amplification and First-run Funnel
+
+| Signal | Checkpoint |
+| --- | ---: |
+| Stars | 1 |
+| Forks | 0 |
+| Watchers | 0 |
+| Open public issues | 9 |
+| GitHub views in available window | 1 total / 1 unique |
+| GitHub clones in available window | 96 total / 38 unique |
+| External maintainer amplification | 1 public X post |
+| Curated submissions | 3 open / 1 closed without merge |
+| Privacy-safe first-run reports | 0 |
+
+The maintainer of `awesome-mac` publicly shared LingShu while reviewing [PR #2355](https://github.com/jaywcjlove/awesome-mac/pull/2355), then asked for a more concise directory description. The four localized descriptions were shortened in response. The shared post is at https://x.com/jaywcjlove/status/2078476842005356908.
+
+The clone count rose sharply, but it can include release, CI, fork maintenance, and automated operations. It is therefore recorded as repository activity rather than external adoption. A separate submission to `Jenqyang/Awesome-AI-Agents` was [closed without merge](https://github.com/Jenqyang/Awesome-AI-Agents/pull/388) because the project did not yet have enough independent usage or maintenance history. That feedback is valid and sets the next evidence threshold.
+
+To turn discovery into measurable first value, the repository now provides a structured [15-minute Alpha first-run report](https://github.com/RoyZhao1991/LingShu/issues/new?template=first_run_report.yml) for successful, partial, and failed runs. It asks for install method, environment, steps reached, and redacted observations while explicitly excluding tokens and private data. Do not claim adoption until an outside user reports a reproducible run or contribution.

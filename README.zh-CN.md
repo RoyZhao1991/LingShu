@@ -162,7 +162,9 @@ brew install --cask RoyZhao1991/tap/lingshu
 
 > 生成一份单页项目简报 DOCX，保存到本地，打开预览，并交给独立 checker 验收。
 
-这条任务会覆盖新用户最应该先检查的完整链路：目标理解、真实文件生成、产物登记、内置预览和验收。正常情况下，灵枢会在 Workspace 中留下可打开的文件，并显示对应任务记录。如果没有完成，请在 [GitHub Discussions](https://github.com/RoyZhao1991/LingShu/discussions) 中说明所选服务商、macOS 版本和失败步骤；不要提交 API Token。
+这条任务会覆盖新用户最应该先检查的完整链路：目标理解、真实文件生成、产物登记、内置预览和验收。正常情况下，灵枢会在 Workspace 中留下可打开的文件，并显示对应任务记录。
+
+无论成功、部分成功还是失败，都欢迎提交一份不含隐私数据的 [15 分钟 Alpha 首跑报告](https://github.com/RoyZhao1991/LingShu/issues/new?template=first_run_report.yml)。安装问题请到 [GitHub Discussions](https://github.com/RoyZhao1991/LingShu/discussions) 交流。不要提交 API Token 或私人文件内容。
 
 ### 从源码构建
 

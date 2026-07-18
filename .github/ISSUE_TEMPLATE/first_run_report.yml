@@ -1,0 +1,92 @@
+name: Alpha first-run report
+description: Share a successful, partial, or failed 15-minute first run
+title: "[Alpha first run]: "
+labels:
+  - alpha feedback
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for testing LingShu. This report helps us measure whether a new user can install the app and complete one verified deliverable without private support.
+
+        Remove API tokens, private file contents, account data, personal information, and identifiable paths before submitting.
+  - type: checkboxes
+    attributes:
+      label: Privacy preflight
+      options:
+        - label: I removed credentials and private data from this report.
+          required: true
+        - label: I understand that this issue will be public.
+          required: true
+  - type: input
+    attributes:
+      label: LingShu version
+      placeholder: v0.1.0-alpha.6
+    validations:
+      required: true
+  - type: dropdown
+    attributes:
+      label: Install method
+      options:
+        - Homebrew
+        - Signed DMG
+        - Built from source
+    validations:
+      required: true
+  - type: input
+    attributes:
+      label: macOS version
+      placeholder: macOS 15.5
+    validations:
+      required: true
+  - type: dropdown
+    attributes:
+      label: Mac architecture
+      options:
+        - Apple silicon
+        - Intel
+        - Unknown
+    validations:
+      required: true
+  - type: input
+    attributes:
+      label: Model provider and protocol
+      description: Name the provider or protocol only. Never include a token.
+      placeholder: OpenAI-compatible DeepSeek, Anthropic Messages, custom endpoint, etc.
+    validations:
+      required: true
+  - type: dropdown
+    attributes:
+      label: Overall result
+      options:
+        - Success
+        - Partial success
+        - Failed
+    validations:
+      required: true
+  - type: checkboxes
+    attributes:
+      label: Steps reached
+      options:
+        - label: App launched
+        - label: Language selected
+        - label: Model connected and validated
+        - label: First task started
+        - label: Real artifact created
+        - label: Artifact opened in built-in preview
+        - label: Independent checker completed
+  - type: textarea
+    attributes:
+      label: What happened
+      description: Tell us what worked, where you stopped, and roughly how long the run took.
+      placeholder: The signed DMG installed successfully. The first DOCX task completed in ...
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Redacted logs or screenshots
+      description: Optional. Attach files only after removing secrets, private content, and identifiable paths.
+  - type: textarea
+    attributes:
+      label: One improvement that would most help
+      description: Optional. A single concrete suggestion is especially useful during Alpha.

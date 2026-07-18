@@ -666,6 +666,12 @@ html[lang="zh-CN"] .copy-zh {
   font-weight: 620;
 }
 
+.first-task-report {
+  grid-column: 2;
+  justify-self: start;
+  margin-top: 4px;
+}
+
 .section-dark {
   color: var(--white);
   background: var(--night-soft);
@@ -1163,6 +1169,10 @@ section.open-source {
 
   .first-task blockquote {
     font-size: 17px;
+  }
+
+  .first-task-report {
+    grid-column: 1;
   }
 
   .deliverable-layout {

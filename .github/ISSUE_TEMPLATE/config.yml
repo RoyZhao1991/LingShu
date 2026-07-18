@@ -1,5 +1,8 @@
 blank_issues_enabled: false
 contact_links:
+  - name: Setup questions and workflow discussion
+    url: https://github.com/RoyZhao1991/LingShu/discussions
+    about: Ask for setup help or share how you use LingShu.
   - name: Private security report
     url: https://github.com/RoyZhao1991/LingShu/security/advisories/new
     about: Report credential exposure, permission bypass, unsafe execution, or private-data disclosure privately.
