@@ -121,6 +121,8 @@ This checkpoint is a conversion experiment, not a growth claim. Recheck after se
 | External maintainer amplification | 1 public X post |
 | Curated submissions | 3 open / 1 closed without merge |
 | Privacy-safe first-run reports | 0 |
+| Outside contribution intents | 1 |
+| Merged outside contributions | 0 |
 
 The maintainer of `awesome-mac` publicly shared LingShu while reviewing [PR #2355](https://github.com/jaywcjlove/awesome-mac/pull/2355), then asked for a more concise directory description. The four localized descriptions were shortened in response. The shared post is at https://x.com/jaywcjlove/status/2078476842005356908.
 
@@ -129,3 +131,7 @@ The clone count rose sharply, but it can include release, CI, fork maintenance, 
 To turn discovery into measurable first value, the repository now provides a structured [15-minute Alpha first-run report](https://github.com/RoyZhao1991/LingShu/issues/new?template=first_run_report.yml) for successful, partial, and failed runs. It asks for install method, environment, steps reached, and redacted observations while explicitly excluding tokens and private data. Do not claim adoption until an outside user reports a reproducible run or contribution.
 
 The canonical tester invitation is [Discussion #13](https://github.com/RoyZhao1991/LingShu/discussions/13). It requests one exact first task and the same report for all outcomes, so successful and failed runs remain comparable.
+
+The canonical alpha announcement, [Discussion #12](https://github.com/RoyZhao1991/LingShu/discussions/12), now links directly to that invitation and report before the feature summary. This reduces the path from discovery to one measurable first run without adding another promotional post.
+
+An outside contributor expressed interest in implementing the offline model-gateway contract fixtures in [Issue #8](https://github.com/RoyZhao1991/LingShu/issues/8). The maintainer supplied exact production and test entry points, fixture boundaries, provider-neutral invariants, and a Draft PR request. Record this as contribution intent only until a reviewable PR exists and is merged.
