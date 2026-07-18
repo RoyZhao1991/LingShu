@@ -24,6 +24,7 @@
     <a href="https://royzhao1991.github.io/LingShu/"><strong>Official website</strong></a>
     ·
     <a href="https://github.com/RoyZhao1991/LingShu/releases/tag/v0.1.0-alpha.5"><strong>Download signed macOS alpha</strong></a>
+    · <a href="#real-public-sample"><strong>Inspect a real sample</strong></a>
     · <a href="#quick-start">Quick start</a>
     · <a href="https://github.com/RoyZhao1991/LingShu/discussions">Community</a>
     · <a href="./README.zh-CN.md">中文</a>
@@ -60,6 +61,21 @@ LingShu does not stop at “here is a slide outline.” A presentation or docume
 5. For presentations, optionally build a narration queue, present the deck, and answer questions against its content.
 
 The result is a local file that remains openable, editable, previewable, and available to later tasks—not a filename invented in chat. Output quality still depends on the configured model, source material, and local toolchain, so important reports should be reviewed before external use.
+
+## Real Public Sample
+
+Project Aurora is a fictional release-quality initiative created as a privacy-safe, reproducible LingShu task. One brief produced an editable four-slide deck and a one-page document; independent rendering then drove several revisions until the final deck passed structural checks and page-by-page visual review.
+
+<p align="center">
+  <a href="./Examples/project-aurora/project-aurora-demo.pdf"><img src="./Docs/media/project-aurora/slide-3.png" width="920" alt="Project Aurora result slide generated and revised by LingShu"></a>
+</p>
+
+- [View the final PDF](./Examples/project-aurora/project-aurora-demo.pdf)
+- [Download the editable PPTX](./Examples/project-aurora/project-aurora-demo.pptx)
+- [Download the one-page DOCX](./Examples/project-aurora/project-aurora-demo.docx)
+- [Read the exact brief, revision history, and known checker limitation](./Examples/project-aurora/README.md)
+
+The sample is deliberately honest about the run: the first checker missed defects that an external render exposed. LingShu continued the same goal through revision and re-verification rather than presenting the first output as finished.
 
 ## What It Can Do
 

@@ -24,6 +24,7 @@
     <a href="https://royzhao1991.github.io/LingShu/"><strong>官方网站</strong></a>
     ·
     <a href="https://github.com/RoyZhao1991/LingShu/releases/tag/v0.1.0-alpha.5"><strong>下载已签名的 macOS Alpha</strong></a>
+    · <a href="#真实公开样例"><strong>检查真实样例</strong></a>
     · <a href="#快速开始">快速开始</a>
     · <a href="https://github.com/RoyZhao1991/LingShu/discussions">社区讨论</a>
     · <a href="./README.md">English</a>
@@ -60,6 +61,21 @@
 5. 对演示文稿还可以建立逐页讲稿队列，实际演示并基于文稿内容回答问题。
 
 最终得到的是可打开、可编辑、可预览、可被后续任务继续使用的本地文件，而不是聊天里虚构的文件名。产出质量仍取决于所选模型、参考资料和本地工具链，重要汇报在对外使用前仍应由用户确认。
+
+## 真实公开样例
+
+Project Aurora 是一个完全虚构的软件发布质量项目，用于公开复现灵枢的完整交付链。一条需求生成了四页可编辑 PPT 和一页 DOCX；独立渲染随后发现初稿缺陷，灵枢围绕同一目标连续修订，最终文件通过结构检查与逐页视觉复核。
+
+<p align="center">
+  <a href="./Examples/project-aurora/project-aurora-demo.pdf"><img src="./Docs/media/project-aurora/slide-3.png" width="920" alt="灵枢生成并反复修订的 Project Aurora 结果页"></a>
+</p>
+
+- [在线查看最终 PDF](./Examples/project-aurora/project-aurora-demo.pdf)
+- [下载可编辑 PPTX](./Examples/project-aurora/project-aurora-demo.pptx)
+- [下载单页 DOCX](./Examples/project-aurora/project-aurora-demo.docx)
+- [查看原始任务、修订过程与 checker 已知限制](./Examples/project-aurora/README.md)
+
+这个样例没有把初稿包装成完美结果：第一轮 checker 漏掉的问题被外部渲染发现后，灵枢继续完成修改和再次验收。这正是“真实产物闭环”与普通聊天答案的区别。
 
 ## 当前能力
 

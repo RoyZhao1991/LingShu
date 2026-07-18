@@ -6,7 +6,14 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
-No changes yet.
+### Added
+
+- A privacy-safe, reproducible Project Aurora sample with editable PPTX and DOCX deliverables, a rendered PDF, page previews, and an honest revision record.
+
+### Fixed
+
+- Light-mode command approval text now uses adaptive foreground colors instead of unreadable white text.
+- Built-in task participant and role filters now follow the selected interface language without changing persisted actor identifiers.
 
 ## [0.1.0-alpha] - 2026-07-18
 
