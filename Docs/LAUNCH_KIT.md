@@ -78,27 +78,13 @@ Capture requirements:
 - Add English subtitles and a Chinese-subtitled version from the same recording.
 - Keep the final cut between 60 and 90 seconds.
 
-## English Launch Copy
+## English Launch Material
 
 ### Hacker News
 
-Title:
+Hacker News asks authors not to post generated or AI-edited text. The final Show HN title and body must therefore be written personally by the founder, not copied from this launch kit. Use the factual founder worksheet and publication checklist in [`COMMUNITY_LAUNCH_PACK.md`](./COMMUNITY_LAUNCH_PACK.md), then verify the current [Show HN rules](https://news.ycombinator.com/showhn.html) before submitting.
 
-> Show HN: LingShu – an open-source, model-agnostic macOS agent beyond coding
-
-Body:
-
-> Codex and Claude Code showed how useful an execution-oriented agent can be for software engineering. I built LingShu to explore two different boundaries: can the complete native agent app remain open source, and can the agent layer work across model providers and deliverables beyond code?
->
-> LingShu is an Apache-2.0 Swift app and agent runtime for macOS. You bring the model—OpenAI, Anthropic, DeepSeek, MiniMax, or a compatible endpoint—and keep the orchestration, task records, artifacts, memory, and permission-aware Computer Use layer on the Mac.
->
-> Code is one deliverable, not the boundary. The same execution loop can produce software, an editable PPTX or DOCX, a PDF, or an authorized Mac workflow. Real files are registered in an artifact ledger, previewed from the task, and can be handed to an independent checker before completion.
->
-> This is an alpha, not a claim of hands-off autonomy. It can operate files and authorized apps, so the release documents its permission and provider boundaries and asks users to review high-impact actions.
->
-> The repository includes the app, more than 1,500 tests, architecture notes, a signed and notarized Universal DMG, a bundled CLI for external connectors, and a set of scoped starter issues. I would especially value reproducible feedback on first-run setup, model compatibility, macOS permissions, and task verification.
->
-> Repository: https://github.com/RoyZhao1991/LingShu
+The founder-authored post should explain the original problem, the architectural decision to separate the runtime from the model provider, one workflow visitors can run today, the current Alpha limitations, and the specific technical feedback requested. Do not ask for votes or coordinated comments.
 
 ### Short Social Post
 

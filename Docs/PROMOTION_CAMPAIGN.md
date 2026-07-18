@@ -63,7 +63,7 @@ The GitHub README and official site are the canonical landing pages. Channel pos
 | V2EX / 掘金 / 即刻 | 国产模型可接入、完整开源、真实交付物 | 中文技术长帖 + 样例截图 | Use a native Chinese narrative; disclose Alpha limitations | 中文安装反馈、Issue、Star |
 | Product Hunt | Polished installable macOS product | Product page, gallery, demo | Launch only after the demo and clean first-run proof are ready | Install attempts and retained users, not rank alone |
 
-The launch copy lives in [`LAUNCH_KIT.md`](./LAUNCH_KIT.md). Adapt the opening paragraph to the community; keep the factual core unchanged.
+The factual launch material lives in [`LAUNCH_KIT.md`](./LAUNCH_KIT.md). Channel-native drafts, publication gates, and measurement records live in [`COMMUNITY_LAUNCH_PACK.md`](./COMMUNITY_LAUNCH_PACK.md). Adapt the opening and requested feedback to the community; never copy-paste one post across channels.
 
 ### First external wave
 
@@ -73,7 +73,9 @@ The first wave uses three channels with different audiences instead of repeating
 | --- | --- | --- | --- |
 | [`awesome-mac`](https://github.com/jaywcjlove/awesome-mac) | More than 100,000 developers and macOS users; active AI Tools curation and frequent merges | Native macOS execution agent, signed app, complete Apache-2.0 source | [PR #2355](https://github.com/jaywcjlove/awesome-mac/pull/2355) open and mergeable |
 | [E2B Awesome AI Agents](https://github.com/e2b-dev/awesome-ai-agents) | Agent-specific discovery surface with more than 28,000 GitHub Stars | Open, model-agnostic execution runtime with real artifact delivery and human checkpoints | [PR #1271](https://github.com/e2b-dev/awesome-ai-agents/pull/1271) open and mergeable; contributor CLA requires owner signature |
-| Hacker News | Strong fit for architecture, open-source runtime, and model-provider discussion | Founder narrative: what changes when the native app and runtime are open and the model becomes replaceable | Show HN publication window scheduled for US morning, Tuesday |
+| Hacker News | Strong fit for architecture, open-source runtime, and model-provider discussion | Founder narrative: what changes when the native app and runtime are open and the model becomes replaceable | Founder must write the final post personally; HN disallows generated or AI-edited submission text |
+| `r/LLMDevs` | Explicitly permits free open-source projects and reaches developers working on LLM infrastructure | Provider-neutral runtime, human checkpoints, and artifact verification | Native draft prepared; account confirmation required before posting |
+| V2EX `分享创造` | Explicitly welcomes independent developers sharing new work with early adopters | Complete runtime open source, domestic and overseas model endpoints, and real PPTX/DOCX delivery | Native draft prepared; account confirmation required before posting |
 
 The following high-Star lists were reviewed but deliberately not used in this wave:
 
@@ -107,7 +109,7 @@ Description:
 
 ### Day 1–2 — Technical launch
 
-- Publish the Show HN post with the repository as the primary link.
+- The founder writes and publishes the Show HN post in their own words with the repository as the primary link. Do not use generated or AI-edited submission text.
 - Stay available for at least two hours after publication; answer architecture, safety, licensing, and model-compatibility questions directly.
 - Turn repeated objections into README clarifications or Issues within 24 hours.
 
@@ -175,5 +177,6 @@ The durable growth loop is: **clear category → inspectable proof → successfu
 | 2026-07-18 | GitHub Discussions | Added the replay as a focused proof update in [Discussion #12](https://github.com/RoyZhao1991/LingShu/discussions/12#discussioncomment-17679576), linking directly to the website's deliverables section | Seven days; do not repost the same update elsewhere without adapting it to that audience |
 | 2026-07-18 | `awesome-mac` AI Tools | Submitted a concise, factual LingShu listing in English, Chinese, Japanese, and Korean through [PR #2355](https://github.com/jaywcjlove/awesome-mac/pull/2355) | Track review/merge time; after merge, compare GitHub referrers, site visits, release downloads, and outside feedback for seven days |
 | 2026-07-18 | E2B Awesome AI Agents | Submitted an agent-category listing with verified website, release, task replay, and reproducible artifact links through [PR #1271](https://github.com/e2b-dev/awesome-ai-agents/pull/1271) | Complete the owner-only CLA signature, then track review/merge time and seven-day repository referrers, release downloads, Stars, and outside feedback |
+| 2026-07-18 | Community launch operations | Prepared channel-native publication gates and drafts for `r/LLMDevs` and V2EX `分享创造`, plus a founder-only Show HN worksheet in [`COMMUNITY_LAUNCH_PACK.md`](./COMMUNITY_LAUNCH_PACK.md) | Publish one channel at a time with account confirmation; measure each for seven full days |
 
-Do not submit another general-purpose directory pull request until PR #76 and PR #2355 are reviewed or seven days have elapsed. E2B PR #1271 is the separate agent-product submission surface, and Show HN is the next community launch; neither should reuse the directory wording verbatim.
+Daily open-source growth operations now check metrics, distribution gates, review feedback, and one concrete channel action. Do not submit another general-purpose directory pull request until PR #76 and PR #2355 are reviewed or seven days have elapsed. E2B PR #1271 is the separate agent-product submission surface, and community launches must not reuse directory wording verbatim.
