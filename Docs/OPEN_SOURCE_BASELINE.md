@@ -135,3 +135,26 @@ The canonical tester invitation is [Discussion #13](https://github.com/RoyZhao19
 The canonical alpha announcement, [Discussion #12](https://github.com/RoyZhao1991/LingShu/discussions/12), now links directly to that invitation and report before the feature summary. This reduces the path from discovery to one measurable first run without adding another promotional post.
 
 An outside contributor expressed interest in implementing the offline model-gateway contract fixtures in [Issue #8](https://github.com/RoyZhao1991/LingShu/issues/8). The maintainer supplied exact production and test entry points, fixture boundaries, provider-neutral invariants, and a Draft PR request. Record this as contribution intent only until a reviewable PR exists and is merged.
+
+## 2026-07-19 — Chinese Discovery Submission
+
+| Signal | Checkpoint |
+| --- | ---: |
+| Stars | 2 |
+| Forks | 0 |
+| Watchers | 0 |
+| Open public issues | 9 |
+| GitHub views in available window | 1 total / 1 unique |
+| GitHub clones in available window | 96 total / 38 unique |
+| `v0.1.0-alpha.6` DMG downloads | 2 |
+| External directory pull requests | 3 open and mergeable |
+| Chinese discovery submissions | 1 open Issue |
+| Privacy-safe first-run reports | 0 |
+
+The contributor agreement check for [E2B Awesome AI Agents PR #1271](https://github.com/e2b-dev/awesome-ai-agents/pull/1271) is passing and the pull request remains open and mergeable. No maintainer follow-up is needed until review activity appears.
+
+LingShu was submitted to the Chinese-language [逛逛 GitHub / Awesome GitHub Repo](https://github.com/Wechat-ggGitHub/Awesome-GitHub-Repo) discovery surface through [Issue #348](https://github.com/Wechat-ggGitHub/Awesome-GitHub-Repo/issues/348). The submission uses a Chinese, category-specific description and links the signed Alpha, Homebrew install, open runtime, and reproducible Project Aurora sample. It discloses the Alpha status and does not claim adoption or production readiness.
+
+Official Homebrew Cask submission remains deliberately deferred. The official repository states that it is not a discoverability service and currently applies public-traction thresholds to self-submitted software. The maintained project tap remains the appropriate installation path until LingShu qualifies independently.
+
+The 96 clone operations remain uninterpretable as adoption because they may include CI, release work, branch activity, and automated fetches. The next meaningful signal is still an outside first-run report, substantive issue, retained user, or reviewable contribution.
