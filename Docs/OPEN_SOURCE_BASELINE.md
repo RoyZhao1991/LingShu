@@ -65,3 +65,10 @@ Build 9 was signed with Developer ID, accepted by Apple notarization for both th
 The public narrative now places LingShu in the Codex / Claude Code execution-agent category rather than comparing it with general chat applications. The differentiators are the complete Apache-2.0 native app and runtime, a replaceable model layer, verified deliverables beyond code, and local macOS execution with explicit approval boundaries.
 
 Repository discovery metadata now includes `codex`, `claude-code`, `model-agnostic`, and `open-source-ai`. These labels describe architecture and category; they do not imply model parity, benchmark superiority, or affiliation with OpenAI or Anthropic. Growth reviews should measure repository visits, release-page visits, sample inspection, stars, external issues, and successful first-run reports as separate funnel stages.
+
+Initial distribution anchors:
+
+- Canonical announcement: https://github.com/RoyZhao1991/LingShu/discussions/12
+- First curated-directory experiment: https://github.com/jaywcjlove/awesome-swift-macos-apps/pull/76
+
+The directory submission is intentionally the only external listing experiment in this checkpoint. Measure referred visits and qualified feedback before repeating the same tactic elsewhere.
