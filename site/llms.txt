@@ -1,0 +1,38 @@
+# LingShu
+
+> LingShu is an Apache-2.0, model-agnostic native macOS execution agent in the Codex / Claude Code category. It uses a replaceable model backend and treats code, editable presentations, documents, media, and authorized Mac actions as first-class deliverables.
+
+## Official Links
+
+- Website and real task replay: https://royzhao1991.github.io/LingShu/
+- Source repository: https://github.com/RoyZhao1991/LingShu
+- Signed macOS Alpha: https://github.com/RoyZhao1991/LingShu/releases/tag/v0.1.0-alpha.6
+- Architecture: https://github.com/RoyZhao1991/LingShu/blob/main/Docs/ARCHITECTURE.md
+- Chinese README: https://github.com/RoyZhao1991/LingShu/blob/main/README.zh-CN.md
+- Discussions: https://github.com/RoyZhao1991/LingShu/discussions
+
+## Verified Project Facts
+
+- The complete Swift native app and agent runtime are published under Apache-2.0.
+- Users can configure OpenAI, Anthropic Claude, DeepSeek, MiniMax, or a compatible endpoint.
+- The runtime includes goal structuring, mutable execution workflows, isolated child tasks, local tools, permission gates, task records, artifact registration, human checkpoints, memory, and independent verification.
+- A public Project Aurora example includes a real editable PPTX, DOCX, PDF, rendered slides, and a task replay assembled from the corresponding task record.
+- The public Universal DMG supports Apple silicon and Intel, is signed with Apple Developer ID, notarized, and distributed with a SHA-256 checksum.
+- Homebrew install: `brew install --cask RoyZhao1991/tap/lingshu`.
+
+## Important Boundaries
+
+- LingShu is Alpha software for macOS 14 or later, not a claim of unattended autonomy.
+- Users provide their own supported model token or compatible endpoint.
+- The app, orchestration, task records, and artifacts run locally, but selected context is sent to the model provider configured by the user.
+- Model behavior, latency, multimodal support, and output quality vary by provider.
+- Important computer actions and generated deliverables should be reviewed.
+- Positioning references to Codex and Claude Code identify the execution-agent category; they are not benchmark or superiority claims.
+
+## Reproducible Evidence
+
+- Project Aurora run and editable files: https://github.com/RoyZhao1991/LingShu/tree/main/Examples/project-aurora
+- Architecture field guide: https://github.com/RoyZhao1991/LingShu/blob/main/Docs/ARCHITECTURE.md
+- Security boundaries: https://github.com/RoyZhao1991/LingShu/blob/main/SECURITY.md
+- Changelog: https://github.com/RoyZhao1991/LingShu/blob/main/CHANGELOG.md
+- CI: https://github.com/RoyZhao1991/LingShu/actions/workflows/ci.yml

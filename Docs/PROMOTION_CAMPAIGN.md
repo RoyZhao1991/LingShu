@@ -80,8 +80,18 @@ The first wave uses three channels with different audiences instead of repeating
 The following high-Star lists were reviewed but deliberately not used in this wave:
 
 - `kyrolabs/awesome-agents` asks brand-new projects to demonstrate traction before submission.
-- `ai-boost/awesome-harness-engineering` currently has low merge throughput for outside additions.
+- `ai-boost/awesome-harness-engineering` currently has more than 130 open pull requests and low merge throughput for outside additions.
 - `deepseek-ai/awesome-deepseek-integration` is highly relevant, but has a large open-PR backlog and slow batch merges; revisit after the first launch wave produces usage evidence.
+
+### Discovery and first-value hardening
+
+The second wave improves the path from an organic search or profile visit to a successful first task:
+
+- GitHub Topics now lead with the execution-agent category (`coding-agent`, `ai-agent`, `computer-use`, and `macos-app`) instead of implying affiliation with a model vendor.
+- The maintainer profile at [`RoyZhao1991/RoyZhao1991`](https://github.com/RoyZhao1991/RoyZhao1991) gives visitors a direct, factual route to LingShu.
+- The official site publishes `SoftwareApplication` structured data and [`llms.txt`](https://royzhao1991.github.io/LingShu/llms.txt) with verified facts, boundaries, and reproducible evidence.
+- Both READMEs give new users one small first task that exercises file creation, artifact registration, preview, and independent verification before broad computer permissions are granted.
+- The repository social preview asset is ready at [`Docs/media/lingshu-social-preview.png`](./media/lingshu-social-preview.png); GitHub requires a repository owner to upload it from Settings.
 
 #### E2B directory submission
 
@@ -178,5 +188,7 @@ The durable growth loop is: **clear category → inspectable proof → successfu
 | 2026-07-18 | `awesome-mac` AI Tools | Submitted a concise, factual LingShu listing in English, Chinese, Japanese, and Korean through [PR #2355](https://github.com/jaywcjlove/awesome-mac/pull/2355) | Track review/merge time; after merge, compare GitHub referrers, site visits, release downloads, and outside feedback for seven days |
 | 2026-07-18 | E2B Awesome AI Agents | Submitted an agent-category listing with verified website, release, task replay, and reproducible artifact links through [PR #1271](https://github.com/e2b-dev/awesome-ai-agents/pull/1271) | Complete the owner-only CLA signature, then track review/merge time and seven-day repository referrers, release downloads, Stars, and outside feedback |
 | 2026-07-18 | Community launch operations | Prepared channel-native publication gates and drafts for `r/LLMDevs` and V2EX `分享创造`, plus a founder-only Show HN worksheet in [`COMMUNITY_LAUNCH_PACK.md`](./COMMUNITY_LAUNCH_PACK.md) | Publish one channel at a time with account confirmation; measure each for seven full days |
+| 2026-07-18 | GitHub discovery | Replaced vendor-like Topics with execution-agent and native macOS discovery terms; published a maintainer profile README that routes visitors to LingShu | Compare profile and search referrers over seven days; keep only accurate category terms |
+| 2026-07-18 | Website and first run | Added verifiable `SoftwareApplication` metadata, `llms.txt`, and a one-document first-task path in both READMEs | Confirm Pages deployment, then track sample opens, installation questions, and first-task reports rather than impressions alone |
 
 Daily open-source growth operations now check metrics, distribution gates, review feedback, and one concrete channel action. Do not submit another general-purpose directory pull request until PR #76 and PR #2355 are reviewed or seven days have elapsed. E2B PR #1271 is the separate agent-product submission surface, and community launches must not reuse directory wording verbatim.

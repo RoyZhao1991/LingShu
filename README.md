@@ -156,6 +156,14 @@ Or install the Universal DMG manually:
 
 The public DMG is Universal (`arm64` + `x86_64`), signed with a Developer ID certificate, notarized by Apple, and carries a stapled notarization ticket. Grant macOS permissions only when a capability you choose requires them.
 
+### Run a First Traceable Task
+
+After choosing a language and connecting a model, start with a small local deliverable instead of granting broad computer permissions immediately:
+
+> Create a one-page project brief in DOCX, save it locally, preview it, and have an independent checker verify the result.
+
+This exercises the complete path a new user should inspect first: goal understanding, local file creation, artifact registration, built-in preview, and verification. The task should finish with a real file in LingShu's Workspace and a visible task record. If it does not, open a [setup discussion](https://github.com/RoyZhao1991/LingShu/discussions) with the selected provider, macOS version, and the failing step; never include an API token.
+
 ### Build From Source
 
 Building from source additionally requires Xcode Command Line Tools with Swift 6.

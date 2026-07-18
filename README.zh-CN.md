@@ -156,6 +156,14 @@ brew install --cask RoyZhao1991/tap/lingshu
 
 公开 DMG 同时支持 Apple 芯片和 Intel Mac，使用 Developer ID 签名，已通过 Apple 公证并附加公证票据。只有在所选能力确实需要时再授予对应 macOS 权限。
 
+### 运行第一条可追踪任务
+
+选择语言并接好主脑后，建议先执行一个小型本地产物任务，不要一开始就授予宽泛的电脑操作权限：
+
+> 生成一份单页项目简报 DOCX，保存到本地，打开预览，并交给独立 checker 验收。
+
+这条任务会覆盖新用户最应该先检查的完整链路：目标理解、真实文件生成、产物登记、内置预览和验收。正常情况下，灵枢会在 Workspace 中留下可打开的文件，并显示对应任务记录。如果没有完成，请在 [GitHub Discussions](https://github.com/RoyZhao1991/LingShu/discussions) 中说明所选服务商、macOS 版本和失败步骤；不要提交 API Token。
+
 ### 从源码构建
 
 从源码构建还需要带 Swift 6 的 Xcode Command Line Tools。

@@ -136,6 +136,20 @@ No. The gateway is model-agnostic, but model capability, latency, multimodal sup
 
 Many real tasks end in an editable report rather than source code. LingShu treats the file itself as a traceable artifact: create it, register it, preview it, revise it, and verify it before closing the task.
 
+## Owner Action Gates
+
+These actions require the repository owner or an authenticated community account. Automation must stop at the gate and report the exact next action instead of impersonating the owner or bypassing platform controls.
+
+| Gate | Owner action | Continuation after completion |
+| --- | --- | --- |
+| E2B contributor agreement | Sign the E2B CLA at https://e2b.dev/docs/cla | Comment `@cla-bot check` on [PR #1271](https://github.com/e2b-dev/awesome-ai-agents/pull/1271), then monitor review state |
+| GitHub social preview | In repository Settings, upload [`Docs/media/lingshu-social-preview.png`](./media/lingshu-social-preview.png) as the Social preview image | Verify a fresh GitHub share card; GitHub does not expose this setting through the repository REST API |
+| GitHub profile metadata | Set name to `Roy Zhao`, bio to `Building LingShu — an Apache-2.0, model-agnostic macOS execution agent.`, and website to https://royzhao1991.github.io/LingShu/ | Confirm the public profile links to the repository; the profile README is already published |
+| Reddit launch | Complete account verification and open `r/LLMDevs` while signed in | Recheck the current rule, present the adapted draft for final confirmation, then publish once |
+| Hacker News launch | Write the final Show HN title and body personally from the factual worksheet | Check the final text only for factual links and private data; do not generate or rewrite it |
+
+Do not treat an uncompleted owner gate as campaign failure. Continue with reversible repository improvements, review replies, measurement, and other approved channels while the gate remains open.
+
 ## Measurement Record
 
 Record one row when a post is published and update it after seven full days.

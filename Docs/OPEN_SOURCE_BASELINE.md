@@ -91,3 +91,19 @@ The directory submission is intentionally the only external listing experiment i
 The README now embeds a lightweight replay loop, and the project website serves the full replay at https://royzhao1991.github.io/LingShu/#deliverables. Captions and timing were added, but no task steps or outputs were fabricated; it is explicitly labeled as a replay rather than a continuous live run.
 
 The proof update was published in the canonical launch discussion: https://github.com/RoyZhao1991/LingShu/discussions/12#discussioncomment-17679576. Treat the counts above as the pre-distribution baseline for this asset. GitHub traffic reporting may lag, and a clone or download still does not prove a successful first run.
+
+## 2026-07-18 — Discovery and First-Value Checkpoint
+
+| Signal | Checkpoint |
+| --- | ---: |
+| Stars | 1 |
+| Forks | 0 |
+| Watchers | 0 |
+| Open public issues | 9 |
+| `v0.1.0-alpha.6` DMG downloads | 2 |
+| Maintainer profile README | Public |
+| Curated directory pull requests | 3 open and mergeable |
+
+GitHub Topics now emphasize accurate discovery terms such as `coding-agent`, `ai-agent`, `computer-use`, and `macos-app`. The maintainer profile gives profile visitors a direct route to LingShu, while the website publishes verified software metadata and an `llms.txt` facts surface. Both READMEs now direct a new user to one small, traceable document task before broad computer permissions are granted.
+
+This checkpoint is a conversion experiment, not a growth claim. Recheck after seven full days using repository visitors, relevant referrers, first-task reports, release downloads, external Issues, and outside contributions. Do not attribute normal background traffic to these changes without referrer or timing evidence.
