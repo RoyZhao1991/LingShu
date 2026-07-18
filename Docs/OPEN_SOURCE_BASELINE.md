@@ -49,3 +49,19 @@ GitHub's views endpoint had not yet reported traffic for the launch window. The 
 | Public proof artifact | Project Aurora PPTX / DOCX / PDF / page previews |
 
 Build 9 was signed with Developer ID, accepted by Apple notarization for both the app and DMG, stapled, remounted, and revalidated. New-release download counts begin at zero and must not be interpreted as installation success.
+
+## 2026-07-18 — Execution-Agent Positioning Reset
+
+| Signal | Checkpoint |
+| --- | ---: |
+| Stars | 1 |
+| Forks | 0 |
+| Watchers | 0 |
+| Open public issues | 9 |
+| `v0.1.0-alpha.6` DMG downloads | 2 |
+| Latest CI and Pages deployment | Passing |
+| Public category | Model-agnostic macOS execution agent |
+
+The public narrative now places LingShu in the Codex / Claude Code execution-agent category rather than comparing it with general chat applications. The differentiators are the complete Apache-2.0 native app and runtime, a replaceable model layer, verified deliverables beyond code, and local macOS execution with explicit approval boundaries.
+
+Repository discovery metadata now includes `codex`, `claude-code`, `model-agnostic`, and `open-source-ai`. These labels describe architecture and category; they do not imply model parity, benchmark superiority, or affiliation with OpenAI or Anthropic. Growth reviews should measure repository visits, release-page visits, sample inspection, stars, external issues, and successful first-run reports as separate funnel stages.

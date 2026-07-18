@@ -228,7 +228,7 @@ html[lang="zh-CN"] .copy-zh {
   color: var(--teal);
   font-size: 13px;
   font-weight: 800;
-  letter-spacing: 0.08em;
+  letter-spacing: 0;
   text-transform: uppercase;
 }
 
@@ -388,6 +388,7 @@ html[lang="zh-CN"] .copy-zh {
 }
 
 .section-heading,
+.positioning-layout,
 .workflow-grid,
 .quick-layout,
 .first-task,
@@ -427,6 +428,79 @@ html[lang="zh-CN"] .copy-zh {
   margin: 18px 0 0;
   color: var(--muted);
   font-size: 18px;
+}
+
+.positioning-section {
+  background: #edf2f0;
+  border-bottom: 1px solid #d5dedb;
+}
+
+.positioning-layout .section-heading {
+  margin-left: 0;
+}
+
+.comparison-matrix {
+  margin-top: 46px;
+  border-top: 1px solid var(--line);
+  border-right: 1px solid var(--line);
+  border-left: 1px solid var(--line);
+}
+
+.comparison-row {
+  display: grid;
+  grid-template-columns: minmax(150px, 0.72fr) repeat(3, minmax(0, 1fr));
+}
+
+.comparison-row > div {
+  min-width: 0;
+  padding: 20px 18px;
+  border-right: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  overflow-wrap: anywhere;
+}
+
+.comparison-row > div:last-child {
+  border-right: 0;
+}
+
+.comparison-head {
+  color: var(--white);
+  background: #111a18;
+  font-size: 13px;
+  font-weight: 760;
+}
+
+.comparison-head > div {
+  border-color: #35433f;
+}
+
+.comparison-row:not(.comparison-head) {
+  color: #33403d;
+  background: rgba(255, 255, 255, 0.58);
+  font-size: 14px;
+}
+
+.comparison-row:not(.comparison-head) > div:nth-child(2) {
+  color: #093f39;
+  background: rgba(13, 158, 142, 0.09);
+  font-weight: 700;
+}
+
+.comparison-label {
+  color: var(--ink);
+  background: rgba(255, 255, 255, 0.28);
+  font-weight: 760;
+}
+
+.comparison-note {
+  max-width: 960px;
+  margin: 18px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.comparison-note a {
+  color: var(--teal-dark);
 }
 
 .workflow-grid {
@@ -1007,6 +1081,43 @@ section.open-source {
   .deliverable-copy > p:not(.eyebrow),
   .open-source > div > p:not(.eyebrow) {
     font-size: 16px;
+  }
+
+  .comparison-matrix {
+    margin-top: 34px;
+  }
+
+  .comparison-head {
+    display: none;
+  }
+
+  .comparison-row {
+    grid-template-columns: 1fr;
+  }
+
+  .comparison-row > div,
+  .comparison-row > div:last-child {
+    border-right: 0;
+  }
+
+  .comparison-row:not(.comparison-head) > div[data-product] {
+    padding: 15px 16px;
+    display: grid;
+    grid-template-columns: minmax(82px, 104px) minmax(0, 1fr);
+    gap: 12px;
+  }
+
+  .comparison-row:not(.comparison-head) > div[data-product]::before {
+    content: attr(data-product);
+    color: #66716f;
+    font-size: 12px;
+    font-weight: 760;
+  }
+
+  .comparison-label {
+    padding: 13px 16px !important;
+    color: var(--white);
+    background: #111a18;
   }
 
   .workflow-grid {

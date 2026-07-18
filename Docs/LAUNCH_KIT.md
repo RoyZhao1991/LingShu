@@ -6,11 +6,11 @@ This document is the working launch pack for LingShu's first public alpha. It ke
 
 English:
 
-> LingShu is a native macOS AI agent that turns goals into verified deliverables, with a replaceable model brain and local orchestration.
+> LingShu is an Apache-2.0, model-agnostic macOS execution agent in the Codex / Claude Code category. Bring your own model and deliver verified code, documents, slides, and authorized computer actions through one open runtime.
 
 中文：
 
-> 灵枢是一款原生 macOS AI Agent：主脑可替换，编排与执行留在本机，并把用户目标推进为经过验收的真实产物。
+> 灵枢是一套与 Codex / Claude Code 同类的 macOS 执行型 Agent：完整 App 与运行时采用 Apache-2.0 开源，主脑可替换，代码、文档、PPT 与授权后的电脑操作共用同一能力层。
 
 Flagship proof:
 
@@ -18,13 +18,21 @@ Flagship proof:
 
 > 一条需求可以被推进为完整、可编辑的 PPT 或文档汇报：真实文件在本地生成、登记、预览、修改并经过独立验收。
 
-The launch should repeatedly prove five things:
+The launch should repeatedly prove six things:
 
-1. It completes report delivery, not just report copy: a brief can become an editable presentation or document, a registered artifact, a preview, and a verification result.
-2. It acts beyond chat: a request becomes a structured goal, execution plan, tool work, and a completion decision.
-3. It delivers real files: artifacts are written to disk, registered, previewable, and revisitable.
-4. It separates execution from verification: isolated workers can hand results to a checker before completion.
-5. It is not tied to one model vendor or one chat surface: OpenAI, Anthropic, DeepSeek, MiniMax M3, and compatible custom endpoints share the same agent layer, while the App and bundled CLI enter the same main session.
+1. It belongs to the execution-agent category established by Codex and Claude Code, not the chat-app category.
+2. The complete native app and agent runtime—not only a CLI—is published under Apache-2.0.
+3. The model layer is replaceable: OpenAI, Anthropic, DeepSeek, MiniMax M3, and compatible custom endpoints share the same agent runtime.
+4. Code is one deliverable, not the boundary: a brief can become software, an editable presentation or document, registered artifacts, and authorized Mac actions.
+5. It delivers real files: artifacts are written to disk, registered, previewable, and revisitable.
+6. It separates execution from verification: isolated workers can hand results to a checker before completion.
+
+Comparison discipline:
+
+- Codex CLI is Apache-2.0 open source; never describe all of Codex as closed source.
+- Claude Code's official repository is public but its license is all rights reserved; describe that fact without implying the code is unavailable to inspect.
+- Compare public product positioning and architecture, not unmeasured quality or model intelligence.
+- Use "model-agnostic" to describe the gateway architecture, not to promise identical results from every model.
 
 Do not claim that LingShu is the only agent capable of creating presentations or documents: current products can also create or edit office files. Prove the narrower and defensible difference instead—LingShu treats a report as a local, traceable, artifact-registered, independently checked workflow across replaceable model providers.
 
@@ -49,7 +57,7 @@ Record one continuous, reproducible workflow. Use a fresh macOS user or isolated
 
 | Time | Screen action | Narration / subtitle | Proof shown |
 | --- | --- | --- | --- |
-| 0-7s | Show the installed LingShu app and request a concise project-report deck plus a one-page written summary. | "Most AI desktop apps stop at an outline. LingShu continues to the finished report files." | Native app, concrete report brief |
+| 0-7s | Show the installed LingShu app, its selected model, and a request for a project-report deck plus a one-page written summary. | "Codex and Claude Code proved the execution-agent model for software. LingShu opens the full native runtime, lets you choose the model, and takes the same idea beyond code." | Category, open runtime, replaceable model, concrete brief |
 | 7-17s | Show the structured goal and plan appearing. | "The request becomes an explicit goal with acceptance criteria." | GoalSpec and plan |
 | 17-34s | Open the task record while an isolated worker uses tools. | "Execution runs in a traceable task session instead of disappearing behind a spinner." | Live task state and tool trace |
 | 34-48s | Show the PPTX and document being created and registered in the artifact list. | "The outputs are real editable files on disk, not filenames claimed in chat." | PPTX/document artifact registration |
@@ -71,15 +79,15 @@ Capture requirements:
 
 Title:
 
-> Show HN: LingShu – a native macOS AI agent that turns goals into verified deliverables
+> Show HN: LingShu – an open-source, model-agnostic macOS agent beyond coding
 
 Body:
 
-> I built LingShu because I wanted a desktop agent that did more than produce a plausible answer. A request becomes a structured goal, runs through local tools or isolated workers, produces real files, and can be checked before completion.
+> Codex and Claude Code showed how useful an execution-oriented agent can be for software engineering. I built LingShu to explore two different boundaries: can the complete native agent app remain open source, and can the agent layer work across model providers and deliverables beyond code?
 >
-> Its flagship workflow is complete report delivery: one brief can become an editable presentation or document, registered on disk, previewed in the app, revised against the real output, and handed to an independent checker. The goal is not another slide-outline generator; it is a traceable path to the files you actually deliver.
+> LingShu is an Apache-2.0 Swift app and agent runtime for macOS. You bring the model—OpenAI, Anthropic, DeepSeek, MiniMax, or a compatible endpoint—and keep the orchestration, task records, artifacts, memory, and permission-aware Computer Use layer on the Mac.
 >
-> LingShu is written in Swift for macOS. The orchestration, task records, artifacts, memory, and permission-aware Computer Use runtime live on the Mac. You bring the model: the first alpha supports OpenAI, Anthropic, DeepSeek, MiniMax M3, and compatible custom endpoints.
+> Code is one deliverable, not the boundary. The same execution loop can produce software, an editable PPTX or DOCX, a PDF, or an authorized Mac workflow. Real files are registered in an artifact ledger, previewed from the task, and can be handed to an independent checker before completion.
 >
 > This is an alpha, not a claim of hands-off autonomy. It can operate files and authorized apps, so the release documents its permission and provider boundaries and asks users to review high-impact actions.
 >
@@ -89,7 +97,7 @@ Body:
 
 ### Short Social Post
 
-> I open-sourced LingShu, a native macOS AI agent that can take a report brief all the way to real, editable presentation and document files—registered, previewed, and independently checked. It also plans, dispatches isolated workers, and operates authorized Mac apps. Bring your own OpenAI, Anthropic, DeepSeek, MiniMax, or compatible model. Apache-2.0. https://github.com/RoyZhao1991/LingShu
+> I open-sourced LingShu: an Apache-2.0, model-agnostic macOS execution agent in the Codex / Claude Code category. Bring OpenAI, Claude, DeepSeek, MiniMax, or a compatible model; deliver verified code, PPTX, DOCX, PDF, and authorized Mac actions through one open runtime. https://github.com/RoyZhao1991/LingShu
 
 ## 中文首发文案
 
@@ -97,15 +105,15 @@ Body:
 
 标题：
 
-> 我开源了灵枢：一款把目标推进为可验收产物的原生 macOS AI Agent
+> 我开源了灵枢：一款不锁模型、也不只交付代码的 macOS 执行型 Agent
 
 正文：
 
-> 我做灵枢，是因为现有桌面 AI 经常停在“给出一个看起来合理的回答”。我希望一次请求能够继续变成明确目标、执行计划、工具调用、真实文件和可检查的完成结论。
+> Codex 与 Claude Code 证明了执行型 Agent 在软件工程中的价值。我做灵枢，是想继续验证两个问题：完整的原生 Agent App 与运行时能不能真正开源；Agent 能不能不锁定某一家模型，也不把交付范围限制在代码里。
 >
-> 灵枢最值得展示的场景是完整汇报交付：一条需求可以继续变成可编辑的 PPT 或文档，在本地真实落盘并登记，在应用内预览和修改，再交给独立 checker 验收。它要解决的不是“帮我写一份 PPT 提纲”，而是把最终需要提交的文件真正做出来。
+> 灵枢是一套 Apache-2.0 的 Swift 原生 macOS App 与 Agent 运行时。主脑由用户选择，支持 OpenAI、Anthropic Claude、DeepSeek、MiniMax 和兼容端点；任务编排、执行记录、产物账本、记忆和权限受控的 Computer Use 都留在 Mac 上。
 >
-> 灵枢使用 Swift 原生开发。任务编排、执行记录、产物登记、记忆和基于 macOS 权限的 Computer Use 都运行在本机；主脑可以自行选择，目前支持 OpenAI、Anthropic Claude、DeepSeek、MiniMax M3 和自定义兼容端点。
+> 代码只是交付物之一。相同的执行闭环还可以生成可编辑的 PPTX、DOCX、PDF，推进授权后的 Mac 工作流，并把真实文件登记、预览和交给独立 checker 验收。
 >
 > 这仍是 Alpha，不是“完全无人值守”的宣传。灵枢能够操作文件和已授权应用，因此仓库明确写出了权限、远程模型和高影响操作边界，并要求用户检查关键动作与交付结果。
 >
@@ -115,7 +123,7 @@ Body:
 
 ### 中文短帖
 
-> 灵枢开源了：原生 macOS AI Agent，可以把一条汇报需求端到端推进为真实可编辑的 PPT/文档，自动落盘登记、预览修改并独立验收；主脑可替换，支持 OpenAI、Claude、DeepSeek、MiniMax 与兼容端点。Apache-2.0。https://github.com/RoyZhao1991/LingShu
+> 灵枢开源了：一套与 Codex / Claude Code 同类的 macOS 执行型 Agent。完整 App 与运行时采用 Apache-2.0，主脑可替换；代码、PPTX、DOCX、PDF 和授权后的 Mac 操作共用同一能力层。https://github.com/RoyZhao1991/LingShu
 
 ## Launch Sequence
 

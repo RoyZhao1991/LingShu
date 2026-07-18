@@ -1,9 +1,9 @@
 <div align="center">
   <img src="./lingshu-icon-preview.png" width="112" alt="LingShu app icon">
   <h1>LingShu</h1>
-  <p><strong>A native macOS AI agent that turns goals into verified deliverables.</strong></p>
-  <p><strong>Flagship workflow: complete editable presentations and document reports end to end—not just outlines or chat answers.</strong></p>
-  <p>Bring your own model. Keep the orchestration, tools, memory, and computer control on your Mac.</p>
+  <p><strong>A fully open-source, model-agnostic macOS execution agent in the Codex / Claude Code category.</strong></p>
+  <p><strong>Code is one deliverable, not the boundary: ship verified software, presentations, documents, and authorized Mac workflows.</strong></p>
+  <p>Use OpenAI, Claude, DeepSeek, MiniMax, or a compatible endpoint. Keep the agent runtime, orchestration, tools, memory, and artifacts on your Mac.</p>
 
   <p>
     <a href="./README.md">English</a> |
@@ -39,12 +39,24 @@
 > [!IMPORTANT]
 > LingShu is an alpha-stage project under active development. It can operate local files and apps after explicit macOS authorization. Review requested permissions and keep backups of important work.
 
-## Why LingShu
+## Where LingShu Fits
 
-Most AI desktop apps stop at conversation. LingShu is an agent runtime designed to continue from intent to execution and verification:
+Codex and Claude Code set the standard for execution-oriented coding agents. LingShu belongs in that same agent category—not the chat-app category—but makes a different architectural choice: the complete native app and runtime are Apache-2.0 open source, the model backend is replaceable, and code is one deliverable among several.
+
+| Dimension | LingShu | OpenAI Codex | Claude Code |
+| --- | --- | --- | --- |
+| Primary product focus | General execution on macOS: code, office documents, local computer workflows | Software engineering | Software engineering |
+| Publicly open-sourced surface | Native app + agent runtime, Apache-2.0 | Codex CLI, Apache-2.0 | Official repository is all rights reserved |
+| Default model layer | User-selected OpenAI, Claude, DeepSeek, MiniMax, or compatible endpoint | OpenAI models | Claude models |
+| Default deliverables | Code, PPTX, DOCX, PDF, local media, and authorized Mac actions | Code changes and engineering work | Code changes and engineering work |
+
+This is a positioning comparison, not a benchmark or claim of superiority. Product surfaces change; the current references are the official [Codex repository](https://github.com/openai/codex), [Codex product page](https://openai.com/codex/), [Claude Code repository](https://github.com/anthropics/claude-code), and [Claude Code product page](https://www.anthropic.com/product/claude-code). Model capability and output quality vary by provider.
+
+LingShu's differentiators are architectural:
 
 - **Finish the report, not just the outline.** From one brief, LingShu can structure the narrative, create a real editable presentation or document, register and preview the file, iterate on it, and send it to an independent checker.
-- **Bring your own brain.** Use OpenAI, Anthropic, DeepSeek, MiniMax M3, or a custom compatible endpoint without coupling LingShu's identity to one model vendor.
+- **Bring your own brain.** Use OpenAI, Anthropic, DeepSeek, MiniMax M3, or a custom compatible endpoint without coupling the agent layer to one model vendor.
+- **Inspect the complete runtime.** The Swift app, orchestration, tools, task records, artifact ledger, memory, and Computer Use implementation are published under Apache-2.0.
 - **Delegate real work.** A main agent can plan work, dispatch isolated worker sessions, invoke tools, and hand results to an independent checker.
 - **Deliver files, not claims.** Documents, presentations, code, scripts, and reports are written to disk, tracked, previewable, and checked before completion.
 - **Use the Mac natively.** LingShu can read accessibility snapshots and operate authorized apps through native macOS APIs. This Computer Use path does not require Codex.

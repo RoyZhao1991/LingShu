@@ -16,7 +16,7 @@
 
 ## 一、当前判断
 
-灵枢具备形成独立开源品类的素材：端到端完成 PPT/文档汇报、原生 macOS、可换主脑、隔离任务编排、验收式交付、感知、记忆，以及不依赖 Codex 的原生 Computer Use。风险不在“代码量不够”，而在首次公开时用户能否在几分钟内看懂这条完整交付链并完成信任判断。
+灵枢已经具备进入执行型 Agent 赛道的产品基础。正确参照物是 Codex 与 Claude Code，而不是聊天工具。差异不在“会不会写代码”，而在完整原生 App 与 Agent 运行时采用 Apache-2.0、模型层可替换，以及代码、Office 文件、媒体和授权后的 Mac 工作流共用同一套可验收执行链。风险不在“代码量不够”，而在陌生开发者能否在几十秒内理解这个差异，并在几分钟内完成安装与首次成功。
 
 高 Star 不能被承诺，只能通过产品价值、安装成功率、演示传播力和持续维护共同提高概率。禁止购买 Star、互刷、批量私信或用无法复现的演示换取关注。
 
@@ -44,16 +44,16 @@
 
 一句话定位：
 
-> LingShu is a native macOS AI agent that turns goals into verified deliverables, with a replaceable model brain and local orchestration.
+> LingShu is an Apache-2.0, model-agnostic macOS execution agent in the Codex / Claude Code category. Bring your own model and deliver verified code, documents, slides, and authorized computer actions through one open runtime.
 
 六个传播支柱：
 
-1. **完整汇报交付**：一条需求端到端推进为可编辑 PPT/文档，而不是只返回提纲或正文。
-2. **不是另一个聊天壳**：从 GoalSpec 到工具执行、隔离子任务、checker 和真实产物。
+1. **与 Codex / Claude Code 同赛道**：灵枢是执行型 Agent，不以聊天 App 作为竞品锚点。
+2. **完整 App 与运行时开源**：Swift 原生 App、编排、工具、任务记录、产物账本、记忆与 Computer Use 采用 Apache-2.0。
 3. **不被单一模型锁定**：OpenAI、Claude、DeepSeek、MiniMax 与自定义兼容端点共用能力层。
-4. **原生 Mac 执行体**：通过 macOS AX 语义树进行 Computer Use，不依赖 Codex 才能操作电脑。
-5. **可检查的真实交付**：文件落盘、Git 登记、预览、测试和验收状态都能追踪。
-6. **可接入而不复制大脑**：内置 CLI 让飞书、Webhook、快捷指令等按一问一答方式进入同一主会话，并保留人机交互续接。
+4. **代码不是交付边界**：同一执行链可以完成代码、PPTX、DOCX、PDF、媒体和授权后的 Mac 工作流。
+5. **可检查的真实交付**：文件落盘、登记、预览、测试和验收状态都能追踪。
+6. **可接入而不复制大脑**：内置 CLI 让飞书、Webhook、快捷指令等进入同一主会话，并保留权限与人机交互续接。
 
 ## 四、首个 30 天节奏
 
@@ -106,11 +106,11 @@
 
 Description：
 
-> Native macOS AI agent: bring your own model, orchestrate isolated workers, control apps, and deliver verified artifacts. 原生 macOS 通用智能中枢。
+> Apache-2.0, model-agnostic macOS agent in the Codex / Claude Code category—bring your own model to deliver verified code, docs, slides, and computer actions.
 
 Topics：
 
-`macos`, `swift`, `ai-agent`, `autonomous-agents`, `computer-use`, `multimodal`, `llm`, `mcp`, `agentic-ai`, `local-first`, `openai`, `anthropic`
+`macos`, `swift`, `ai-agent`, `autonomous-agents`, `computer-use`, `multimodal`, `llm`, `mcp`, `agentic-ai`, `local-first`, `openai`, `anthropic`, `codex`, `claude-code`, `model-agnostic`, `open-source-ai`
 
 ## 七、每周维护纪律
 
@@ -126,7 +126,7 @@ Topics：
 
 参考 [OpenClaw](https://github.com/openclaw/openclaw) 与 [Hermes Agent](https://github.com/NousResearch/hermes-agent) 的公开路径，灵枢不复制功能清单，而是复用下面这套可持续范式：
 
-1. **一句话品类清楚**：始终围绕“原生 macOS、真实可编辑产物、独立验收”表达，不同时争夺所有 Agent 标签。
+1. **一句话品类清楚**：先明确“与 Codex / Claude Code 同类的执行型 Agent”，再用“完整运行时开源、模型无关、代码不是边界”解释差异，不同时争夺所有 Agent 标签。
 2. **只保留一个推荐入口**：Homebrew/签名 DMG、首次语言选择、连接自有模型、运行一条小型交付任务；其余高级能力后置。
 3. **让证据靠近首屏**：README 与官网同时提供 Project Aurora 可编辑文件、PDF 和修订记录，让陌生用户先检查结果。
 4. **同一内核，多种入口**：App、CLI、Webhook 与未来消息连接器复用主会话、权限、人机协作和产物账本，避免每个入口形成一套不一致的 Agent。

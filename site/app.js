@@ -11,8 +11,8 @@
       button.setAttribute("aria-pressed", String(button.dataset.language === next));
     });
     document.title = next === "zh-CN"
-      ? "LingShu - 给出目标，交付经过验收的真实产物"
-      : "LingShu - Goals in. Verified deliverables out.";
+      ? "LingShu - 纯开源、模型无关的 macOS Agent"
+      : "LingShu - Open-source, model-agnostic macOS agent";
     document.querySelectorAll("[data-label-en][data-label-zh]").forEach((element) => {
       element.setAttribute("aria-label", next === "zh-CN" ? element.dataset.labelZh : element.dataset.labelEn);
     });

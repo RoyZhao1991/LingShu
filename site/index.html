@@ -3,20 +3,20 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>LingShu - Goals in. Verified deliverables out.</title>
-  <meta name="description" content="LingShu is a native macOS AI agent that turns one brief into editable presentations, documents, code, and independently checked local artifacts.">
+  <title>LingShu - Open-source, model-agnostic macOS agent</title>
+  <meta name="description" content="LingShu is an Apache-2.0, model-agnostic macOS execution agent in the Codex and Claude Code category. Bring your own model to deliver verified code, documents, slides, and computer actions.">
   <meta name="theme-color" content="#07100f">
   <meta name="robots" content="index,follow">
   <link rel="canonical" href="https://royzhao1991.github.io/LingShu/">
   <link rel="icon" type="image/png" href="assets/lingshu-icon-preview.png">
   <meta property="og:type" content="website">
-  <meta property="og:title" content="LingShu - Goals in. Verified deliverables out.">
-  <meta property="og:description" content="A native macOS AI agent for editable, checked deliverables - not just chat answers.">
+  <meta property="og:title" content="LingShu - Open-source, model-agnostic macOS agent">
+  <meta property="og:description" content="A fully open-source execution agent with a replaceable model brain. Code is one deliverable, not the boundary.">
   <meta property="og:url" content="https://royzhao1991.github.io/LingShu/">
   <meta property="og:image" content="https://royzhao1991.github.io/LingShu/assets/lingshu-social-preview.png">
   <meta name="twitter:card" content="summary_large_image">
-  <meta name="twitter:title" content="LingShu - Goals in. Verified deliverables out.">
-  <meta name="twitter:description" content="Native macOS orchestration, real local artifacts, independent verification.">
+  <meta name="twitter:title" content="LingShu - Open-source, model-agnostic macOS agent">
+  <meta name="twitter:description" content="Bring your own model to one open agent runtime for code, documents, slides, and authorized Mac actions.">
   <meta name="twitter:image" content="https://royzhao1991.github.io/LingShu/assets/lingshu-social-preview.png">
   <link rel="stylesheet" href="styles.css">
   <script src="app.js" defer></script>
@@ -31,6 +31,7 @@
       <span>LingShu</span>
     </a>
     <nav class="primary-nav" aria-label="Primary navigation">
+      <a href="#positioning"><span class="copy-en">Why LingShu</span><span class="copy-zh">定位</span></a>
       <a href="#workflow"><span class="copy-en">Workflow</span><span class="copy-zh">工作流</span></a>
       <a href="#sample"><span class="copy-en">Sample</span><span class="copy-zh">样例</span></a>
       <a href="#quick-start"><span class="copy-en">Quick start</span><span class="copy-zh">快速开始</span></a>
@@ -50,13 +51,13 @@
     <section class="hero" id="top" aria-labelledby="hero-title">
       <div class="hero-shade" aria-hidden="true"></div>
       <div class="hero-inner">
-        <p class="eyebrow copy-en">Native macOS AI agent</p>
-        <p class="eyebrow copy-zh">原生 macOS AI Agent</p>
+        <p class="eyebrow copy-en">Open-source, model-agnostic macOS agent</p>
+        <p class="eyebrow copy-zh">纯开源、模型无关的 macOS Agent</p>
         <h1 id="hero-title">LingShu</h1>
-        <p class="hero-statement copy-en">Goals in. Verified deliverables out.</p>
-        <p class="hero-statement copy-zh">给出目标，交付经过验收的真实产物。</p>
-        <p class="hero-support copy-en">Turn one brief into editable presentations, documents, code, and checked local files. Bring your own model; keep orchestration, tools, memory, and computer control on your Mac.</p>
-        <p class="hero-support copy-zh">从一条需求出发，生成可编辑的 PPT、文档、代码和经过独立验收的本地文件。主脑由你选择，编排、工具、记忆与电脑控制留在 Mac 上。</p>
+        <p class="hero-statement copy-en">Your model. Your agent runtime. More than code.</p>
+        <p class="hero-statement copy-zh">你的模型，你的 Agent；代码不是边界。</p>
+        <p class="hero-support copy-en">Use OpenAI, Claude, DeepSeek, MiniMax, or a compatible endpoint. Deliver verified software, editable presentations and documents, and authorized Mac workflows through one Apache-2.0 runtime.</p>
+        <p class="hero-support copy-zh">支持 OpenAI、Claude、DeepSeek、MiniMax 与兼容端点。通过同一套 Apache-2.0 运行时，交付经过验收的软件、可编辑 PPT/文档与授权后的 Mac 工作流。</p>
         <div class="hero-actions">
           <a class="button button-primary" href="https://github.com/RoyZhao1991/LingShu/releases/download/v0.1.0-alpha.6/LingShu-0.1.0-9-macOS-universal.dmg">
             <span class="copy-en">Download signed alpha</span><span class="copy-zh">下载签名公测版</span>
@@ -65,12 +66,12 @@
             <span class="copy-en">Inspect real sample</span><span class="copy-zh">检查真实样例</span>
           </a>
           <a class="button button-secondary" href="https://github.com/RoyZhao1991/LingShu" target="_blank" rel="noreferrer">
-            <span class="copy-en">View source</span><span class="copy-zh">查看源码</span>
+            <span class="copy-en">Star on GitHub</span><span class="copy-zh">在 GitHub 点 Star</span>
           </a>
         </div>
         <ul class="hero-facts" aria-label="Project facts">
           <li>macOS 14+</li>
-          <li>Swift 6</li>
+          <li><span class="copy-en">Model-agnostic</span><span class="copy-zh">模型无关</span></li>
           <li>Apache-2.0</li>
           <li><span class="copy-en">Apple notarized</span><span class="copy-zh">Apple 已公证</span></li>
         </ul>
@@ -79,17 +80,64 @@
 
     <section class="proof-band" aria-label="Core capabilities" data-label-en="Core capabilities" data-label-zh="核心能力">
       <div class="proof-grid">
-        <div><strong class="copy-en">Real files</strong><strong class="copy-zh">真实文件</strong><span class="copy-en">PPTX, DOCX, PDF, code</span><span class="copy-zh">PPTX、DOCX、PDF、代码</span></div>
-        <div><strong class="copy-en">Independent checker</strong><strong class="copy-zh">独立验收</strong><span class="copy-en">Completion needs evidence</span><span class="copy-zh">完成必须有验收依据</span></div>
-        <div><strong class="copy-en">Local orchestration</strong><strong class="copy-zh">本地编排</strong><span class="copy-en">Tasks, tools, memory, artifacts</span><span class="copy-zh">任务、工具、记忆、产物</span></div>
-        <div><strong class="copy-en">Native Computer Use</strong><strong class="copy-zh">原生电脑控制</strong><span class="copy-en">Permission-scoped macOS actions</span><span class="copy-zh">受权限约束的 macOS 操作</span></div>
+        <div><strong class="copy-en">Full runtime open source</strong><strong class="copy-zh">完整运行时开源</strong><span class="copy-en">Native app + agent layer</span><span class="copy-zh">原生 App + Agent 能力层</span></div>
+        <div><strong class="copy-en">Bring your own model</strong><strong class="copy-zh">自带主脑</strong><span class="copy-en">No single-vendor lock-in</span><span class="copy-zh">不锁定单一模型厂商</span></div>
+        <div><strong class="copy-en">Beyond code</strong><strong class="copy-zh">不只交付代码</strong><span class="copy-en">PPTX, DOCX, PDF, media, apps</span><span class="copy-zh">PPTX、DOCX、PDF、媒体、应用</span></div>
+        <div><strong class="copy-en">Verified delivery</strong><strong class="copy-zh">验收式交付</strong><span class="copy-en">Artifacts, preview, checker</span><span class="copy-zh">产物、预览、独立 checker</span></div>
+      </div>
+    </section>
+
+    <section class="section positioning-section" id="positioning" aria-label="Where LingShu fits" data-label-en="Where LingShu fits" data-label-zh="灵枢处在什么赛道">
+      <div class="positioning-layout">
+        <div class="section-heading">
+          <p class="eyebrow copy-en">The execution-agent category</p>
+          <p class="eyebrow copy-zh">执行型 Agent 赛道</p>
+          <h2><span class="copy-en">Same category. Different boundaries.</span><span class="copy-zh">同一个赛道，不同的边界。</span></h2>
+          <p class="copy-en">Codex and Claude Code set the standard for execution-oriented coding agents. LingShu starts from the same agent premise, then makes the complete native runtime open source, keeps the model replaceable, and treats code as one deliverable among several.</p>
+          <p class="copy-zh">Codex 与 Claude Code 定义了执行型编程 Agent 的标杆。灵枢从同一类 Agent 出发，把完整原生运行时开源、把主脑做成可替换能力，并让代码成为多种交付物之一。</p>
+        </div>
+
+        <div class="comparison-matrix" role="table" aria-label="LingShu, Codex, and Claude Code positioning comparison">
+          <div class="comparison-row comparison-head" role="row">
+            <div role="columnheader"><span class="copy-en">Dimension</span><span class="copy-zh">维度</span></div>
+            <div role="columnheader">LingShu</div>
+            <div role="columnheader">OpenAI Codex</div>
+            <div role="columnheader">Claude Code</div>
+          </div>
+          <div class="comparison-row" role="row">
+            <div class="comparison-label" role="rowheader"><span class="copy-en">Product focus</span><span class="copy-zh">产品定位</span></div>
+            <div role="cell" data-product="LingShu"><span class="copy-en">General execution on macOS</span><span class="copy-zh">macOS 通用执行</span></div>
+            <div role="cell" data-product="Codex"><span class="copy-en">Software engineering</span><span class="copy-zh">软件工程</span></div>
+            <div role="cell" data-product="Claude Code"><span class="copy-en">Software engineering</span><span class="copy-zh">软件工程</span></div>
+          </div>
+          <div class="comparison-row" role="row">
+            <div class="comparison-label" role="rowheader"><span class="copy-en">Open-source surface</span><span class="copy-zh">公开开源范围</span></div>
+            <div role="cell" data-product="LingShu"><span class="copy-en">Native app + runtime, Apache-2.0</span><span class="copy-zh">原生 App + 运行时，Apache-2.0</span></div>
+            <div role="cell" data-product="Codex"><span class="copy-en">Codex CLI, Apache-2.0</span><span class="copy-zh">Codex CLI，Apache-2.0</span></div>
+            <div role="cell" data-product="Claude Code"><span class="copy-en">Official repository: all rights reserved</span><span class="copy-zh">官方仓库：All Rights Reserved</span></div>
+          </div>
+          <div class="comparison-row" role="row">
+            <div class="comparison-label" role="rowheader"><span class="copy-en">Model layer</span><span class="copy-zh">模型层</span></div>
+            <div role="cell" data-product="LingShu"><span class="copy-en">OpenAI, Claude, DeepSeek, MiniMax, compatible endpoints</span><span class="copy-zh">OpenAI、Claude、DeepSeek、MiniMax、兼容端点</span></div>
+            <div role="cell" data-product="Codex"><span class="copy-en">OpenAI models</span><span class="copy-zh">OpenAI 模型</span></div>
+            <div role="cell" data-product="Claude Code"><span class="copy-en">Claude models</span><span class="copy-zh">Claude 模型</span></div>
+          </div>
+          <div class="comparison-row" role="row">
+            <div class="comparison-label" role="rowheader"><span class="copy-en">Default output</span><span class="copy-zh">默认交付范围</span></div>
+            <div role="cell" data-product="LingShu"><span class="copy-en">Code, office files, media, Mac actions</span><span class="copy-zh">代码、Office 文件、媒体、Mac 操作</span></div>
+            <div role="cell" data-product="Codex"><span class="copy-en">Code and engineering work</span><span class="copy-zh">代码与工程任务</span></div>
+            <div role="cell" data-product="Claude Code"><span class="copy-en">Code and engineering work</span><span class="copy-zh">代码与工程任务</span></div>
+          </div>
+        </div>
+        <p class="comparison-note copy-en">Positioning, not a benchmark. Sources: official <a href="https://github.com/openai/codex">Codex repository</a>, <a href="https://openai.com/codex/">Codex product page</a>, <a href="https://github.com/anthropics/claude-code">Claude Code repository</a>, and <a href="https://www.anthropic.com/product/claude-code">Claude Code product page</a>. Product surfaces and model capabilities change over time.</p>
+        <p class="comparison-note copy-zh">这是品类与公开形态对比，不是性能榜。依据：官方 <a href="https://github.com/openai/codex">Codex 仓库</a>、<a href="https://openai.com/codex/">Codex 产品页</a>、<a href="https://github.com/anthropics/claude-code">Claude Code 仓库</a>与<a href="https://www.anthropic.com/product/claude-code">Claude Code 产品页</a>。产品形态与模型能力会持续变化。</p>
       </div>
     </section>
 
     <section class="section section-light" id="workflow" aria-label="From a goal to a checked file" data-label-en="From a goal to a checked file" data-label-zh="从目标到经过验收的文件">
       <div class="section-heading">
-        <p class="eyebrow copy-en">Not another chat wrapper</p>
-        <p class="eyebrow copy-zh">不止是对话外壳</p>
+        <p class="eyebrow copy-en">Execution-agent workflow</p>
+        <p class="eyebrow copy-zh">执行型 Agent 工作流</p>
         <h2 id="workflow-title"><span class="copy-en">From a goal to a checked file</span><span class="copy-zh">从目标到经过验收的文件</span></h2>
         <p class="copy-en">The main conversation protects intent. Isolated workers do the long work. Every deliverable returns to one traceable record.</p>
         <p class="copy-zh">主会话负责守住意图，隔离子任务推进长流程，所有产物最终回到同一条可追踪任务记录。</p>
@@ -208,8 +256,8 @@
         <p class="eyebrow copy-en">Built in the open</p>
         <p class="eyebrow copy-zh">开放共建</p>
         <h2 id="open-source-title"><span class="copy-en">Inspect it. Run it. Improve it.</span><span class="copy-zh">查看、运行、一起改进。</span></h2>
-        <p class="copy-en">LingShu is Apache-2.0 licensed, written in Swift, and ships with more than 1,500 tests. The signed alpha is for trying the product; the repository is for understanding and shaping it.</p>
-        <p class="copy-zh">灵枢采用 Apache-2.0 许可证，以 Swift 编写，并拥有超过 1,500 项测试。签名公测版用于体验，代码仓库用于理解与共同塑造它。</p>
+        <p class="copy-en">The complete native app and agent runtime are Apache-2.0 licensed, written in Swift, and ship with more than 1,500 tests. Bring your own model, inspect the orchestration, and help shape an agent layer that is not owned by one provider.</p>
+        <p class="copy-zh">完整原生 App 与 Agent 运行时采用 Apache-2.0，以 Swift 编写，并拥有超过 1,500 项测试。你可以自带主脑、审阅完整编排，并共同塑造一套不属于单一模型厂商的 Agent 能力层。</p>
       </div>
       <div class="open-source-actions">
         <a class="button button-primary" href="https://github.com/RoyZhao1991/LingShu" target="_blank" rel="noreferrer"><span class="copy-en">Star on GitHub</span><span class="copy-zh">在 GitHub 点 Star</span></a>
@@ -220,8 +268,8 @@
 
   <footer class="site-footer">
     <div class="footer-brand"><img src="assets/lingshu-icon-preview.png" alt="" width="30" height="30"><strong>LingShu</strong></div>
-    <p class="copy-en">Native macOS agent orchestration for real, verified deliverables.</p>
-    <p class="copy-zh">面向真实、可验收产物的原生 macOS Agent 中枢。</p>
+    <p class="copy-en">Open-source, model-agnostic macOS execution for verified deliverables.</p>
+    <p class="copy-zh">纯开源、模型无关、面向可验收交付物的 macOS 执行型 Agent。</p>
     <nav aria-label="Footer navigation">
       <a href="https://github.com/RoyZhao1991/LingShu">GitHub</a>
       <a href="https://github.com/RoyZhao1991/LingShu/releases">Releases</a>

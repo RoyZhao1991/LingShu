@@ -1,9 +1,9 @@
 <div align="center">
   <img src="./lingshu-icon-preview.png" width="112" alt="灵枢应用图标">
   <h1>灵枢 LingShu</h1>
-  <p><strong>把目标推进为经过验收的真实交付物的原生 macOS AI Agent。</strong></p>
-  <p><strong>旗舰能力：端到端完成可编辑的 PPT 与文档汇报，而不只是给提纲或聊天答案。</strong></p>
-  <p>大脑可以更换，编排、工具、记忆与计算机操作留在你的 Mac 上。</p>
+  <p><strong>一套与 Codex / Claude Code 同类的原生 macOS 执行型 Agent：完整 App 与运行时开源，主脑不绑定厂商。</strong></p>
+  <p><strong>代码只是交付物之一，不是能力边界：还可完成 PPT、文档、媒体与授权后的 Mac 工作流。</strong></p>
+  <p>支持 OpenAI、Claude、DeepSeek、MiniMax 与兼容端点；Agent 运行时、编排、工具、记忆和产物留在你的 Mac 上。</p>
 
   <p>
     <a href="./README.md">English</a> |
@@ -39,12 +39,24 @@
 > [!IMPORTANT]
 > 灵枢仍处于 Alpha 阶段并在快速迭代。它会在获得明确的 macOS 授权后操作本地文件与应用。请确认权限范围，并为重要工作保留备份。
 
-## 为什么做灵枢
+## 灵枢处在什么赛道
 
-多数桌面 AI 停留在对话层。灵枢把自己定位为一套原生 macOS Agent 运行时，从意图继续推进到执行和验收：
+Codex 与 Claude Code 定义了现代执行型编程 Agent 的标杆。灵枢与它们属于同一个 Agent 赛道，而不是聊天工具赛道；不同之处在于：灵枢把完整原生 App 与运行时以 Apache-2.0 开源，主脑可以替换，而且代码只是多种交付物之一。
+
+| 维度 | 灵枢 LingShu | OpenAI Codex | Claude Code |
+| --- | --- | --- | --- |
+| 主要产品定位 | macOS 通用执行：代码、Office 文档、本地电脑工作流 | 软件工程 | 软件工程 |
+| 公开开源范围 | 原生 App + Agent 运行时，Apache-2.0 | Codex CLI，Apache-2.0 | 官方仓库采用 All Rights Reserved |
+| 默认模型层 | 用户选择 OpenAI、Claude、DeepSeek、MiniMax 或兼容端点 | OpenAI 模型 | Claude 模型 |
+| 默认交付范围 | 代码、PPTX、DOCX、PDF、本地媒体与授权后的 Mac 操作 | 代码修改与工程任务 | 代码修改与工程任务 |
+
+这是一份品类定位与公开形态对比，不是性能榜，也不主张灵枢优于其他产品。产品会持续变化，当前依据为官方 [Codex 仓库](https://github.com/openai/codex)、[Codex 产品页](https://openai.com/codex/)、[Claude Code 仓库](https://github.com/anthropics/claude-code) 与 [Claude Code 产品页](https://www.anthropic.com/product/claude-code)。不同模型的能力与产出质量会有差异。
+
+灵枢的差异主要来自架构选择：
 
 - **交付完整汇报，而不只是提纲**：从一条需求出发，灵枢可以组织叙事与内容，生成真实可编辑的 PPT 或文档，登记并预览文件，迭代修改，再交给独立 checker 验收。
-- **大脑可替换**：支持 OpenAI、Anthropic、DeepSeek、MiniMax M3 与自定义兼容端点，不把灵枢身份锁死在某一家模型上。
+- **大脑可替换**：支持 OpenAI、Anthropic、DeepSeek、MiniMax M3 与自定义兼容端点，不把 Agent 能力层锁死在某一家模型上。
+- **完整运行时可审阅**：Swift App、任务编排、工具、执行记录、产物账本、记忆与 Computer Use 实现都以 Apache-2.0 发布。
 - **能够真实派活**：主 Agent 可以规划、调用工具、派发隔离子线程，并交给独立 checker 验收。
 - **交付文件而不是口头宣称**：文档、PPT、代码、脚本和报告会真实落盘、登记、预览并在完成前检查。
 - **原生操作 Mac**：通过 macOS 辅助功能语义快照读取并操作已授权应用；原生 Computer Use 不依赖 Codex。
