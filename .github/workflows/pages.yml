@@ -1,0 +1,43 @@
+name: Deploy GitHub Pages
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "site/**"
+      - "Docs/media/lingshu-overview.jpg"
+      - "Docs/media/lingshu-social-preview.png"
+      - "lingshu-icon-preview.png"
+      - "Scripts/build-pages.sh"
+      - ".github/workflows/pages.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+      - name: Configure Pages
+        uses: actions/configure-pages@v6
+      - name: Build static site
+        run: bash Scripts/build-pages.sh "$RUNNER_TEMP/site"
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v5
+        with:
+          path: ${{ runner.temp }}/site
+      - name: Deploy Pages
+        id: deployment
+        uses: actions/deploy-pages@v5

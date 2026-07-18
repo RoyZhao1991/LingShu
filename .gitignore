@@ -2,6 +2,7 @@
 .build/
 build/
 dist/
+.site-output/
 XcodeDerived/
 XcodeAppDerived/
 DerivedData/

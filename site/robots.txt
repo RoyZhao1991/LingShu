@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://royzhao1991.github.io/LingShu/sitemap.xml

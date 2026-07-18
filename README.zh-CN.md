@@ -21,6 +21,8 @@
   </p>
 
   <p>
+    <a href="https://royzhao1991.github.io/LingShu/"><strong>官方网站</strong></a>
+    ·
     <a href="https://github.com/RoyZhao1991/LingShu/releases/tag/v0.1.0-alpha.5"><strong>下载已签名的 macOS Alpha</strong></a>
     · <a href="#快速开始">快速开始</a>
     · <a href="https://github.com/RoyZhao1991/LingShu/discussions">社区讨论</a>
