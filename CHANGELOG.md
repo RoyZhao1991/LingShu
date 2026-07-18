@@ -6,6 +6,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [0.1.0-alpha.6] - 2026-07-18
+
 ### Added
 
 - A privacy-safe, reproducible Project Aurora sample with editable PPTX and DOCX deliverables, a rendered PDF, page previews, and an honest revision record.
@@ -50,5 +52,6 @@ First public alpha.
 - Dynamic workflow mutations are validated as a transaction, reject dependency cycles and started-node rewrites, and persist their revision history in the task record.
 - Read-only agent stalls now receive a final model-owned, tool-free convergence turn instead of exposing internal process output or hard-coded diagnostic prose.
 
-[Unreleased]: https://github.com/RoyZhao1991/LingShu/compare/v0.1.0-alpha...HEAD
+[Unreleased]: https://github.com/RoyZhao1991/LingShu/compare/v0.1.0-alpha.6...HEAD
+[0.1.0-alpha.6]: https://github.com/RoyZhao1991/LingShu/releases/tag/v0.1.0-alpha.6
 [0.1.0-alpha]: https://github.com/RoyZhao1991/LingShu/releases/tag/v0.1.0-alpha

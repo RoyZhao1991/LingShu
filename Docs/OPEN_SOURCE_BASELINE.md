@@ -33,3 +33,19 @@ The checksum download performed during anonymous launch verification is not coun
 | Latest CI and Pages deployment | Passing |
 
 GitHub's views endpoint had not yet reported traffic for the launch window. The two DMG downloads are asset requests, not proof of installation or successful first use. The next meaningful conversion evidence is a clean first-run report, a reproducible external issue, or an outside contribution.
+
+## 2026-07-18 — Reproducible Sample Release
+
+| Signal | Checkpoint |
+| --- | ---: |
+| Latest release | `v0.1.0-alpha.6` |
+| Release source | `af829f1eeac627cde362f23e6b799a0101b2f521` |
+| Stars | 1 |
+| Forks | 0 |
+| Watchers | 0 |
+| Open public issues | 9 |
+| Local regression | 1,581 executed / 4 skipped / 0 failed |
+| CI and Pages on release source | Passing |
+| Public proof artifact | Project Aurora PPTX / DOCX / PDF / page previews |
+
+Build 9 was signed with Developer ID, accepted by Apple notarization for both the app and DMG, stapled, remounted, and revalidated. New-release download counts begin at zero and must not be interpreted as installation success.
