@@ -7,7 +7,7 @@ Canonical public anchors:
 - Repository: https://github.com/RoyZhao1991/LingShu
 - Website and reproducible sample: https://royzhao1991.github.io/LingShu/
 - Alpha announcement and feedback thread: https://github.com/RoyZhao1991/LingShu/discussions/12
-- Latest signed release: https://github.com/RoyZhao1991/LingShu/releases/latest
+- Latest signed release: https://github.com/RoyZhao1991/LingShu/releases/tag/v0.1.0-alpha.6
 
 ## 1. Category and Message
 
@@ -64,6 +64,38 @@ The GitHub README and official site are the canonical landing pages. Channel pos
 | Product Hunt | Polished installable macOS product | Product page, gallery, demo | Launch only after the demo and clean first-run proof are ready | Install attempts and retained users, not rank alone |
 
 The launch copy lives in [`LAUNCH_KIT.md`](./LAUNCH_KIT.md). Adapt the opening paragraph to the community; keep the factual core unchanged.
+
+### First external wave
+
+The first wave uses three channels with different audiences instead of repeating the same directory submission:
+
+| Channel | Why it fits | Native message | State |
+| --- | --- | --- | --- |
+| [`awesome-mac`](https://github.com/jaywcjlove/awesome-mac) | More than 100,000 developers and macOS users; active AI Tools curation and frequent merges | Native macOS execution agent, signed app, complete Apache-2.0 source | [PR #2355](https://github.com/jaywcjlove/awesome-mac/pull/2355) open and mergeable |
+| [E2B Awesome AI Agents](https://github.com/e2b-dev/awesome-ai-agents) | Agent-specific discovery surface with more than 28,000 GitHub Stars | Open, model-agnostic execution runtime with real artifact delivery and human checkpoints | Submission prepared; contact email confirmation required |
+| Hacker News | Strong fit for architecture, open-source runtime, and model-provider discussion | Founder narrative: what changes when the native app and runtime are open and the model becomes replaceable | Show HN publication window scheduled for US morning, Tuesday |
+
+The following high-Star lists were reviewed but deliberately not used in this wave:
+
+- `kyrolabs/awesome-agents` asks brand-new projects to demonstrate traction before submission.
+- `ai-boost/awesome-harness-engineering` currently has low merge throughput for outside additions.
+- `deepseek-ai/awesome-deepseek-integration` is highly relevant, but has a large open-PR backlog and slow batch merges; revisit after the first launch wave produces usage evidence.
+
+#### E2B directory submission
+
+- **Product:** LingShu
+- **Tagline:** `Open macOS agent for verified deliverables`
+- **Type:** Open-source
+- **Categories:** General purpose; Content creation; Coding; Productivity; Multi-agent; Supports open-source models
+- **Additional category:** Computer use; document and presentation delivery
+- **Website:** https://royzhao1991.github.io/LingShu/
+- **GitHub:** https://github.com/RoyZhao1991/LingShu
+- **Proof:** https://royzhao1991.github.io/LingShu/#deliverables
+- **Release:** https://github.com/RoyZhao1991/LingShu/releases/tag/v0.1.0-alpha.6
+
+Description:
+
+> LingShu is an Apache-2.0, model-agnostic native macOS execution agent in the Codex / Claude Code category. Users bring OpenAI, Anthropic, DeepSeek, MiniMax, or a compatible endpoint while the same open runtime plans long-running work, runs isolated workers and tools, registers real artifacts, pauses for human action, and sends results to an independent checker. Code is one deliverable, not the boundary: LingShu also creates editable PPTX, DOCX, PDF, media, and authorized Mac workflows.
 
 ## 5. Fourteen-Day Sequence
 
@@ -141,5 +173,6 @@ The durable growth loop is: **clear category → inspectable proof → successfu
 | 2026-07-18 | Curated macOS directory | Submitted a bilingual AI-category listing to [`awesome-swift-macos-apps` PR #76](https://github.com/jaywcjlove/awesome-swift-macos-apps/pull/76) | From merge until seven days after merge |
 | 2026-07-18 | Repository + website | Published a 16-second captioned replay from a real Project Aurora task record: explicit goal, registered PPTX/DOCX artifacts, and independent review | Compare repository visits, sample opens, release downloads, and qualified discussion over seven days |
 | 2026-07-18 | GitHub Discussions | Added the replay as a focused proof update in [Discussion #12](https://github.com/RoyZhao1991/LingShu/discussions/12#discussioncomment-17679576), linking directly to the website's deliverables section | Seven days; do not repost the same update elsewhere without adapting it to that audience |
+| 2026-07-18 | `awesome-mac` AI Tools | Submitted a concise, factual LingShu listing in English, Chinese, Japanese, and Korean through [PR #2355](https://github.com/jaywcjlove/awesome-mac/pull/2355) | Track review/merge time; after merge, compare GitHub referrers, site visits, release downloads, and outside feedback for seven days |
 
-Do not submit another directory-listing pull request until the first one is reviewed or seven days have elapsed. The next independent channel is the technical founder narrative, not another near-identical catalog entry.
+Do not submit another general-purpose directory pull request until PR #76 and PR #2355 are reviewed or seven days have elapsed. E2B is a separate agent-product submission surface, and Show HN is the next community launch; neither should reuse the directory wording verbatim.
