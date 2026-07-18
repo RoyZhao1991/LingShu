@@ -32,9 +32,9 @@
 </div>
 
 <p align="center">
-  <img src="./Docs/media/lingshu-overview.jpg" width="1120" alt="LingShu turning a software goal into an implemented, tested, independently verified macOS release">
+  <a href="./Docs/media/lingshu-task-replay.mp4"><img src="./Docs/media/lingshu-task-replay.gif" width="1120" alt="Recorded LingShu task replay: a brief becomes a GoalSpec, editable PPTX and DOCX artifacts, and an independently checked result"></a>
 </p>
-<p align="center"><sub>Real LingShu interface with isolated demo content. No user history, credentials, or private files are included.</sub></p>
+<p align="center"><sub>16-second replay assembled from a real Project Aurora task record and its real deliverables. Captions were added; steps and outputs were not fabricated. This is a replay, not a continuous real-time recording.</sub></p>
 
 > [!IMPORTANT]
 > LingShu is an alpha-stage project under active development. It can operate local files and apps after explicit macOS authorization. Review requested permissions and keep backups of important work.

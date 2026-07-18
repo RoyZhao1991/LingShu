@@ -5,8 +5,7 @@ on:
     branches: [main]
     paths:
       - "site/**"
-      - "Docs/media/lingshu-overview.jpg"
-      - "Docs/media/lingshu-social-preview.png"
+      - "Docs/media/**"
       - "lingshu-icon-preview.png"
       - "Scripts/build-pages.sh"
       - ".github/workflows/pages.yml"

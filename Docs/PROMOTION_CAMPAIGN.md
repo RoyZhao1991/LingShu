@@ -139,5 +139,6 @@ The durable growth loop is: **clear category → inspectable proof → successfu
 | --- | --- | --- | --- |
 | 2026-07-18 | GitHub Discussions | Published the canonical bilingual alpha announcement in [Discussion #12](https://github.com/RoyZhao1991/LingShu/discussions/12) | Seven days |
 | 2026-07-18 | Curated macOS directory | Submitted a bilingual AI-category listing to [`awesome-swift-macos-apps` PR #76](https://github.com/jaywcjlove/awesome-swift-macos-apps/pull/76) | From merge until seven days after merge |
+| 2026-07-18 | Repository + website | Published a 16-second captioned replay from a real Project Aurora task record: explicit goal, registered PPTX/DOCX artifacts, and independent review | Compare repository visits, sample opens, release downloads, and qualified discussion over seven days |
 
 Do not submit another directory-listing pull request until the first one is reviewed or seven days have elapsed. The next independent channel is the technical founder narrative, not another near-identical catalog entry.

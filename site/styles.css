@@ -715,8 +715,12 @@ html[lang="zh-CN"] .copy-zh {
   margin: 0;
 }
 
-.product-figure img {
+.product-figure img,
+.product-figure video {
+  display: block;
   width: 100%;
+  aspect-ratio: 16 / 9;
+  object-fit: cover;
   border: 1px solid #344642;
   border-radius: var(--radius);
   box-shadow: 0 28px 70px rgba(0, 0, 0, 0.42);

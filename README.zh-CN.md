@@ -32,9 +32,9 @@
 </div>
 
 <p align="center">
-  <img src="./Docs/media/lingshu-overview.jpg" width="1120" alt="灵枢把软件目标推进为已实现、已测试并经过独立验收的 macOS 发布产物">
+  <a href="./Docs/media/lingshu-task-replay.mp4"><img src="./Docs/media/lingshu-task-replay.gif" width="1120" alt="灵枢真实任务回放：从需求到 GoalSpec、可编辑 PPTX 与 DOCX 产物，再到独立验收"></a>
 </p>
-<p align="center"><sub>真实灵枢界面，使用隔离的演示数据；不包含用户历史、凭据或私有文件。</sub></p>
+<p align="center"><sub>16 秒回放由真实 Project Aurora 任务记录和真实产物组成；仅增加字幕，没有伪造步骤或结果。它是任务回放，不是连续实时录屏。</sub></p>
 
 > [!IMPORTANT]
 > 灵枢仍处于 Alpha 阶段并在快速迭代。它会在获得明确的 macOS 授权后操作本地文件与应用。请确认权限范围，并为重要工作保留备份。
