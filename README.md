@@ -225,6 +225,8 @@ API credentials are stored in macOS Keychain, remain local runtime configuration
 
 LingShu requests macOS permissions only when a capability needs them. Computer control can require Accessibility and Screen Recording; voice and visual perception can require Microphone, Speech Recognition, and Camera access.
 
+If a first-run permission prompt is unclear or a capability still fails after you grant access, see [First-run macOS permission troubleshooting](./Docs/FIRST_RUN_PERMISSION_TROUBLESHOOTING.md).
+
 - Sensory streams are processed in memory by LingShu and are not archived by default.
 - Content sent to a configured remote model or perception provider leaves the Mac and is governed by that provider's retention and privacy terms.
 - Model credentials are stored in macOS Keychain; secrets are redacted from task traces where supported.

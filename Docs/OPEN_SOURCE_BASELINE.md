@@ -221,3 +221,30 @@ Measure both editorial actions for seven days using replies, a verifiable public
 The GitHub repository now serves the versioned [`Docs/media/lingshu-social-preview.png`](./media/lingshu-social-preview.png) as its custom social preview. The public `og:image` was fetched independently after upload and is an exact SHA-256 match for the repository asset: a 1280×640, 157,500-byte PNG. This improves link recognition and consistency across social and chat clients without introducing user tracking.
 
 This is a conversion improvement, not an exposure claim. Measure it for seven days through aggregate GitHub referrers, unique visitors, release downloads, explicit first-run reports, outside Issues, and outside pull requests. Console.dev remains in editorial review, Developers Digest has not replied, and the `awesome-mac` maintainer's public X post remains the only verified external amplification at this checkpoint.
+
+## 2026-07-19 — First-Run Permission Friction Reduction
+
+| Signal | Checkpoint |
+| --- | ---: |
+| Stars | 5 |
+| Forks | 1 |
+| Watchers | 0 |
+| Open public issues | 9 |
+| GitHub views in available window | 1 total / 1 unique |
+| GitHub clones in available window | 96 total / 38 unique |
+| Latest release | `v0.1.0-alpha.6` prerelease |
+| `v0.1.0-alpha.6` DMG downloads | 4 |
+| `v0.1.0-alpha.6` checksum downloads | 2 |
+| Latest CI | Passing |
+| GitHub Pages | Deployed; status endpoint currently reports `null` |
+| Privacy-safe first-run reports | 0 |
+
+The repository now has a single English permission troubleshooting page linked from both READMEs: [`Docs/FIRST_RUN_PERMISSION_TROUBLESHOOTING.md`](./FIRST_RUN_PERMISSION_TROUBLESHOOTING.md). This is a small conversion fix, not a growth claim. It should reduce setup friction for Accessibility, Screen Recording, Microphone, Speech Recognition, and Camera prompts without changing the app's capability boundaries.
+
+Treat the current GitHub traffic, downloads, and stars as a mixed signal set rather than adoption. The most important next evidence remains an outside first-run report, a reproducible issue, or a real contribution.
+
+## 2026-07-19 — Swift/Apple Developer Editorial Submission
+
+LingShu was submitted through the official [iOS Dev Weekly Suggest a Link form](https://suggest.iosdevweekly.com/) for direct editorial consideration. The submission linked the public repository and described the project as an Apache-2.0, native Swift macOS execution agent in the Codex / Claude Code category: model-agnostic and BYOK, with transparent task threads, human approval, computer use, editable PPTX/DOCX/PDF/code delivery, a reproducible Project Aurora sample, and a signed and notarized Alpha. It also disclosed the current macOS-only and Alpha-stage limits.
+
+The form returned an explicit `Thank you!` confirmation. This verifies delivery to the editorial suggestion channel, not selection, publication, readership, or adoption. Measure the action for seven days through a verifiable editorial response or feature, attributable GitHub referrer, release downloads, privacy-safe first-run reports, outside Issues, and outside pull requests. Do not submit the same link again while it is under consideration.
