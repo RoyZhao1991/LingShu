@@ -59,7 +59,7 @@ extension LingShuEngineeringArtifactService {
     }
 
     private func writePPTX(slides: [PresentationSlide], to pptxURL: URL) -> Bool {
-        let packageURL = FileManager.default.temporaryDirectory
+        let packageURL = LingShuRuntimeEnvironment.temporaryDirectory
             .appendingPathComponent("lingshu-pptx-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: packageURL) }
         try? FileManager.default.removeItem(at: pptxURL)

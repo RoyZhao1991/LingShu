@@ -54,7 +54,7 @@ enum LingShuPluginPermissionChecker {
     }
 
     private static func expandTilde(_ s: String) -> String {
-        s.hasPrefix("~") ? FileManager.default.homeDirectoryForCurrentUser.path + s.dropFirst().description : s
+        s.hasPrefix("~") ? LingShuRuntimeEnvironment.homeDirectory.path + s.dropFirst().description : s
     }
 
     /// 简易 glob → 正则:`**` 匹配任意(含 /),`*` 匹配除 / 外任意;其余字符转义。

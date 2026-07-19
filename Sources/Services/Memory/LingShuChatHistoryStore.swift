@@ -53,8 +53,7 @@ final class LingShuChatHistoryStore: @unchecked Sendable {
     }
 
     static func defaultStorageDirectory() -> URL {
-        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-            ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support")
+        let base = LingShuRuntimeEnvironment.applicationSupportDirectory()
         return base.appendingPathComponent("LingShu/History", isDirectory: true)
     }
 

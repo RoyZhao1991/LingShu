@@ -60,6 +60,9 @@ struct LingShuInitialLanguageSelectionView: View {
             .padding(.horizontal, 48)
         }
         .frame(minWidth: 900, minHeight: 640)
+        .onAppear {
+            LingShuCleanUserSmokeProbe.recordLanguageSelectionPresented()
+        }
     }
 
     private func languageButton(

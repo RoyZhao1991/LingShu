@@ -23,7 +23,7 @@ final class LingShuResourceRegistry: @unchecked Sendable {
     private var entries: [LingShuResourceEntry]
 
     init(baseDir: URL? = nil) {
-        let dir = baseDir ?? FileManager.default.homeDirectoryForCurrentUser
+        let dir = baseDir ?? LingShuRuntimeEnvironment.homeDirectory
             .appendingPathComponent("Library/Application Support/LingShu/Resources", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         self.baseDir = dir

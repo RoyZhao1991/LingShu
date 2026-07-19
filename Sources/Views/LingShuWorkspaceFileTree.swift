@@ -13,7 +13,7 @@ struct LingShuWorkspaceFileTree: View {
         if let loc = record.artifacts.first?.location.trimmingCharacters(in: .whitespaces), !loc.isEmpty {
             return URL(fileURLWithPath: loc).deletingLastPathComponent()
         }
-        return FileManager.default.homeDirectoryForCurrentUser
+        return LingShuRuntimeEnvironment.homeDirectory
     }
 
     var body: some View {

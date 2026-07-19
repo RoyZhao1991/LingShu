@@ -119,12 +119,12 @@ final class VoiceIOManager: ObservableObject {
     @Published var voiceLanguage: LingShuVoiceLanguage = VoiceIOManager.persistedVoiceLanguage {
         didSet {
             guard voiceLanguage != oldValue else { return }
-            UserDefaults.standard.set(voiceLanguage.rawValue, forKey: LingShuLanguagePreferenceStore.languageKey)
+            LingShuRuntimeEnvironment.preferences.set(voiceLanguage.rawValue, forKey: LingShuLanguagePreferenceStore.languageKey)
             speechRecognizer = SFSpeechRecognizer(locale: Locale(identifier: voiceLanguage.asrLocale))
         }
     }
     static var persistedVoiceLanguage: LingShuVoiceLanguage {
-        LingShuVoiceLanguage(rawValue: UserDefaults.standard.string(forKey: LingShuLanguagePreferenceStore.languageKey) ?? "zh") ?? .chinese
+        LingShuVoiceLanguage(rawValue: LingShuRuntimeEnvironment.preferences.string(forKey: LingShuLanguagePreferenceStore.languageKey) ?? "zh") ?? .chinese
     }
     // 识别器随语言可重建(不再 let):初始 locale 取持久化语言。
     private var speechRecognizer = SFSpeechRecognizer(locale: Locale(identifier: VoiceIOManager.persistedVoiceLanguage.asrLocale))

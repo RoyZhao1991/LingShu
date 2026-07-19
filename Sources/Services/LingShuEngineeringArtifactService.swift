@@ -118,7 +118,7 @@ struct LingShuEngineeringArtifactService {
 
     private func artifactRoot(workingDirectory: String) -> URL {
         let base = workingDirectory.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            ? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("app", isDirectory: true)
+            ? LingShuRuntimeEnvironment.homeDirectory.appendingPathComponent("app", isDirectory: true)
             : URL(fileURLWithPath: workingDirectory, isDirectory: true)
         let projectRoot = base.appendingPathComponent("LingShuMac", isDirectory: true)
         let root = (FileManager.default.fileExists(atPath: projectRoot.path) ? projectRoot : base)

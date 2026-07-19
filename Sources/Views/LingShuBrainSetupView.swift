@@ -29,6 +29,7 @@ struct LingShuBrainSetupView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(Color.lingVoid)
         .onAppear {
+            LingShuCleanUserSmokeProbe.recordBrainSetupPresented()
             if state.modelProvider == "Anthropic Claude" {
                 route = .claude
                 selectedModel = LingShuBrainSetupRoute.claude.defaultModel

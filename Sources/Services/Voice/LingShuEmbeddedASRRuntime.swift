@@ -83,12 +83,11 @@ enum LingShuEmbeddedASRRuntimeLocator {
             roots.append(resourceURL.appendingPathComponent("Models/sensevoice-sherpa-onnx", isDirectory: true))
         }
 
-        if let applicationSupport = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first {
-            let lingShuSupport = applicationSupport.appendingPathComponent("LingShu", isDirectory: true)
-            roots.append(lingShuSupport.appendingPathComponent("Models/SenseVoice", isDirectory: true))
-            roots.append(lingShuSupport.appendingPathComponent("Models/sensevoice-sherpa-onnx", isDirectory: true))
-            roots.append(lingShuSupport.appendingPathComponent("ASR/SenseVoice", isDirectory: true))
-        }
+        let applicationSupport = LingShuRuntimeEnvironment.applicationSupportDirectory(using: fileManager)
+        let lingShuSupport = applicationSupport.appendingPathComponent("LingShu", isDirectory: true)
+        roots.append(lingShuSupport.appendingPathComponent("Models/SenseVoice", isDirectory: true))
+        roots.append(lingShuSupport.appendingPathComponent("Models/sensevoice-sherpa-onnx", isDirectory: true))
+        roots.append(lingShuSupport.appendingPathComponent("ASR/SenseVoice", isDirectory: true))
 
         let sourceRoot = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()

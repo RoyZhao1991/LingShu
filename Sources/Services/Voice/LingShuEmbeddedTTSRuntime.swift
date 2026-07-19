@@ -85,12 +85,11 @@ enum LingShuEmbeddedTTSRuntimeLocator {
             roots.append(resourceURL.appendingPathComponent("Models/sherpa-onnx-tts", isDirectory: true))
         }
 
-        if let applicationSupport = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first {
-            let lingShuSupport = applicationSupport.appendingPathComponent("LingShu", isDirectory: true)
-            roots.append(lingShuSupport.appendingPathComponent("Models/SpeechOutput", isDirectory: true))
-            roots.append(lingShuSupport.appendingPathComponent("Models/sherpa-onnx-tts", isDirectory: true))
-            roots.append(lingShuSupport.appendingPathComponent("TTS/SherpaONNX", isDirectory: true))
-        }
+        let applicationSupport = LingShuRuntimeEnvironment.applicationSupportDirectory(using: fileManager)
+        let lingShuSupport = applicationSupport.appendingPathComponent("LingShu", isDirectory: true)
+        roots.append(lingShuSupport.appendingPathComponent("Models/SpeechOutput", isDirectory: true))
+        roots.append(lingShuSupport.appendingPathComponent("Models/sherpa-onnx-tts", isDirectory: true))
+        roots.append(lingShuSupport.appendingPathComponent("TTS/SherpaONNX", isDirectory: true))
 
         let sourceRoot = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()

@@ -69,7 +69,7 @@ extension LingShuState {
     }
 
     func restoreUnreadTaskThreadRecordIDs() {
-        let stored = Set(UserDefaults.standard.stringArray(
+        let stored = Set(LingShuRuntimeEnvironment.preferences.stringArray(
             forKey: LingShuTaskThreadActivityStorage.unreadRecordIDsKey
         ) ?? [])
         let known = Set(taskExecutionRecordLookup.map(\.id))
@@ -78,7 +78,7 @@ extension LingShuState {
     }
 
     private func persistUnreadTaskThreadRecordIDs() {
-        UserDefaults.standard.set(
+        LingShuRuntimeEnvironment.preferences.set(
             unreadTaskThreadRecordIDs.sorted(),
             forKey: LingShuTaskThreadActivityStorage.unreadRecordIDsKey
         )

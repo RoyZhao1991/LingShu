@@ -106,6 +106,7 @@ struct LingShuRootView: View {
             }
         }
         .onAppear {
+            guard LingShuRuntimeEnvironment.allowsPermissionServices else { return }
             state.livePerceptionContextProvider = { [weak perceptionGateway] in
                 guard let perceptionGateway, perceptionGateway.hasLiveSignals else { return "" }
                 return perceptionGateway.promptContext
@@ -166,9 +167,11 @@ struct LingShuRootView: View {
             }
         }
         .onChange(of: state.apiKey) { _, _ in
+            guard LingShuRuntimeEnvironment.allowsPermissionServices else { return }
             perceptionGateway.registerCloudPerceptionRoute(client: state.cloudPerceptionClient)
         }
         .onChange(of: state.modelProvider) { _, _ in
+            guard LingShuRuntimeEnvironment.allowsPermissionServices else { return }
             perceptionGateway.registerCloudPerceptionRoute(client: state.cloudPerceptionClient)
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in

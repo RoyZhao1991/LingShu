@@ -29,7 +29,7 @@ enum LingShuStructuredGoalSpecCapability {
         endpoint: String,
         protocolName: String,
         format: LingShuModelGatewayRequestFormat,
-        defaults: UserDefaults = .standard,
+        defaults: UserDefaults = LingShuRuntimeEnvironment.preferences,
         now: Date = Date()
     ) -> Bool {
         switch format {
@@ -53,7 +53,7 @@ enum LingShuStructuredGoalSpecCapability {
         model: String,
         endpoint: String,
         protocolName: String,
-        defaults: UserDefaults = .standard,
+        defaults: UserDefaults = LingShuRuntimeEnvironment.preferences,
         now: Date = Date()
     ) -> Bool {
         let key = capabilityKey(provider: provider, model: model, endpoint: endpoint, protocolName: protocolName)
@@ -72,7 +72,7 @@ enum LingShuStructuredGoalSpecCapability {
         model: String,
         endpoint: String,
         protocolName: String,
-        defaults: UserDefaults = .standard,
+        defaults: UserDefaults = LingShuRuntimeEnvironment.preferences,
         now: Date = Date()
     ) {
         var entries = unsupportedEntries(defaults: defaults)

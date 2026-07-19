@@ -576,7 +576,7 @@ final class LingShuTaskExecutionJournal: @unchecked Sendable {
     private var cachedArchivedRecords: [LingShuTaskExecutionRecord]?
 
     init(
-        defaults: UserDefaults = .standard,
+        defaults: UserDefaults = LingShuRuntimeEnvironment.preferences,
         storageKey: String = "lingshu.task-execution.records",
         archiveStorageKey: String = "lingshu.task-execution.records.archive",
         maxRecords: Int = 300,

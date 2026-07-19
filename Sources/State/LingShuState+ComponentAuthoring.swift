@@ -264,7 +264,7 @@ extension LingShuState {
     /// P3 沙箱里把 runner 物化到临时目录、用 test_input 真跑一遍(confined,绝不在工作目录/不带宽松权限)。
     /// 返回是否通过 + 输出。通过 = 进程零退出有输出(且若指定 expected 子串则命中)。
     private func sandboxTestRunner(spec: LingShuComponentAuthoring.Spec, permissions: LingShuPluginPermissions) async -> (passed: Bool, output: String) {
-        let dir = FileManager.default.temporaryDirectory
+        let dir = LingShuRuntimeEnvironment.temporaryDirectory
             .appendingPathComponent("lingshu-component-test-\(UUID().uuidString.prefix(8))", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: dir) }

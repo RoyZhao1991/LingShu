@@ -16,7 +16,7 @@ private enum LingShuPreferenceKeys {
 
 private enum LingShuPreferenceDefaults {
     static func bool(forKey key: String, defaultValue: Bool) -> Bool {
-        let defaults = UserDefaults.standard
+        let defaults = LingShuRuntimeEnvironment.preferences
         guard defaults.object(forKey: key) != nil else { return defaultValue }
         return defaults.bool(forKey: key)
     }
@@ -87,7 +87,7 @@ final class LingShuState: ObservableObject {
     @Published var language: LingShuVoiceLanguage = VoiceIOManager.persistedVoiceLanguage {
         didSet {
             guard language != oldValue else { return }
-            UserDefaults.standard.set(language.rawValue, forKey: LingShuLanguagePreferenceStore.languageKey)
+            LingShuRuntimeEnvironment.preferences.set(language.rawValue, forKey: LingShuLanguagePreferenceStore.languageKey)
             voiceManager?.voiceLanguage = language
             // 外接设备蓝牙广播名随语言切换(中文「灵枢」/ 英文「Nous」)。
             externalSensory.setBluetoothLocalName(appName)
@@ -117,14 +117,14 @@ final class LingShuState: ObservableObject {
     }
     @Published var supervisionTick = 0
     // 模型选择持久化(写进配置,跨重启保留所选大脑——灵枢可灵活更换大模型,选了 DeepSeek 重启后仍是 DeepSeek)。
-    @Published var modelProvider = UserDefaults.standard.string(forKey: LingShuPreferenceKeys.modelProvider) ?? ModelProviderPreset.minimaxOfficial.name {
-        didSet { UserDefaults.standard.set(modelProvider, forKey: LingShuPreferenceKeys.modelProvider) }
+    @Published var modelProvider = LingShuRuntimeEnvironment.preferences.string(forKey: LingShuPreferenceKeys.modelProvider) ?? ModelProviderPreset.minimaxOfficial.name {
+        didSet { LingShuRuntimeEnvironment.preferences.set(modelProvider, forKey: LingShuPreferenceKeys.modelProvider) }
     }
-    @Published var modelName = UserDefaults.standard.string(forKey: LingShuPreferenceKeys.modelName) ?? ModelProviderPreset.minimaxOfficial.defaultModels[0] {
-        didSet { UserDefaults.standard.set(modelName, forKey: LingShuPreferenceKeys.modelName) }
+    @Published var modelName = LingShuRuntimeEnvironment.preferences.string(forKey: LingShuPreferenceKeys.modelName) ?? ModelProviderPreset.minimaxOfficial.defaultModels[0] {
+        didSet { LingShuRuntimeEnvironment.preferences.set(modelName, forKey: LingShuPreferenceKeys.modelName) }
     }
-    @Published var endpoint = UserDefaults.standard.string(forKey: LingShuPreferenceKeys.modelEndpoint) ?? ModelProviderPreset.minimaxOfficial.endpoint {
-        didSet { UserDefaults.standard.set(endpoint, forKey: LingShuPreferenceKeys.modelEndpoint) }
+    @Published var endpoint = LingShuRuntimeEnvironment.preferences.string(forKey: LingShuPreferenceKeys.modelEndpoint) ?? ModelProviderPreset.minimaxOfficial.endpoint {
+        didSet { LingShuRuntimeEnvironment.preferences.set(endpoint, forKey: LingShuPreferenceKeys.modelEndpoint) }
     }
     /// **实际在用的脑(地面真相,2026-06-29)**:最近一次真实模型请求**实际**用的 provider/model + 时间。
     /// 与"选中的通道"(modelProvider/modelName)分开显示——会话快照滞后/选择漂移时,这条才是此刻真在干活的脑。
@@ -142,24 +142,23 @@ final class LingShuState: ObservableObject {
     /// 用户可在 UI 改;改了持久化跨重启。任务里写了字面目录/绝对路径的,照样按它来(这只是"没说时"的默认值)。
     static let defaultWorkspaceDirectory: String = {
         let fm = FileManager.default
-        let base = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-            ?? fm.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support")
+        let base = LingShuRuntimeEnvironment.applicationSupportDirectory(using: fm)
         let ws = base.appendingPathComponent("LingShu/Workspace", isDirectory: true)
         try? fm.createDirectory(at: ws, withIntermediateDirectories: true)
         return ws.path
     }()
-    @Published var agentWorkingDirectory = UserDefaults.standard.string(forKey: LingShuPreferenceKeys.agentWorkingDirectory) ?? LingShuState.defaultWorkspaceDirectory {
-        didSet { UserDefaults.standard.set(agentWorkingDirectory, forKey: LingShuPreferenceKeys.agentWorkingDirectory) }
+    @Published var agentWorkingDirectory = LingShuRuntimeEnvironment.preferences.string(forKey: LingShuPreferenceKeys.agentWorkingDirectory) ?? LingShuState.defaultWorkspaceDirectory {
+        didSet { LingShuRuntimeEnvironment.preferences.set(agentWorkingDirectory, forKey: LingShuPreferenceKeys.agentWorkingDirectory) }
     }
     /// 本轮临时工作目录覆盖:用户明确说"在目录 X 写/生成/保存"时生效。
     /// 常驻主会话的工具不能在创建时把目录拍死,而要在工具真正执行时读这个值。
     /// 回合结束会恢复旧值;没有明确目录时回落到 `agentWorkingDirectory`。
     var currentAgentWorkingDirectoryOverride: String?
-    @Published var executionPermissionMode: LingShuExecutionPermissionMode = UserDefaults.standard
+    @Published var executionPermissionMode: LingShuExecutionPermissionMode = LingShuRuntimeEnvironment.preferences
         .string(forKey: LingShuPreferenceKeys.executionPermissionMode)
         .flatMap(LingShuExecutionPermissionMode.init(rawValue:)) ?? .sandbox {
         didSet {
-            UserDefaults.standard.set(executionPermissionMode.rawValue, forKey: LingShuPreferenceKeys.executionPermissionMode)
+            LingShuRuntimeEnvironment.preferences.set(executionPermissionMode.rawValue, forKey: LingShuPreferenceKeys.executionPermissionMode)
             sessionShellAlwaysAllowed = executionPermissionMode == .fullAccess
         }
     }
@@ -178,14 +177,14 @@ final class LingShuState: ObservableObject {
     /// 本机有兜底方案的能力（耳/口）给用户一个显式开关，确认到底走不走本机，而不是悄悄自动降级。
     @Published var asrLocalModeEnabled = LingShuPreferenceDefaults.bool(forKey: LingShuPreferenceKeys.asrLocalMode, defaultValue: true) {
         didSet {
-            UserDefaults.standard.set(asrLocalModeEnabled, forKey: LingShuPreferenceKeys.asrLocalMode)
+            LingShuRuntimeEnvironment.preferences.set(asrLocalModeEnabled, forKey: LingShuPreferenceKeys.asrLocalMode)
             applyASRLocalMode()
         }
     }
     /// 语音口·本地模式：开=强制 macOS 系统语音；关=偏好数据网关情绪语音（不可用时仍兜底本机）。
     @Published var ttsLocalModeEnabled = LingShuPreferenceDefaults.bool(forKey: LingShuPreferenceKeys.ttsLocalMode, defaultValue: false) {
         didSet {
-            UserDefaults.standard.set(ttsLocalModeEnabled, forKey: LingShuPreferenceKeys.ttsLocalMode)
+            LingShuRuntimeEnvironment.preferences.set(ttsLocalModeEnabled, forKey: LingShuPreferenceKeys.ttsLocalMode)
             applyTTSLocalMode()
         }
     }
@@ -194,12 +193,12 @@ final class LingShuState: ObservableObject {
         defaultValue: true
     ) {
         didSet {
-            UserDefaults.standard.set(requiresVoiceWakeWord, forKey: LingShuPreferenceKeys.requiresVoiceWakeWord)
+            LingShuRuntimeEnvironment.preferences.set(requiresVoiceWakeWord, forKey: LingShuPreferenceKeys.requiresVoiceWakeWord)
         }
     }
-    @Published var voiceWakeWord = UserDefaults.standard.string(forKey: LingShuPreferenceKeys.voiceWakeWord) ?? "灵枢" {
+    @Published var voiceWakeWord = LingShuRuntimeEnvironment.preferences.string(forKey: LingShuPreferenceKeys.voiceWakeWord) ?? "灵枢" {
         didSet {
-            UserDefaults.standard.set(voiceWakeWord, forKey: LingShuPreferenceKeys.voiceWakeWord)
+            LingShuRuntimeEnvironment.preferences.set(voiceWakeWord, forKey: LingShuPreferenceKeys.voiceWakeWord)
         }
     }
     @Published var isVoiceConversationActive = false
@@ -226,9 +225,9 @@ final class LingShuState: ObservableObject {
     @Published var developmentPhaseFullAccess: Bool = LingShuState.loadDevFullAccessDefault()
     // 计算机直接操作四肢(截屏/点击/键入)总开关:默认关,授权语义=用户显式开启 + 系统辅助功能授权(计划 §9)。
     // 独立运行「完整授权」档自动视为开启(完整电脑控制)。
-    @Published var computerControlEnabled = UserDefaults.standard.bool(forKey: "lingshu.computerControlEnabled") {
+    @Published var computerControlEnabled = LingShuRuntimeEnvironment.preferences.bool(forKey: "lingshu.computerControlEnabled") {
         didSet {
-            UserDefaults.standard.set(computerControlEnabled, forKey: "lingshu.computerControlEnabled")
+            LingShuRuntimeEnvironment.preferences.set(computerControlEnabled, forKey: "lingshu.computerControlEnabled")
             // 打开开关即向系统申请权限(辅助功能 + 屏幕录制),立刻弹系统授权框——不等首次动作。
             if computerControlEnabled, !oldValue { requestComputerControlPermissions() }
         }
@@ -333,7 +332,7 @@ final class LingShuState: ObservableObject {
     /// 常驻主 agent 会话(对话连续性);懒构造,见 LingShuState+AgentBackbone。
     /// 核心循环变体开关(新旧循环热切换):`.classic`=经典连续循环 / `.nested`=嵌套分阶段验收循环。
     /// 持久化到 UserDefaults(跨重启保留所选引擎);经 `setAgentLoopVariant` 切换(默认常量/MCP 调试口)。
-    var agentLoopVariant: LingShuAgentLoopVariant = UserDefaults.standard.string(forKey: "lingshu.agentLoopVariant").flatMap(LingShuAgentLoopVariant.init(rawValue:)) ?? .classic
+    var agentLoopVariant: LingShuAgentLoopVariant = LingShuRuntimeEnvironment.preferences.string(forKey: "lingshu.agentLoopVariant").flatMap(LingShuAgentLoopVariant.init(rawValue:)) ?? .classic
     // 附件入脑不再用手动开关(2026-06-28 用户定调:能自动判多模态脑就不需要开关)。自动按脑能力判——
     // 多模态脑→显式附件原图直发,否则 VL→文字。逻辑见 LingShuState+DirectMultimodal.swift;态势感知一律强制 VL(perceptionVLTask),不在此列。
     /// 一次性缓冲:submitTextWithAttachments 算好的"直发大脑"图片/PDF data URL,由下一次 runMainAgentTurn 消费挂到该回合。
@@ -407,7 +406,7 @@ final class LingShuState: ObservableObject {
     /// **自我进化(P6)总开关**:默认**关闭**(自进化属高风险能力,需主人显式开启 + 风险确认)。
     /// 关 → 不挖反复弱点/不提改进提案/不采纳,零行为;开 → P6 自检弱点并提**待批**提案(采纳仍逐条人批、可一键回退)。
     /// 持久化 `lingshu.selfEvolution`。改 via `setSelfEvolutionEnabled`。见 [[pluggable-self-evolution-m0-m1]][[skill-self-evolution]]。
-    @Published var selfEvolutionEnabled: Bool = (UserDefaults.standard.object(forKey: "lingshu.selfEvolution") as? Bool ?? false)
+    @Published var selfEvolutionEnabled: Bool = (LingShuRuntimeEnvironment.preferences.object(forKey: "lingshu.selfEvolution") as? Bool ?? false)
     /// 某条**派发的隔离任务**正卡在 ask_user 等用户回答(它问了主题/要信息):上下文感知分诊把它标成
     /// "⏳正等你回答",让分诊器认出用户的答复(哪怕隔了几条)并续到那条隔离会话。见 buildTriageContext。
     var blockedDispatchedRecordID: String?
@@ -475,27 +474,26 @@ final class LingShuState: ObservableObject {
         didSet { LingShuState.saveChannelConfigs(channelConfigs) }
     }
     static func loadChannelConfigs() -> [String: ModelChannelConfig] {
-        guard let data = UserDefaults.standard.data(forKey: "lingshu.channelConfigs"),
+        guard let data = LingShuRuntimeEnvironment.preferences.data(forKey: "lingshu.channelConfigs"),
               let decoded = try? JSONDecoder().decode([String: ModelChannelConfig].self, from: data) else { return [:] }
         return decoded
     }
     static func saveChannelConfigs(_ v: [String: ModelChannelConfig]) {
-        if let data = try? JSONEncoder().encode(v) { UserDefaults.standard.set(data, forKey: "lingshu.channelConfigs") }
+        if let data = try? JSONEncoder().encode(v) { LingShuRuntimeEnvironment.preferences.set(data, forKey: "lingshu.channelConfigs") }
     }
 
     static func loadChannelValidations() -> [String: LingShuChannelValidation] {
-        guard let data = UserDefaults.standard.data(forKey: "lingshu.channelValidations"),
+        guard let data = LingShuRuntimeEnvironment.preferences.data(forKey: "lingshu.channelValidations"),
               let decoded = try? JSONDecoder().decode([String: LingShuChannelValidation].self, from: data) else { return [:] }
         return decoded
     }
     static func saveChannelValidations(_ v: [String: LingShuChannelValidation]) {
-        if let data = try? JSONEncoder().encode(v) { UserDefaults.standard.set(data, forKey: "lingshu.channelValidations") }
+        if let data = try? JSONEncoder().encode(v) { LingShuRuntimeEnvironment.preferences.set(data, forKey: "lingshu.channelValidations") }
     }
 
     /// 增量记忆落盘目录(Application Support/LingShu/memory)。
     static var memoryStoreDirectory: URL {
-        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-            ?? URL(fileURLWithPath: NSTemporaryDirectory())
+        let base = LingShuRuntimeEnvironment.applicationSupportDirectory()
         return base.appendingPathComponent("LingShu/memory", isDirectory: true)
     }
     /// 上次 dreaming 离线固化时间(节流,见 LingShuState+Dreaming);nil=本次会话还没固化过。
@@ -524,8 +522,8 @@ final class LingShuState: ObservableObject {
     var batchInterruptRequested = false
     // 周期感知循环(模块2):常驻灵枢在岗时定时感知屏幕+系统声音 → 注入/唤醒。详见 LingShuState+AutonomousPerception。
     /// 自主反应「武装」开关:开 = 环境事件(如有人开始说话)可唤醒大脑自主处理;关 = 只保持感知 digest 新鲜,不擅自行动(安全默认)。
-    @Published var autonomousAutoReactArmed = UserDefaults.standard.bool(forKey: "lingshu.autoReactArmed") {
-        didSet { UserDefaults.standard.set(autonomousAutoReactArmed, forKey: "lingshu.autoReactArmed") }
+    @Published var autonomousAutoReactArmed = LingShuRuntimeEnvironment.preferences.bool(forKey: "lingshu.autoReactArmed") {
+        didSet { LingShuRuntimeEnvironment.preferences.set(autonomousAutoReactArmed, forKey: "lingshu.autoReactArmed") }
     }
     /// 最新一份周期感知态势(屏幕一句话描述 + 音频活动),供接管态遮罩显示、命令前置注入。
     /// 仅由 LingShuState+AutonomousPerception 写入(跨文件扩展,故不能用 private(set))。
@@ -771,7 +769,7 @@ final class LingShuState: ObservableObject {
             rolePipelineOrphans.append(rec)
         }
         if !rolePipelineOrphans.isEmpty { resumeOrphanedRolePipelinesOnLaunch(rolePipelineOrphans) }
-        taskRecordFeedback = (UserDefaults.standard.dictionary(forKey: "lingshu.taskFeedback") as? [String: Bool]) ?? [:]
+        taskRecordFeedback = (LingShuRuntimeEnvironment.preferences.dictionary(forKey: "lingshu.taskFeedback") as? [String: Bool]) ?? [:]
         archivedTaskExecutionRecords = taskExecutionJournal.loadArchivedRecords()
         restoreUnreadTaskThreadRecordIDs()
         let repairedExperience = reconcileExperienceArtifactsFromRecords()

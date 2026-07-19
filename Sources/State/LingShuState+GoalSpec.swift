@@ -6,12 +6,12 @@ extension LingShuState {
     /// 目标认知开关:**默认开(发布态亦然=完整可用)**;配置入口 `setGoalSpecEnabled` / MCP `lingshu_set_goalspec` 可关。
     /// 关 → 零行为/零成本变更(不发那次解析模型调用、不注入引导/成功标准/不沉淀经验)。状态见 `lingshu_status.goalSpecEnabled`。
     var goalSpecEnabled: Bool {
-        UserDefaults.standard.object(forKey: "lingshu.goalSpec") as? Bool ?? true
+        LingShuRuntimeEnvironment.preferences.object(forKey: "lingshu.goalSpec") as? Bool ?? true
     }
 
     /// 配置入口:开/关目标认知(持久化 UserDefaults,跨重启)。供 MCP `lingshu_set_goalspec` / 设置 UI 调用。
     func setGoalSpecEnabled(_ on: Bool) {
-        UserDefaults.standard.set(on, forKey: "lingshu.goalSpec")
+        LingShuRuntimeEnvironment.preferences.set(on, forKey: "lingshu.goalSpec")
         appendTrace(kind: .system, actor: "目标认知", title: on ? "已开启" : "已关闭",
                     detail: on ? "每个新顶层目标先结构化理解(GoalSpec)→ 注入执行引导/验收成功标准/沉淀经验。"
                                : "已关闭:零成本零行为变更。")

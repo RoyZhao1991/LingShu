@@ -19,7 +19,7 @@ struct LingShuWorkspaceTerminalView: View {
     }
 
     private var promptString: String {
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let home = LingShuRuntimeEnvironment.homeDirectory.path
         let p = cwd.path.hasPrefix(home) ? "~" + cwd.path.dropFirst(home.count) : cwd.path
         return p + " %"
     }

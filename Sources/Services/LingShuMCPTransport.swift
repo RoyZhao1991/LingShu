@@ -21,7 +21,7 @@ extension LingShuMCPTransport {
     func shutdown() async {}
     /// 是否持久复用连接(默认开;`lingshu.mcpPersistent=false` 切回每次新连)。
     static var persistentByDefault: Bool {
-        (UserDefaults.standard.object(forKey: "lingshu.mcpPersistent") as? Bool) ?? true
+        (LingShuRuntimeEnvironment.preferences.object(forKey: "lingshu.mcpPersistent") as? Bool) ?? true
     }
     /// 标准 initialize 帧(transport 握手用)。
     static func initializeFrames() -> [[String: Any]] {

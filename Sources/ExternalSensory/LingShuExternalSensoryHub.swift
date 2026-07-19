@@ -101,8 +101,8 @@ final class LingShuExternalSensoryHub: ObservableObject {
 
     /// 应用持久化的偏好（启动时调一次）：主开关 + 上次启用的源。
     func restorePersistedPreferences() {
-        guard UserDefaults.standard.bool(forKey: masterDefaultsKey) else { return }
-        let saved = Set(UserDefaults.standard.stringArray(forKey: enabledDefaultsKey) ?? [])
+        guard LingShuRuntimeEnvironment.preferences.bool(forKey: masterDefaultsKey) else { return }
+        let saved = Set(LingShuRuntimeEnvironment.preferences.stringArray(forKey: enabledDefaultsKey) ?? [])
         setMasterEnabled(true)
         for id in saved where sources[id] != nil { enableSource(id) }
     }
@@ -110,7 +110,7 @@ final class LingShuExternalSensoryHub: ObservableObject {
     func setMasterEnabled(_ enabled: Bool) {
         guard enabled != masterEnabled else { return }
         masterEnabled = enabled
-        UserDefaults.standard.set(enabled, forKey: masterDefaultsKey)
+        LingShuRuntimeEnvironment.preferences.set(enabled, forKey: masterDefaultsKey)
         if !enabled {
             for id in enabledSourceIDs { stopConsumer(id) }
             enabledSourceIDs.removeAll()
@@ -173,7 +173,7 @@ final class LingShuExternalSensoryHub: ObservableObject {
     }
 
     private func persistEnabled() {
-        UserDefaults.standard.set(Array(enabledSourceIDs), forKey: enabledDefaultsKey)
+        LingShuRuntimeEnvironment.preferences.set(Array(enabledSourceIDs), forKey: enabledDefaultsKey)
     }
 
     // MARK: - 汇聚

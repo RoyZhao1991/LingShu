@@ -345,7 +345,7 @@ extension VoiceIOManager {
             throw LingShuVoiceError.embeddedRuntimeUnavailable(status.diagnosticSummary)
         }
 
-        let outputURL = FileManager.default.temporaryDirectory
+        let outputURL = LingShuRuntimeEnvironment.temporaryDirectory
             .appendingPathComponent("lingshu-tts-\(UUID().uuidString)", isDirectory: false)
             .appendingPathExtension("wav")
         let arguments = try LingShuEmbeddedTTSRuntimeLocator.processArguments(

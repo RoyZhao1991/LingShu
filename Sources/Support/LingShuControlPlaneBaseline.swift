@@ -47,7 +47,7 @@ enum LingShuControlPlaneBaseline {
     /// 开关文件不存在时仅一次 `fileExists` 检查即返回,不写任何东西(生产默认关)。不依赖 `#if DEBUG`
     /// (SwiftPM debug 构建默认不定义 DEBUG,会把整段编译掉)。
     nonisolated static func baselineLog(_ line: String) {
-        let dir = FileManager.default.homeDirectoryForCurrentUser
+        let dir = LingShuRuntimeEnvironment.homeDirectory
             .appendingPathComponent("Library/Application Support/LingShu", isDirectory: true)
         let sentinel = dir.appendingPathComponent(".baseline-log-enabled")
         guard FileManager.default.fileExists(atPath: sentinel.path) else { return }

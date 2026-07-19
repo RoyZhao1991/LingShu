@@ -180,7 +180,7 @@ extension LingShuState {
         var perms = permissions
         perms.fileWrite.append(workingDirectory)   // 让 skill 生成器把产出写进工作目录(否则 deny-default 会挡住)
         let profile = LingShuPluginSandbox.profile(for: perms)
-        let profileURL = URL(fileURLWithPath: NSTemporaryDirectory())
+        let profileURL = URL(fileURLWithPath: LingShuRuntimeEnvironment.temporaryDirectoryPath)
             .appendingPathComponent("lingshu-sbx-\(UUID().uuidString.prefix(8)).sb")
         guard (try? profile.write(to: profileURL, atomically: true, encoding: .utf8)) != nil else { return nil }
         let esc = command.replacingOccurrences(of: "'", with: "'\\''")   // 标准单引号转义
@@ -202,7 +202,7 @@ extension LingShuState {
     /// `~/Library/Application Support/LingShu/backups/<时间>_<文件名>.bak`,返回备份路径(失败返 nil)。
     /// 不阻塞执行,纯为可回滚兜底。纯函数(只碰文件系统),可单测。
     nonisolated static func backupOverwrittenFile(path: String, oldContent: String) -> String? {
-        let dir = FileManager.default.homeDirectoryForCurrentUser
+        let dir = LingShuRuntimeEnvironment.homeDirectory
             .appendingPathComponent("Library/Application Support/LingShu/backups", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let stamp = DateFormatter()

@@ -7,7 +7,7 @@ enum LingShuWorkspaceReviewGit {
 
     /// 把补丁反向应用(回退其代表的改动)。成功=退出码 0。`--recount` 容忍行号小偏差。
     static func applyReverse(patch: String, dir: String) -> Bool {
-        let tmp = NSTemporaryDirectory() + "lsrev-\(UUID().uuidString).patch"
+        let tmp = LingShuRuntimeEnvironment.temporaryDirectoryPath + "lsrev-\(UUID().uuidString).patch"
         guard (try? patch.write(toFile: tmp, atomically: true, encoding: .utf8)) != nil else { return false }
         defer { try? FileManager.default.removeItem(atPath: tmp) }
         return run(["-C", dir, "apply", "--reverse", "--recount", tmp]).code == 0

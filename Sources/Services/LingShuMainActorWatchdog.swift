@@ -122,7 +122,7 @@ final class LingShuMainActorWatchdog: @unchecked Sendable {
     private struct RestartState { var count: Int; var at: Date?; var lastMission: String?; var consumed: Bool }
 
     private static var stateURL: URL {
-        let dir = FileManager.default.homeDirectoryForCurrentUser
+        let dir = LingShuRuntimeEnvironment.homeDirectory
             .appendingPathComponent("Library/Application Support/LingShu", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir.appendingPathComponent("watchdog-restart.json")

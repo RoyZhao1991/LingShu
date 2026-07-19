@@ -11,8 +11,8 @@ extension LingShuState {
 
     /// 用户 opt-in 的索引目录(consent at folder level)。
     var localKnowledgeFolders: [String] {
-        get { (UserDefaults.standard.array(forKey: Self.foldersKey) as? [String]) ?? [] }
-        set { UserDefaults.standard.set(Array(Set(newValue)).sorted(), forKey: Self.foldersKey) }
+        get { (LingShuRuntimeEnvironment.preferences.array(forKey: Self.foldersKey) as? [String]) ?? [] }
+        set { LingShuRuntimeEnvironment.preferences.set(Array(Set(newValue)).sorted(), forKey: Self.foldersKey) }
     }
 
     func addLocalKnowledgeFolder(_ path: String) {

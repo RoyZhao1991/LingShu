@@ -95,8 +95,7 @@ final class LingShuLocalTextEmbedding: @unchecked Sendable {
 /// 检索是混合式的：FTS5（中文按字 bigram 切词）与句向量余弦各自排序，
 /// 倒数排名融合（RRF）后输出，谁可用用谁，互为兜底。
 final class LingShuSemanticMemoryStore: @unchecked Sendable {
-    static let defaultDirectory = FileManager.default
-        .homeDirectoryForCurrentUser
+    static let defaultDirectory = LingShuRuntimeEnvironment.homeDirectory
         .appendingPathComponent("Library/Application Support/LingShu/Memory", isDirectory: true)
 
     private let queue = DispatchQueue(label: "lingshu.semantic-memory")

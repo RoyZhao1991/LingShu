@@ -26,7 +26,7 @@ enum LingShuEmbodimentManifest {
 
     /// 是否对外暴露具身工具(默认开;`lingshu.exposeEmbodiment` 可关)。
     static var isEnabled: Bool {
-        (UserDefaults.standard.object(forKey: "lingshu.exposeEmbodiment") as? Bool) ?? true
+        (LingShuRuntimeEnvironment.preferences.object(forKey: "lingshu.exposeEmbodiment") as? Bool) ?? true
     }
 
     /// 从全量 agent 工具里过滤出可对外暴露的具身工具(纯逻辑)。关则空。

@@ -154,12 +154,12 @@ extension LingShuState {
         if list.count > 8 { list = Array(list.prefix(8)) }
         store[p] = list
         if let data = try? JSONSerialization.data(withJSONObject: store) {
-            UserDefaults.standard.set(data, forKey: "lingshu.model.recentByProvider")
+            LingShuRuntimeEnvironment.preferences.set(data, forKey: "lingshu.model.recentByProvider")
         }
     }
 
     private func recentBrainModelStore() -> [String: [String]] {
-        guard let data = UserDefaults.standard.data(forKey: "lingshu.model.recentByProvider"),
+        guard let data = LingShuRuntimeEnvironment.preferences.data(forKey: "lingshu.model.recentByProvider"),
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: [String]] else { return [:] }
         return obj
     }

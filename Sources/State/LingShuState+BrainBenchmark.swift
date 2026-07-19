@@ -14,7 +14,7 @@ extension LingShuState {
         isRunningBrainBenchmark = true
         appendTrace(kind: .system, actor: "脑力测试", title: "开始", detail: "共 \(LingShuBrainBenchmark.items.count) 题(当前脑 \(currentBrainID))")
         // 长链编码题在隔离 benchDir 里写代码(临时把工作目录指过去,让 write_file/run_command 都落这);跑完恢复+清理。
-        let benchDir = NSTemporaryDirectory() + "lingshu-brainbench-" + UUID().uuidString.prefix(8)
+        let benchDir = LingShuRuntimeEnvironment.temporaryDirectoryPath + "lingshu-brainbench-" + UUID().uuidString.prefix(8)
         try? FileManager.default.createDirectory(atPath: benchDir, withIntermediateDirectories: true)
         let savedWorkdir = agentWorkingDirectory
         agentWorkingDirectory = benchDir
@@ -104,12 +104,12 @@ extension LingShuState {
         brainBenchmarkHistory.append(snap)
         brainBenchmarkHistory.sort { $0.score > $1.score }   // 高分在前,差距一目了然
         if let data = try? JSONEncoder().encode(brainBenchmarkHistory) {
-            UserDefaults.standard.set(data, forKey: Self.benchHistoryKey)
+            LingShuRuntimeEnvironment.preferences.set(data, forKey: Self.benchHistoryKey)
         }
     }
 
     nonisolated static func loadBenchmarkHistory() -> [LingShuBrainBenchmarkSnapshot] {
-        guard let data = UserDefaults.standard.data(forKey: benchHistoryKey),
+        guard let data = LingShuRuntimeEnvironment.preferences.data(forKey: benchHistoryKey),
               let h = try? JSONDecoder().decode([LingShuBrainBenchmarkSnapshot].self, from: data) else { return [] }
         return h
     }

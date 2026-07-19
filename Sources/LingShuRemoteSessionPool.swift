@@ -154,7 +154,7 @@ final class LingShuRemoteSessionPool {
     private var records: [LingShuRemoteSessionRecord]
 
     init(
-        defaults: UserDefaults = .standard,
+        defaults: UserDefaults = LingShuRuntimeEnvironment.preferences,
         storageKey: String = "lingshu.remote-session.pool.records",
         maxHotSessions: Int = 12,
         warmTTL: TimeInterval = 30 * 60,

@@ -240,7 +240,7 @@ final class LingShuPreviewController: ObservableObject {
     private nonisolated static func convertToPDF(_ path: String) async -> String? {
         let soffice = "/Applications/LibreOffice.app/Contents/MacOS/soffice"
         guard FileManager.default.isExecutableFile(atPath: soffice) else { return nil }
-        let outDir = NSTemporaryDirectory() + "lingshu-preview-\(UUID().uuidString.prefix(8))"
+        let outDir = LingShuRuntimeEnvironment.temporaryDirectoryPath + "lingshu-preview-\(UUID().uuidString.prefix(8))"
         try? FileManager.default.createDirectory(atPath: outDir, withIntermediateDirectories: true)
         let profile = "file://\(outDir)/profile"
         _ = await LingShuState.runCapturing(soffice, ["-env:UserInstallation=\(profile)", "--headless", "--convert-to", "pdf", "--outdir", outDir, path], timeout: 90)

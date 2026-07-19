@@ -25,7 +25,7 @@ extension LingShuState {
     /// 兼容旧入口:当前不支持多脑端点配置,调用时清理旧配置并保持当前主脑。
     func setBrainTierModel(_ tier: LingShuBrainTier, provider: String, model: String, endpoint: String, apiKey: String) {
         _ = tier; _ = provider; _ = model; _ = endpoint; _ = apiKey
-        UserDefaults.standard.removeObject(forKey: Self.brainTiersKey)
+        LingShuRuntimeEnvironment.preferences.removeObject(forKey: Self.brainTiersKey)
         appendTrace(kind: .system, actor: "主脑", title: "单主脑模式", detail: "已忽略多端点配置,继续使用当前启用主脑。")
     }
 

@@ -63,7 +63,7 @@ final class LingShuMainThreadKernel {
     private var lastReportedHeartbeatAt: Date
 
     init(
-        defaults: UserDefaults = .standard,
+        defaults: UserDefaults = LingShuRuntimeEnvironment.preferences,
         snapshotKey: String = "lingshu.main-thread.kernel.snapshot",
         heartbeatInterval: TimeInterval = 20,
         now: Date = Date()

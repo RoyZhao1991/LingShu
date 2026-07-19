@@ -13,6 +13,7 @@ final class LingShuCredentialStore: @unchecked Sendable {
     private let service: String
     private let fileURL: URL
     private let usesKeychain: Bool
+    private let isEphemeral: Bool
     private let lock = NSLock()
     private var cache: [String: String] = [:]
     private var keychainReadsAvailable = true
@@ -42,14 +43,18 @@ final class LingShuCredentialStore: @unchecked Sendable {
     init(
         service: String = "cn.lingshu.model-credentials",
         directory: URL? = nil,
-        useKeychain: Bool? = nil
+        useKeychain: Bool? = nil,
+        ephemeral: Bool? = nil
     ) {
+        let isEphemeral = ephemeral ?? LingShuRuntimeEnvironment.isCleanUserSmoke
         self.service = service
-        self.usesKeychain = useKeychain ?? (directory == nil)
-        let base = directory ?? FileManager.default.homeDirectoryForCurrentUser
+        self.isEphemeral = isEphemeral
+        self.usesKeychain = !isEphemeral && (useKeychain ?? (directory == nil))
+        let base = directory ?? LingShuRuntimeEnvironment.homeDirectory
             .appendingPathComponent("Library/Application Support/LingShu/Credentials", isDirectory: true)
-        try? FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
         self.fileURL = base.appendingPathComponent("credentials.json")
+        guard !isEphemeral else { return }
+        try? FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
         if usesKeychain {
             cache = readAllFromKeychain()
             migrateLegacyFileIfNeeded()
@@ -72,7 +77,8 @@ final class LingShuCredentialStore: @unchecked Sendable {
             cache[providerID] = stored
             return stored
         }
-        if let env = ProcessInfo.processInfo.environment[Self.environmentKey(forProvider: providerID)],
+        if !isEphemeral,
+           let env = ProcessInfo.processInfo.environment[Self.environmentKey(forProvider: providerID)],
            !env.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             let trimmed = env.trimmingCharacters(in: .whitespacesAndNewlines)
             cache[providerID] = trimmed
@@ -88,6 +94,10 @@ final class LingShuCredentialStore: @unchecked Sendable {
         defer { lock.unlock() }
 
         let trimmed = key.trimmingCharacters(in: .whitespacesAndNewlines)
+        if isEphemeral {
+            cache[providerID] = trimmed
+            return true
+        }
         if usesKeychain {
             let stored = trimmed.isEmpty
                 ? deleteFromKeychain(account: providerID)
@@ -124,12 +134,14 @@ final class LingShuCredentialStore: @unchecked Sendable {
         for (id, value) in entries {
             let v = value.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !v.isEmpty else { continue }
-            if !usesKeychain || writeToKeychain(account: id, value: v) {
+            if isEphemeral || !usesKeychain || writeToKeychain(account: id, value: v) {
                 cache[id] = v
             }
         }
-        if !usesKeychain { persist() }
+        if !usesKeychain, !isEphemeral { persist() }
     }
+
+    var usesEphemeralBackend: Bool { isEphemeral }
 
     static func environmentKey(forProvider providerID: String) -> String {
         "LINGSHU_TOKEN_" + providerID.uppercased().replacingOccurrences(of: "-", with: "_")

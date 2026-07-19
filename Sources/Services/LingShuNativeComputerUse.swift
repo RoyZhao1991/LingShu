@@ -649,7 +649,7 @@ final class LingShuNativeComputerUseRuntime {
             return (id, rect.width * rect.height)
         }
         guard let windowID = candidates.max(by: { $0.area < $1.area })?.id else { return nil }
-        let path = NSTemporaryDirectory() + "lingshu-app-\(pid)-\(UUID().uuidString.prefix(6)).png"
+        let path = LingShuRuntimeEnvironment.temporaryDirectoryPath + "lingshu-app-\(pid)-\(UUID().uuidString.prefix(6)).png"
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
         process.arguments = ["-x", "-t", "png", "-l", String(windowID), path]

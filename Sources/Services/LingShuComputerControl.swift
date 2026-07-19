@@ -42,7 +42,7 @@ enum LingShuComputerControl {
 
     /// 截屏到临时 PNG,返回路径(失败 nil)。`-x` 静音、`-t png`。需屏幕录制授权。
     static func captureScreen() -> String? {
-        let path = NSTemporaryDirectory() + "lingshu-screen-\(Int(Date().timeIntervalSince1970)).png"
+        let path = LingShuRuntimeEnvironment.temporaryDirectoryPath + "lingshu-screen-\(Int(Date().timeIntervalSince1970)).png"
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
         proc.arguments = ["-x", "-t", "png", path]

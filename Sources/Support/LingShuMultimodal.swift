@@ -24,7 +24,7 @@ enum LingShuMultimodal {
         model: String,
         endpoint: String,
         protocolName: String,
-        defaults: UserDefaults = .standard
+        defaults: UserDefaults = LingShuRuntimeEnvironment.preferences
     ) -> Bool {
         guard !isMarkedNativeMultimodalUnsupported(
             provider: provider,
@@ -56,7 +56,7 @@ enum LingShuMultimodal {
         model: String,
         endpoint: String,
         protocolName: String,
-        defaults: UserDefaults = .standard
+        defaults: UserDefaults = LingShuRuntimeEnvironment.preferences
     ) -> Bool {
         unsupportedKeys(defaults: defaults).contains(capabilityKey(
             provider: provider,
@@ -71,7 +71,7 @@ enum LingShuMultimodal {
         model: String,
         endpoint: String,
         protocolName: String,
-        defaults: UserDefaults = .standard
+        defaults: UserDefaults = LingShuRuntimeEnvironment.preferences
     ) {
         var keys = unsupportedKeys(defaults: defaults)
         keys.insert(capabilityKey(provider: provider, model: model, endpoint: endpoint, protocolName: protocolName))
@@ -83,7 +83,7 @@ enum LingShuMultimodal {
         model: String,
         endpoint: String,
         protocolName: String,
-        defaults: UserDefaults = .standard
+        defaults: UserDefaults = LingShuRuntimeEnvironment.preferences
     ) {
         var keys = unsupportedKeys(defaults: defaults)
         keys.remove(capabilityKey(provider: provider, model: model, endpoint: endpoint, protocolName: protocolName))

@@ -9,7 +9,7 @@ enum LingShuLanguagePreferenceStore {
         .english: "I am here. Tell me the goal, and I will handle the judgment, delegation, and follow-through."
     ]
 
-    static func hasCompletedInitialSelection(in defaults: UserDefaults = .standard) -> Bool {
+    static func hasCompletedInitialSelection(in defaults: UserDefaults = LingShuRuntimeEnvironment.preferences) -> Bool {
         if defaults.object(forKey: initialSelectionKey) != nil {
             return defaults.bool(forKey: initialSelectionKey)
         }
@@ -21,7 +21,7 @@ enum LingShuLanguagePreferenceStore {
 
     static func completeInitialSelection(
         _ language: LingShuVoiceLanguage,
-        in defaults: UserDefaults = .standard
+        in defaults: UserDefaults = LingShuRuntimeEnvironment.preferences
     ) {
         defaults.set(language.rawValue, forKey: languageKey)
         defaults.set(true, forKey: initialSelectionKey)
@@ -30,12 +30,12 @@ enum LingShuLanguagePreferenceStore {
     static func localized(
         _ chinese: String,
         _ english: String,
-        in defaults: UserDefaults = .standard
+        in defaults: UserDefaults = LingShuRuntimeEnvironment.preferences
     ) -> String {
         currentLanguage(in: defaults) == .english ? english : chinese
     }
 
-    static func currentLanguage(in defaults: UserDefaults = .standard) -> LingShuVoiceLanguage {
+    static func currentLanguage(in defaults: UserDefaults = LingShuRuntimeEnvironment.preferences) -> LingShuVoiceLanguage {
         LingShuVoiceLanguage(
             rawValue: defaults.string(forKey: languageKey) ?? LingShuVoiceLanguage.chinese.rawValue
         ) ?? .chinese
@@ -57,7 +57,7 @@ enum LingShuLanguagePreferenceStore {
     /// rule here makes language selection a protocol concern instead of a model-specific
     /// prompt convention, so newly added compatible providers inherit it automatically.
     static func highestPriorityModelInstruction(
-        in defaults: UserDefaults = .standard
+        in defaults: UserDefaults = LingShuRuntimeEnvironment.preferences
     ) -> String {
         highestPriorityModelInstruction(for: currentLanguage(in: defaults))
     }
@@ -76,7 +76,7 @@ enum LingShuLanguagePreferenceStore {
     /// older contradictory instruction in a reused system prompt.
     static func modelPrompt(
         applyingHighestPriorityLanguageTo prompt: String,
-        in defaults: UserDefaults = .standard
+        in defaults: UserDefaults = LingShuRuntimeEnvironment.preferences
     ) -> String {
         let instruction = highestPriorityModelInstruction(in: defaults)
         var cleaned = prompt

@@ -60,10 +60,9 @@ extension LingShuState {
     /// `~/Library/Application Support/LingShu/SentAttachments`;已是持久路径的(用户上传/拖入的原文件)**原样返回**(不复制)。
     /// 纯文件系统操作,不挑场景。返回稳定可预览的绝对路径(复制失败则回退原路径)。
     nonisolated static func persistedSentAttachmentPath(_ url: URL) -> String {
-        let tmp = FileManager.default.temporaryDirectory.path
+        let tmp = LingShuRuntimeEnvironment.temporaryDirectory.path
         guard url.path.hasPrefix(tmp) else { return url.path }   // 已持久(原文件)→ 直接用,不复制
-        guard let base = try? FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask,
-                                                      appropriateFor: nil, create: true) else { return url.path }
+        let base = LingShuRuntimeEnvironment.applicationSupportDirectory()
         let dir = base.appendingPathComponent("LingShu/SentAttachments", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let dest = dir.appendingPathComponent(url.lastPathComponent)
@@ -81,7 +80,7 @@ extension LingShuState {
         }
         lastPastedImageFingerprint = (fingerprint, Date())
         let stamp = Int(Date().timeIntervalSince1970)
-        let tempURL = FileManager.default.temporaryDirectory
+        let tempURL = LingShuRuntimeEnvironment.temporaryDirectory
             .appendingPathComponent("粘贴图片-\(stamp)-\(UUID().uuidString.prefix(6)).png")
         guard (try? data.write(to: tempURL)) != nil else { return }
         ingestAttachment(at: tempURL)

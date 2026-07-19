@@ -4,7 +4,7 @@ import Combine
 
 final class LingShuAppDelegate: NSObject, NSApplicationDelegate {
     override init() {
-        UserDefaults.standard.set(true, forKey: "ApplePersistenceIgnoreState")
+        LingShuRuntimeEnvironment.preferences.set(true, forKey: "ApplePersistenceIgnoreState")
         Self.removeSavedApplicationState()
         super.init()
     }
@@ -36,8 +36,7 @@ final class LingShuAppDelegate: NSObject, NSApplicationDelegate {
 
     private static func removeSavedApplicationState() {
         guard let bundleID = Bundle.main.bundleIdentifier else { return }
-        let savedStateURL = FileManager.default
-            .homeDirectoryForCurrentUser
+        let savedStateURL = LingShuRuntimeEnvironment.homeDirectory
             .appendingPathComponent("Library/Saved Application State/\(bundleID).savedState")
         try? FileManager.default.removeItem(at: savedStateURL)
     }
@@ -151,8 +150,12 @@ struct LingShuMacApp: App {
                 vision: vision,
                 perceptionGateway: perceptionGateway
             )
+            .task {
+                await LingShuCleanUserSmokeCoordinator.runIfRequested(state: state)
+            }
             .task(id: state.hasCompletedInitialLanguageSelection) {
                 guard state.hasCompletedInitialLanguageSelection else { return }
+                guard LingShuRuntimeEnvironment.allowsBackgroundServices else { return }
                 // 启动本机回环 MCP 控制服务(幂等),让外部测试/MCP 客户端可驱动灵枢内部动作。
                 LingShuControlServer.shared.start(state: state)
                 // 主线程卡死看门狗:独立后台探测 MainActor,卡死自动重启续作(不挂 MainActor,否则自身也被卡)。

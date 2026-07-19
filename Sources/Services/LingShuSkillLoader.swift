@@ -4,8 +4,7 @@ import Foundation
 /// 带 frontmatter（id/title/mission/triggers）+ 正文小节（专业要点/交付物模板/评审清单）。
 /// 内置专家是出厂能力，用户技能是可插拔扩展——对应 ROADMAP 的"能力节点插件化"。
 enum LingShuSkillLoader {
-    static let defaultDirectory = FileManager.default
-        .homeDirectoryForCurrentUser
+    static let defaultDirectory = LingShuRuntimeEnvironment.homeDirectory
         .appendingPathComponent("Library/Application Support/LingShu/Skills", isDirectory: true)
 
     /// 加载目录下全部技能文件，解析成专家档案（带触发词）。

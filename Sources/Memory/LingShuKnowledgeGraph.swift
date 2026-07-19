@@ -6,8 +6,7 @@ import Foundation
 final class LingShuKnowledgeGraph {
     /// 默认库目录:~/Library/Application Support/LingShu/Memory/vault(人/Obsidian 可直接打开)。
     static var defaultRoot: URL {
-        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-            ?? URL(fileURLWithPath: NSTemporaryDirectory())
+        let base = LingShuRuntimeEnvironment.applicationSupportDirectory()
         return base.appendingPathComponent("LingShu/Memory/vault", isDirectory: true)
     }
 

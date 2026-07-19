@@ -35,7 +35,7 @@ extension LingShuState {
     private static let moduleVariantsKey = "lingshu.module.variants"
 
     func moduleRegistry() -> LingShuModuleVariantRegistry {
-        guard let data = UserDefaults.standard.data(forKey: Self.moduleVariantsKey),
+        guard let data = LingShuRuntimeEnvironment.preferences.data(forKey: Self.moduleVariantsKey),
               let reg = try? JSONDecoder().decode(LingShuModuleVariantRegistry.self, from: data) else {
             return LingShuModuleVariantRegistry()
         }
@@ -43,7 +43,7 @@ extension LingShuState {
     }
 
     private func persistModuleRegistry(_ reg: LingShuModuleVariantRegistry) {
-        if let data = try? JSONEncoder().encode(reg) { UserDefaults.standard.set(data, forKey: Self.moduleVariantsKey) }
+        if let data = try? JSONEncoder().encode(reg) { LingShuRuntimeEnvironment.preferences.set(data, forKey: Self.moduleVariantsKey) }
     }
 
     /// 确保某槽位有基线变体(payload 多为""=不改行为),否则回退无处可去。返回基线变体 id。

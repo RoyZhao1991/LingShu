@@ -6,7 +6,7 @@ final class LingShuMemoryRepository {
     private let taskMemoryKey = "lingshu.task.memory.records"
     private let coldMemoryKey = "lingshu.cold.memory.records"
 
-    init(defaults: UserDefaults = .standard) {
+    init(defaults: UserDefaults = LingShuRuntimeEnvironment.preferences) {
         self.defaults = defaults
     }
 

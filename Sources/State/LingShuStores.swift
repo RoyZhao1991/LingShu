@@ -14,7 +14,7 @@ final class LingShuChatStore: ObservableObject {
 
     var onMessagesChanged: (([ChatMessage]) -> Void)?
 
-    init(defaults: UserDefaults = .standard) {
+    init(defaults: UserDefaults = LingShuRuntimeEnvironment.preferences) {
         let language = LingShuLanguagePreferenceStore.currentLanguage(in: defaults)
         messages = [
             .init(

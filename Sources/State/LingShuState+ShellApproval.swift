@@ -102,7 +102,7 @@ extension LingShuState {
 
     /// 开发阶段全权默认值:UserDefaults 显式覆盖优先,否则 DEBUG 构建开(开发期)、Release 关(发布后人工授权)。
     nonisolated static func loadDevFullAccessDefault() -> Bool {
-        if let v = UserDefaults.standard.object(forKey: "lingshu.devFullAccess") as? Bool { return v }
+        if let v = LingShuRuntimeEnvironment.preferences.object(forKey: "lingshu.devFullAccess") as? Bool { return v }
         #if DEBUG
         return true
         #else
@@ -113,7 +113,7 @@ extension LingShuState {
     /// 切换开发阶段全权(持久化)。发布上线前置 false 即恢复"每次人工授权"。
     func setDevelopmentPhaseFullAccess(_ on: Bool) {
         developmentPhaseFullAccess = on
-        UserDefaults.standard.set(on, forKey: "lingshu.devFullAccess")
+        LingShuRuntimeEnvironment.preferences.set(on, forKey: "lingshu.devFullAccess")
         logEvent(on ? "已开启开发阶段全权(系统授权门直接放行)" : "已关闭开发阶段全权(恢复人工授权)")
     }
 

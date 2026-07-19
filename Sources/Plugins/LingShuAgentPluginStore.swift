@@ -29,7 +29,7 @@ enum LingShuAgentPluginStore {
         return (path.contains("/") && path.contains(":")) ? path : nil   // 像个真 PATH 才用
     }()
 
-    static let directory = FileManager.default.homeDirectoryForCurrentUser
+    static let directory = LingShuRuntimeEnvironment.homeDirectory
         .appendingPathComponent("Library/Application Support/LingShu/AgentPlugins", isDirectory: true)
 
     /// 加载已注册的全部 agent 插件。

@@ -233,7 +233,7 @@ enum LingShuAgentCapabilityDiscovery {
         var env = ProcessInfo.processInfo.environment
         if let loginPATH = LingShuAgentPluginStore.loginShellPATH { env["PATH"] = loginPATH }
         proc.environment = env
-        proc.currentDirectoryURL = FileManager.default.homeDirectoryForCurrentUser
+        proc.currentDirectoryURL = LingShuRuntimeEnvironment.homeDirectory
         let outPipe = Pipe(); let errPipe = Pipe()
         proc.standardOutput = outPipe; proc.standardError = errPipe
         do { try proc.run() } catch { return nil }

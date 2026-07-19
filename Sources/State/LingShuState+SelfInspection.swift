@@ -162,7 +162,7 @@ extension LingShuState {
     func refreshAgentPluginAvailabilityForSelfInspection() async {
         let agents = LingShuAgentPluginStore.load()
         guard !agents.isEmpty else { return }
-        let wd = agentWorkingDirectory.isEmpty ? FileManager.default.homeDirectoryForCurrentUser.path : agentWorkingDirectory
+        let wd = agentWorkingDirectory.isEmpty ? LingShuRuntimeEnvironment.homeDirectory.path : agentWorkingDirectory
         await withTaskGroup(of: Void.self) { group in
             for agent in agents {
                 group.addTask {

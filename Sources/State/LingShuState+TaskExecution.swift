@@ -239,7 +239,7 @@ extension LingShuState {
     /// 不该被 `git init` 的**过宽/敏感目录**(会把整个家目录/系统目录纳入版本控制)。只拦这些目录本身,不拦其子目录(工程目录都在子目录里)。
     nonisolated static func isSafeToInitGit(_ dir: String) -> Bool {
         let path = (dir as NSString).standardizingPath
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let home = LingShuRuntimeEnvironment.homeDirectory.path
         var blocked: Set<String> = ["/", "/tmp", "/private", "/private/tmp", "/var", "/usr", "/etc", "/opt",
                                     "/Applications", "/Library", "/System", "/Users", home]
         for sub in ["Desktop", "Documents", "Downloads", "Movies", "Music", "Pictures", "Public"] {

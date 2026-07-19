@@ -19,10 +19,10 @@ enum LingShuBrowserHistorySource {
     static func chromeUnixTime(_ micros: Double) -> Double { micros / 1_000_000 - 11_644_473_600 }
 
     static var safariHistoryPath: String {
-        (NSHomeDirectory() as NSString).appendingPathComponent("Library/Safari/History.db")
+        (LingShuRuntimeEnvironment.homeDirectory.path as NSString).appendingPathComponent("Library/Safari/History.db")
     }
     static var chromeHistoryPath: String {
-        (NSHomeDirectory() as NSString).appendingPathComponent("Library/Application Support/Google/Chrome/Default/History")
+        (LingShuRuntimeEnvironment.homeDirectory.path as NSString).appendingPathComponent("Library/Application Support/Google/Chrome/Default/History")
     }
 
     static let pathPrefix = "history://"
@@ -68,7 +68,7 @@ enum LingShuBrowserHistorySource {
     /// 复制 db 到临时只读副本再查(纯读、避锁)。任何失败(不存在/无权限/格式)→ []。
     static func readRows(dbPath: String, sql: String) -> [[String: Any]] {
         guard FileManager.default.fileExists(atPath: dbPath) else { return [] }
-        let tmp = NSTemporaryDirectory() + "lk-hist-\(UUID().uuidString).sqlite"
+        let tmp = LingShuRuntimeEnvironment.temporaryDirectoryPath + "lk-hist-\(UUID().uuidString).sqlite"
         defer { try? FileManager.default.removeItem(atPath: tmp) }
         guard (try? FileManager.default.copyItem(atPath: dbPath, toPath: tmp)) != nil else { return [] }
 

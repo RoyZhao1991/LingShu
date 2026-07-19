@@ -34,7 +34,7 @@ extension LingShuState {
 
     private func setBrainScore(_ s: LingShuBrainScore) {
         brainScore = s
-        if let data = try? JSONEncoder().encode(s) { UserDefaults.standard.set(data, forKey: Self.brainScoreKey) }
+        if let data = try? JSONEncoder().encode(s) { LingShuRuntimeEnvironment.preferences.set(data, forKey: Self.brainScoreKey) }
     }
 
     /// 脑当前是否"已证明足够强"(脑力旋钮的判据):**优先用生产/真编码主导的测评分**(≥85),
@@ -55,7 +55,7 @@ extension LingShuState {
     }
 
     nonisolated static func loadBrainScore() -> LingShuBrainScore {
-        guard let data = UserDefaults.standard.data(forKey: brainScoreKey),
+        guard let data = LingShuRuntimeEnvironment.preferences.data(forKey: brainScoreKey),
               let s = try? JSONDecoder().decode(LingShuBrainScore.self, from: data) else {
             return LingShuBrainScore(brainID: "")
         }

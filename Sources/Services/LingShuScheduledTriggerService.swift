@@ -35,8 +35,7 @@ final class LingShuScheduledTriggerService: ObservableObject {
     private let storeURL: URL
 
     init(directory: URL? = nil) {
-        let base = directory ?? FileManager.default
-            .homeDirectoryForCurrentUser
+        let base = directory ?? LingShuRuntimeEnvironment.homeDirectory
             .appendingPathComponent("Library/Application Support/LingShu/Triggers", isDirectory: true)
         try? FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
         storeURL = base.appendingPathComponent("triggers.json")

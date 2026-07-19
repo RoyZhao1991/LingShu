@@ -46,7 +46,7 @@ enum LingShuPluginSandbox {
 
     private static func expand(_ path: String) -> String {
         path.hasPrefix("~")
-            ? FileManager.default.homeDirectoryForCurrentUser.path + path.dropFirst().description
+            ? LingShuRuntimeEnvironment.homeDirectory.path + path.dropFirst().description
             : path
     }
 }

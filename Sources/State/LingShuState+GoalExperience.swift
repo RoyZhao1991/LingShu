@@ -22,7 +22,7 @@ extension LingShuState {
 
     /// 持久化的目标经验库(跨重启;尾部截断,留最近 N 条)。
     func goalExperiences() -> [LingShuGoalExperience] {
-        guard let data = UserDefaults.standard.data(forKey: Self.goalExperiencesKey),
+        guard let data = LingShuRuntimeEnvironment.preferences.data(forKey: Self.goalExperiencesKey),
               let list = try? JSONDecoder().decode([LingShuGoalExperience].self, from: data) else { return [] }
         return list
     }
@@ -31,7 +31,7 @@ extension LingShuState {
         let retained = LingShuGoalExperienceMatch.retained(list)
         let capped = Array(retained.suffix(200))
         if let data = try? JSONEncoder().encode(capped) {
-            UserDefaults.standard.set(data, forKey: Self.goalExperiencesKey)
+            LingShuRuntimeEnvironment.preferences.set(data, forKey: Self.goalExperiencesKey)
         }
     }
 
@@ -51,7 +51,7 @@ extension LingShuState {
     }
 
     func clearGoalExperiences() {
-        UserDefaults.standard.removeObject(forKey: Self.goalExperiencesKey)
+        LingShuRuntimeEnvironment.preferences.removeObject(forKey: Self.goalExperiencesKey)
     }
 
     func memoryDashboardStats() -> LingShuMemoryDashboardStats {

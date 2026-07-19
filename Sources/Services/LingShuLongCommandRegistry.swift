@@ -105,8 +105,7 @@ final class LingShuLongCommandRegistry {
     }
 
     static func defaultLogDirectory() -> URL {
-        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-            ?? FileManager.default.temporaryDirectory
+        let base = LingShuRuntimeEnvironment.applicationSupportDirectory()
         return base.appendingPathComponent("LingShu/long-commands", isDirectory: true)
     }
 

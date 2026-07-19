@@ -30,14 +30,14 @@ extension LingShuState {
 
     /// 持久化的已获取能力(跨重启可复用)。
     func acquiredCapabilities() -> [LingShuCapabilityEntry] {
-        guard let data = UserDefaults.standard.data(forKey: Self.acquiredCapabilitiesKey),
+        guard let data = LingShuRuntimeEnvironment.preferences.data(forKey: Self.acquiredCapabilitiesKey),
               let list = try? JSONDecoder().decode([LingShuCapabilityEntry].self, from: data) else { return [] }
         return list
     }
 
     private func persistAcquiredCapabilities(_ list: [LingShuCapabilityEntry]) {
         if let data = try? JSONEncoder().encode(list) {
-            UserDefaults.standard.set(data, forKey: Self.acquiredCapabilitiesKey)
+            LingShuRuntimeEnvironment.preferences.set(data, forKey: Self.acquiredCapabilitiesKey)
         }
     }
 

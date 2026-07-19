@@ -131,8 +131,7 @@ enum LingShuShadowGit {
 
     /// 某工作目录对应的影子 git-dir 路径(按标准化绝对路径 SHA256 取稳定短哈希)。
     static func shadowDir(for dir: String) -> String? {
-        guard let base = try? FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask,
-                                                      appropriateFor: nil, create: true) else { return nil }
+        let base = LingShuRuntimeEnvironment.applicationSupportDirectory()
         let std = URL(fileURLWithPath: dir).standardizedFileURL.path
         let hash = SHA256.hash(data: Data(std.utf8)).map { String(format: "%02x", $0) }.joined().prefix(16)
         return base.appendingPathComponent("LingShu/ShadowGits/\(hash)").path

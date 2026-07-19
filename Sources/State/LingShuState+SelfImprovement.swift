@@ -14,7 +14,7 @@ extension LingShuState {
     func setSelfEvolutionEnabled(_ on: Bool) {
         guard selfEvolutionEnabled != on else { return }
         selfEvolutionEnabled = on
-        UserDefaults.standard.set(on, forKey: "lingshu.selfEvolution")
+        LingShuRuntimeEnvironment.preferences.set(on, forKey: "lingshu.selfEvolution")
         appendTrace(kind: on ? .warning : .system, actor: "自我进化",
                     title: on ? "已开启(高风险能力)" : "已关闭",
                     detail: on ? "灵枢将自检反复弱点并主动提改进提案;采纳仍需你逐条批准、每条可一键回退。"
@@ -22,14 +22,14 @@ extension LingShuState {
     }
 
     func improvementProposals() -> [LingShuImprovementProposal] {
-        guard let data = UserDefaults.standard.data(forKey: Self.improvementProposalsKey),
+        guard let data = LingShuRuntimeEnvironment.preferences.data(forKey: Self.improvementProposalsKey),
               let list = try? JSONDecoder().decode([LingShuImprovementProposal].self, from: data) else { return [] }
         return list
     }
 
     private func persistImprovementProposals(_ list: [LingShuImprovementProposal]) {
         if let data = try? JSONEncoder().encode(Array(list.suffix(100))) {
-            UserDefaults.standard.set(data, forKey: Self.improvementProposalsKey)
+            LingShuRuntimeEnvironment.preferences.set(data, forKey: Self.improvementProposalsKey)
         }
     }
 

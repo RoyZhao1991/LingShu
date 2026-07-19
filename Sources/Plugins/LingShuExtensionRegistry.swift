@@ -10,7 +10,7 @@ final class LingShuExtensionRegistry: ObservableObject {
     private let key = "lingshu.extensions.state"
 
     init() {
-        if let data = UserDefaults.standard.data(forKey: key),
+        if let data = LingShuRuntimeEnvironment.preferences.data(forKey: key),
            let decoded = try? JSONDecoder().decode(LingShuExtensionStateStore.self, from: data) {
             store = decoded
         } else {
@@ -55,6 +55,6 @@ final class LingShuExtensionRegistry: ObservableObject {
     }
 
     private func persist() {
-        if let data = try? JSONEncoder().encode(store) { UserDefaults.standard.set(data, forKey: key) }
+        if let data = try? JSONEncoder().encode(store) { LingShuRuntimeEnvironment.preferences.set(data, forKey: key) }
     }
 }

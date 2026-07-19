@@ -24,8 +24,7 @@ struct LingShuKnowledgeHit: Sendable, Equatable {
 }
 
 final class LingShuFileKnowledgeIndex: @unchecked Sendable {
-    static let defaultDirectory = FileManager.default
-        .homeDirectoryForCurrentUser
+    static let defaultDirectory = LingShuRuntimeEnvironment.homeDirectory
         .appendingPathComponent("Library/Application Support/LingShu/Knowledge", isDirectory: true)
 
     private let queue = DispatchQueue(label: "lingshu.file-knowledge")

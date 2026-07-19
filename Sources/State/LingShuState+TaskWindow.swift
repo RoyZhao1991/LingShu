@@ -275,7 +275,7 @@ extension LingShuState {
     /// 设置/清除任务反馈(👍true / 👎false / nil 清除)。持久化;👎 会让该任务不进 dreaming 固化样本。
     func setTaskFeedback(_ value: Bool?, recordID: String) {
         if let value { taskRecordFeedback[recordID] = value } else { taskRecordFeedback.removeValue(forKey: recordID) }
-        UserDefaults.standard.set(taskRecordFeedback, forKey: "lingshu.taskFeedback")
+        LingShuRuntimeEnvironment.preferences.set(taskRecordFeedback, forKey: "lingshu.taskFeedback")
         appendTrace(kind: .system, actor: "反馈",
                     title: value == true ? "赞" : (value == false ? "踩" : "清除反馈"),
                     detail: "任务 \(recordID) 反馈已记录(踩的输出不进自固化样本)。")

@@ -3,7 +3,7 @@ import Foundation
 @MainActor
 extension LingShuState {
     nonisolated static func loadWorldModelSnapshot() -> LingShuWorldModel {
-        guard let data = UserDefaults.standard.data(forKey: "lingshu.worldModel.snapshot"),
+        guard let data = LingShuRuntimeEnvironment.preferences.data(forKey: "lingshu.worldModel.snapshot"),
               let model = try? JSONDecoder().decode(LingShuWorldModel.self, from: data) else {
             return LingShuWorldModel()
         }
@@ -12,7 +12,7 @@ extension LingShuState {
 
     func persistWorldModelSnapshot() {
         if let data = try? JSONEncoder().encode(worldModel) {
-            UserDefaults.standard.set(data, forKey: "lingshu.worldModel.snapshot")
+            LingShuRuntimeEnvironment.preferences.set(data, forKey: "lingshu.worldModel.snapshot")
         }
     }
 

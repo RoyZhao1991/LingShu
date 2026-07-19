@@ -3,7 +3,7 @@ import Foundation
 /// 本机知识·**邮件源**(多源接入):遍历 ~/Library/Mail 下的 .emlx 邮件,抽 主题/发件人/正文摘要 → "那封关于X的邮件说了啥"能找回。
 /// 全本地读取、零上传;需系统「完全磁盘访问」才读得到 ~/Library/Mail。走统一增量管线(scan→ingest)。
 enum LingShuMailSource {
-    static var mailRoot: String { (NSHomeDirectory() as NSString).appendingPathComponent("Library/Mail") }
+    static var mailRoot: String { (LingShuRuntimeEnvironment.homeDirectory.path as NSString).appendingPathComponent("Library/Mail") }
     static let pathPrefix = "mail://"
     static func owns(_ path: String) -> Bool { path.hasPrefix(pathPrefix) }
 

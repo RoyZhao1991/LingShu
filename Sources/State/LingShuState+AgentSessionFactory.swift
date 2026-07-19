@@ -67,7 +67,7 @@ extension LingShuState {
     /// **保留并扩展脑力自适应**:`lingshu.toolCatalog=adaptive`(默认)下,仅强脑(lean 档)开延迟加载;
     /// 弱脑走全量(日常零回归)。可一键切 serial/classic/eager。
     func currentHarnessConfig() -> LingShuHarnessConfig {
-        let d = UserDefaults.standard
+        let d = LingShuRuntimeEnvironment.preferences
         let toolMode = d.string(forKey: "lingshu.toolCatalog") ?? "adaptive"
         let deferred: Bool
         switch toolMode {
@@ -170,7 +170,7 @@ extension LingShuState {
     func setAgentLoopVariant(_ variant: LingShuAgentLoopVariant) {
         guard agentLoopVariant != variant else { return }
         agentLoopVariant = variant
-        UserDefaults.standard.set(variant.rawValue, forKey: "lingshu.agentLoopVariant")
+        LingShuRuntimeEnvironment.preferences.set(variant.rawValue, forKey: "lingshu.agentLoopVariant")
         // 重建常驻会话(主/自主):下次回合用新引擎构造(经 seededDistilledMemory 续接记忆)。
         mainAgentSessionHolder = nil
         autonomousSessionHolder = nil

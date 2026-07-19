@@ -52,7 +52,7 @@ enum LingShuDesignKB {
 
     /// 可写 overlay 目录(app-support);dreaming 进化产物落这里,与随包只读种子分离。
     static func writableDirectoryURL() -> URL {
-        let dir = FileManager.default.homeDirectoryForCurrentUser
+        let dir = LingShuRuntimeEnvironment.homeDirectory
             .appendingPathComponent("Library/Application Support/LingShu/DesignKB", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir

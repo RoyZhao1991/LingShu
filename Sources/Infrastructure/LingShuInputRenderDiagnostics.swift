@@ -14,7 +14,7 @@ final class LingShuInputRenderDiagnostics: @unchecked Sendable {
     private init() {}
 
     private static var isEnabled: Bool {
-        let defaults = UserDefaults.standard
+        let defaults = LingShuRuntimeEnvironment.preferences
         guard defaults.object(forKey: "lingshu.debug.inputRender") != nil else { return false }
         return defaults.bool(forKey: "lingshu.debug.inputRender")
     }
