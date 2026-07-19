@@ -385,3 +385,26 @@ The first-run feedback path now follows the selected website language into separ
 Desktop and mobile browser checks verified the default English link, the Chinese link after language switching, the visible localized label, and the absence of horizontal overflow. This is a conversion-friction change, not new reach or evidence of adoption. For the next seven full days, measure successful, partial, and failed first-run reports, recurring setup blockers, reproducible Issues, and outside pull requests. Continue to treat downloads, clones, and Stars as repository signals rather than proof of successful use.
 
 The native app now exposes the same locale-matched report, GitHub Discussions, and source links through the standard macOS Help menu and the live Self-check page. These are passive, user-initiated routes rather than a completion popup or notification. The link contract has dedicated tests for both configured languages and the canonical repository paths. This brings the report path closer to an installed tester without introducing telemetry or claiming that opening a link equals a completed report.
+
+## 2026-07-19 — First Directory-to-Social Conversion Signal
+
+| Signal | Checkpoint |
+| --- | ---: |
+| Stars | 9 |
+| External stargazers | 8 |
+| Forks | 1 |
+| Watchers | 0 |
+| Open public issues | 7 |
+| GitHub views in available 14-day window | 58 total / 19 unique |
+| GitHub clones in available 14-day window | 312 total / 94 unique |
+| `v0.1.0-alpha.7` DMG requests | 2 |
+| Privacy-safe first-run reports | 0 |
+| Open LingShu pull requests | 0 |
+| Outside contribution intents | 1 |
+| Outside Draft pull requests | 0 |
+
+The ninth Star was added by an outside account after the `awesome-mac` merge and maintainer X share. GitHub reports `t.co` as 14 views from 10 unique visitors and `github.com` as 23 views from 4 unique visitors. The timing and aggregate referrer make the curated-list-to-social path the strongest current distribution signal, but they do not prove that a particular visit produced the Star or that any visitor installed or used the app.
+
+The Alpha 7 release still has only the two DMG requests already recorded, including the maintainer verification request, and no privacy-safe first-run report. Discovery is therefore improving faster than verified first value. Console.dev has acknowledged receipt into its editorial review queue; E2B PR #1271 and `awesome-ai-coding-tools` PR #553 remain open and mergeable without maintainer review; Chinese discovery Issue #348 remains open without a response. No duplicate reminder or resubmission is warranted yet.
+
+The outside contributor on Issue #8 has confirmed the bounded, offline, test-only fixture scope and intends to open a Draft PR. No pull request exists yet, so this remains intent. The public contribution guide now states the complete review, merge, authorship, recording, and thank-you contract that will govern that first contribution. Issue #2 was closed only after its five permission classes, optional-capability boundary, macOS 14+ recovery path, privacy boundary, and both README links were verified on current `main`.

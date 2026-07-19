@@ -37,6 +37,12 @@ Use dummy credentials in tests. Environment-dependent or paid-provider tests mus
 - Preserve existing permission, confirmation, redaction, and artifact-verification boundaries.
 - Avoid model-specific exceptions when a protocol- or capability-based solution is possible.
 
+### Review and Recognition
+
+Every outside pull request is reviewed before merge. The review covers scope, user-visible behavior, regressions, security and privacy boundaries, internationalization, documentation, and tests proportional to risk. A pull request is merged only after the required evidence and CI checks pass; activity alone is never a reason to merge incomplete work.
+
+When a contribution is merged, LingShu preserves the contributor's Git authorship, posts a specific public thank-you on the pull request, and records the contribution in the relevant release notes or project operations record. Review may still request changes or decline work that does not fit the current architecture or roadmap.
+
 By submitting a contribution, you agree that it is licensed under the repository's Apache License 2.0.
 
 ## 简体中文
@@ -59,5 +65,11 @@ By submitting a contribution, you agree that it is licensed under the repository
 - 可见 UI 改动附截图，并按需检查浅色与深色模式。
 - 保留现有权限、确认、脱敏与交付物验收边界。
 - 能用协议或能力判断解决时，不为单一模型增加特殊分支。
+
+### 审查与贡献记录
+
+所有外部 Pull Request 都会在合并前接受完整审查，范围包括改动边界、用户可见行为、回归风险、安全与隐私边界、国际化、文档，以及与风险相匹配的测试。只有验证依据充分且 CI 检查通过后才会合并；不会为了制造活跃度而合并不完整的代码。
+
+贡献合并后，灵枢会保留贡献者的 Git 作者身份，在 Pull Request 中公开说明并感谢具体贡献，并将其记录到对应版本说明或项目运营记录中。若改动不符合当前架构或路线，审查仍可能要求修改或不予合并。
 
 提交贡献即表示你同意按本仓库 Apache License 2.0 授权该贡献。
