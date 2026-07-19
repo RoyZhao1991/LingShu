@@ -248,3 +248,20 @@ Treat the current GitHub traffic, downloads, and stars as a mixed signal set rat
 LingShu was submitted through the official [iOS Dev Weekly Suggest a Link form](https://suggest.iosdevweekly.com/) for direct editorial consideration. The submission linked the public repository and described the project as an Apache-2.0, native Swift macOS execution agent in the Codex / Claude Code category: model-agnostic and BYOK, with transparent task threads, human approval, computer use, editable PPTX/DOCX/PDF/code delivery, a reproducible Project Aurora sample, and a signed and notarized Alpha. It also disclosed the current macOS-only and Alpha-stage limits.
 
 The form returned an explicit `Thank you!` confirmation. This verifies delivery to the editorial suggestion channel, not selection, publication, readership, or adoption. Measure the action for seven days through a verifiable editorial response or feature, attributable GitHub referrer, release downloads, privacy-safe first-run reports, outside Issues, and outside pull requests. Do not submit the same link again while it is under consideration.
+
+## 2026-07-19 — Open-source Editorial Tip and Contribution Review Policy
+
+| Signal | Checkpoint |
+| --- | ---: |
+| Stars | 5 |
+| Forks | 1 |
+| Watchers | 0 |
+| Open public issues | 9 |
+| GitHub views in available window | 1 total / 1 unique |
+| `v0.1.0-alpha.6` DMG downloads | 4 |
+| Outside Draft pull requests | 0 |
+| Merged outside contributions | 0 |
+
+LingShu was sent once to Forkable's current public editorial address. Forkable remains an active weekly open-source publication and has recently covered open-source AI agents, model choice, human review, and agentic developer tooling. The tailored message linked the repository and reproducible Project Aurora example, described the replaceable model layer and verifiable non-code artifact workflow, and disclosed the macOS 14+, BYOK, and Alpha limits. Gmail message `19f7824d4f273e5c` is delivery evidence only; it is not evidence of editorial acceptance, readership, referral traffic, or adoption.
+
+Ongoing operations now treat external pull requests as a higher priority than routine promotion. A PR must receive scope and authorship review, file-level behavioral and safety review, and risk-appropriate local or CI verification. Only a PR that satisfies the repository's required checks and protection rules may be merged. After merge, the contributor retains authorship, receives a specific public thank-you, and is recorded through the repository's existing contribution mechanism and campaign ledger. No PR is merged merely to create activity.
