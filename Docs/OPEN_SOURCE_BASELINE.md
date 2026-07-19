@@ -204,3 +204,20 @@ Console.dev returned an automated receipt confirming that the project submission
 A second, audience-specific project tip was sent to Developers Digest, whose published coverage includes AI agents, coding tools, LLM engineering, and open-source projects. The message identified LingShu as an Apache-2.0, model-agnostic native macOS execution agent, linked the reproducible Project Aurora proof, and disclosed the macOS-only, BYOK Alpha limitations. It did not request paid placement or claim adoption.
 
 Measure both editorial actions for seven days using replies, a verifiable publication or referrer, release downloads, privacy-safe first-run reports, outside Issues, and outside pull requests. Continue treating Stars, forks, clones, and downloads as separate funnel signals rather than successful use.
+
+## 2026-07-19 — Social Sharing Conversion Checkpoint
+
+| Signal | Checkpoint |
+| --- | ---: |
+| Stars | 4 |
+| External stargazers | 3 |
+| Forks | 1 |
+| Watchers | 0 |
+| Open public issues | 9 |
+| `v0.1.0-alpha.6` DMG downloads | 4 |
+| Privacy-safe first-run reports | 0 |
+| Custom repository social preview | Live |
+
+The GitHub repository now serves the versioned [`Docs/media/lingshu-social-preview.png`](./media/lingshu-social-preview.png) as its custom social preview. The public `og:image` was fetched independently after upload and is an exact SHA-256 match for the repository asset: a 1280×640, 157,500-byte PNG. This improves link recognition and consistency across social and chat clients without introducing user tracking.
+
+This is a conversion improvement, not an exposure claim. Measure it for seven days through aggregate GitHub referrers, unique visitors, release downloads, explicit first-run reports, outside Issues, and outside pull requests. Console.dev remains in editorial review, Developers Digest has not replied, and the `awesome-mac` maintainer's public X post remains the only verified external amplification at this checkpoint.
