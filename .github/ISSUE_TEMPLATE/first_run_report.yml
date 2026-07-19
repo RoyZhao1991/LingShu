@@ -37,8 +37,6 @@ body:
     attributes:
       label: macOS version
       placeholder: macOS 15.5
-    validations:
-      required: true
   - type: dropdown
     attributes:
       label: Mac architecture
@@ -46,8 +44,6 @@ body:
         - Apple silicon
         - Intel
         - Unknown
-    validations:
-      required: true
   - type: input
     attributes:
       label: Model provider and protocol
@@ -78,10 +74,8 @@ body:
   - type: textarea
     attributes:
       label: What happened
-      description: Tell us what worked, where you stopped, and roughly how long the run took.
+      description: Optional for a successful run. Tell us what worked, where you stopped, and roughly how long the run took.
       placeholder: The signed DMG installed successfully. The first DOCX task completed in ...
-    validations:
-      required: true
   - type: textarea
     attributes:
       label: Redacted logs or screenshots

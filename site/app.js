@@ -17,6 +17,9 @@
     document.querySelectorAll("[data-label-en][data-label-zh]").forEach((element) => {
       element.setAttribute("aria-label", next === "zh-CN" ? element.dataset.labelZh : element.dataset.labelEn);
     });
+    document.querySelectorAll("[data-href-en][data-href-zh]").forEach((element) => {
+      element.setAttribute("href", next === "zh-CN" ? element.dataset.hrefZh : element.dataset.hrefEn);
+    });
     if (remember) {
       try { window.localStorage.setItem(storageKey, next); } catch (_) {}
     }

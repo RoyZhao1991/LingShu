@@ -165,7 +165,7 @@ After choosing a language and connecting a model, start with a small local deliv
 
 This exercises the complete path a new user should inspect first: goal understanding, local file creation, artifact registration, built-in preview, and verification. The task should finish with a real file in LingShu's Workspace and a visible task record.
 
-Whether it succeeds, partly succeeds, or fails, share a privacy-safe [15-minute Alpha first-run report](https://github.com/RoyZhao1991/LingShu/issues/new?template=first_run_report.yml). Use [GitHub Discussions](https://github.com/RoyZhao1991/LingShu/discussions) for setup questions. Never include an API token or private file contents.
+Whether it succeeds, partly succeeds, or fails, share a privacy-safe [15-minute Alpha first-run report](https://github.com/RoyZhao1991/LingShu/issues/new?template=first_run_report.yml). A successful run only needs the key result fields, not a long log. Use [GitHub Discussions](https://github.com/RoyZhao1991/LingShu/discussions) for setup questions. Never include an API token or private file contents.
 
 ### Build From Source
 

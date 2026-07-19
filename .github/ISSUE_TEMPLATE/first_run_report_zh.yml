@@ -1,0 +1,86 @@
+name: Alpha 首跑报告（中文）
+description: 记录一次成功、部分成功或失败的 15 分钟首跑
+title: "[Alpha 首跑]: "
+labels:
+  - alpha feedback
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢测试灵枢。无论首跑成功、部分成功还是失败，这份报告都能帮助我们判断新用户是否可以独立安装应用并完成一个经过验收的真实产物。
+
+        提交前请删除 API Token、私人文件内容、账号数据、个人信息和可识别的本机路径。
+  - type: checkboxes
+    attributes:
+      label: 隐私检查
+      options:
+        - label: 我已经删除凭据和私人数据。
+          required: true
+        - label: 我了解这份 Issue 将公开显示。
+          required: true
+  - type: input
+    attributes:
+      label: 灵枢版本
+      placeholder: v0.1.0-alpha.7
+    validations:
+      required: true
+  - type: dropdown
+    attributes:
+      label: 安装方式
+      options:
+        - Homebrew
+        - 已签名 DMG
+        - 从源码构建
+    validations:
+      required: true
+  - type: input
+    attributes:
+      label: macOS 版本
+      placeholder: macOS 15.5（可选）
+  - type: dropdown
+    attributes:
+      label: Mac 架构
+      options:
+        - Apple 芯片
+        - Intel
+        - 不确定
+  - type: input
+    attributes:
+      label: 模型服务商与协议
+      description: 只填写服务商或协议名称，禁止填写 Token。
+      placeholder: OpenAI 兼容 DeepSeek、Anthropic Messages、自定义端点等
+    validations:
+      required: true
+  - type: dropdown
+    attributes:
+      label: 整体结果
+      options:
+        - 成功
+        - 部分成功
+        - 失败
+    validations:
+      required: true
+  - type: checkboxes
+    attributes:
+      label: 已完成步骤
+      options:
+        - label: 应用成功启动
+        - label: 已选择语言
+        - label: 模型连接并通过验证
+        - label: 第一条任务已开始
+        - label: 真实产物已生成
+        - label: 产物已在内置预览中打开
+        - label: 独立 checker 已完成
+  - type: textarea
+    attributes:
+      label: 实际情况
+      description: 成功首跑可以不填；如有异常，请说明哪里停止以及大致耗时。
+      placeholder: DMG 安装成功，第一条 DOCX 任务在……
+  - type: textarea
+    attributes:
+      label: 脱敏后的日志或截图
+      description: 可选。上传前请删除密钥、私人内容和可识别路径。
+  - type: textarea
+    attributes:
+      label: 最希望改进的一件事
+      description: 可选。Alpha 阶段尤其欢迎一条具体建议。

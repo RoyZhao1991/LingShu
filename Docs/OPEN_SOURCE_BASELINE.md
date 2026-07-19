@@ -368,3 +368,18 @@ LingShu was also submitted to LocalAlternative through its public local-first AI
 The first request for each Alpha 7 release asset was maintainer release verification. The second DMG request is observable but cannot be attributed to an outside user or successful installation. Keep the current 8 Stars and 1 Fork as repository signals, not usage claims. Measure both new channels for seven full days through a merge or listing, attributable referrers, release requests above the verification baseline, privacy-safe first-run reports, reproducible Issues, and outside pull requests.
 
 There are no open pull requests in the LingShu repository at this checkpoint. If an outside pull request appears, review it before routine promotion: verify scope and authorship, inspect every changed file for behavior, regressions, security, privacy, internationalization, documentation, and test coverage, and run risk-appropriate local or CI checks. Merge only after required checks pass; preserve the original commits and authorship, record the contribution through the repository's existing mechanism, and publish a specific thank-you describing the improvement.
+
+## 2026-07-19 — Locale-matched First-run Reporting
+
+| Signal | Checkpoint |
+| --- | ---: |
+| Stars | 8 |
+| Forks | 1 |
+| Watchers | 0 |
+| Open public issues | 8 |
+| Privacy-safe first-run reports | 0 |
+| Open LingShu pull requests | 0 |
+
+The first-run feedback path now follows the selected website language into separate English and Chinese structured Issue forms. Both forms retain the same comparable core fields: privacy confirmation, LingShu version, installation method, model provider or protocol, outcome, and the furthest completed step. macOS details, architecture, and the narrative are optional so a successful first run can be reported without reconstructing a long diagnostic log.
+
+Desktop and mobile browser checks verified the default English link, the Chinese link after language switching, the visible localized label, and the absence of horizontal overflow. This is a conversion-friction change, not new reach or evidence of adoption. For the next seven full days, measure successful, partial, and failed first-run reports, recurring setup blockers, reproducible Issues, and outside pull requests. Continue to treat downloads, clones, and Stars as repository signals rather than proof of successful use.
