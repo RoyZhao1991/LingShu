@@ -296,3 +296,26 @@ The maintainer received a specific [post-merge thank-you](https://github.com/jay
 | Privacy verification | Full decode, contact-sheet review, selected full-resolution frames, and one-frame-per-second OCR scan |
 
 The new demo replaces the 16-second replay as the README and website's primary visual proof. No private path, email address, token, account identifier, or personal notification was detected in the public MP4, GIF, or poster. This closes a proof-quality gap; it does not establish outside adoption, successful installation, or model parity.
+
+## 2026-07-19 — Post-demo Discovery and First-run Checkpoint
+
+| Signal | Checkpoint |
+| --- | ---: |
+| Stars | 8 |
+| Forks | 1 |
+| Watchers | 0 |
+| Open public issues | 8 |
+| GitHub views in available 14-day window | 58 total / 19 unique |
+| GitHub clones in available 14-day window | 312 total / 94 unique |
+| `v0.1.0-alpha.6` DMG downloads | 5 |
+| `v0.1.0-alpha.6` checksum downloads | 2 |
+| Privacy-safe first-run reports | 0 |
+| Outside contribution intents | 1 |
+| Outside Draft pull requests | 0 |
+| Merged outside contributions | 0 |
+
+The reported referrers are `github.com` (23 views / 4 unique visitors) and `t.co` (14 views / 10 unique visitors). The `t.co` traffic is consistent with an X link, but the aggregate referrer alone does not prove which post, person, or downstream action produced it. The clone spike can include CI, release, fork maintenance, and automated fetches and therefore remains repository activity rather than installation or adoption evidence.
+
+The `awesome-swift-macos-apps` [PR #76](https://github.com/jaywcjlove/awesome-swift-macos-apps/pull/76) was closed by the maintainer as duplicate content because LingShu had already been submitted through `awesome-mac`; no reopen or resubmission is needed. E2B [PR #1271](https://github.com/e2b-dev/awesome-ai-agents/pull/1271) remains open and mergeable with the CLA check passing. Chinese discovery [Issue #348](https://github.com/Wechat-ggGitHub/Awesome-GitHub-Repo/issues/348) remains open without editorial response.
+
+The 71-second demo is now linked directly from the [15-minute Alpha tester invitation](https://github.com/RoyZhao1991/LingShu/discussions/13#discussioncomment-17686827). Five DMG requests and 19 unique repository visitors have still produced no outside first-run report, so the immediate funnel risk is first-value completion and reporting rather than raw discovery. The outside contributor in [Issue #8](https://github.com/RoyZhao1991/LingShu/issues/8) has confirmed the bounded offline fixture scope but has not yet opened a Draft PR; record this as intent only.
