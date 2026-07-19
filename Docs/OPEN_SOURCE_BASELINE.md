@@ -430,3 +430,28 @@ The outside contributor on Issue #8 has confirmed the bounded, offline, test-onl
 Build 11 starts its release gate from the Apple-notarized Universal DMG, installs the app into a disposable user root, and verifies the real language-selection and no-brain setup views without reading maintainer Application Support, preferences, Keychain tokens, environment tokens, or task history. It also disables permission and background services, verifies the installed signature and app liveness, and completes a deterministic local direct reply. The published `clean-user-smoke-result.json` records every check; the DMG SHA-256 is `815a1e8471e1dfc2cd2e773f388567601fc36fb45d30b83eec4c4743644822d4`.
 
 The first DMG request came from maintainer Homebrew fetch verification and is excluded from outside conversion. This evidence closes the automated clean-user installation scope in Issue #7, but it does not prove that an outside user configured a remote model, completed a real first task, retained the app, or adopted it. Those outcomes still require explicit privacy-safe reports or reproducible outside activity.
+
+## 2026-07-20 — Mac-native Editorial Outreach
+
+| Signal | Checkpoint |
+| --- | ---: |
+| Latest release | `v0.1.0-alpha.8` prerelease |
+| Stars | 9 |
+| External stargazers | 8 |
+| Forks | 1 |
+| Watchers | 0 |
+| Open public issues | 6 |
+| GitHub views in available 14-day window | 58 total / 19 unique |
+| GitHub clones in available 14-day window | 312 total / 94 unique |
+| Reported `t.co` referrer | 14 views / 10 unique visitors |
+| `v0.1.0-alpha.8` DMG requests | 2 |
+| Privacy-safe outside first-run reports | 0 |
+| Open LingShu pull requests | 0 |
+| Outside contribution intents | 1 |
+| Outside Draft pull requests | 0 |
+
+The second Alpha 8 DMG request is observable but unattributed. The first request was maintainer Homebrew verification; the second is not proof of installation, successful setup, first value, retention, or outside adoption. The aggregate `t.co` referrer remains the strongest current discovery signal, but it cannot identify which public post produced a particular visit or Star.
+
+No LingShu pull request or new substantive editorial reply appeared at this checkpoint. The outside contributor on [Issue #8](https://github.com/RoyZhao1991/LingShu/issues/8) is still inside a reasonable implementation window for the bounded offline fixture Draft PR, so no reminder was sent. E2B [PR #1271](https://github.com/e2b-dev/awesome-ai-agents/pull/1271) and `awesome-ai-coding-tools` [PR #553](https://github.com/ai-for-developers/awesome-ai-coding-tools/pull/553) remain open and mergeable without maintainer review; Chinese discovery [Issue #348](https://github.com/Wechat-ggGitHub/Awesome-GitHub-Repo/issues/348) remains open without editorial response.
+
+A single factual project tip was sent to MacStories managing editor John Voorhees through the publication's [officially listed contact route](https://www.macstories.net/about/). MacStories covers native Apple apps, automation, and agentic coding workflows, making this a distinct editorial audience rather than another general-purpose directory. The message linked only public evidence and disclosed macOS 14+, BYOK, public Alpha, and human-review limits. Gmail message `19f7b25325fca7eb` proves delivery only; it is not evidence of acceptance, publication, readership, referral traffic, installation, or adoption. Do not send a duplicate or routine follow-up during the normal editorial review window.
