@@ -33,9 +33,9 @@
 </div>
 
 <p align="center">
-  <a href="./Docs/media/lingshu-task-replay.mp4"><img src="./Docs/media/lingshu-task-replay.gif" width="1120" alt="灵枢真实任务回放：从需求到 GoalSpec、可编辑 PPTX 与 DOCX 产物，再到独立验收"></a>
+  <a href="./Docs/media/lingshu-end-to-end-demo.mp4"><img src="./Docs/media/lingshu-end-to-end-demo.gif" width="1120" alt="灵枢端到端演示：一条需求生成可编辑 PowerPoint、Word 简报和经过验收的产物记录"></a>
 </p>
-<p align="center"><sub>16 秒回放由真实 Project Aurora 任务记录和真实产物组成；仅增加字幕，没有伪造步骤或结果。它是任务回放，不是连续实时录屏。</sub></p>
+<p align="center"><sub><a href="./Docs/media/lingshu-end-to-end-demo.mp4">观看 71 秒完整演示</a>。演示使用一次真实、隐私安全的 Project Helios 任务及其实际生成的可编辑 PPTX/DOCX；长时间等待明确标注为 12 倍加速。结尾 GoalSpec 与产物账本画面明确标注来自第二次已验证的合成数据任务。</sub></p>
 
 > [!IMPORTANT]
 > 灵枢仍处于 Alpha 阶段并在快速迭代。它会在获得明确的 macOS 授权后操作本地文件与应用。请确认权限范围，并为重要工作保留备份。

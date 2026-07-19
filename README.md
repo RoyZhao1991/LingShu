@@ -33,9 +33,9 @@
 </div>
 
 <p align="center">
-  <a href="./Docs/media/lingshu-task-replay.mp4"><img src="./Docs/media/lingshu-task-replay.gif" width="1120" alt="Recorded LingShu task replay: a brief becomes a GoalSpec, editable PPTX and DOCX artifacts, and an independently checked result"></a>
+  <a href="./Docs/media/lingshu-end-to-end-demo.mp4"><img src="./Docs/media/lingshu-end-to-end-demo.gif" width="1120" alt="LingShu end-to-end demo: one request becomes an editable PowerPoint, a Word brief, and a verified artifact record"></a>
 </p>
-<p align="center"><sub>16-second replay assembled from a real Project Aurora task record and its real deliverables. Captions were added; steps and outputs were not fabricated. This is a replay, not a continuous real-time recording.</sub></p>
+<p align="center"><sub><a href="./Docs/media/lingshu-end-to-end-demo.mp4">Watch the full 71-second demo</a>. It uses a real privacy-safe Project Helios run and its actual editable PPTX/DOCX outputs; long waits are visibly accelerated 12x. The final GoalSpec and artifact-ledger inspection is explicitly labeled as a second verified synthetic-data run.</sub></p>
 
 > [!IMPORTANT]
 > LingShu is an alpha-stage project under active development. It can operate local files and apps after explicit macOS authorization. Review requested permissions and keep backups of important work.

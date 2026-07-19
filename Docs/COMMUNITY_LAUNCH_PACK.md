@@ -12,7 +12,7 @@ This pack turns LingShu's verified product facts into community-native launch ma
 - Current maturity: public Alpha for macOS 14 or later; users should review important actions and outputs.
 - Install: signed and notarized Universal DMG or Homebrew Cask.
 - Repository: https://github.com/RoyZhao1991/LingShu
-- Real task replay and editable sample: https://royzhao1991.github.io/LingShu/#deliverables
+- 71-second end-to-end demo and editable sample: https://royzhao1991.github.io/LingShu/#deliverables
 - Release: https://github.com/RoyZhao1991/LingShu/releases/tag/v0.1.0-alpha.6
 
 ## Launch Queue
@@ -23,7 +23,7 @@ This pack turns LingShu's verified product facts into community-native launch ma
 | 2 | `r/LLMDevs` | Does one provider-neutral runtime behave predictably across different model APIs? | Free open-source project; disclose Alpha status and BYO model requirement; post once | Seven full days |
 | 3 | V2EX `分享创造` | Can a domestic or overseas model drive the same open macOS execution runtime and produce real deliverables? | Use a personal build story, not company-style marketing; post in `分享创造` | Seven full days |
 | 4 | `r/ChatGPTCoding` self-promotion thread | What should a coding-agent user expect when the same execution loop also owns documents, slides, and verification? | Use the designated self-promotion thread; post LingShu only once | Seven full days |
-| 5 | Product Hunt | Is the signed Alpha install and first-run model setup clear enough for a broader product audience? | Wait for at least three independent install reports and a clean 60–90 second demo | Seven full days |
+| 5 | Product Hunt | Is the signed Alpha install and first-run model setup clear enough for a broader product audience? | The clean 71-second demo is ready; wait for at least three independent install reports | Seven full days |
 
 Do not publish these entries on the same day. A failed channel is still useful evidence; record it rather than reposting immediately.
 
@@ -76,7 +76,7 @@ Draft to adapt before posting:
 >
 > Code: https://github.com/RoyZhao1991/LingShu
 >
-> 16-second task replay and editable sample: https://royzhao1991.github.io/LingShu/#deliverables
+> 71-second end-to-end demo and editable sample: https://royzhao1991.github.io/LingShu/#deliverables
 
 Publication notes:
 
@@ -101,7 +101,7 @@ Draft to adapt before posting:
 >
 > 目前灵枢是一套 Apache-2.0 的 Swift 原生 macOS App 与 Agent 运行时。可以接 OpenAI、Claude、DeepSeek、MiniMax 或兼容端点。任务会形成明确目标和步骤，执行过程有记录，真实文件进入产物账本，可以直接预览，也可以在完成前交给独立 checker 验收；遇到扫码、登录、授权等人机交互时，会暂停并在 App 内等待用户处理后继续。
 >
-> 我把一个真实的 PPTX/DOCX 任务做成了 16 秒回放，同时放出了可编辑样例。当前版本仍是 Alpha，只支持 macOS 14 及以上，需要用户自备模型通道，重要操作和交付结果也应该人工确认。
+> 我把一个真实、仅使用合成数据的 PPTX/DOCX 任务做成了 71 秒端到端演示，同时放出了可编辑样例。等待段明确标注了加速，结尾任务账本画面也披露了来自第二次已验证的合成数据任务。当前版本仍是 Alpha，只支持 macOS 14 及以上，需要用户自备模型通道，重要操作和交付结果也应该人工确认。
 >
 > 我现在最需要的不是泛泛的功能建议，而是三类可复现反馈：首次安装和主脑配置是否顺畅；不同模型端点是否兼容；“产物登记 + 独立验收”是否真的减少了 Agent 嘴上说完成、文件却不可用的问题。
 >

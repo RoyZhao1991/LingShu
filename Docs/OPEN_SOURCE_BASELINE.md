@@ -282,3 +282,17 @@ Ongoing operations now treat external pull requests as a higher priority than ro
 [`awesome-mac` PR #2355](https://github.com/jaywcjlove/awesome-mac/pull/2355) was merged by maintainer `jaywcjlove` on 2026-07-19 as commit `cac4ce1bd06dd55a1504c2bd67548b4f19560284`. LingShu is now publicly listed under [`awesome-mac` AI Tools](https://github.com/jaywcjlove/awesome-mac#ai-tools) as an open-source, model-agnostic macOS agent for verified code, documents, slides, and computer actions. The maintainer also shared the project publicly during review and helped tighten the four localized descriptions.
 
 The maintainer received a specific [post-merge thank-you](https://github.com/jaywcjlove/awesome-mac/pull/2355#issuecomment-5013824677). This is verified external curation and distribution, not evidence of installation, successful use, retention, endorsement, or adoption. Measure any downstream effect only through attributable referrers, release downloads, privacy-safe first-run reports, Issues, and outside contributions.
+
+## 2026-07-19 — 71-Second End-to-End Demo Published
+
+| Asset | Verified result |
+| --- | --- |
+| Web video | 71.2 seconds, H.264, 1920×1080, 30 fps, 1.6 MB |
+| README loop | 13 seconds, 720×405, 0.55 MB |
+| Source workflow | Real Project Helios task using synthetic data only |
+| Deliverables shown | Actual four-slide PPTX and one-page DOCX produced by the run |
+| Runtime disclosure | Long waits visibly accelerated 12x |
+| Inspection disclosure | GoalSpec, 5/5 plan, checker, and artifact ledger labeled as a second verified synthetic-data run |
+| Privacy verification | Full decode, contact-sheet review, selected full-resolution frames, and one-frame-per-second OCR scan |
+
+The new demo replaces the 16-second replay as the README and website's primary visual proof. No private path, email address, token, account identifier, or personal notification was detected in the public MP4, GIF, or poster. This closes a proof-quality gap; it does not establish outside adoption, successful installation, or model parity.

@@ -42,9 +42,10 @@ Do not claim that LingShu is production-ready, fully autonomous, fully local, or
 
 - Repository screenshot: [`media/lingshu-overview.jpg`](./media/lingshu-overview.jpg)
 - GitHub social preview: [`media/lingshu-social-preview.png`](./media/lingshu-social-preview.png)
-- 16-second task replay: [`media/lingshu-task-replay.mp4`](./media/lingshu-task-replay.mp4)
-- Lightweight README loop: [`media/lingshu-task-replay.gif`](./media/lingshu-task-replay.gif)
-- Replay poster: [`media/lingshu-task-replay-poster.jpg`](./media/lingshu-task-replay-poster.jpg)
+- 71-second end-to-end demo: [`media/lingshu-end-to-end-demo.mp4`](./media/lingshu-end-to-end-demo.mp4)
+- Lightweight README loop: [`media/lingshu-end-to-end-demo.gif`](./media/lingshu-end-to-end-demo.gif)
+- Demo poster: [`media/lingshu-end-to-end-demo-poster.jpg`](./media/lingshu-end-to-end-demo-poster.jpg)
+- Historical 16-second task replay: [`media/lingshu-task-replay.mp4`](./media/lingshu-task-replay.mp4)
 - Reproducible Project Aurora sample: [`../Examples/project-aurora/README.md`](../Examples/project-aurora/README.md)
 - Editable sample deck: [`../Examples/project-aurora/project-aurora-demo.pptx`](../Examples/project-aurora/project-aurora-demo.pptx)
 - One-page sample brief: [`../Examples/project-aurora/project-aurora-demo.docx`](../Examples/project-aurora/project-aurora-demo.docx)
@@ -54,28 +55,32 @@ Do not claim that LingShu is production-ready, fully autonomous, fully local, or
 
 Upload `lingshu-social-preview.png` as the repository social preview when GitHub settings access is available. The source image is launch-ready, but do not claim the repository-level preview is configured until the upload is verified.
 
-The 16-second task replay is assembled from real Project Aurora task screens and real rendered deliverables. It adds captions and timing, but does not fabricate steps or outputs. Describe it as a **recorded task replay**, not as a continuous live run. The uninterrupted 60–90 second capture below remains the stronger launch proof and is still tracked separately.
+The primary public proof is the 71.2-second Project Helios demo. Its execution section comes from one real privacy-safe run, long waits are visibly accelerated 12x, and the displayed PowerPoint and Word pages are rendered from the files produced by that run. The final GoalSpec and artifact-ledger inspection is explicitly labeled on screen as a second verified synthetic-data run because the current Alpha categorized the Helios completion as `chat_reply` and did not expose its thread inspector. Do not describe the edit as a single uninterrupted run. The older 16-second Project Aurora replay remains available as a compact historical proof.
 
-## 75-Second Demo
+## 71-Second Demo
 
-Record one continuous, reproducible workflow. Use a fresh macOS user or isolated demo data, hide notifications, and never show an API token, personal path, account name, browser history, or private document.
+Published files:
+
+- Web MP4: [`media/lingshu-end-to-end-demo.mp4`](./media/lingshu-end-to-end-demo.mp4)
+- README loop: [`media/lingshu-end-to-end-demo.gif`](./media/lingshu-end-to-end-demo.gif)
+- Poster: [`media/lingshu-end-to-end-demo-poster.jpg`](./media/lingshu-end-to-end-demo-poster.jpg)
 
 | Time | Screen action | Narration / subtitle | Proof shown |
 | --- | --- | --- | --- |
-| 0-7s | Show the installed LingShu app, its selected model, and a request for a project-report deck plus a one-page written summary. | "Codex and Claude Code proved the execution-agent model for software. LingShu opens the full native runtime, lets you choose the model, and takes the same idea beyond code." | Category, open runtime, replaceable model, concrete brief |
-| 7-17s | Show the structured goal and plan appearing. | "The request becomes an explicit goal with acceptance criteria." | GoalSpec and plan |
-| 17-34s | Open the task record while an isolated worker uses tools. | "Execution runs in a traceable task session instead of disappearing behind a spinner." | Live task state and tool trace |
-| 34-48s | Show the PPTX and document being created and registered in the artifact list. | "The outputs are real editable files on disk, not filenames claimed in chat." | PPTX/document artifact registration |
-| 48-61s | Show independent verification and its result. | "A checker evaluates the result before the task is closed." | Verification state |
-| 61-70s | Preview the generated file from LingShu. | "The deliverable remains previewable and available to later tasks." | Built-in preview |
-| 70-75s | End on the repository URL and release name. | "Native macOS. Bring your own model. Apache-2.0." | Clear next action |
+| 0-3s | Open on the claim and scope. | "One prompt. Verified delivery." | Category and concrete outcome |
+| 3-16s | Show the real Project Helios request and live planning/execution state. | "One request becomes two editable deliverables." | Real execution source; long waits labeled as 12x |
+| 16-21s | Show the generated PPTX opening in Preview. | "The generated PPTX opens in Preview." | Real file opens successfully |
+| 21-47s | Show all four rendered slides. | "Actual PPTX output." | Readable editable deck content |
+| 47-53s | Show the rendered one-page Word brief. | "Editable Word brief." | Readable DOCX output |
+| 53-67s | Show structured GoalSpec, 5/5 plan, checker, and registered artifacts from a second verified synthetic-data run. | "Post-run inspection." | Goal, boundaries, verification, and artifact ledger; source caveat visible |
+| 67-71s | End on repository URL and release boundaries. | "Open source. Model agnostic." | Apache-2.0, BYOK, macOS Alpha |
 
 Capture requirements:
 
 - 1920x1080 or 2560x1440 source, exported at 1080p.
 - Pointer and text must remain readable at normal playback speed.
 - Use real elapsed states; speed up waiting sections visibly instead of cutting to fabricated success.
-- Add English subtitles and a Chinese-subtitled version from the same recording.
+- English captions are embedded. A Chinese-subtitled derivative may be created from the same edit without changing the evidence.
 - Keep the final cut between 60 and 90 seconds.
 
 ## English Launch Material

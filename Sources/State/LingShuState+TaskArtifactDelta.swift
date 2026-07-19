@@ -70,16 +70,26 @@ extension LingShuState {
     func reconcileTaskRecordArtifactsFromMentionedExistingFiles(recordID: String, producer: String = "任务收尾补登") -> Int {
         guard let index = taskExecutionRecords.firstIndex(where: { $0.id == recordID }) else { return 0 }
         let record = taskExecutionRecords[index]
-        let text = ([record.summary] + record.messages.map(\.text))
+        let allText = ([record.summary] + record.messages.map(\.text))
             .joined(separator: "\n")
-        let paths = LingShuLocalPathDetector.existingFilePaths(in: text)
-        guard !paths.isEmpty else { return 0 }
-
         let trustedBases = trustedArtifactBaseDirectories(recordID: recordID, record: record)
         guard !trustedBases.isEmpty else { return 0 }
 
+        // Absolute paths remain supported for compatibility. Privacy-safe delivery replies commonly expose
+        // filenames only, so resolve those names against trusted task directories instead of requiring the
+        // model to reveal a local absolute path. User-authored messages are deliberately excluded from this
+        // second pass: requesting an old filename must not make that old file a new task artifact.
+        let deliveredText = ([record.summary] + record.messages.filter { $0.kind != .user }.map(\.text))
+            .joined(separator: "\n")
+        let absolutePaths = LingShuLocalPathDetector.existingFilePaths(in: allText)
+        let filenamePaths = existingTrustedFilesMentionedByName(in: deliveredText, trustedBases: trustedBases)
+        let paths = uniquePaths(absolutePaths + filenamePaths)
+        guard !paths.isEmpty else { return 0 }
+
+        var knownCanonicalPaths = Set(record.artifacts.map { canonicalArtifactPath($0.location) })
         var added = 0
         for path in paths where shouldBackfillMentionedArtifact(path, trustedBases: trustedBases) {
+            guard knownCanonicalPaths.insert(canonicalArtifactPath(path)).inserted else { continue }
             let before = taskExecutionRecords[index].artifacts.count
             taskExecutionRecords[index].appendArtifact(
                 title: (path as NSString).lastPathComponent,
@@ -115,31 +125,85 @@ extension LingShuState {
     }
 
     private func trustedArtifactBaseDirectories(recordID: String, record: LingShuTaskExecutionRecord) -> [String] {
-        var bases = Set<String>()
+        var bases: [String] = []
+        var seen = Set<String>()
 
         func addDirectory(_ path: String) {
             let cleaned = path.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !cleaned.isEmpty else { return }
             var isDir = ObjCBool(false)
             if FileManager.default.fileExists(atPath: cleaned, isDirectory: &isDir), isDir.boolValue {
-                bases.insert(URL(fileURLWithPath: cleaned).standardizedFileURL.path)
+                let canonical = URL(fileURLWithPath: cleaned).resolvingSymlinksInPath().standardizedFileURL.path
+                if seen.insert(canonical).inserted { bases.append(canonical) }
             }
         }
 
-        addDirectory(artifactDeltaWorkingDirectory(for: recordID))
-        addDirectory(agentWorkingDirectory)
-        addDirectory(Self.defaultWorkspaceDirectory)
+        // Existing artifacts provide the strongest record-specific location signal, especially during
+        // launch-time repair after ephemeral subtask maps have been discarded.
         for artifact in record.artifacts where artifact.location.hasPrefix("/") {
             addDirectory((artifact.location as NSString).deletingLastPathComponent)
         }
-        return Array(bases)
+        addDirectory(artifactDeltaWorkingDirectory(for: recordID))
+        addDirectory(agentWorkingDirectory)
+        addDirectory(Self.defaultWorkspaceDirectory)
+        return bases
+    }
+
+    private func existingTrustedFilesMentionedByName(in text: String, trustedBases: [String]) -> [String] {
+        guard !text.isEmpty else { return [] }
+        let fm = FileManager.default
+        let resourceKeys: Set<URLResourceKey> = [.isRegularFileKey, .isSymbolicLinkKey]
+        var paths: [String] = []
+        var resolvedNames = Set<String>()
+
+        for base in trustedBases {
+            let baseURL = URL(fileURLWithPath: base, isDirectory: true)
+            guard let files = try? fm.contentsOfDirectory(
+                at: baseURL,
+                includingPropertiesForKeys: Array(resourceKeys),
+                options: [.skipsHiddenFiles]
+            ) else { continue }
+
+            for file in files {
+                let name = file.lastPathComponent
+                guard !resolvedNames.contains(name),
+                      text.range(of: name, options: .literal) != nil,
+                      let values = try? file.resourceValues(forKeys: resourceKeys),
+                      values.isRegularFile == true,
+                      values.isSymbolicLink != true else { continue }
+                // Keep the caller-visible path spelling (for example /var versus /private/var) so it
+                // de-duplicates with artifacts already recorded by tools. The trust check below resolves
+                // symlinks independently before comparing directory boundaries.
+                let path = file.standardizedFileURL.path
+                if shouldBackfillMentionedArtifact(path, trustedBases: trustedBases) {
+                    paths.append(path)
+                    resolvedNames.insert(name)
+                }
+            }
+        }
+        return uniquePaths(paths)
+    }
+
+    private func uniquePaths(_ paths: [String]) -> [String] {
+        var seen = Set<String>()
+        return paths.filter { seen.insert(canonicalArtifactPath($0)).inserted }
+    }
+
+    private func canonicalArtifactPath(_ path: String) -> String {
+        URL(fileURLWithPath: path).resolvingSymlinksInPath().standardizedFileURL.path
     }
 
     private func shouldBackfillMentionedArtifact(_ path: String, trustedBases: [String]) -> Bool {
         guard !LingShuShadowGit.isBuildOrCacheNoise(path) else { return false }
-        let std = URL(fileURLWithPath: path).standardizedFileURL.path
+        let url = URL(fileURLWithPath: path)
+        let keys: Set<URLResourceKey> = [.isRegularFileKey, .isSymbolicLinkKey]
+        guard let values = try? url.resourceValues(forKeys: keys),
+              values.isRegularFile == true,
+              values.isSymbolicLink != true else { return false }
+        let std = url.resolvingSymlinksInPath().standardizedFileURL.path
         return trustedBases.contains { base in
-            std == base || std.hasPrefix(base.hasSuffix("/") ? base : base + "/")
+            let trusted = URL(fileURLWithPath: base).resolvingSymlinksInPath().standardizedFileURL.path
+            return std == trusted || std.hasPrefix(trusted.hasSuffix("/") ? trusted : trusted + "/")
         }
     }
 }

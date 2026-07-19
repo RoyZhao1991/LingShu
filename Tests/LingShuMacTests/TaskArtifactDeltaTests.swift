@@ -132,4 +132,91 @@ final class TaskArtifactDeltaTests: XCTestCase {
         XCTAssertTrue(record.artifacts.contains { $0.location == word.path })
         XCTAssertFalse(record.artifacts.contains { $0.location == outside.path }, "补登只能收本任务可信目录内的文件,避免历史旧文件串台")
     }
+
+    func testFilenameOnlyDeliveryBackfillsAllTrustedArtifactsWithoutDuplicates() throws {
+        let state = LingShuState()
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("lingshu-artifact-filename-only-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        state.agentWorkingDirectory = dir.path
+        let recordID = state.createTaskExecutionRecord(for: "生成项目启动材料")
+        let deck = dir.appendingPathComponent("Project Helios Launch Kit.pptx")
+        let brief = dir.appendingPathComponent("Project_Helios_Launch_Brief.docx")
+        try Data("deck".utf8).write(to: deck)
+        try Data("brief".utf8).write(to: brief)
+        state.appendTaskRecordArtifact(
+            recordID,
+            title: deck.lastPathComponent,
+            location: deck.path,
+            producer: "测试",
+            operation: .created
+        )
+
+        guard let index = state.taskExecutionRecords.firstIndex(where: { $0.id == recordID }) else {
+            return XCTFail("record missing")
+        }
+        state.taskExecutionRecords[index].summary = """
+        Delivered `Project Helios Launch Kit.pptx` and **Project_Helios_Launch_Brief.docx**.
+        """
+
+        let added = state.reconcileTaskRecordArtifactsFromMentionedExistingFiles(recordID: recordID)
+        let record = try XCTUnwrap(state.taskExecutionRecords.first { $0.id == recordID })
+        let canonicalBrief = brief.resolvingSymlinksInPath().standardizedFileURL.path
+
+        XCTAssertEqual(added, 1, "artifacts=\(record.artifacts.map(\.location))")
+        XCTAssertEqual(record.artifacts.filter { $0.location == deck.path }.count, 1)
+        XCTAssertEqual(record.artifacts.filter {
+            URL(fileURLWithPath: $0.location).resolvingSymlinksInPath().standardizedFileURL.path == canonicalBrief
+        }.count, 1)
+    }
+
+    func testFilenameMentionedOnlyByUserDoesNotBackfillArtifact() throws {
+        let state = LingShuState()
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("lingshu-artifact-user-mention-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        state.agentWorkingDirectory = dir.path
+        let filename = "existing_report_\(UUID().uuidString).docx"
+        let file = dir.appendingPathComponent(filename)
+        try Data("old".utf8).write(to: file)
+        let recordID = state.createTaskExecutionRecord(for: "请读取 \(filename) 后给建议")
+
+        let added = state.reconcileTaskRecordArtifactsFromMentionedExistingFiles(recordID: recordID)
+        let record = try XCTUnwrap(state.taskExecutionRecords.first { $0.id == recordID })
+
+        XCTAssertEqual(added, 0)
+        XCTAssertFalse(record.artifacts.contains { $0.location == file.path })
+    }
+
+    func testFilenameOnlyBackfillRejectsSymlinkEscapingTrustedDirectory() throws {
+        let state = LingShuState()
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("lingshu-artifact-symlink-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let outside = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("outside-secret-\(UUID().uuidString).docx")
+        let link = dir.appendingPathComponent("Final_Brief.docx")
+        try Data("outside".utf8).write(to: outside)
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: outside)
+        defer { try? FileManager.default.removeItem(at: outside) }
+
+        state.agentWorkingDirectory = dir.path
+        let recordID = state.createTaskExecutionRecord(for: "生成最终简报")
+        guard let index = state.taskExecutionRecords.firstIndex(where: { $0.id == recordID }) else {
+            return XCTFail("record missing")
+        }
+        state.taskExecutionRecords[index].summary = "Delivered Final_Brief.docx"
+
+        let added = state.reconcileTaskRecordArtifactsFromMentionedExistingFiles(recordID: recordID)
+        let record = try XCTUnwrap(state.taskExecutionRecords.first { $0.id == recordID })
+
+        XCTAssertEqual(added, 0)
+        XCTAssertTrue(record.artifacts.isEmpty)
+    }
 }
