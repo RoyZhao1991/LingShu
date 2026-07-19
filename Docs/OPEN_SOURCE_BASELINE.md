@@ -342,3 +342,29 @@ Build 10 brings the downloadable binary into alignment with the public end-to-en
 The ten requests for the previous DMG and the new release's initial zero remain asset-request counts, not proof of installation, successful first use, retention, or adoption. After publication, maintainer verification opened or fetched the DMG, checksum, and manifest once each; those first three asset counts are release QA, not outside conversion. Homebrew resolved `0.1.0-10`, fetched the DMG, and verified the published SHA-256. The [canonical announcement update](https://github.com/RoyZhao1991/LingShu/discussions/12#discussioncomment-17687162) links the release, 71-second demo, Homebrew upgrade path, and one privacy-safe report form.
 
 Measure this release for seven full days through attributable visits, release requests above the documented verification baseline, privacy-safe first-run reports, reproducible Issues, and outside pull requests.
+
+## 2026-07-19 — Second Developer Discovery Wave
+
+| Signal | Checkpoint |
+| --- | ---: |
+| Stars | 8 |
+| Forks | 1 |
+| Watchers | 0 |
+| Open public issues | 8 |
+| `v0.1.0-alpha.7` DMG requests | 2 |
+| `v0.1.0-alpha.7` checksum requests | 1 |
+| `v0.1.0-alpha.7` manifest requests | 1 |
+| Open LingShu pull requests | 0 |
+| Outside contribution intents | 1 |
+| Outside Draft pull requests | 0 |
+| Merged outside contributions | 0 |
+| New curated-list submissions | 1 open pull request |
+| New directory submissions | 1 in editorial review |
+
+[`awesome-ai-coding-tools` PR #553](https://github.com/ai-for-developers/awesome-ai-coding-tools/pull/553) adds one concise LingShu entry to the Coding Agents category. The repository is active, has approximately 1,900 Stars, and explicitly accepts public or free developer AI tools. The pull request is open and mergeable at this checkpoint; it is not yet a public directory placement.
+
+LingShu was also submitted to LocalAlternative through its public local-first AI tool review flow. The endpoint returned submission id `jx76g6ddq9fvsw2a6k91h7f2h18ath4s`. This confirms receipt by the review system only, not acceptance, publication, traffic, installation, or adoption.
+
+The first request for each Alpha 7 release asset was maintainer release verification. The second DMG request is observable but cannot be attributed to an outside user or successful installation. Keep the current 8 Stars and 1 Fork as repository signals, not usage claims. Measure both new channels for seven full days through a merge or listing, attributable referrers, release requests above the verification baseline, privacy-safe first-run reports, reproducible Issues, and outside pull requests.
+
+There are no open pull requests in the LingShu repository at this checkpoint. If an outside pull request appears, review it before routine promotion: verify scope and authorship, inspect every changed file for behavior, regressions, security, privacy, internationalization, documentation, and test coverage, and run risk-appropriate local or CI checks. Merge only after required checks pass; preserve the original commits and authorship, record the contribution through the repository's existing mechanism, and publish a specific thank-you describing the improvement.
