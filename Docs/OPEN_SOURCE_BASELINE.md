@@ -158,3 +158,25 @@ LingShu was submitted to the Chinese-language [逛逛 GitHub / Awesome GitHub Re
 Official Homebrew Cask submission remains deliberately deferred. The official repository states that it is not a discoverability service and currently applies public-traction thresholds to self-submitted software. The maintained project tap remains the appropriate installation path until LingShu qualifies independently.
 
 The 96 clone operations remain uninterpretable as adoption because they may include CI, release work, branch activity, and automated fetches. The next meaningful signal is still an outside first-run report, substantive issue, retained user, or reviewable contribution.
+
+## 2026-07-19 — Targeted Developer-Tool Editorial Outreach
+
+| Signal | Checkpoint |
+| --- | ---: |
+| Stars | 3 |
+| External stargazers | 2 |
+| Forks | 0 |
+| Watchers | 0 |
+| Open public issues | 9 |
+| `v0.1.0-alpha.6` DMG downloads | 3 |
+| GitHub views in available window | 1 total / 1 unique |
+| GitHub clones in available window | 96 total / 38 unique |
+| Privacy-safe first-run reports | 0 |
+| Outside contribution intents | 1 |
+| Outside Draft pull requests | 0 |
+
+The existing external submissions remain healthy but pending: `awesome-swift-macos-apps` PR #76, `awesome-mac` PR #2355, and E2B Awesome AI Agents PR #1271 are open, while the Chinese discovery Issue #348 has no editorial response yet. The E2B contributor agreement check is passing. Discussion #13 has not received an outside first-run report, and the bounded contribution handoff in Issue #8 has not yet produced a Draft PR. No reminder was sent because none of these review windows warrants repeated contact.
+
+LingShu was submitted directly to the Console.dev editorial team through its published developer-tool submission address. The English pitch disclosed the Alpha status and linked the repository, signed release, Homebrew install, architecture map, reproducible Project Aurora sample, and 15-minute tester task. This is one targeted editorial pitch based on Console.dev's stated acceptance of beta and preview developer tools, not another generic directory submission or a claim of coverage.
+
+Measure this action for seven days using an editorial reply, a verifiable feature or referrer, release downloads, first-run reports, and outside Issues or pull requests. Do not count the channel's potential audience as LingShu reach unless a feature is actually published, and continue treating clones and downloads as intent rather than successful use.
