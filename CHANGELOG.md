@@ -6,6 +6,17 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [0.1.0-alpha.7] - 2026-07-19
+
+### Added
+
+- A 71-second privacy-safe end-to-end demo showing synthetic PPTX/DOCX delivery, independent checking, and artifact registration, with accelerated waits and second-run inspection footage explicitly disclosed.
+
+### Fixed
+
+- Filename-only delivery replies now register real task outputs from trusted task directories without requiring the model to expose absolute local paths.
+- Artifact reconciliation excludes user-authored filename mentions, rejects symbolic links, canonicalizes trust checks, and suppresses duplicate entries.
+
 ## [0.1.0-alpha.6] - 2026-07-18
 
 ### Added
@@ -52,6 +63,7 @@ First public alpha.
 - Dynamic workflow mutations are validated as a transaction, reject dependency cycles and started-node rewrites, and persist their revision history in the task record.
 - Read-only agent stalls now receive a final model-owned, tool-free convergence turn instead of exposing internal process output or hard-coded diagnostic prose.
 
-[Unreleased]: https://github.com/RoyZhao1991/LingShu/compare/v0.1.0-alpha.6...HEAD
+[Unreleased]: https://github.com/RoyZhao1991/LingShu/compare/v0.1.0-alpha.7...HEAD
+[0.1.0-alpha.7]: https://github.com/RoyZhao1991/LingShu/releases/tag/v0.1.0-alpha.7
 [0.1.0-alpha.6]: https://github.com/RoyZhao1991/LingShu/releases/tag/v0.1.0-alpha.6
 [0.1.0-alpha]: https://github.com/RoyZhao1991/LingShu/releases/tag/v0.1.0-alpha

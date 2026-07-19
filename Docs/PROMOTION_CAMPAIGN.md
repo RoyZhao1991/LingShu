@@ -8,7 +8,7 @@ Canonical public anchors:
 - Website and reproducible sample: https://royzhao1991.github.io/LingShu/
 - Alpha announcement and feedback thread: https://github.com/RoyZhao1991/LingShu/discussions/12
 - 15-minute Alpha tester invitation: https://github.com/RoyZhao1991/LingShu/discussions/13
-- Latest signed release: https://github.com/RoyZhao1991/LingShu/releases/tag/v0.1.0-alpha.6
+- Latest signed release: https://github.com/RoyZhao1991/LingShu/releases/tag/v0.1.0-alpha.7
 - Privacy-safe first-run report: https://github.com/RoyZhao1991/LingShu/issues/new?template=first_run_report.yml
 
 ## 1. Category and Message
@@ -108,7 +108,7 @@ The second wave improves the path from an organic search or profile visit to a s
 - **Website:** https://royzhao1991.github.io/LingShu/
 - **GitHub:** https://github.com/RoyZhao1991/LingShu
 - **Proof:** https://royzhao1991.github.io/LingShu/#deliverables
-- **Release:** https://github.com/RoyZhao1991/LingShu/releases/tag/v0.1.0-alpha.6
+- **Release:** https://github.com/RoyZhao1991/LingShu/releases/tag/v0.1.0-alpha.7
 
 Description:
 

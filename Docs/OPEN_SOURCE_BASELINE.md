@@ -319,3 +319,24 @@ The reported referrers are `github.com` (23 views / 4 unique visitors) and `t.co
 The `awesome-swift-macos-apps` [PR #76](https://github.com/jaywcjlove/awesome-swift-macos-apps/pull/76) was closed by the maintainer as duplicate content because LingShu had already been submitted through `awesome-mac`; no reopen or resubmission is needed. E2B [PR #1271](https://github.com/e2b-dev/awesome-ai-agents/pull/1271) remains open and mergeable with the CLA check passing. Chinese discovery [Issue #348](https://github.com/Wechat-ggGitHub/Awesome-GitHub-Repo/issues/348) remains open without editorial response.
 
 The 71-second demo is now linked directly from the [15-minute Alpha tester invitation](https://github.com/RoyZhao1991/LingShu/discussions/13#discussioncomment-17686827). Five DMG requests and 19 unique repository visitors have still produced no outside first-run report, so the immediate funnel risk is first-value completion and reporting rather than raw discovery. The outside contributor in [Issue #8](https://github.com/RoyZhao1991/LingShu/issues/8) has confirmed the bounded offline fixture scope but has not yet opened a Draft PR; record this as intent only.
+
+## 2026-07-19 — Demo-aligned Signed Release
+
+| Signal | Checkpoint |
+| --- | ---: |
+| Latest release | `v0.1.0-alpha.7` prerelease |
+| Release source | `36fa7ce15ee917cdd2066f87b7dac23ffe8515db` |
+| Stars | 8 |
+| Forks | 1 |
+| Watchers | 0 |
+| Open public issues | 8 |
+| GitHub views in available 14-day window | 58 total / 19 unique |
+| GitHub clones in available 14-day window | 312 total / 94 unique |
+| Previous `v0.1.0-alpha.6` DMG downloads | 10 |
+| New `v0.1.0-alpha.7` DMG downloads at publication | 0 |
+| CI on release source | 1,584 executed / 4 skipped / 0 failed |
+| Targeted artifact-delta regression | 6 executed / 0 failed |
+
+Build 10 brings the downloadable binary into alignment with the public end-to-end demo by fixing filename-only delivery artifact registration inside record-specific trusted directories. The clean Universal build was signed with Developer ID, accepted by Apple notarization for both the app and DMG, stapled, remounted, and revalidated with its bundled CLI and embedded source revision. Its DMG SHA-256 is `ed8fc1fe17c82c15f8fba9d8703490f15653164aaa37341033550f3ad27bdfeb`.
+
+The ten requests for the previous DMG and the new release's initial zero remain asset-request counts, not proof of installation, successful first use, retention, or adoption. Measure the new release through attributable visits, checksum requests, privacy-safe first-run reports, reproducible Issues, and outside pull requests.
