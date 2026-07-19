@@ -19,6 +19,7 @@ BUILD_NUMBER="${LINGSHU_BUILD_NUMBER:-1}"
 TEAM_ID="${LINGSHU_APPLE_TEAM_ID:-KM7N84AC9Y}"
 EXPECTED_CERT_SHA256="${LINGSHU_SIGN_CERT_SHA256:-8B15EC76661737C31CAB3AF508A50F923BD86FC4C7B8AF2313E0157FAA2D8D02}"
 NOTARY_PROFILE="${LINGSHU_NOTARY_PROFILE:-lingshu-notary}"
+NOTARY_NO_S3_ACCELERATION="${LINGSHU_NOTARY_NO_S3_ACCELERATION:-1}"
 BUNDLE_SENSEVOICE="${LINGSHU_BUNDLE_SENSEVOICE:-0}"
 BUNDLE_HAL_DRIVER="${LINGSHU_BUNDLE_HAL_DRIVER:-0}"
 ALLOW_DIRTY_RELEASE="${LINGSHU_ALLOW_DIRTY_RELEASE:-0}"
@@ -35,10 +36,47 @@ MOUNT_POINT="$TMP_DIR/mount"
 DMG_STAGE="$TMP_DIR/dmg-root"
 MOUNTED=0
 
+detach_image_path() {
+  local target="$1"
+  local device
+  device="$(hdiutil info 2>/dev/null | awk -v target="$target" '
+    /^image-path[[:space:]]*:/ {
+      path = $0
+      sub(/^[^:]*:[[:space:]]*/, "", path)
+      active = (path == target)
+      next
+    }
+    /^=+$/ { active = 0; next }
+    active && $1 ~ /^\/dev\/disk[0-9]+$/ { print $1; exit }
+  ')" || true
+  if [ -n "$device" ]; then
+    hdiutil detach "$device" -force -quiet || true
+  fi
+}
+
+submit_for_notarization() {
+  local input="$1"
+  local output="$2"
+  if [ "$NOTARY_NO_S3_ACCELERATION" = "1" ]; then
+    xcrun notarytool submit "$input" \
+      --keychain-profile "$NOTARY_PROFILE" \
+      --no-s3-acceleration \
+      --wait \
+      --output-format json > "$output"
+  else
+    xcrun notarytool submit "$input" \
+      --keychain-profile "$NOTARY_PROFILE" \
+      --wait \
+      --output-format json > "$output"
+  fi
+}
+
 cleanup() {
   if [ "$MOUNTED" = "1" ]; then
     hdiutil detach "$MOUNT_POINT" -quiet || true
   fi
+  # notarytool may leave a private DiskImages attachment when interrupted.
+  detach_image_path "$DMG_PATH"
   rm -rf "$TMP_DIR"
 }
 trap cleanup EXIT
@@ -53,6 +91,7 @@ fail() {
 [[ "$BUNDLE_SENSEVOICE" =~ ^[01]$ ]] || fail "LINGSHU_BUNDLE_SENSEVOICE must be 0 or 1"
 [[ "$BUNDLE_HAL_DRIVER" =~ ^[01]$ ]] || fail "LINGSHU_BUNDLE_HAL_DRIVER must be 0 or 1"
 [[ "$ALLOW_DIRTY_RELEASE" =~ ^[01]$ ]] || fail "LINGSHU_ALLOW_DIRTY_RELEASE must be 0 or 1"
+[[ "$NOTARY_NO_S3_ACCELERATION" =~ ^[01]$ ]] || fail "LINGSHU_NOTARY_NO_S3_ACCELERATION must be 0 or 1"
 
 BUNDLED_SENSEVOICE_BOOL=false
 BUNDLED_HAL_DRIVER_BOOL=false
@@ -112,6 +151,7 @@ echo "    version: $VERSION ($BUILD_NUMBER)"
 echo "    identity: $IDENTITY"
 echo "    certificate SHA-256: $CERTIFICATE_SHA256"
 echo "    notary profile: $NOTARY_PROFILE"
+echo "    notary S3 acceleration: $([ "$NOTARY_NO_S3_ACCELERATION" = "1" ] && echo disabled || echo enabled)"
 echo "    bundled SenseVoice: $BUNDLE_SENSEVOICE"
 echo "    bundled HAL driver: $BUNDLE_HAL_DRIVER"
 echo "    source revision: $SOURCE_REVISION"
@@ -178,10 +218,7 @@ PRIVATE_CONFIG="$(find "$APP_PATH/Contents/Resources/RuntimeConfig" -type f \( \
 echo "==> notarizing app"
 APP_ZIP="$TMP_DIR/LingShu-app.zip"
 ditto -c -k --keepParent "$APP_PATH" "$APP_ZIP"
-xcrun notarytool submit "$APP_ZIP" \
-  --keychain-profile "$NOTARY_PROFILE" \
-  --wait \
-  --output-format json > "$APP_NOTARY_LOG"
+submit_for_notarization "$APP_ZIP" "$APP_NOTARY_LOG"
 cat "$APP_NOTARY_LOG"
 APP_NOTARY_STATUS="$(plutil -extract status raw -o - "$APP_NOTARY_LOG")"
 [ "$APP_NOTARY_STATUS" = "Accepted" ] || fail "app notarization returned: $APP_NOTARY_STATUS"
@@ -199,14 +236,15 @@ hdiutil create \
   -format UDZO \
   -ov \
   "$DMG_PATH" >/dev/null
+hdiutil verify "$DMG_PATH"
 codesign --force --sign "$IDENTITY" --timestamp "$DMG_PATH"
 codesign --verify --verbose=2 "$DMG_PATH"
 
 echo "==> notarizing DMG"
-xcrun notarytool submit "$DMG_PATH" \
-  --keychain-profile "$NOTARY_PROFILE" \
-  --wait \
-  --output-format json > "$DMG_NOTARY_LOG"
+# A previously interrupted notarytool run can leave this exact DMG attached
+# through diskimages-helper. Detach only that image before local validation.
+detach_image_path "$DMG_PATH"
+submit_for_notarization "$DMG_PATH" "$DMG_NOTARY_LOG"
 cat "$DMG_NOTARY_LOG"
 DMG_NOTARY_STATUS="$(plutil -extract status raw -o - "$DMG_NOTARY_LOG")"
 [ "$DMG_NOTARY_STATUS" = "Accepted" ] || fail "DMG notarization returned: $DMG_NOTARY_STATUS"

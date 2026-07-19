@@ -7,7 +7,7 @@
 - Website and real task replay: https://royzhao1991.github.io/LingShu/
 - Shareable architecture and value map: https://royzhao1991.github.io/LingShu/architecture/
 - Source repository: https://github.com/RoyZhao1991/LingShu
-- Signed macOS Alpha: https://github.com/RoyZhao1991/LingShu/releases/tag/v0.1.0-alpha.7
+- Signed macOS Alpha: https://github.com/RoyZhao1991/LingShu/releases/tag/v0.1.0-alpha.8
 - Architecture: https://github.com/RoyZhao1991/LingShu/blob/main/Docs/ARCHITECTURE.md
 - Chinese README: https://github.com/RoyZhao1991/LingShu/blob/main/README.zh-CN.md
 - Discussions: https://github.com/RoyZhao1991/LingShu/discussions

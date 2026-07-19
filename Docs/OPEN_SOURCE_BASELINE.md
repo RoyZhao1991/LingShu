@@ -408,3 +408,25 @@ The ninth Star was added by an outside account after the `awesome-mac` merge and
 The Alpha 7 release still has only the two DMG requests already recorded, including the maintainer verification request, and no privacy-safe first-run report. Discovery is therefore improving faster than verified first value. Console.dev has acknowledged receipt into its editorial review queue; E2B PR #1271 and `awesome-ai-coding-tools` PR #553 remain open and mergeable without maintainer review; Chinese discovery Issue #348 remains open without a response. No duplicate reminder or resubmission is warranted yet.
 
 The outside contributor on Issue #8 has confirmed the bounded, offline, test-only fixture scope and intends to open a Draft PR. No pull request exists yet, so this remains intent. The public contribution guide now states the complete review, merge, authorship, recording, and thank-you contract that will govern that first contribution. Issue #2 was closed only after its five permission classes, optional-capability boundary, macOS 14+ recovery path, privacy boundary, and both README links were verified on current `main`.
+
+## 2026-07-19 — Notarized Clean-User Release Gate
+
+| Signal | Checkpoint |
+| --- | ---: |
+| Latest release | `v0.1.0-alpha.8` prerelease |
+| Release source | `081976ba8f7d64d803332d0b3b0cd889998545ad` |
+| Stars | 9 |
+| External stargazers | 8 |
+| Forks | 1 |
+| Watchers | 0 |
+| Open public issues after closing #7 | 6 |
+| Open LingShu pull requests | 0 |
+| CI on release source | 1,586 executed / 4 skipped / 0 failed |
+| Focused clean-user tests | 4 executed / 0 failed |
+| Notarized-DMG machine checks | 11 / 11 passed |
+| `v0.1.0-alpha.8` DMG requests after maintainer verification | 1 |
+| Privacy-safe outside first-run reports | 0 |
+
+Build 11 starts its release gate from the Apple-notarized Universal DMG, installs the app into a disposable user root, and verifies the real language-selection and no-brain setup views without reading maintainer Application Support, preferences, Keychain tokens, environment tokens, or task history. It also disables permission and background services, verifies the installed signature and app liveness, and completes a deterministic local direct reply. The published `clean-user-smoke-result.json` records every check; the DMG SHA-256 is `815a1e8471e1dfc2cd2e773f388567601fc36fb45d30b83eec4c4743644822d4`.
+
+The first DMG request came from maintainer Homebrew fetch verification and is excluded from outside conversion. This evidence closes the automated clean-user installation scope in Issue #7, but it does not prove that an outside user configured a remote model, completed a real first task, retained the app, or adopted it. Those outcomes still require explicit privacy-safe reports or reproducible outside activity.

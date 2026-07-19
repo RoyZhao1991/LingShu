@@ -17,14 +17,14 @@
     <img alt="项目阶段 Alpha" src="https://img.shields.io/badge/status-alpha-E9A23B">
     <img alt="1,500+ 项测试" src="https://img.shields.io/badge/tests-1%2C500%2B-2C8C7F">
     <a href="https://github.com/RoyZhao1991/LingShu/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/RoyZhao1991/LingShu/actions/workflows/ci.yml/badge.svg"></a>
-    <a href="https://github.com/RoyZhao1991/LingShu/releases/tag/v0.1.0-alpha.7"><img alt="最新版本" src="https://img.shields.io/github/v/release/RoyZhao1991/LingShu?include_prereleases&label=download"></a>
+    <a href="https://github.com/RoyZhao1991/LingShu/releases/tag/v0.1.0-alpha.8"><img alt="最新版本" src="https://img.shields.io/github/v/release/RoyZhao1991/LingShu?include_prereleases&label=download"></a>
     <a href="https://github.com/jaywcjlove/awesome-mac#ai-tools"><img alt="已收录于 awesome-mac" src="https://img.shields.io/badge/listed-awesome--mac-2C8C7F"></a>
   </p>
 
   <p>
     <a href="https://royzhao1991.github.io/LingShu/"><strong>官方网站</strong></a>
     ·
-    <a href="https://github.com/RoyZhao1991/LingShu/releases/tag/v0.1.0-alpha.7"><strong>下载已签名的 macOS Alpha</strong></a>
+    <a href="https://github.com/RoyZhao1991/LingShu/releases/tag/v0.1.0-alpha.8"><strong>下载已签名的 macOS Alpha</strong></a>
     · <a href="#真实公开样例"><strong>检查真实样例</strong></a>
     · <a href="#快速开始">快速开始</a>
     · <a href="https://github.com/RoyZhao1991/LingShu/discussions">社区讨论</a>
@@ -145,11 +145,11 @@ brew install --cask RoyZhao1991/tap/lingshu
 
 也可以手动安装 Universal DMG：
 
-1. 从 [v0.1.0-alpha.7 Release](https://github.com/RoyZhao1991/LingShu/releases/tag/v0.1.0-alpha.7) 下载 DMG 与对应 `.sha256` 文件。
+1. 从 [v0.1.0-alpha.8 Release](https://github.com/RoyZhao1991/LingShu/releases/tag/v0.1.0-alpha.8) 下载 DMG 与对应 `.sha256` 文件。
 2. 在终端校验下载文件：
 
    ```bash
-   shasum -a 256 -c LingShu-0.1.0-10-macOS-universal.dmg.sha256
+   shasum -a 256 -c LingShu-0.1.0-11-macOS-universal.dmg.sha256
    ```
 
 3. 打开 DMG，将 `灵枢.app` 拖入“应用程序”，然后启动。
@@ -248,7 +248,7 @@ API 凭据保存在 macOS 钥匙串中，只属于本地运行配置，禁止提
 | PPT、文档与代码的端到端产物工作流 | 已实现 |
 | 实时感知与语音 | 可用；部分链路依赖环境并带降级策略 |
 | HAL 虚拟麦克风 | 实验性；设备出现仍不稳定 |
-| 官网签名与公证发布 | [v0.1.0-alpha.7 已发布](https://github.com/RoyZhao1991/LingShu/releases/tag/v0.1.0-alpha.7) |
+| 官网签名与公证发布 | [v0.1.0-alpha.8 已发布](https://github.com/RoyZhao1991/LingShu/releases/tag/v0.1.0-alpha.8)；公证 DMG 全新用户验证通过 |
 
 仓库包含超过 10 万行源码与测试代码、超过 180 个 Swift 测试文件以及超过 1,500 项测试。这些数字用于说明工程深度，并不等于所有依赖外部环境的测试都能在每一台 Mac 上通过。
 
@@ -260,6 +260,8 @@ bash Scripts/smoke-e2e.sh
 ```
 
 官网分发的签名、公证与 DMG 构建见 [`Scripts/release-website.sh`](./Scripts/release-website.sh)。官方构建锁定 Developer ID Team `KM7N84AC9Y` 与当前签名证书指纹，并把指纹写入发布清单；Apple Developer 凭据与私钥不存入仓库。官方二进制一旦被修改，原签名会立即失效；派生版本必须使用自己的签名身份。
+
+官方发布还会使用 [`Scripts/smoke-clean-user-dmg.sh`](./Scripts/smoke-clean-user-dmg.sh) 在一次性用户目录中验证公证 DMG。Release 资产 `clean-user-smoke-result.json` 会记录首次启动、隔离、无权限、空历史、签名和最小直答检查，全程不读取维护者凭据。
 
 架构资料：
 

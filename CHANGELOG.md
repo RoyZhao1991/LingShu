@@ -6,6 +6,18 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+### Changed
+
+- Public releases now verify DMG integrity before notarization and clean up exact-image DiskImages attachments left by interrupted notarization attempts.
+- The release pipeline supports a configurable non-S3 notarization upload path for networks where accelerated upload is unreliable.
+
+## [0.1.0-alpha.8] - 2026-07-19
+
+### Added
+
+- A notarized-DMG clean-user smoke path that isolates home, Application Support, preferences, temporary files, credentials, task history, permission services, and background services.
+- Machine-readable release evidence for first-language selection, no-brain setup, app liveness, installed signature, no-permission startup, empty history, and a deterministic minimal reply.
+
 ## [0.1.0-alpha.7] - 2026-07-19
 
 ### Added
@@ -63,7 +75,8 @@ First public alpha.
 - Dynamic workflow mutations are validated as a transaction, reject dependency cycles and started-node rewrites, and persist their revision history in the task record.
 - Read-only agent stalls now receive a final model-owned, tool-free convergence turn instead of exposing internal process output or hard-coded diagnostic prose.
 
-[Unreleased]: https://github.com/RoyZhao1991/LingShu/compare/v0.1.0-alpha.7...HEAD
+[Unreleased]: https://github.com/RoyZhao1991/LingShu/compare/v0.1.0-alpha.8...HEAD
+[0.1.0-alpha.8]: https://github.com/RoyZhao1991/LingShu/releases/tag/v0.1.0-alpha.8
 [0.1.0-alpha.7]: https://github.com/RoyZhao1991/LingShu/releases/tag/v0.1.0-alpha.7
 [0.1.0-alpha.6]: https://github.com/RoyZhao1991/LingShu/releases/tag/v0.1.0-alpha.6
 [0.1.0-alpha]: https://github.com/RoyZhao1991/LingShu/releases/tag/v0.1.0-alpha

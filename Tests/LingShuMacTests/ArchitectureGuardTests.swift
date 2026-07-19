@@ -302,6 +302,9 @@ final class ArchitectureGuardTests: XCTestCase {
         XCTAssertTrue(releaseScript.contains("source_archive_sha256"))
         XCTAssertTrue(releaseScript.contains("app_binary_sha256"))
         XCTAssertTrue(releaseScript.contains("cli_binary_sha256"))
+        XCTAssertTrue(releaseScript.contains("LINGSHU_NOTARY_NO_S3_ACCELERATION"))
+        XCTAssertTrue(releaseScript.contains("detach_image_path"))
+        XCTAssertTrue(releaseScript.contains(#"hdiutil verify "$DMG_PATH""#))
     }
 
     func testArchitectureQuickReferenceStatesCurrentCodeReality() throws {
