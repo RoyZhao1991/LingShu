@@ -45,6 +45,8 @@ struct LingShuSelfCheckPanel: View {
 
                 groupHeader(state.loc("当前能力（实时）", "Current Capabilities (Live)"), state.loc("此刻具体有什么", "What is available right now"))
                 ForEach(Array(snap.capabilities.enumerated()), id: \.offset) { _, s in sectionCard(s, accent: .green) }
+
+                feedbackCard
             }
         }
         .onAppear { refreshSnapshot(forceProbe: state.agentPluginSelfInspectionNeedsRefresh()) }
@@ -83,5 +85,46 @@ struct LingShuSelfCheckPanel: View {
         .padding(12).frame(maxWidth: .infinity, alignment: .leading)
         .background(Color.lingFg.opacity(0.04), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 9, style: .continuous).stroke(accent.opacity(0.18), lineWidth: 1))
+    }
+
+    private var feedbackCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            SectionHeader(
+                icon: "bubble.left.and.text.bubble.right",
+                title: state.loc("Alpha 反馈与社区", "Alpha Feedback & Community"),
+                subtitle: state.loc("报告真实首跑结果，或向社区提问", "Report a real first run or ask the community")
+            )
+
+            Text(state.loc(
+                "无论首跑成功、部分成功还是失败，都欢迎提交不含凭据和私人数据的结构化报告。成功首跑只需填写关键结果，不必整理长日志。",
+                "Whether the first run succeeds, partly succeeds, or fails, share a structured report without credentials or private data. A successful run only needs the key outcome fields, not a long log."
+            ))
+            .font(.system(size: 11.5, weight: .medium))
+            .foregroundStyle(Color.lingFg.opacity(0.58))
+            .fixedSize(horizontal: false, vertical: true)
+
+            HStack(spacing: 8) {
+                Link(destination: LingShuPublicLinks.firstRunReport(for: state.language)) {
+                    Label(state.loc("提交首跑报告", "Share First-run Report"), systemImage: "checklist")
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.lingHolo)
+
+                Link(destination: LingShuPublicLinks.discussions) {
+                    Label(state.loc("社区提问", "Ask the Community"), systemImage: "bubble.left.and.bubble.right")
+                }
+                .buttonStyle(.bordered)
+
+                Link(destination: LingShuPublicLinks.repository) {
+                    Label(state.loc("查看源码", "View Source"), systemImage: "chevron.left.forwardslash.chevron.right")
+                }
+                .buttonStyle(.bordered)
+            }
+            .font(.system(size: 11.5, weight: .semibold))
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.lingFg.opacity(0.045), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .overlay { RoundedRectangle(cornerRadius: 10, style: .continuous).stroke(Color.lingHolo.opacity(0.18)) }
     }
 }
