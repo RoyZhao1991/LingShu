@@ -18,6 +18,7 @@
     <img alt="1,500+ tests" src="https://img.shields.io/badge/tests-1%2C500%2B-2C8C7F">
     <a href="https://github.com/RoyZhao1991/LingShu/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/RoyZhao1991/LingShu/actions/workflows/ci.yml/badge.svg"></a>
     <a href="https://github.com/RoyZhao1991/LingShu/releases/tag/v0.1.0-alpha.6"><img alt="Latest release" src="https://img.shields.io/github/v/release/RoyZhao1991/LingShu?include_prereleases&label=download"></a>
+    <a href="https://github.com/jaywcjlove/awesome-mac#ai-tools"><img alt="Listed in awesome-mac" src="https://img.shields.io/badge/listed-awesome--mac-2C8C7F"></a>
   </p>
 
   <p>

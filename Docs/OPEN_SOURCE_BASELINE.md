@@ -265,3 +265,20 @@ The form returned an explicit `Thank you!` confirmation. This verifies delivery 
 LingShu was sent once to Forkable's current public editorial address. Forkable remains an active weekly open-source publication and has recently covered open-source AI agents, model choice, human review, and agentic developer tooling. The tailored message linked the repository and reproducible Project Aurora example, described the replaceable model layer and verifiable non-code artifact workflow, and disclosed the macOS 14+, BYOK, and Alpha limits. Gmail message `19f7824d4f273e5c` is delivery evidence only; it is not evidence of editorial acceptance, readership, referral traffic, or adoption.
 
 Ongoing operations now treat external pull requests as a higher priority than routine promotion. A PR must receive scope and authorship review, file-level behavioral and safety review, and risk-appropriate local or CI verification. Only a PR that satisfies the repository's required checks and protection rules may be merged. After merge, the contributor retains authorship, receives a specific public thank-you, and is recorded through the repository's existing contribution mechanism and campaign ledger. No PR is merged merely to create activity.
+
+## 2026-07-19 — First Merged Curated Directory Listing
+
+| Signal | Checkpoint |
+| --- | ---: |
+| Stars | 5 |
+| Forks | 1 |
+| Watchers | 0 |
+| Open public issues | 9 |
+| GitHub views in available window | 1 total / 1 unique |
+| `v0.1.0-alpha.6` DMG downloads | 4 |
+| Privacy-safe first-run reports | 0 |
+| Merged curated-directory listings | 1 |
+
+[`awesome-mac` PR #2355](https://github.com/jaywcjlove/awesome-mac/pull/2355) was merged by maintainer `jaywcjlove` on 2026-07-19 as commit `cac4ce1bd06dd55a1504c2bd67548b4f19560284`. LingShu is now publicly listed under [`awesome-mac` AI Tools](https://github.com/jaywcjlove/awesome-mac#ai-tools) as an open-source, model-agnostic macOS agent for verified code, documents, slides, and computer actions. The maintainer also shared the project publicly during review and helped tighten the four localized descriptions.
+
+The maintainer received a specific [post-merge thank-you](https://github.com/jaywcjlove/awesome-mac/pull/2355#issuecomment-5013824677). This is verified external curation and distribution, not evidence of installation, successful use, retention, endorsement, or adoption. Measure any downstream effect only through attributable referrers, release downloads, privacy-safe first-run reports, Issues, and outside contributions.
