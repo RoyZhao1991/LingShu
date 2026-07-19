@@ -180,3 +180,27 @@ The existing external submissions remain healthy but pending: `awesome-swift-mac
 LingShu was submitted directly to the Console.dev editorial team through its published developer-tool submission address. The English pitch disclosed the Alpha status and linked the repository, signed release, Homebrew install, architecture map, reproducible Project Aurora sample, and 15-minute tester task. This is one targeted editorial pitch based on Console.dev's stated acceptance of beta and preview developer tools, not another generic directory submission or a claim of coverage.
 
 Measure this action for seven days using an editorial reply, a verifiable feature or referrer, release downloads, first-run reports, and outside Issues or pull requests. Do not count the channel's potential audience as LingShu reach unless a feature is actually published, and continue treating clones and downloads as intent rather than successful use.
+
+## 2026-07-19 — First External Fork and AI Developer Editorial Outreach
+
+| Signal | Checkpoint |
+| --- | ---: |
+| Stars | 4 |
+| External stargazers | 3 |
+| Forks | 1 |
+| Watchers | 0 |
+| Open public issues | 9 |
+| `v0.1.0-alpha.6` DMG downloads | 4 |
+| GitHub views in available window | 1 total / 1 unique |
+| GitHub clones in available window | 96 total / 38 unique |
+| Privacy-safe first-run reports | 0 |
+| Outside contribution intents | 1 |
+| Outside Draft pull requests | 0 |
+
+An outside GitHub user, `MichaelC001`, starred and forked LingShu. This is the first verified outside fork and a useful inspect-or-modify signal, but it does not prove installation, successful use, retention, or a specific acquisition source. No attribution is assigned without a referrer or direct report.
+
+Console.dev returned an automated receipt confirming that the project submission entered review for a future newsletter. This confirms delivery to the editorial queue, not acceptance or publication. Do not attribute the new Star, fork, or release download to Console.dev unless a feature or referrer becomes observable.
+
+A second, audience-specific project tip was sent to Developers Digest, whose published coverage includes AI agents, coding tools, LLM engineering, and open-source projects. The message identified LingShu as an Apache-2.0, model-agnostic native macOS execution agent, linked the reproducible Project Aurora proof, and disclosed the macOS-only, BYOK Alpha limitations. It did not request paid placement or claim adoption.
+
+Measure both editorial actions for seven days using replies, a verifiable publication or referrer, release downloads, privacy-safe first-run reports, outside Issues, and outside pull requests. Continue treating Stars, forks, clones, and downloads as separate funnel signals rather than successful use.
