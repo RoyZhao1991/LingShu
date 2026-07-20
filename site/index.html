@@ -185,14 +185,16 @@
     <section class="section quick-start" id="quick-start" aria-label="Run your first traceable task" data-label-en="Run your first traceable task" data-label-zh="运行第一条可追踪任务">
       <div class="quick-layout">
         <div class="section-heading compact">
-          <p class="eyebrow copy-en">Three-minute path</p>
-          <p class="eyebrow copy-zh">三分钟上手路径</p>
+          <p class="eyebrow copy-en">Your first 15 minutes</p>
+          <p class="eyebrow copy-zh">首个 15 分钟</p>
           <h2 id="quick-start-title"><span class="copy-en">Run your first traceable task</span><span class="copy-zh">运行第一条可追踪任务</span></h2>
-          <p class="copy-en">Install LingShu, choose a language, connect your own model, then start with a small local deliverable.</p>
-          <p class="copy-zh">安装灵枢、选择语言、连接自己的主脑，然后从一个小型本地产物开始。</p>
+          <p class="copy-en">Install LingShu, choose a language, connect one provider with your own API token, then start with a small local deliverable.</p>
+          <p class="copy-zh">安装灵枢、选择语言，使用自己的 API Token 连接一个模型服务商，然后从一个小型本地产物开始。</p>
           <div class="requirement-row">
             <span>macOS 14+</span><span>OpenAI</span><span>Claude</span><span>DeepSeek</span><span>MiniMax M3</span>
           </div>
+          <p class="quick-start-note copy-en">LingShu is free and BYOK; inference credits are not included. No token yet? <a href="#sample">Inspect the 71-second sample first.</a></p>
+          <p class="quick-start-note copy-zh">灵枢免费开源，但需要自备模型 Token，不包含推理额度。还没有 Token？可以先<a href="#sample">检查 71 秒真实演示</a>。</p>
         </div>
         <div class="install-panel">
           <div class="install-header">
@@ -208,11 +210,26 @@
       </div>
       <div class="first-task">
         <p class="copy-en">Try this first</p><p class="copy-zh">第一条任务可以这样写</p>
-        <blockquote class="copy-en">Create a one-page project brief in DOCX, save it locally, preview it, and have an independent checker verify the result.</blockquote>
-        <blockquote class="copy-zh">生成一份单页项目简报 DOCX，保存到本地，打开预览，并交给独立 checker 验收。</blockquote>
-        <a class="button button-outline first-task-report" href="https://github.com/RoyZhao1991/LingShu/issues/new?template=first_run_report.yml" data-href-en="https://github.com/RoyZhao1991/LingShu/issues/new?template=first_run_report.yml" data-href-zh="https://github.com/RoyZhao1991/LingShu/issues/new?template=first_run_report_zh.yml">
-          <span class="copy-en">Share a 15-minute first-run report</span><span class="copy-zh">提交 15 分钟首跑报告</span>
-        </a>
+        <div class="first-task-body">
+          <blockquote class="copy-en">Create a one-page project brief in DOCX, save it locally, preview it, and have an independent checker verify the result.</blockquote>
+          <blockquote class="copy-zh">生成一份单页项目简报 DOCX，保存到本地，打开预览，并交给独立 checker 验收。</blockquote>
+          <div class="first-run-proof">
+            <p class="copy-en">You will know it worked when all three signals are visible:</p>
+            <p class="copy-zh">看到以下三个信号，就说明完整链路已跑通：</p>
+            <ul>
+              <li><span class="copy-en">A real <code>.docx</code> appears in Workspace</span><span class="copy-zh">Workspace 中出现真实 <code>.docx</code> 文件</span></li>
+              <li><span class="copy-en">The file opens in built-in preview</span><span class="copy-zh">文件可以在内置预览中打开</span></li>
+              <li><span class="copy-en">The task record shows the artifact and checker result</span><span class="copy-zh">任务记录显示产物和 checker 结果</span></li>
+            </ul>
+          </div>
+          <div class="first-run-actions">
+            <a class="button button-outline first-task-report" href="https://github.com/RoyZhao1991/LingShu/issues/new?template=first_run_report.yml" data-href-en="https://github.com/RoyZhao1991/LingShu/issues/new?template=first_run_report.yml" data-href-zh="https://github.com/RoyZhao1991/LingShu/issues/new?template=first_run_report_zh.yml">
+              <span class="copy-en">Report success, partial, or failure</span><span class="copy-zh">提交成功、部分成功或失败结果</span>
+            </a>
+            <p class="copy-en">Every outcome helps. Key fields are enough; no long log is required.</p>
+            <p class="copy-zh">每一种结果都有价值，只填关键字段即可，不需要整理长日志。</p>
+          </div>
+        </div>
       </div>
     </section>
 

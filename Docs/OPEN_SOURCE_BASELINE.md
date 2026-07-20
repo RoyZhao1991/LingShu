@@ -455,3 +455,24 @@ The second Alpha 8 DMG request is observable but unattributed. The first request
 No LingShu pull request or new substantive editorial reply appeared at this checkpoint. The outside contributor on [Issue #8](https://github.com/RoyZhao1991/LingShu/issues/8) is still inside a reasonable implementation window for the bounded offline fixture Draft PR, so no reminder was sent. E2B [PR #1271](https://github.com/e2b-dev/awesome-ai-agents/pull/1271) and `awesome-ai-coding-tools` [PR #553](https://github.com/ai-for-developers/awesome-ai-coding-tools/pull/553) remain open and mergeable without maintainer review; Chinese discovery [Issue #348](https://github.com/Wechat-ggGitHub/Awesome-GitHub-Repo/issues/348) remains open without editorial response.
 
 A single factual project tip was sent to MacStories managing editor John Voorhees through the publication's [officially listed contact route](https://www.macstories.net/about/). MacStories covers native Apple apps, automation, and agentic coding workflows, making this a distinct editorial audience rather than another general-purpose directory. The message linked only public evidence and disclosed macOS 14+, BYOK, public Alpha, and human-review limits. Gmail message `19f7b25325fca7eb` proves delivery only; it is not evidence of acceptance, publication, readership, referral traffic, installation, or adoption. Do not send a duplicate or routine follow-up during the normal editorial review window.
+
+## 2026-07-20 — First-run Conversion Contract
+
+| Signal | Checkpoint |
+| --- | ---: |
+| Latest release | `v0.1.0-alpha.8` prerelease |
+| Stars | 9 |
+| External stargazers | 8 |
+| Forks | 1 |
+| Watchers | 0 |
+| Open public issues | 6 |
+| Open LingShu pull requests | 0 |
+| Privacy-safe outside first-run reports | 0 |
+| Website local references checked | 55 / 55 present |
+| Website layout checks | English and Chinese, desktop and mobile, 0 horizontal overflow |
+
+The public quick-start path now describes the first 15 minutes instead of promising a three-minute outcome. Before installation, it states that LingShu is free and open source but uses bring-your-own-key model access and does not include inference credits. Visitors without a token have a direct route to the real 71-second sample rather than a dead-end setup expectation.
+
+A complete first run has one public, model-neutral contract with three visible signals: a real `.docx` appears in Workspace, the file opens in the built-in preview, and the task record shows the artifact plus independent checker result. The report call to action accepts success, partial success, and failure and asks only for key privacy-safe fields. Both locale-matched forms now use Alpha 8 as their version placeholder.
+
+The Pages build rejects a regression to the old three-minute claim and requires the English and Chinese BYOK, success-signal, and report copy before deployment. The built site passed local-resource validation and visual checks at 1440×1000 and 390×844 in both languages. This is funnel repair, not new distribution or adoption evidence. Measure explicit first-run reports and recurring blockers for seven full days; continue to treat visits, clones, downloads, and Stars as separate repository signals.

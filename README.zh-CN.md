@@ -163,7 +163,7 @@ brew install --cask RoyZhao1991/tap/lingshu
 
 > 生成一份单页项目简报 DOCX，保存到本地，打开预览，并交给独立 checker 验收。
 
-这条任务会覆盖新用户最应该先检查的完整链路：目标理解、真实文件生成、产物登记、内置预览和验收。正常情况下，灵枢会在 Workspace 中留下可打开的文件，并显示对应任务记录。
+这条任务会覆盖新用户最应该先检查的完整链路：目标理解、真实文件生成、产物登记、内置预览和验收。完整首跑会留下三个可见信号：Workspace 中出现真实 `.docx` 文件、该文件能在内置预览中打开、任务记录同时显示产物与独立 checker 结果。
 
 无论成功、部分成功还是失败，都欢迎提交一份不含隐私数据的 [15 分钟 Alpha 首跑报告（中文）](https://github.com/RoyZhao1991/LingShu/issues/new?template=first_run_report_zh.yml)。成功首跑只需选择关键结果，不必撰写长日志。应用内的 **帮助** 菜单和 **设置 → 自检** 页面也提供了跟随当前语言的报告与社区入口。安装问题请到 [GitHub Discussions](https://github.com/RoyZhao1991/LingShu/discussions) 交流。不要提交 API Token 或私人文件内容。
 

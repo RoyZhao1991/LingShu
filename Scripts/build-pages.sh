@@ -28,4 +28,26 @@ cp "$ROOT/Examples/project-aurora/project-aurora-demo.docx" "$OUTPUT/examples/pr
 cp "$ROOT/lingshu-icon-preview.png" "$OUTPUT/assets/lingshu-icon-preview.png"
 touch "$OUTPUT/.nojekyll"
 
+require_copy() {
+  local expected="$1"
+  if ! grep -Fq "$expected" "$OUTPUT/index.html"; then
+    printf 'Missing required first-run copy: %s\n' "$expected" >&2
+    exit 1
+  fi
+}
+
+require_copy "Your first 15 minutes"
+require_copy "LingShu is free and BYOK; inference credits are not included."
+require_copy "A real <code>.docx</code> appears in Workspace"
+require_copy "Report success, partial, or failure"
+require_copy "首个 15 分钟"
+require_copy "灵枢免费开源，但需要自备模型 Token，不包含推理额度。"
+require_copy "Workspace 中出现真实 <code>.docx</code> 文件"
+require_copy "提交成功、部分成功或失败结果"
+
+if grep -Fq "Three-minute path" "$OUTPUT/index.html"; then
+  printf 'Outdated first-run timing claim remains in the published page.\n' >&2
+  exit 1
+fi
+
 printf 'Built LingShu Pages site at %s\n' "$OUTPUT"

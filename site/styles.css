@@ -642,6 +642,18 @@ html[lang="zh-CN"] .copy-zh {
   color: var(--cyan);
 }
 
+.quick-start-note {
+  margin: 16px 0 0;
+  color: #52605d;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.quick-start-note a {
+  color: var(--teal-dark);
+  font-weight: 720;
+}
+
 .first-task {
   margin-top: 46px;
   padding-top: 30px;
@@ -659,17 +671,79 @@ html[lang="zh-CN"] .copy-zh {
   text-transform: uppercase;
 }
 
-.first-task blockquote {
+.first-task-body {
+  display: grid;
+  gap: 22px;
+}
+
+.first-task-body blockquote {
   margin: 0;
   color: #26312f;
   font-size: 19px;
   font-weight: 620;
 }
 
+.first-run-proof {
+  padding: 20px 0;
+  border-top: 1px solid #c4cfcc;
+  border-bottom: 1px solid #c4cfcc;
+}
+
+.first-run-proof > p {
+  margin: 0 0 14px;
+  color: #26312f;
+  font-size: 14px;
+  font-weight: 760;
+}
+
+.first-run-proof ul {
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 18px;
+  list-style: none;
+}
+
+.first-run-proof li {
+  position: relative;
+  padding-left: 22px;
+  color: #52605d;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.first-run-proof li::before {
+  position: absolute;
+  top: 1px;
+  left: 0;
+  color: var(--teal-dark);
+  content: "✓";
+  font-weight: 800;
+}
+
+.first-run-proof code {
+  color: #26312f;
+  font-size: 0.95em;
+}
+
+.first-run-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px 18px;
+}
+
+.first-run-actions p {
+  margin: 0;
+  max-width: 520px;
+  color: #63706d;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
 .first-task-report {
-  grid-column: 2;
-  justify-self: start;
-  margin-top: 4px;
+  flex: 0 0 auto;
 }
 
 .section-dark {
@@ -1588,12 +1662,22 @@ section.open-source {
     gap: 10px;
   }
 
-  .first-task blockquote {
+  .first-task-body blockquote {
     font-size: 17px;
   }
 
+  .first-run-proof ul {
+    grid-template-columns: 1fr;
+    gap: 10px;
+  }
+
+  .first-run-actions {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
   .first-task-report {
-    grid-column: 1;
+    width: 100%;
   }
 
   .deliverable-layout {
