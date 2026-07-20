@@ -201,9 +201,9 @@ An outside GitHub user, `MichaelC001`, starred and forked LingShu. This is the f
 
 Console.dev returned an automated receipt confirming that the project submission entered review for a future newsletter. This confirms delivery to the editorial queue, not acceptance or publication. Do not attribute the new Star, fork, or release download to Console.dev unless a feature or referrer becomes observable.
 
-A second, audience-specific project tip was sent to Developers Digest, whose published coverage includes AI agents, coding tools, LLM engineering, and open-source projects. The message identified LingShu as an Apache-2.0, model-agnostic native macOS execution agent, linked the reproducible Project Aurora proof, and disclosed the macOS-only, BYOK Alpha limitations. It did not request paid placement or claim adoption.
+An audience-specific project tip was prepared for Developers Digest, whose published coverage includes AI agents, coding tools, LLM engineering, and open-source projects. The initial recipient address omitted the final `s` in `developers`, and Gmail returned a permanent delivery failure (`19f77bf6524f8abb`). The message therefore did not reach the publication at this checkpoint and must not be counted as delivered outreach. A later correction is recorded separately below.
 
-Measure both editorial actions for seven days using replies, a verifiable publication or referrer, release downloads, privacy-safe first-run reports, outside Issues, and outside pull requests. Continue treating Stars, forks, clones, and downloads as separate funnel signals rather than successful use.
+Measure the Console.dev editorial action for seven days using replies, a verifiable publication or referrer, release downloads, privacy-safe first-run reports, outside Issues, and outside pull requests. Keep the failed Developers Digest attempt as an audit record rather than an active editorial review. Continue treating Stars, forks, clones, and downloads as separate funnel signals rather than successful use.
 
 ## 2026-07-19 — Social Sharing Conversion Checkpoint
 
@@ -220,7 +220,7 @@ Measure both editorial actions for seven days using replies, a verifiable public
 
 The GitHub repository now serves the versioned [`Docs/media/lingshu-social-preview.png`](./media/lingshu-social-preview.png) as its custom social preview. The public `og:image` was fetched independently after upload and is an exact SHA-256 match for the repository asset: a 1280×640, 157,500-byte PNG. This improves link recognition and consistency across social and chat clients without introducing user tracking.
 
-This is a conversion improvement, not an exposure claim. Measure it for seven days through aggregate GitHub referrers, unique visitors, release downloads, explicit first-run reports, outside Issues, and outside pull requests. Console.dev remains in editorial review, Developers Digest has not replied, and the `awesome-mac` maintainer's public X post remains the only verified external amplification at this checkpoint.
+This is a conversion improvement, not an exposure claim. Measure it for seven days through aggregate GitHub referrers, unique visitors, release downloads, explicit first-run reports, outside Issues, and outside pull requests. Console.dev remains in editorial review. A later mailbox audit showed that the initial Developers Digest message had bounced rather than entered review. The `awesome-mac` maintainer's public X post remains the only verified external amplification at this checkpoint.
 
 ## 2026-07-19 — First-Run Permission Friction Reduction
 
@@ -476,3 +476,29 @@ The public quick-start path now describes the first 15 minutes instead of promis
 A complete first run has one public, model-neutral contract with three visible signals: a real `.docx` appears in Workspace, the file opens in the built-in preview, and the task record shows the artifact plus independent checker result. The report call to action accepts success, partial success, and failure and asks only for key privacy-safe fields. Both locale-matched forms now use Alpha 8 as their version placeholder.
 
 The Pages build rejects a regression to the old three-minute claim and requires the English and Chinese BYOK, success-signal, and report copy before deployment. The built site passed local-resource validation and visual checks at 1440×1000 and 390×844 in both languages. This is funnel repair, not new distribution or adoption evidence. Measure explicit first-run reports and recurring blockers for seven full days; continue to treat visits, clones, downloads, and Stars as separate repository signals.
+
+## 2026-07-20 — Developers Digest Delivery Correction
+
+| Signal | Checkpoint |
+| --- | ---: |
+| Initial singular-address attempt | Permanent delivery failure |
+| Correct official address | Verified from the publication's current contact page |
+| Corrected Gmail message | `19f7e56157c63f39` |
+| Editorial acceptance or publication | Not observed |
+| Stars | 10 |
+| External stargazers | 9 |
+| Forks / watchers | 1 / 0 |
+| GitHub views in available 14-day window | 106 total / 38 unique |
+| GitHub clones in available 14-day window | 420 total / 128 unique |
+| Reported `t.co` referrer | 28 views / 23 unique visitors |
+| Reported `github.com` referrer | 42 views / 7 unique visitors |
+| `v0.1.0-alpha.8` DMG requests | 2 |
+| Privacy-safe outside first-run reports | 0 |
+| Open LingShu pull requests | 0 |
+| New proactive outreach allowed today | 0 |
+
+The failed July 19 Developers Digest attempt was corrected only after the publication's current [official contact page](https://www.developersdigest.tech/contact) confirmed the plural `developers` address. The replacement message updates the proof links to the 71-second privacy-safe demo and signed Alpha 8 release, and explicitly discloses macOS 14+, BYOK, no included inference credits, Alpha status, and human-approval limits.
+
+The Gmail Sent record proves only that the corrected message was submitted through the maintainer mailbox. It does not prove inbox placement, editorial review, publication, readership, referral traffic, installation, or adoption. Because this was an actual outbound message on July 20, no additional proactive email outreach should be sent today. Monitor only for a reply, a verifiable publication or referrer, release requests above the maintainer-verification baseline, privacy-safe first-run reports, reproducible Issues, and outside pull requests; do not send a routine follow-up during the normal editorial window.
+
+One additional outside account has starred the repository since the previous checkpoint. Aggregate traffic also increased, led by `t.co` and GitHub referrals, but the Alpha 8 DMG request count did not move and no outside first-run report or pull request appeared. This is verified discovery growth without verified first value. The 420 clone events include maintainer, branch, and CI activity and must not be interpreted as 128 installations or users. The immediate measurement question remains whether the newly deployed 15-minute path converts any visitor into a privacy-safe success, partial-success, or failure report.
