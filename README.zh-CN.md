@@ -19,6 +19,7 @@
     <a href="https://github.com/RoyZhao1991/LingShu/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/RoyZhao1991/LingShu/actions/workflows/ci.yml/badge.svg"></a>
     <a href="https://github.com/RoyZhao1991/LingShu/releases/tag/v0.1.0-alpha.9"><img alt="最新版本" src="https://img.shields.io/github/v/release/RoyZhao1991/LingShu?include_prereleases&label=download"></a>
     <a href="https://github.com/jaywcjlove/awesome-mac#ai-tools"><img alt="已收录于 awesome-mac" src="https://img.shields.io/badge/listed-awesome--mac-2C8C7F"></a>
+    <a href="https://star-history.com/#RoyZhao1991/LingShu<a href="https://github.com/jaywcjlove/awesome-mac#ai-tools"><img alt="已收录于 awesome-mac" src="https://img.shields.io/badge/listed-awesome--mac-2C8C7F"></a>Date"><img alt="Star 历史" src="https://api.star-history.com/svg?repos=RoyZhao1991/LingShu<a href="https://github.com/jaywcjlove/awesome-mac#ai-tools"><img alt="已收录于 awesome-mac" src="https://img.shields.io/badge/listed-awesome--mac-2C8C7F"></a>type=Date"></a>
   </p>
 
   <p>
@@ -287,3 +288,11 @@ bash Scripts/smoke-e2e.sh
 灵枢以 [Apache License 2.0](./LICENSE) 开源。第三方组件保留各自许可证，详见 [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md)。
 
 由 [Roy Zhao](https://github.com/RoyZhao1991) 创建并维护。
+
+---
+
+## ⭐ Star 历史
+
+[![Star 历史趋势](https://api.star-history.com/svg?repos=RoyZhao1991/LingShu&type=Date)](https://star-history.com/#RoyZhao1991/LingShu&Date)
+
+灵枢是开源项目，正在成长中。如果你觉得它有用，不妨点个 Star — 这能帮助更多人发现这个项目。
