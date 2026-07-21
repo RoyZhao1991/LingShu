@@ -19,6 +19,7 @@
     <a href="https://github.com/RoyZhao1991/LingShu/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/RoyZhao1991/LingShu/actions/workflows/ci.yml/badge.svg"></a>
     <a href="https://github.com/RoyZhao1991/LingShu/releases/tag/v0.1.0-alpha.9"><img alt="Latest release" src="https://img.shields.io/github/v/release/RoyZhao1991/LingShu?include_prereleases&label=download"></a>
     <a href="https://github.com/jaywcjlove/awesome-mac#ai-tools"><img alt="Listed in awesome-mac" src="https://img.shields.io/badge/listed-awesome--mac-2C8C7F"></a>
+    <a href="https://star-history.com/#RoyZhao1991/LingShu<a href="https://github.com/jaywcjlove/awesome-mac#ai-tools"><img alt="Listed in awesome-mac" src="https://img.shields.io/badge/listed-awesome--mac-2C8C7F"></a>Date"><img alt="Star History" src="https://api.star-history.com/svg?repos=RoyZhao1991/LingShu<a href="https://github.com/jaywcjlove/awesome-mac#ai-tools"><img alt="Listed in awesome-mac" src="https://img.shields.io/badge/listed-awesome--mac-2C8C7F"></a>type=Date"></a>
   </p>
 
   <p>
@@ -287,3 +288,11 @@ Bug reports, focused pull requests, provider adapters, tests, documentation, and
 LingShu is licensed under the [Apache License 2.0](./LICENSE). Third-party components retain their own licenses; see [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md).
 
 Created and maintained by [Roy Zhao](https://github.com/RoyZhao1991).
+
+---
+
+## ⭐ Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=RoyZhao1991/LingShu&type=Date)](https://star-history.com/#RoyZhao1991/LingShu&Date)
+
+LingShu is open source and growing. If you find it useful, consider giving it a star — it helps others discover the project.
