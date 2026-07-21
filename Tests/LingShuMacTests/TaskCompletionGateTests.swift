@@ -439,6 +439,30 @@ final class TaskCompletionGateTests: XCTestCase {
         XCTAssertEqual(LingShuState.finishStatus(for: nil, fallback: .completed), .completed)
     }
 
+    func testRunResultStatusCannotPromoteFailedCheckerToCompleted() {
+        XCTAssertEqual(
+            LingShuState.runResultFallbackStatus(
+                for: .maxTurnsReached(lastText: "checker 未通过"),
+                record: nil
+            ),
+            .needsRevision
+        )
+        XCTAssertEqual(
+            LingShuState.runResultFallbackStatus(
+                for: .blocked(question: "需要人工确认"),
+                record: nil
+            ),
+            .waitingForUser
+        )
+        XCTAssertEqual(
+            LingShuState.runResultFallbackStatus(
+                for: .interrupted(reason: "network"),
+                record: nil
+            ),
+            .suspended
+        )
+    }
+
     @MainActor
     func testDefaultSuccessStatusUsesStructuredTaskEvidenceNotTextKeywords() {
         let state = LingShuState()

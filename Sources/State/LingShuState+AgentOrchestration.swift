@@ -142,7 +142,8 @@ extension LingShuState {
             // P2 真闭环:即便模型撞顶/停滞被判 failed,若完成闸早已判 waitingForUser/partial(如缺凭据需用户),
             // 以完成闸为准——给出「需要你…」的诚实收尾,而不是笼统「异常」,并指向它便于续接。
             let outcome = recordID.flatMap { rid in taskExecutionRecords.first { $0.id == rid }?.taskOutcome }
-            let status = Self.finishStatus(for: outcome, fallback: .blocked)
+            let failedVerification = LingShuVerificationFailure.isMarked(summary)
+            let status = Self.finishStatus(for: outcome, fallback: failedVerification ? .needsRevision : .blocked)
             let honest = recordID.flatMap { outcomeAwareSummary(recordID: $0, base: summary) } ?? LingShuVisibleModelText.clean(summary)
             if let notice = LingShuAgentPluginStore.unavailableNotice(from: honest, knownPlugins: LingShuAgentPluginStore.load()) {
                 if let recordID {
@@ -155,11 +156,14 @@ extension LingShuState {
                 return
             }
             if let recordID {
-                appendTaskRecordMessage(recordID, actor: "灵枢", role: status == .waitingForUser ? "待用户" : "失败", kind: .warning, text: honest)
+                let role = status == .waitingForUser ? "待用户" : (status == .needsRevision ? "验收未通过" : "失败")
+                appendTaskRecordMessage(recordID, actor: "灵枢", role: role, kind: .warning, text: honest)
                 finishTaskRecord(recordID, status: status, summary: honest)
-                if status == .waitingForUser || status == .partial { blockedDispatchedRecordID = recordID }
+                if status == .waitingForUser || status == .partial || status == .needsRevision { blockedDispatchedRecordID = recordID }
             }
-            let head = status == .waitingForUser ? "⏸ 等待前提" : (status == .partial ? "⚠️ 部分完成" : "⚠️ 未能自行收尾")
+            let head = status == .waitingForUser ? "⏸ 等待前提"
+                : (status == .partial ? "⚠️ 部分完成"
+                   : (status == .needsRevision ? "⚠️ 验收未通过" : "⚠️ 未能自行收尾"))
             postOrchestratorChat(recordID: recordID, dispatched: honest, spawned: "\(head):子任务「\(objective)」——\(honest.prefix(220))")
             briefMainThread("子任务「\(objective)」\(head):\(honest.prefix(160))")
         case .interrupted(let id, let objective, let reason):

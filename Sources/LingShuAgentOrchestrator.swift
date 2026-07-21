@@ -218,7 +218,10 @@ actor LingShuAgentOrchestrator {
             // `resumeWithInput` 收到答案后续跑(必要时重新占槽,用户前台续接优先)。
             admitNext(after: id)
         case .maxTurnsReached(let lastText):
-            if LingShuStructuredModelOutput.parse(lastText)?.completion?.status == .ok {
+            // 普通会话在轮次边界附带结构化 completion.ok 时仍可识别收尾；
+            // 但 Checker 驳回是更高优先级的硬事实，不能被 Maker 文本中残留的 ok 反向提升。
+            if !LingShuVerificationFailure.isMarked(lastText),
+               LingShuStructuredModelOutput.parse(lastText)?.completion?.status == .ok {
                 upsert(id: id, objective: objective, status: .completed, summary: digest(lastText))
                 pushes.append("子任务「\(objective)」已完成:\(digest(lastText))")
                 Task { await self.onEvent?(.completed(id: id, objective: objective, summary: lastText)) }

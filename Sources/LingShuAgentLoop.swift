@@ -103,6 +103,20 @@ enum LingShuAgentRunResult: Equatable, Sendable {
     case interrupted(reason: String)
 }
 
+/// Checker 驳回必须能穿透 Agent Loop、Completion Gate 和 Orchestrator，不能因 Maker
+/// 文本中残留 `completion.ok` 而被重新提升为成功。用户可见前缀同时是跨层失败标记。
+enum LingShuVerificationFailure {
+    static let prefix = "验收未通过（未登记交付）："
+
+    static func text(_ body: String) -> String {
+        body.hasPrefix(prefix) ? body : prefix + "\n" + body
+    }
+
+    static func isMarked(_ text: String) -> Bool {
+        text.hasPrefix(prefix)
+    }
+}
+
 /// 一条隔离会话 = 一条任务线程的上下文与循环。多会话并发即多任务并行(配合有界并发管理器)。
 /// 核心循环变体(新旧循环热切换):`.classic`=经典连续循环;`.nested`=嵌套分阶段验收循环(大 LOOP 含多个子 LOOP/阶段,
 /// 任务阶段验交付物、互动阶段不验,阶段间断点续)。两者都实现 `LingShuAgentSessioning`,由 `makeAgentSession` 工厂按开关返回。

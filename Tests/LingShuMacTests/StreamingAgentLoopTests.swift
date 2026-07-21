@@ -192,6 +192,15 @@ final class StreamingAgentLoopTests: XCTestCase {
         XCTAssertFalse(visible.contains("总用时"))
     }
 
+    func testCheckerFailureMarkerSurvivesStructuredMakerReplyCleaning() {
+        let maker = #"{"reply":"maker 自述已完成","completion":{"status":"ok","needs_user":false}}"#
+        let visible = LingShuVisibleModelText.clean(LingShuVerificationFailure.text(maker))
+
+        XCTAssertTrue(visible.hasPrefix(LingShuVerificationFailure.prefix))
+        XCTAssertTrue(visible.contains("maker 自述已完成"))
+        XCTAssertFalse(visible.contains("\"completion\""))
+    }
+
     func testMalformedStructuredReplyWithUnescapedInnerQuotesStillRendersWholeReply() {
         let raw = """
         {

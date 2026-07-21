@@ -354,18 +354,40 @@ extension LingShuState {
             ④ **铁律:你只管开发,别自行找别的 agent 代替系统 checker 自评**——独立 checker 由系统在你交付后**自动**跑,不归你管;你交付后就结束回合。**但如果当前或后续用户明确指定某外部 agent 参与/复核/验收(如 Codex),必须按用户要求调用 `run_agent` 委托,不要说没有能力。**
             """))
         }
-        let sub = makeAgentSession(
-            id: subID,
-            system: Self.dispatchedTaskSystemPrompt(workingDir: dispatchedWorkingDir),
-            initialMessages: initialMessages,
-            tools: tools,
-            model: adapter,
-            // 安全天花板(防失控),非目标预算——复杂工程的「读→改→构建→测试→修」单段推进
-            // 真能远超 40 步(超级玛丽暴露:40 太低,撞顶就被当失败/异常收尾)。抬到 120 让它纯做防失控用;
-            // 真停止位仍是目标达成/停滞(5 次重复)/撞顶后由 verifyAndContinue 续跑恢复(见编排器委托)。
-            maxTurns: 120,
-            recordIDProvider: recordProvider   // .nested 阶段验收据此定位本派发任务记录
-        )
+        let systemPrompt = Self.dispatchedTaskSystemPrompt(workingDir: dispatchedWorkingDir)
+        let sub: any LingShuAgentSessioning
+        // 显式外部 maker 优先于默认 Loop：保留灵枢编排会话，由它通过 run_agent 调 Codex/Claude。
+        // 未显式指定外部 maker 时，使用同进程常驻的灵枢原生 Loop。
+        if makerAgentID == nil,
+           let embedded = makeEmbeddedLoopSession(
+                id: subID,
+                role: .maker,
+                workingDirectory: dispatchedWorkingDir,
+                systemPrompt: systemPrompt,
+                initialMessages: initialMessages,
+                recordID: taskRecordID
+           ) {
+            appendTaskRecordMessage(taskRecordID, actor: "灵枢 Runtime", role: "默认 Maker 路由", kind: .router,
+                                    text: "灵枢原生 Loop 已为默认 Maker 创建独立会话；显式外部 Agent 绑定未被改写。")
+            sub = embedded
+        } else {
+            if makerAgentID != nil {
+                appendTrace(kind: .system, actor: "Loop 路由", title: "外部 Maker 优先",
+                            detail: "显式指定 \(makerName ?? "外部 Agent")，保留 run_agent 调用链，不由默认 Loop 覆盖。")
+            }
+            sub = makeAgentSession(
+                id: subID,
+                system: systemPrompt,
+                initialMessages: initialMessages,
+                tools: tools,
+                model: adapter,
+                // 安全天花板(防失控),非目标预算——复杂工程的「读→改→构建→测试→修」单段推进
+                // 真能远超 40 步(超级玛丽暴露:40 太低,撞顶就被当失败/异常收尾)。抬到 120 让它纯做防失控用;
+                // 真停止位仍是目标达成/停滞(5 次重复)/撞顶后由 verifyAndContinue 续跑恢复(见编排器委托)。
+                maxTurns: 120,
+                recordIDProvider: recordProvider   // .nested 阶段验收据此定位本派发任务记录
+            )
+        }
         let orchestrator = agentOrchestrator
         Task { @MainActor [weak self] in
             await self?.prepareSubtaskArtifactDelta(subID: subID, recordID: taskRecordID, workingDirectory: dispatchedWorkingDir)

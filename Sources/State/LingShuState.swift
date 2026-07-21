@@ -10,6 +10,8 @@ private enum LingShuPreferenceKeys {
     static let modelEndpoint = "lingshu.model.endpoint"
     static let agentWorkingDirectory = "lingshu.agent.workdir"
     static let executionPermissionMode = "lingshu.execution.permissionMode"
+    static let loopEngine = "lingshu.loop.engine"
+    static let legacyDeliveryMakerEngine = "lingshu.delivery.makerEngine"
     static let asrLocalMode = "lingshu.perception.asrLocalMode"
     static let ttsLocalMode = "lingshu.perception.ttsLocalMode"
 }
@@ -20,6 +22,18 @@ private enum LingShuPreferenceDefaults {
         guard defaults.object(forKey: key) != nil else { return defaultValue }
         return defaults.bool(forKey: key)
     }
+}
+
+private func loadLingShuLoopEnginePreference() -> LingShuLoopEngine {
+    let defaults = LingShuRuntimeEnvironment.preferences
+    let persisted = defaults.string(forKey: LingShuPreferenceKeys.loopEngine)
+        ?? defaults.string(forKey: LingShuPreferenceKeys.legacyDeliveryMakerEngine)
+    let engine = LingShuLoopEngine.resolvePersisted(persisted)
+
+    // 新安装默认内嵌 Runtime；旧的 "native" 和旧 Maker 专用键也在启动时一次性归一。
+    defaults.set(engine.rawValue, forKey: LingShuPreferenceKeys.loopEngine)
+    defaults.removeObject(forKey: LingShuPreferenceKeys.legacyDeliveryMakerEngine)
+    return engine
 }
 
 enum LingShuDialogueInputSource: Equatable {
@@ -118,13 +132,22 @@ final class LingShuState: ObservableObject {
     @Published var supervisionTick = 0
     // 模型选择持久化(写进配置,跨重启保留所选大脑——灵枢可灵活更换大模型,选了 DeepSeek 重启后仍是 DeepSeek)。
     @Published var modelProvider = LingShuRuntimeEnvironment.preferences.string(forKey: LingShuPreferenceKeys.modelProvider) ?? ModelProviderPreset.minimaxOfficial.name {
-        didSet { LingShuRuntimeEnvironment.preferences.set(modelProvider, forKey: LingShuPreferenceKeys.modelProvider) }
+        didSet {
+            LingShuRuntimeEnvironment.preferences.set(modelProvider, forKey: LingShuPreferenceKeys.modelProvider)
+            scheduleLoopRuntimeRefresh()
+        }
     }
     @Published var modelName = LingShuRuntimeEnvironment.preferences.string(forKey: LingShuPreferenceKeys.modelName) ?? ModelProviderPreset.minimaxOfficial.defaultModels[0] {
-        didSet { LingShuRuntimeEnvironment.preferences.set(modelName, forKey: LingShuPreferenceKeys.modelName) }
+        didSet {
+            LingShuRuntimeEnvironment.preferences.set(modelName, forKey: LingShuPreferenceKeys.modelName)
+            scheduleLoopRuntimeRefresh()
+        }
     }
     @Published var endpoint = LingShuRuntimeEnvironment.preferences.string(forKey: LingShuPreferenceKeys.modelEndpoint) ?? ModelProviderPreset.minimaxOfficial.endpoint {
-        didSet { LingShuRuntimeEnvironment.preferences.set(endpoint, forKey: LingShuPreferenceKeys.modelEndpoint) }
+        didSet {
+            LingShuRuntimeEnvironment.preferences.set(endpoint, forKey: LingShuPreferenceKeys.modelEndpoint)
+            scheduleLoopRuntimeRefresh()
+        }
     }
     /// **实际在用的脑(地面真相,2026-06-29)**:最近一次真实模型请求**实际**用的 provider/model + 时间。
     /// 与"选中的通道"(modelProvider/modelName)分开显示——会话快照滞后/选择漂移时,这条才是此刻真在干活的脑。
@@ -133,10 +156,24 @@ final class LingShuState: ObservableObject {
     @Published var actualBrainAt: Date?
     @Published var apiKey = "" {
         didSet {
-            guard apiKey != oldValue, let preset = selectedModelPreset else { return }
-            credentialStore.setAPIKey(apiKey, forProvider: preset.id)
+            guard apiKey != oldValue else { return }
+            if let preset = selectedModelPreset {
+                credentialStore.setAPIKey(apiKey, forProvider: preset.id)
+            }
+            scheduleLoopRuntimeRefresh()
         }
     }
+    /// 默认内部 LOOP；当前固定为同进程常驻的灵枢原生 Runtime（Grok 派生实现），
+    /// 同时控制未显式绑定外部 Agent 的 Maker 与 Checker。
+    /// 显式指定的 Codex/Claude 等外部 Agent 始终优先，不受本选项覆盖。
+    @Published var loopEngine = loadLingShuLoopEnginePreference() {
+        didSet {
+            guard loopEngine != oldValue else { return }
+            LingShuRuntimeEnvironment.preferences.set(loopEngine.rawValue, forKey: LingShuPreferenceKeys.loopEngine)
+            scheduleLoopRuntimeRefresh()
+        }
+    }
+    var loopRuntimeRefreshTask: Task<Void, Never>?
     /// **未指定位置时的默认工作目录 = 灵枢自己的工作区**(2026-06-30 用户定调:别落进源码仓库/某人主目录)。
     /// `~/Library/Application Support/LingShu/Workspace`——属于灵枢、跨机可移植(不写死 /Users/某人)、不存在则建。
     /// 用户可在 UI 改;改了持久化跨重启。任务里写了字面目录/绝对路径的,照样按它来(这只是"没说时"的默认值)。

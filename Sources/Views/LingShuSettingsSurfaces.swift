@@ -507,6 +507,7 @@ struct LingShuModelGatewaySurface: View {
 /// 执行策略=独立配置(不在模型通道里):工作目录 · 常规偏好(语音/随机性)· 高风险边界(权限模式/人工确认/计算机操作)。
 struct LingShuExecutionPolicySurface: View {
     @ObservedObject var state: LingShuState
+    @ObservedObject private var loopRuntime = LingShuEmbeddedGrokRuntime.shared
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -529,6 +530,31 @@ struct LingShuExecutionPolicySurface: View {
                 row(state.loc("随机性", "Temperature")) {
                     Slider(value: $state.temperature, in: 0...1, step: 0.1).frame(width: 300)
                     Text(String(format: "%.1f", state.temperature)).font(.system(size: 12.5, weight: .bold, design: .monospaced)).foregroundStyle(Color.lingHolo)
+                }
+                row(state.loc("Loop 引擎", "Loop Engine")) {
+                    Picker("", selection: Binding(
+                        get: { state.loopEngine },
+                        set: { state.setLoopEngine($0) }
+                    )) {
+                        ForEach(LingShuLoopEngine.allCases) { engine in
+                            Text(engine.displayName(language: state.language)).tag(engine)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    .labelsHidden()
+                    .frame(width: 250, alignment: .leading)
+                    .help(state.loc(
+                        "灵枢原生 Loop 使用同进程常驻 Runtime，同时控制默认 Maker 与 Checker；显式外部 Agent 优先",
+                        "LingShu Native Loop uses the in-process resident runtime for the default Maker and Checker; explicit external agents take priority"
+                    ))
+
+                    Circle()
+                        .fill(loopRuntime.status.isReady ? Color.green : Color.lingFg.opacity(0.28))
+                        .frame(width: 7, height: 7)
+                    Text(loopRuntime.status.displayText(language: state.language))
+                        .font(.system(size: 10.5, design: .monospaced))
+                        .foregroundStyle(loopRuntime.status.isReady ? Color.green : Color.lingFg.opacity(0.5))
+                        .lineLimit(1)
                 }
 
                 Divider().overlay(Color.lingFg.opacity(0.08))

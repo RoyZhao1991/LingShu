@@ -24,11 +24,13 @@ STRICT_DISTRIBUTION="${LINGSHU_REQUIRE_DISTRIBUTION_SIGNING:-0}"
 UNIVERSAL_BUILD="${LINGSHU_UNIVERSAL:-0}"
 BUNDLE_SENSEVOICE="${LINGSHU_BUNDLE_SENSEVOICE:-1}"
 BUNDLE_HAL_DRIVER="${LINGSHU_BUNDLE_HAL_DRIVER:-1}"
+BUNDLE_GROK_RUNTIME="${LINGSHU_BUNDLE_GROK_RUNTIME:-1}"
 SOURCE_REVISION="${LINGSHU_SOURCE_REVISION:-$(git rev-parse HEAD 2>/dev/null || printf 'development')}"
 APP_DIR="$ROOT_DIR/dist/${APP_NAME}.app"
 CONTENTS="$APP_DIR/Contents"
 MACOS_DIR="$CONTENTS/MacOS"
 RES_DIR="$CONTENTS/Resources"
+FRAMEWORKS_DIR="$CONTENTS/Frameworks"
 BUILD_TMP_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/lingshu-build.XXXXXX")"
 
 cleanup_build_temp() {
@@ -50,6 +52,10 @@ trap cleanup_build_temp EXIT
 }
 [[ "$BUNDLE_HAL_DRIVER" =~ ^[01]$ ]] || {
   echo "invalid LINGSHU_BUNDLE_HAL_DRIVER: $BUNDLE_HAL_DRIVER (expected 0 or 1)" >&2
+  exit 1
+}
+[[ "$BUNDLE_GROK_RUNTIME" =~ ^[01]$ ]] || {
+  echo "invalid LINGSHU_BUNDLE_GROK_RUNTIME: $BUNDLE_GROK_RUNTIME (expected 0 or 1)" >&2
   exit 1
 }
 
@@ -92,9 +98,13 @@ fi
 
 echo "==> assembling bundle"
 rm -rf "$APP_DIR"
-mkdir -p "$MACOS_DIR" "$RES_DIR"
+mkdir -p "$MACOS_DIR" "$RES_DIR" "$FRAMEWORKS_DIR"
 cp "$BIN_PATH" "$MACOS_DIR/$APP_NAME"
 cp "$CLI_BIN_PATH" "$MACOS_DIR/$CLI_NAME"
+
+if [ "$BUNDLE_GROK_RUNTIME" = "1" ]; then
+  bash "$ROOT_DIR/Scripts/build-grok-runtime.sh" "$CONFIG" "$FRAMEWORKS_DIR"
+fi
 
 # 图标：从 appiconset 合成 .icns
 ICONSET="$BUILD_TMP_ROOT/AppIcon.iconset"
@@ -230,6 +240,7 @@ if [ -z "$SIGN_IDENTITY" ]; then
   fi
 fi
 DRIVER_BUNDLE="$RES_DIR/LingShuAudioDriver.driver"
+GROK_RUNTIME_LIBRARY="$FRAMEWORKS_DIR/liblingshu_grok_runtime.dylib"
 if [ "$STRICT_DISTRIBUTION" = "1" ] && [[ "$SIGN_IDENTITY" != Developer\ ID\ Application:* ]]; then
   echo "error: website distribution requires a Developer ID Application identity" >&2
   exit 1
@@ -243,6 +254,14 @@ if security find-identity -v -p codesigning 2>/dev/null | grep -Fq "\"$SIGN_IDEN
   else
     codesign --force --sign "$SIGN_IDENTITY" --options runtime "$MACOS_DIR/$CLI_NAME" 2>/dev/null \
       || codesign --force --sign "$SIGN_IDENTITY" "$MACOS_DIR/$CLI_NAME"
+  fi
+  if [ -f "$GROK_RUNTIME_LIBRARY" ]; then
+    echo "   ==> signing embedded Agent Runtime ($SIGN_IDENTITY)"
+    if [[ "$SIGN_IDENTITY" == Developer\ ID* ]]; then
+      codesign --force --sign "$SIGN_IDENTITY" --timestamp "$GROK_RUNTIME_LIBRARY"
+    else
+      codesign --force --sign "$SIGN_IDENTITY" "$GROK_RUNTIME_LIBRARY"
+    fi
   fi
   # 关键:HAL 驱动必须**单独**用同一身份签——`--deep` 不会遍历 Contents/Resources 里的 .driver
   # (它只签 Frameworks/PlugIns 等常规嵌套位置),漏签会让驱动是 ad-hoc → coreaudiod 静默拒载、设备不出现。
@@ -334,6 +353,7 @@ else
   echo "⚠️  修复:确保钥匙串里有「${SIGN_IDENTITY}」证书,或用 LINGSHU_SIGN_IDENTITY 指定稳定证书后重建。"
   echo "════════════════════════════════════════════════════════════════"
   [ -d "$DRIVER_BUNDLE" ] && codesign --force --sign - --options runtime "$DRIVER_BUNDLE" 2>/dev/null || true
+  [ -f "$GROK_RUNTIME_LIBRARY" ] && codesign --force --sign - "$GROK_RUNTIME_LIBRARY"
   codesign --force --sign - --options runtime "$MACOS_DIR/$CLI_NAME" 2>/dev/null \
     || codesign --force --sign - "$MACOS_DIR/$CLI_NAME"
   codesign --force --sign - \
