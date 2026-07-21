@@ -19,7 +19,7 @@
     <a href="https://github.com/RoyZhao1991/LingShu/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/RoyZhao1991/LingShu/actions/workflows/ci.yml/badge.svg"></a>
     <a href="https://github.com/RoyZhao1991/LingShu/releases/tag/v0.1.0-alpha.9"><img alt="最新版本" src="https://img.shields.io/github/v/release/RoyZhao1991/LingShu?include_prereleases&label=download"></a>
     <a href="https://github.com/jaywcjlove/awesome-mac#ai-tools"><img alt="已收录于 awesome-mac" src="https://img.shields.io/badge/listed-awesome--mac-2C8C7F"></a>
-    <a href="https://star-history.com/#RoyZhao1991/LingShu<a href="https://github.com/jaywcjlove/awesome-mac#ai-tools"><img alt="已收录于 awesome-mac" src="https://img.shields.io/badge/listed-awesome--mac-2C8C7F"></a>Date"><img alt="Star 历史" src="https://api.star-history.com/svg?repos=RoyZhao1991/LingShu<a href="https://github.com/jaywcjlove/awesome-mac#ai-tools"><img alt="已收录于 awesome-mac" src="https://img.shields.io/badge/listed-awesome--mac-2C8C7F"></a>type=Date"></a>
+    <a href="https://star-history.com/#RoyZhao1991/LingShu&Date"><img alt="Star 历史" src="https://api.star-history.com/svg?repos=RoyZhao1991/LingShu&type=Date"></a>
   </p>
 
   <p>
