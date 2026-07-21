@@ -20,7 +20,7 @@ The public Project Aurora sample contains a four-slide editable PowerPoint, a on
 
 - Website and sample: https://royzhao1991.github.io/LingShu/
 - Source: https://github.com/RoyZhao1991/LingShu
-- Signed and notarized alpha: https://github.com/RoyZhao1991/LingShu/releases/tag/v0.1.0-alpha.8
+- Signed and notarized alpha: https://github.com/RoyZhao1991/LingShu/releases/tag/v0.1.0-alpha.9
 - Homebrew: `brew install --cask RoyZhao1991/tap/lingshu`
 
 ## What feedback would help most

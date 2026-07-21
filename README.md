@@ -17,14 +17,14 @@
     <img alt="Project status: alpha" src="https://img.shields.io/badge/status-alpha-E9A23B">
     <img alt="1,500+ tests" src="https://img.shields.io/badge/tests-1%2C500%2B-2C8C7F">
     <a href="https://github.com/RoyZhao1991/LingShu/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/RoyZhao1991/LingShu/actions/workflows/ci.yml/badge.svg"></a>
-    <a href="https://github.com/RoyZhao1991/LingShu/releases/tag/v0.1.0-alpha.8"><img alt="Latest release" src="https://img.shields.io/github/v/release/RoyZhao1991/LingShu?include_prereleases&label=download"></a>
+    <a href="https://github.com/RoyZhao1991/LingShu/releases/tag/v0.1.0-alpha.9"><img alt="Latest release" src="https://img.shields.io/github/v/release/RoyZhao1991/LingShu?include_prereleases&label=download"></a>
     <a href="https://github.com/jaywcjlove/awesome-mac#ai-tools"><img alt="Listed in awesome-mac" src="https://img.shields.io/badge/listed-awesome--mac-2C8C7F"></a>
   </p>
 
   <p>
     <a href="https://royzhao1991.github.io/LingShu/"><strong>Official website</strong></a>
     ·
-    <a href="https://github.com/RoyZhao1991/LingShu/releases/tag/v0.1.0-alpha.8"><strong>Download signed macOS alpha</strong></a>
+    <a href="https://github.com/RoyZhao1991/LingShu/releases/download/v0.1.0-alpha.9/LingShu-0.1.0-12-macOS-universal.dmg"><strong>Download signed macOS alpha</strong></a>
     · <a href="#real-public-sample"><strong>Inspect a real sample</strong></a>
     · <a href="#quick-start">Quick start</a>
     · <a href="https://github.com/RoyZhao1991/LingShu/discussions">Community</a>
@@ -145,11 +145,11 @@ brew install --cask RoyZhao1991/tap/lingshu
 
 Or install the Universal DMG manually:
 
-1. Download the DMG and its `.sha256` file from the [v0.1.0-alpha.8 release](https://github.com/RoyZhao1991/LingShu/releases/tag/v0.1.0-alpha.8).
+1. Download the DMG and its `.sha256` file from the [v0.1.0-alpha.9 release](https://github.com/RoyZhao1991/LingShu/releases/tag/v0.1.0-alpha.9).
 2. In Terminal, verify the download:
 
    ```bash
-   shasum -a 256 -c LingShu-0.1.0-11-macOS-universal.dmg.sha256
+   shasum -a 256 -c LingShu-0.1.0-12-macOS-universal.dmg.sha256
    ```
 
 3. Open the DMG, drag `灵枢.app` to Applications, and launch it.
@@ -248,7 +248,7 @@ LingShu is usable for development and controlled local workflows, but it is not 
 | End-to-end presentation, document, and code artifact workflow | Implemented |
 | Live perception and voice | Available with environment-dependent fallbacks |
 | HAL virtual microphone | Experimental; device appearance is not yet stable |
-| Signed and notarized public release | [v0.1.0-alpha.8 available](https://github.com/RoyZhao1991/LingShu/releases/tag/v0.1.0-alpha.8); notarized-DMG clean-user smoke passed |
+| Signed and notarized public release | [v0.1.0-alpha.9 available](https://github.com/RoyZhao1991/LingShu/releases/tag/v0.1.0-alpha.9); embedded Loop Runtime and notarized-DMG clean-user smoke passed |
 
 The repository contains more than 100,000 lines of source and test code, more than 180 Swift test files, and more than 1,500 tests. These numbers describe engineering depth, not a guarantee that every environment-dependent test passes on every Mac.
 

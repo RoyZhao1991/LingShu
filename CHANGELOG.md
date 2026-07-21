@@ -6,8 +6,21 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [0.1.0-alpha.9] - 2026-07-21
+
+### Added
+
+- The Grok-derived agent source is embedded as LingShu's in-process native Loop Runtime and packaged inside the signed Universal app.
+- Maker and checker runs use isolated runtime sessions while preserving explicit external-agent Maker/Checker overrides.
+
 ### Changed
 
+- The embedded Loop Runtime is now the default hidden native engine for both Maker and checker execution; one Loop setting controls both roles.
+- Release builds pin and checksum the architecture-matched bundled ripgrep dependency and verify the embedded Runtime is Universal and signed.
+
+### Fixed
+
+- Failed or inconclusive checker results no longer permit a delivery task to be reported as completed.
 - Public releases now verify DMG integrity before notarization and clean up exact-image DiskImages attachments left by interrupted notarization attempts.
 - The release pipeline supports a configurable non-S3 notarization upload path for networks where accelerated upload is unreliable.
 
@@ -75,7 +88,8 @@ First public alpha.
 - Dynamic workflow mutations are validated as a transaction, reject dependency cycles and started-node rewrites, and persist their revision history in the task record.
 - Read-only agent stalls now receive a final model-owned, tool-free convergence turn instead of exposing internal process output or hard-coded diagnostic prose.
 
-[Unreleased]: https://github.com/RoyZhao1991/LingShu/compare/v0.1.0-alpha.8...HEAD
+[Unreleased]: https://github.com/RoyZhao1991/LingShu/compare/v0.1.0-alpha.9...HEAD
+[0.1.0-alpha.9]: https://github.com/RoyZhao1991/LingShu/releases/tag/v0.1.0-alpha.9
 [0.1.0-alpha.8]: https://github.com/RoyZhao1991/LingShu/releases/tag/v0.1.0-alpha.8
 [0.1.0-alpha.7]: https://github.com/RoyZhao1991/LingShu/releases/tag/v0.1.0-alpha.7
 [0.1.0-alpha.6]: https://github.com/RoyZhao1991/LingShu/releases/tag/v0.1.0-alpha.6
