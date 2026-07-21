@@ -3,9 +3,11 @@
 # Apple notarization, stapled DMG, checksum and machine-readable manifest.
 set -euo pipefail
 
-# Public release builds use only the Apple/system toolchain. This prevents a
-# writable package-manager or user PATH entry from shadowing signing, Git,
-# archive, checksum, or notarization commands.
+# Capture Cargo explicitly before locking the release PATH. Apple signing,
+# Git, archive, checksum and notarization commands remain system-pinned; the
+# Rust entrypoint is passed by absolute path and Runtime/Grok/rust-toolchain.toml
+# pins the compiler version used for the embedded engine.
+CARGO_BIN="${LINGSHU_CARGO_BIN:-$(command -v cargo || true)}"
 PATH="/usr/bin:/bin:/usr/sbin:/sbin"
 export PATH
 hash -r
@@ -92,6 +94,10 @@ fail() {
 [[ "$BUNDLE_HAL_DRIVER" =~ ^[01]$ ]] || fail "LINGSHU_BUNDLE_HAL_DRIVER must be 0 or 1"
 [[ "$ALLOW_DIRTY_RELEASE" =~ ^[01]$ ]] || fail "LINGSHU_ALLOW_DIRTY_RELEASE must be 0 or 1"
 [[ "$NOTARY_NO_S3_ACCELERATION" =~ ^[01]$ ]] || fail "LINGSHU_NOTARY_NO_S3_ACCELERATION must be 0 or 1"
+[ -n "$CARGO_BIN" ] && [ -x "$CARGO_BIN" ] || fail "Cargo is required to build the embedded Loop Runtime"
+[[ "$CARGO_BIN" = /* ]] || fail "LINGSHU_CARGO_BIN must be an absolute path: $CARGO_BIN"
+CARGO_VERSION="$(cd "$ROOT_DIR/Runtime/Grok" && "$CARGO_BIN" --version)" \
+  || fail "could not run Cargo at $CARGO_BIN"
 
 BUNDLED_SENSEVOICE_BOOL=false
 BUNDLED_HAL_DRIVER_BOOL=false
@@ -152,6 +158,7 @@ echo "    identity: $IDENTITY"
 echo "    certificate SHA-256: $CERTIFICATE_SHA256"
 echo "    notary profile: $NOTARY_PROFILE"
 echo "    notary S3 acceleration: $([ "$NOTARY_NO_S3_ACCELERATION" = "1" ] && echo disabled || echo enabled)"
+echo "    cargo: $CARGO_BIN ($CARGO_VERSION)"
 echo "    bundled SenseVoice: $BUNDLE_SENSEVOICE"
 echo "    bundled HAL driver: $BUNDLE_HAL_DRIVER"
 echo "    source revision: $SOURCE_REVISION"
@@ -183,12 +190,14 @@ LINGSHU_UNIVERSAL=1 \
 LINGSHU_BUNDLE_SENSEVOICE="$BUNDLE_SENSEVOICE" \
 LINGSHU_BUNDLE_HAL_DRIVER="$BUNDLE_HAL_DRIVER" \
 LINGSHU_SOURCE_REVISION="$SOURCE_REVISION" \
+LINGSHU_CARGO_BIN="$CARGO_BIN" \
   bash "$ROOT_DIR/Scripts/build-app.sh" release
 
 [ -d "$APP_PATH" ] || fail "app bundle was not produced: $APP_PATH"
 
 APP_BINARY="$APP_PATH/Contents/MacOS/$PRODUCT_NAME"
 CLI_BINARY="$APP_PATH/Contents/MacOS/lingshu"
+RUNTIME_LIBRARY="$APP_PATH/Contents/Frameworks/liblingshu_grok_runtime.dylib"
 BUNDLED_SOURCE_REVISION="$(plutil -extract LingShuSourceRevision raw -o - "$APP_PATH/Contents/Info.plist")"
 [ "$BUNDLED_SOURCE_REVISION" = "$SOURCE_REVISION" ] \
   || fail "bundled source revision mismatch: expected $SOURCE_REVISION, got $BUNDLED_SOURCE_REVISION"
@@ -199,9 +208,15 @@ ARCHS="$(lipo -archs "$APP_BINARY")"
 CLI_ARCHS="$(lipo -archs "$CLI_BINARY")"
 [[ " $CLI_ARCHS " == *" arm64 "* ]] || fail "CLI binary is missing arm64: $CLI_ARCHS"
 [[ " $CLI_ARCHS " == *" x86_64 "* ]] || fail "CLI binary is missing x86_64: $CLI_ARCHS"
+[ -f "$RUNTIME_LIBRARY" ] || fail "embedded Loop Runtime was not produced: $RUNTIME_LIBRARY"
+RUNTIME_ARCHS="$(lipo -archs "$RUNTIME_LIBRARY")"
+[[ " $RUNTIME_ARCHS " == *" arm64 "* ]] || fail "embedded Loop Runtime is missing arm64: $RUNTIME_ARCHS"
+[[ " $RUNTIME_ARCHS " == *" x86_64 "* ]] || fail "embedded Loop Runtime is missing x86_64: $RUNTIME_ARCHS"
 codesign --verify --strict --verbose=2 "$CLI_BINARY"
+codesign --verify --strict --verbose=2 "$RUNTIME_LIBRARY"
 APP_BINARY_SHA256="$(shasum -a 256 "$APP_BINARY" | awk '{print $1}')"
 CLI_BINARY_SHA256="$(shasum -a 256 "$CLI_BINARY" | awk '{print $1}')"
+RUNTIME_BINARY_SHA256="$(shasum -a 256 "$RUNTIME_LIBRARY" | awk '{print $1}')"
 
 codesign --verify --deep --strict --verbose=2 "$APP_PATH"
 codesign -d --verbose=4 "$APP_PATH" 2>&1 | grep -F "TeamIdentifier=$TEAM_ID" >/dev/null \
@@ -284,6 +299,7 @@ plutil -insert source_revision -string "$SOURCE_REVISION" "$MANIFEST_PLIST"
 plutil -insert source_archive_sha256 -string "$SOURCE_ARCHIVE_SHA256" "$MANIFEST_PLIST"
 plutil -insert app_binary_sha256 -string "$APP_BINARY_SHA256" "$MANIFEST_PLIST"
 plutil -insert cli_binary_sha256 -string "$CLI_BINARY_SHA256" "$MANIFEST_PLIST"
+plutil -insert runtime_binary_sha256 -string "$RUNTIME_BINARY_SHA256" "$MANIFEST_PLIST"
 plutil -insert source_dirty -bool "$SOURCE_DIRTY" "$MANIFEST_PLIST"
 plutil -insert dmg_file -string "$DMG_NAME" "$MANIFEST_PLIST"
 plutil -insert dmg_sha256 -string "$SHA256" "$MANIFEST_PLIST"
