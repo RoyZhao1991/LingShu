@@ -7,6 +7,12 @@ GROK_DIR="$ROOT_DIR/Runtime/Grok"
 CONFIG="${1:-debug}"
 DESTINATION="${2:-}"
 UNIVERSAL_BUILD="${LINGSHU_UNIVERSAL:-0}"
+CARGO_BIN="${LINGSHU_CARGO_BIN:-$(command -v cargo || true)}"
+
+[ -n "$CARGO_BIN" ] && [ -x "$CARGO_BIN" ] || {
+  echo "error: Cargo is required to build the embedded Loop Runtime" >&2
+  exit 1
+}
 
 if [ "$CONFIG" = "release" ] || [ "$CONFIG" = "Release" ]; then
   CARGO_FLAG="--release"
@@ -22,14 +28,14 @@ if [ "$UNIVERSAL_BUILD" = "1" ]; then
   LIBRARIES=()
   for TARGET in aarch64-apple-darwin x86_64-apple-darwin; do
     echo "==> cargo build lingshu-grok-runtime ($PROFILE, $TARGET)"
-    cargo build --manifest-path "$GROK_DIR/Cargo.toml" -p lingshu-grok-runtime $CARGO_FLAG --target "$TARGET"
+    (cd "$GROK_DIR" && "$CARGO_BIN" build -p lingshu-grok-runtime $CARGO_FLAG --target "$TARGET")
     LIBRARIES+=("$GROK_DIR/target/$TARGET/$PROFILE/liblingshu_grok_runtime.dylib")
   done
   BUILT_LIBRARY="$WORK_DIR/liblingshu_grok_runtime.dylib"
   lipo -create "${LIBRARIES[@]}" -output "$BUILT_LIBRARY"
 else
   echo "==> cargo build lingshu-grok-runtime ($PROFILE)"
-  cargo build --manifest-path "$GROK_DIR/Cargo.toml" -p lingshu-grok-runtime $CARGO_FLAG
+  (cd "$GROK_DIR" && "$CARGO_BIN" build -p lingshu-grok-runtime $CARGO_FLAG)
   BUILT_LIBRARY="$GROK_DIR/target/$PROFILE/liblingshu_grok_runtime.dylib"
 fi
 
