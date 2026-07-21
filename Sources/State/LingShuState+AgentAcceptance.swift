@@ -214,20 +214,21 @@ extension LingShuState {
             // 停滞判定:这一轮 maker 没产出新文件,且验收意见与上轮实质相同 → 在原地打转,诚实交还。
             let artifactCount = (taskExecutionRecords.first { $0.id == taskRecordID }?.artifacts ?? [])
                 .filter { FileManager.default.fileExists(atPath: $0.location) }.count
-            // 非代码交付 + 已有真产出物 + 返工超时预算 → 别再为主观设计意见死磕,交付当前版本(用户更要"快出东西")。
+            // 非代码交付 + 已有真产出物 + 返工超时预算 → 停止自动返工，但 Checker 未通过就不能标成完成。
+            // 产物仍然保留供用户查看，任务状态必须是 needsRevision，后续可以“继续”原线程返工。
             if nonCodeDeliverable, round > 0, artifactCount > artifactBaseline, Date() > revisionDeadline {
-                appendTrace(kind: .result, actor: "验收", title: "返工超预算·交付现有版本", detail: "非代码交付(如PPT)已多轮打磨且超时,先交付当前版本,避免无限返工。")
+                appendTrace(kind: .warning, actor: "验收", title: "返工超预算·未通过", detail: "停止自动返工，保留当前产物，但不登记为成功交付。")
                 let delivery = await composeDeliveryMessage(userRequest: userRequest, makerText: Self.runResultText(result), taskRecordID: taskRecordID)
-                // **修 1b(2026-06-27)**:超预算交付,但本轮审查员**仍有异议**(passed=false 才会走到这里)→ 别静默"已完成",
-                // 如实把未决意见带给用户(否则用户看到"已完成"+时间线里"不通过"自相矛盾、否决被悄悄吞掉)。
                 let note = critique.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? ""
-                    : "\n\n(说明:已多轮打磨并交付当前版本;审查员仍保留意见——\(critique.prefix(160))。要我继续按这条改就说一声。)"
-                return .completed(text: delivery + note)
+                    : "\n\n（当前版本未通过验收：\(critique.prefix(160))。任务已标记为未达标，可继续返工后重验。）"
+                return .maxTurnsReached(lastText: LingShuVerificationFailure.text(delivery + note))
             }
             if round > 0, artifactCount <= lastArtifactCount, critique.prefix(120) == lastCritique.prefix(120) {
                 recordBrainFallback("验收停滞交还(脑没救回来)")   // 大脑评分:触发兜底 −1
                 appendTrace(kind: .warning, actor: "验收", title: "停滞交还", detail: "连续未通过且无新进展,交还用户。")
-                return .maxTurnsReached(lastText: Self.runResultText(result) + "\n\n（验收一直没通过且我已无新进展:\(critique.prefix(160))。先停下交还——需要你的判断或补充信息。）")
+                return .maxTurnsReached(lastText: LingShuVerificationFailure.text(
+                    Self.runResultText(result) + "\n\n（验收一直没通过且我已无新进展:\(critique.prefix(160))。先停下交还——需要你的判断或补充信息。）"
+                ))
             }
             if round == 3 { recordBrainFallback("验收升级到确定性兜底(Rung2)") }   // 大脑评分:升到最重脚手架=触发兜底 −1
             appendTrace(kind: .warning, actor: "验收", title: "未通过(第\(round + 1)轮,继续修)", detail: String(critique.prefix(80)))
@@ -241,9 +242,16 @@ extension LingShuState {
             round += 1
             lastArtifactCount = artifactCount
             lastCritique = critique
-            // 修复轮里网络中断:别在断网时空转验证,原样上抛 .interrupted 让上层挂起、等重连续跑。
-            if case .interrupted = result { return result }
+            // 返工本身没有正常完成时不能继续拿一段非完成文本做验收。
+            if case .completed = result {
+                continue
+            }
+            return result
         }
-        return result
+        return .maxTurnsReached(
+            lastText: LingShuVerificationFailure.text(Self.runResultText(result)
+                + "\n\n（验收在安全轮次内仍未通过：\(lastCritique.prefix(160))。任务未标记完成，需继续返工后重验。）"
+            )
+        )
     }
 }

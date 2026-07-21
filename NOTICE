@@ -2,3 +2,6 @@ LingShu
 Copyright 2026 Roy Zhao
 
 This product includes software developed by LingShu contributors.
+
+This product includes modified software derived from xai-org/grok-build
+(Copyright 2023-2026 SpaceXAI), licensed under the Apache License 2.0.

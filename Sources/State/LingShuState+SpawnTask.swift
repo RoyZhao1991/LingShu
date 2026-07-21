@@ -130,6 +130,29 @@ extension LingShuState {
         let system = LingShuPersona.system(
             "现在你作为一条子任务线,独立完成给定目标。工作目录:\(workingDirectory)。**有产出物的必须用 write_file/run_command 真把文件落到工作目录并汇报路径,不要只口头说完成**;写代码必须真构建+运行不崩+测试全绿,跑崩了/报错是要修复的观测、不是交付;信息确实不足才调用 ask_user。\n\(grounding)"
         )
+        if let embedded = makeEmbeddedLoopSession(
+            id: subID,
+            role: .maker,
+            workingDirectory: workingDirectory,
+            systemPrompt: system,
+            recordID: agentSubTaskRecords[subID]
+        ) {
+            appendTaskRecordMessage(
+                agentSubTaskRecords[subID],
+                actor: "灵枢 Runtime",
+                role: "Maker 路由",
+                kind: .router,
+                text: "本任务由常驻灵枢原生 Loop 创建独立 Maker 会话；完成后另建独立 Checker 会话验收。"
+            )
+            return embedded
+        }
+        appendTaskRecordMessage(
+            agentSubTaskRecords[subID],
+            actor: "灵枢 Runtime",
+            role: "Maker 应急降级",
+            kind: .warning,
+            text: "灵枢原生 Loop Runtime 尚未就绪（\(LingShuEmbeddedGrokRuntime.shared.status.displayText(language: language))），本轮启用不可配置的应急兼容执行器。"
+        )
         return makeAgentSession(
             id: subID,
             system: system,

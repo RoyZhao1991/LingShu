@@ -82,12 +82,17 @@ extension LingShuState {
             var verdicts: [(name: String, passed: Bool, critique: String)] = []   // 每个 checker 一条(多 checker 聚合)
 
             // 主 checker:外部 agent → 它;否则异源审查员(GLM,先自己跑测试再判)。
-            if checkerIsAgent, let primary = LingShuAgentPluginStore.plugin(id: checkerAgentID) {
-                let (p, c) = await runAgentChecker(primary, makerText: makerText, round: round)
-                verdicts.append((primary.displayName, p, c))
+            if checkerIsAgent {
+                if let primary = LingShuAgentPluginStore.plugin(id: checkerAgentID) {
+                    let (p, c) = await runAgentChecker(primary, makerText: makerText, round: round)
+                    verdicts.append((primary.displayName, p, c))
+                } else {
+                    verdicts.append((checkerAgentID, false, "显式指定的外部 Checker 当前不可用，未执行验收。"))
+                }
             } else {
                 await checkerIndependentlyRunsTests(recordID: rid, makerText: makerText)
-                let (p, c) = await verifyAgentDeliverable(userRequest: objective, reply: makerText, taskRecordID: rid)
+                // 外部 maker + 默认内部 checker：外部 maker 绑定保持不变，checker 才消费当前 Loop 引擎。
+                let (p, c) = await runCheckerSession(recordID: rid, objective: objective, makerText: makerText)
                 let waitingForHuman = LingShuWorkflowControlEnvelope.extract(from: c)?.humanInteraction != nil
                 appendTaskRecordMessage(rid, actor: "审查员",
                     role: waitingForHuman ? "验收(checker)·等待人机协作" : (p ? "验收(checker)·通过" : "验收(checker)·需修正(第\(round + 1)轮)"),
@@ -121,12 +126,16 @@ extension LingShuState {
 
             round += 1
             if round >= maxRounds {
-                return .maxTurnsReached(lastText: makerText + "\n\n(独立验收 \(round) 轮仍未全过:\(combined.prefix(200))。先交还——需要你的判断。)")
+                return .maxTurnsReached(lastText: LingShuVerificationFailure.text(
+                    makerText + "\n\n(独立验收 \(round) 轮仍未全过:\(combined.prefix(200))。先交还——需要你的判断。)"
+                ))
             }
             // ── 不过 → 退回 maker 自己改(带上**所有未过 checker** 的合并意见),checker 再验。
             // 本地脑 maker(灵枢自己开发 + 外部 agent 当 checker)无插件可重委托 → 如实交还,等主人/灵枢据意见再修。
             guard makerIsExternal, let makerPlugin = LingShuAgentPluginStore.plugin(id: makerAgentID) else {
-                return .maxTurnsReached(lastText: makerText + "\n\n(独立 checker 判未通过:\(combined.prefix(200))。本地 maker 已交还——需据意见修正后重验。)")
+                return .maxTurnsReached(lastText: LingShuVerificationFailure.text(
+                    makerText + "\n\n(独立 checker 判未通过:\(combined.prefix(200))。本地 maker 已交还——需据意见修正后重验。)"
+                ))
             }
             let fixObj = "你之前针对目标「\(objective)」的开发未通过独立验收。验收意见:\n\(combined.prefix(800))\n请据此修正,产物落到当前工作目录,确保真能跑通。"
             // **流式**:maker 返工也边跑边更新气泡(不再干等)。
@@ -138,10 +147,14 @@ extension LingShuState {
                 appendTaskRecordMessage(rid, actor: makerPlugin.displayName, role: "开发(maker)·返工交付", kind: .result, text: String(t.prefix(1500)))
             case .failure(let f):
                 appendTaskRecordMessage(rid, actor: makerPlugin.displayName, role: "开发(maker)·返工失败", kind: .warning, text: f)
-                return current
+                return .maxTurnsReached(lastText: LingShuVerificationFailure.text(
+                    makerText + "\n\n(外部 maker 返工失败：\(f.prefix(200))。当前版本仍未通过验收。)"
+                ))
             }
         }
-        return current
+        return .maxTurnsReached(lastText: LingShuVerificationFailure.text(
+            Self.runResultText(current) + "\n\n(独立 Checker 尚未通过，任务已停止继续执行。)"
+        ))
     }
 
     /// 独立 checker **自己真跑测试**(不信 maker 自报的"全绿"):据 maker 落盘的测试文件选测试运行器真执行,
@@ -191,8 +204,24 @@ extension LingShuState {
         appendTaskRecordMessage(rid, actor: "审查员", role: "验收(checker)·独立会话上岗", kind: .agent,
             text: "🧑‍⚖️ 独立 checker 会话上岗(与 maker 不同会话/上下文),开始独立核验产出——读代码、跑测试、运行起来。")
         appendTrace(kind: .tool, actor: "checker会话", title: "独立验收会话上岗", detail: String(objective.prefix(50)))
-        let session = makeAgentSession(id: "checker-\(UUID().uuidString.prefix(6))", system: system,
+        let checkerID = "checker-\(UUID().uuidString.prefix(6))"
+        let session: any LingShuAgentSessioning
+        if let embedded = makeEmbeddedLoopSession(
+            id: checkerID,
+            role: .checker,
+            workingDirectory: agentWorkingDirectory,
+            systemPrompt: system,
+            recordID: rid
+        ) {
+            appendTaskRecordMessage(rid, actor: "灵枢 Runtime", role: "默认 Checker 路由", kind: .router,
+                                    text: "灵枢原生 Loop 已创建与 Maker 上下文隔离的 Checker 会话；工具限制为读取、搜索和受控验证命令。")
+            session = embedded
+        } else {
+            appendTaskRecordMessage(rid, actor: "灵枢 Runtime", role: "Checker 应急降级", kind: .warning,
+                                    text: "灵枢原生 Loop Runtime 尚未就绪，默认 Checker 本轮启用不可配置的应急兼容执行器。")
+            session = makeAgentSession(id: checkerID, system: system,
                                        tools: tools, model: adapter, maxTurns: 30)
+        }
         // **修 1a(2026-06-27)**:给 checker **产出物的真实绝对路径**——别只说"在工作目录"。
         // 否则产物在工作目录之外(maker 用绝对路径写到别处)或 list_directory 列空时,checker 找不到文件 → 瞎判"不存在"=假否决
         // (实测:checker 在 HOME list_directory 列空,而产物在 /app 子目录,直接判 PPT 不存在)。给了绝对路径它就能 read_file 核真文件。

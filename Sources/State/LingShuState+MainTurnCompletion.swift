@@ -29,9 +29,14 @@ extension LingShuState {
         appendTrace(kind: .result, actor: "Agent循环", title: "主会话答复", detail: String(text.prefix(60)))
         let record = taskExecutionRecords.first { $0.id == recordID }
         let outcome = record?.taskOutcome
-        finishTaskRecord(recordID, status: Self.finishStatus(for: outcome, fallback: Self.defaultSuccessStatus(for: record)), summary: text)
+        let fallback = Self.runResultFallbackStatus(for: result, record: record)
+        let finalStatus = Self.finishStatus(for: outcome, fallback: fallback)
+        finishTaskRecord(recordID, status: finalStatus, summary: text)
         if case .blocked = result { pendingMainQuestionRecordID = recordID } else { pendingMainQuestionRecordID = nil }
-        recordDeliverable(recordID: recordID, title: prompt, summary: text)
+        // 未通过 Checker 的产物可以保留在任务记录中供返工，但不进入“最近已交付”记忆。
+        if finalStatus.isSuccessfulCompletion {
+            recordDeliverable(recordID: recordID, title: prompt, summary: text)
+        }
         rememberMainThreadTurn(prompt: prompt, reply: text)
     }
 }

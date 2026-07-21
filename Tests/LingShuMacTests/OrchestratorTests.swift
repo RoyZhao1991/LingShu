@@ -92,6 +92,23 @@ final class OrchestratorTests: XCTestCase {
         XCTAssertFalse(pushes.contains { $0.contains("未能自行收尾") })
     }
 
+    func testCheckerFailureCannotBePromotedByMakerCompletionOK() async {
+        let orch = LingShuAgentOrchestrator(maxConcurrent: 3)
+        let makerOK = #"{"reply":"maker 自述已完成","completion":{"status":"ok","reason":"maker 认为完成","needs_user":false}}"#
+        let rejected = LingShuVerificationFailure.text(makerOK + "\nchecker: failed")
+        _ = await orch.spawn(
+            id: "sub-rejected",
+            objective: "交付并验收",
+            session: FixedResultSession(.maxTurnsReached(lastText: rejected))
+        )
+
+        let ledger = await orch.ledger()
+        XCTAssertEqual(ledger.first?.status, .failed)
+        XCTAssertTrue(ledger.first?.summary.contains(LingShuVerificationFailure.prefix) == true)
+        let pushes = await orch.pendingPushes()
+        XCTAssertFalse(pushes.contains { $0.contains("已完成") })
+    }
+
     // 死锁回归:卡在 ask_user 等用户的任务**不占并发槽**——否则多条"等你补充"占满槽 → 新任务永远派不出去 = 死锁。
     func testBlockedTasksReleaseConcurrencySlots() async {
         let orch = LingShuAgentOrchestrator(maxConcurrent: 2)

@@ -4,6 +4,16 @@ import Foundation
 /// 流程控制仍只读取严格 JSON；这里仅负责把违规混合输出里的 `reply` 提取成用户可见文本。
 enum LingShuVisibleModelText {
     static func clean(_ raw: String) -> String {
+        // Checker 硬驳回不能被展示层的“从混合输出提取 reply”逻辑吃掉。
+        // 否则内部状态是未通过，用户却只会看到 Maker 原先的“已完成”自述。
+        if LingShuVerificationFailure.isMarked(raw) {
+            let body = String(raw.dropFirst(LingShuVerificationFailure.prefix.count))
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let visibleBody = clean(body)
+            return visibleBody.isEmpty
+                ? LingShuVerificationFailure.prefix
+                : LingShuVerificationFailure.prefix + "\n" + visibleBody
+        }
         let visible = LingShuStructuredModelOutput.visibleText(from: raw)
             .trimmingCharacters(in: .whitespacesAndNewlines)
         let original = raw.trimmingCharacters(in: .whitespacesAndNewlines)

@@ -160,6 +160,8 @@ struct LingShuMacApp: App {
                 LingShuControlServer.shared.start(state: state)
                 // 主线程卡死看门狗:独立后台探测 MainActor,卡死自动重启续作(不挂 MainActor,否则自身也被卡)。
                 LingShuMainActorWatchdog.shared.start(state: state)
+                // 默认 Loop Runtime 与灵枢同寿命：启动阶段预热，任务到来时只开 Maker / Checker 逻辑会话。
+                await state.prepareLoopRuntimeOnLaunch()
                 // 先真实验证主脑；只有可用时才预热会话。无配置/失效时由首配引导接管，避免启动即发无效请求。
                 if await state.prepareBrainOnLaunch() {
                     _ = await state.mainAgentSession()

@@ -115,6 +115,24 @@ extension LingShuState {
         }
     }
 
+    /// Agent Loop 的运行结果是主线程终态的硬下限：产物存在不代表验收通过。
+    /// Completion Gate 可以把完成结果进一步降级，但不能把 maxTurnsReached 反向提升为已完成。
+    nonisolated static func runResultFallbackStatus(
+        for result: LingShuAgentRunResult,
+        record: LingShuTaskExecutionRecord?
+    ) -> LingShuTaskExecutionStatus {
+        switch result {
+        case .completed:
+            return defaultSuccessStatus(for: record)
+        case .blocked:
+            return .waitingForUser
+        case .maxTurnsReached:
+            return .needsRevision
+        case .interrupted:
+            return .suspended
+        }
+    }
+
     /// 成功终态的默认语义：纯问答才是「已直接回答」；只要记录已经出现任务型结构证据,
     /// 成功收尾就应归入「已完成」。这里不看用户文本关键词,只看 GoalSpec、产物、验收和工具事实。
     nonisolated static func defaultSuccessStatus(for record: LingShuTaskExecutionRecord?) -> LingShuTaskExecutionStatus {
