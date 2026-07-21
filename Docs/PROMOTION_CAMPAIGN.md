@@ -8,7 +8,7 @@ Canonical public anchors:
 - Website and reproducible sample: https://royzhao1991.github.io/LingShu/
 - Alpha announcement and feedback thread: https://github.com/RoyZhao1991/LingShu/discussions/12
 - 15-minute Alpha tester invitation: https://github.com/RoyZhao1991/LingShu/discussions/13
-- Latest signed release: https://github.com/RoyZhao1991/LingShu/releases/tag/v0.1.0-alpha.8
+- Latest signed release: https://github.com/RoyZhao1991/LingShu/releases/tag/v0.1.0-alpha.9
 - Privacy-safe first-run report (English): https://github.com/RoyZhao1991/LingShu/issues/new?template=first_run_report.yml
 - 隐私安全首跑报告（中文）: https://github.com/RoyZhao1991/LingShu/issues/new?template=first_run_report_zh.yml
 
@@ -109,7 +109,7 @@ The second wave improves the path from an organic search or profile visit to a s
 - **Website:** https://royzhao1991.github.io/LingShu/
 - **GitHub:** https://github.com/RoyZhao1991/LingShu
 - **Proof:** https://royzhao1991.github.io/LingShu/#deliverables
-- **Release:** https://github.com/RoyZhao1991/LingShu/releases/tag/v0.1.0-alpha.8
+- **Release:** https://github.com/RoyZhao1991/LingShu/releases/tag/v0.1.0-alpha.9
 
 Description:
 

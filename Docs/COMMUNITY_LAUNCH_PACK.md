@@ -13,7 +13,7 @@ This pack turns LingShu's verified product facts into community-native launch ma
 - Install: signed and notarized Universal DMG or Homebrew Cask.
 - Repository: https://github.com/RoyZhao1991/LingShu
 - 71-second end-to-end demo and editable sample: https://royzhao1991.github.io/LingShu/#deliverables
-- Release: https://github.com/RoyZhao1991/LingShu/releases/tag/v0.1.0-alpha.8
+- Release: https://github.com/RoyZhao1991/LingShu/releases/tag/v0.1.0-alpha.9
 
 ## Launch Queue
 
