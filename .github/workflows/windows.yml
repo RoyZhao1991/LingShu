@@ -83,10 +83,13 @@ jobs:
             Copy-Item $installer.FullName -Destination $output
           }
           Copy-Item $nsisInstallers[0].FullName -Destination (Join-Path $output "LingShu-Windows-x64-Setup.exe")
-          Get-ChildItem $output -File | ForEach-Object {
+          $checksumLines = @(Get-ChildItem $output -File | ForEach-Object {
             $hash = Get-FileHash $_.FullName -Algorithm SHA256
             "$($hash.Hash.ToLower())  $($_.Name)"
-          } | Set-Content -Encoding utf8 (Join-Path $output "SHA256SUMS.txt")
+          })
+          $checksumPath = Join-Path $output "SHA256SUMS.txt"
+          $checksumText = ($checksumLines -join "`n") + "`n"
+          [System.IO.File]::WriteAllText($checksumPath, $checksumText, [System.Text.UTF8Encoding]::new($false))
           Get-ChildItem $output -File | Format-Table Name, Length
 
       - name: Upload Windows installers

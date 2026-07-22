@@ -175,7 +175,7 @@ The public DMG is Universal (`arm64` + `x86_64`), signed with a Developer ID cer
 
 3. Run the setup executable, choose a language, connect a model provider, and send a small first request.
 
-The Windows preview preserves the same GoalSpec-driven execution model: one serialized main task, isolated concurrent child sessions, visible reasoning summaries and tool events, human-action pause/resume, independent checking, artifact registration, and built-in preview. It intentionally excludes direct Windows computer control and realtime audio/video perception. See the complete [Windows capability boundary](./Docs/WINDOWS.md).
+The Windows preview preserves the same GoalSpec-driven execution model: one serialized main task, isolated concurrent child sessions, visible reasoning summaries and tool events, human-action pause/resume, independent checking, artifact registration, and built-in preview. It intentionally excludes direct Windows computer control and realtime audio/video perception. This first preview is not yet Authenticode-signed, so Windows may show a SmartScreen warning; verify its published SHA-256 before installation. See the complete [Windows capability boundary](./Docs/WINDOWS.md).
 
 ### Run a First Traceable Task
 
