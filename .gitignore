@@ -1,6 +1,15 @@
 # Build artifacts
 .build/
 Runtime/Grok/target/
+Runtime/LingShuCore/target/
+WindowsApp/node_modules/
+WindowsApp/dist/
+WindowsApp/src-tauri/target/
+WindowsApp/src-tauri/gen/schemas/
+WindowsApp/src-tauri/icons/android/
+WindowsApp/src-tauri/icons/ios/
+WindowsApp/src-tauri/icons/icon.icns
+WindowsApp/src-tauri/icons/icon.png
 build/
 dist/
 .site-output/

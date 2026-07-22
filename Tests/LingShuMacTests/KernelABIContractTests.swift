@@ -19,6 +19,34 @@ final class KernelABIContractTests: XCTestCase {
         XCTAssertTrue(LingShuKernelABI.selfCheck(), "内核 ABI 清单自洽校验失败(契约数/重名/空冻结面)")
     }
 
+    func testWindowsRuntimeUsesTheSameKernelContract() throws {
+        let contractURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Runtime/LingShuCore/resources/kernel-contract.json")
+        let object = try XCTUnwrap(
+            try JSONSerialization.jsonObject(with: Data(contentsOf: contractURL)) as? [String: Any]
+        )
+        XCTAssertEqual(object["abiVersion"] as? String, LingShuKernelABI.version)
+        let portableContracts = try XCTUnwrap(object["contracts"] as? [[String: Any]])
+        XCTAssertEqual(
+            portableContracts.compactMap { $0["symbol"] as? String },
+            LingShuKernelABI.contracts.map(\.symbol),
+            "Windows 与 macOS 必须由同一份五协议内核 ABI 驱动"
+        )
+        for (portable, native) in zip(portableContracts, LingShuKernelABI.contracts) {
+            XCTAssertEqual(portable["frozenSurface"] as? [String], native.frozenSurface)
+        }
+        XCTAssertEqual(object["goalSpecFields"] as? [String], [
+            "objective", "kind", "output_mode", "reference_scope",
+            "reference_evidence", "reference_explicit", "reference_confidence",
+            "constraints", "boundaries", "risks", "success_criteria", "open_questions"
+        ])
+        let platforms = try XCTUnwrap(object["platformCapabilities"] as? [String: Any])
+        let windows = try XCTUnwrap(platforms["windows"] as? [String: Any])
+        XCTAssertEqual(windows["computerControl"] as? Bool, false)
+        XCTAssertEqual(windows["internalPreview"] as? Bool, true)
+    }
+
     func testFiveKernelContractsEnumerated() {
         let symbols = LingShuKernelABI.contracts.map(\.symbol)
         XCTAssertEqual(symbols, [

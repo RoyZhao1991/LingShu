@@ -1,9 +1,9 @@
 <div align="center">
   <img src="./lingshu-icon-preview.png" width="112" alt="LingShu app icon">
   <h1>LingShu</h1>
-  <p><strong>A fully open-source, model-agnostic macOS execution agent in the Codex / Claude Code category.</strong></p>
+  <p><strong>A fully open-source, model-agnostic execution agent in the Codex / Claude Code category.</strong></p>
   <p><strong>Code is one deliverable, not the boundary: ship verified software, presentations, documents, and authorized Mac workflows.</strong></p>
-  <p>Use OpenAI, Claude, DeepSeek, MiniMax, or a compatible endpoint. Keep the agent runtime, orchestration, tools, memory, and artifacts on your Mac.</p>
+  <p>Use OpenAI, Claude, DeepSeek, MiniMax, or a compatible endpoint. Keep the agent runtime, orchestration, memory, and artifacts on your own computer.</p>
 
   <p>
     <a href="./README.md">English</a> |
@@ -12,11 +12,13 @@
 
   <p>
     <img alt="macOS 14+" src="https://img.shields.io/badge/macOS-14%2B-111111?logo=apple">
+    <img alt="Windows preview" src="https://img.shields.io/badge/Windows-technical%20preview-2F6FED?logo=windows11&logoColor=white">
     <img alt="Swift 6" src="https://img.shields.io/badge/Swift-6-F05138?logo=swift&logoColor=white">
     <img alt="Apache-2.0" src="https://img.shields.io/badge/license-Apache--2.0-2C8C7F">
     <img alt="Project status: alpha" src="https://img.shields.io/badge/status-alpha-E9A23B">
     <img alt="1,500+ tests" src="https://img.shields.io/badge/tests-1%2C500%2B-2C8C7F">
     <a href="https://github.com/RoyZhao1991/LingShu/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/RoyZhao1991/LingShu/actions/workflows/ci.yml/badge.svg"></a>
+    <a href="https://github.com/RoyZhao1991/LingShu/actions/workflows/windows.yml"><img alt="Windows build" src="https://github.com/RoyZhao1991/LingShu/actions/workflows/windows.yml/badge.svg"></a>
     <a href="https://github.com/RoyZhao1991/LingShu/releases/tag/v0.1.0-alpha.9"><img alt="Latest release" src="https://img.shields.io/github/v/release/RoyZhao1991/LingShu?include_prereleases&label=download"></a>
     <a href="https://github.com/jaywcjlove/awesome-mac#ai-tools"><img alt="Listed in awesome-mac" src="https://img.shields.io/badge/listed-awesome--mac-2C8C7F"></a>
   </p>
@@ -40,13 +42,15 @@
 > [!IMPORTANT]
 > LingShu is an alpha-stage project under active development. It can operate local files and apps after explicit macOS authorization. Review requested permissions and keep backups of important work.
 
+The Windows technical preview uses the same versioned kernel contract and shared Rust domain core. It includes model setup, persistent chat and task threads, registered artifacts, and built-in preview; direct Windows computer control and realtime perception are intentionally unavailable. See [LingShu for Windows](./Docs/WINDOWS.md).
+
 ## Where LingShu Fits
 
 Codex and Claude Code set the standard for execution-oriented coding agents. LingShu belongs in that same agent category—not the chat-app category—but makes a different architectural choice: the complete native app and runtime are Apache-2.0 open source, the model backend is replaceable, and code is one deliverable among several.
 
 | Dimension | LingShu | OpenAI Codex | Claude Code |
 | --- | --- | --- | --- |
-| Primary product focus | General execution on macOS: code, office documents, local computer workflows | Software engineering | Software engineering |
+| Primary product focus | General execution: code and office documents on macOS/Windows, plus authorized computer workflows on macOS | Software engineering | Software engineering |
 | Publicly open-sourced surface | Native app + agent runtime, Apache-2.0 | Codex CLI, Apache-2.0 | Official repository is all rights reserved |
 | Default model layer | User-selected OpenAI, Claude, DeepSeek, MiniMax, or compatible endpoint | OpenAI models | Claude models |
 | Default deliverables | Code, PPTX, DOCX, PDF, local media, and authorized Mac actions | Code changes and engineering work | Code changes and engineering work |
@@ -243,6 +247,7 @@ LingShu is usable for development and controlled local workflows, but it is not 
 | Area | Status |
 | --- | --- |
 | Native macOS app and agent loop | Active development |
+| Windows desktop shell | Technical preview; shared kernel, built-in preview, no direct computer control |
 | Multi-provider model setup | Implemented |
 | Native Computer Use | Implemented; requires explicit macOS authorization |
 | End-to-end presentation, document, and code artifact workflow | Implemented |

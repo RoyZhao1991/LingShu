@@ -1,0 +1,124 @@
+import { invoke as tauriInvoke } from "@tauri-apps/api/core";
+import { open as tauriOpen } from "@tauri-apps/plugin-dialog";
+import type {
+  PreviewPayload, ProviderPreset, RuntimeSettings, RuntimeSnapshot, TaskRecord,
+} from "./types";
+
+export interface BootstrapPayload {
+  snapshot: RuntimeSnapshot;
+  providers: ProviderPreset[];
+}
+
+export function hasNativeBridge(): boolean {
+  return Reflect.has(window, "__TAURI_INTERNALS__");
+}
+
+export async function runtimeInvoke<T>(command: string, args?: Record<string, unknown>): Promise<T> {
+  if (hasNativeBridge()) return tauriInvoke<T>(command, args);
+  return mockInvoke<T>(command, args);
+}
+
+export async function chooseFiles(): Promise<string[]> {
+  if (!hasNativeBridge()) return ["C:\\Users\\Roy\\Documents\\project-brief.md"];
+  const selected = await tauriOpen({ multiple: true, directory: false });
+  if (!selected) return [];
+  return Array.isArray(selected) ? selected : [selected];
+}
+
+const providers: ProviderPreset[] = [
+  { id: "deepseek", name: "DeepSeek", region: "CN", endpoint: "https://api.deepseek.com", protocol: "openai_chat_completions", defaultModels: ["deepseek-chat", "deepseek-reasoner"], requiresApiKey: true },
+  { id: "minimax-official", name: "MiniMax", region: "CN", endpoint: "https://api.minimaxi.com/v1", protocol: "openai_chat_completions", defaultModels: ["MiniMax-M3"], requiresApiKey: true },
+  { id: "openai", name: "OpenAI", region: "Global", endpoint: "https://api.openai.com/v1", protocol: "openai_chat_completions", defaultModels: ["gpt-5.5", "gpt-5"], requiresApiKey: true },
+  { id: "anthropic", name: "Anthropic Claude", region: "Global", endpoint: "https://api.anthropic.com/v1", protocol: "anthropic_messages", defaultModels: ["claude-opus-4-8", "claude-sonnet-4-6"], requiresApiKey: true },
+  { id: "custom-compatible", name: "Custom OpenAI-compatible", region: "Custom", endpoint: "https://your-gateway.example.com/v1", protocol: "openai_chat_completions", defaultModels: ["custom-model"], requiresApiKey: true },
+];
+
+const now = new Date().toISOString();
+const demoArtifactPath = "C:\\Users\\Roy\\Documents\\LingShu Workspace\\Project-Aurora-Brief.md";
+const demoTask: TaskRecord = {
+  id: "demo-thread",
+  title: "Create and verify a Project Aurora brief",
+  prompt: "Create a concise project brief and register the file.",
+  status: "completed",
+  createdAt: now,
+  updatedAt: now,
+  goalSpec: {
+    objective: "Create and verify a concise Project Aurora brief",
+    kind: "task",
+    output_mode: "artifact",
+    reference_scope: "current_input",
+    reference_evidence: ["Current user request"],
+    reference_explicit: true,
+    reference_confidence: "high",
+    constraints: ["Use fictional data"], boundaries: ["Do not operate the Windows desktop"], risks: [],
+    success_criteria: ["A readable Markdown file is registered", "The file opens in LingShu preview"], open_questions: [],
+  },
+  steps: [
+    { id: "demo-step-1", title: "Understand the request", detail: "GoalSpec accepted by LingShu Runtime Core", status: "completed", updatedAt: now },
+    { id: "demo-step-2", title: "Produce the response and artifacts", detail: "Response and artifact registry completed", status: "completed", updatedAt: now },
+  ],
+  artifacts: [{ id: "demo-artifact", title: "Project Aurora brief", path: demoArtifactPath, kind: "markdown", sizeBytes: 1840, modifiedAt: now }],
+  summary: "The Project Aurora brief is ready and registered.", error: undefined, attachmentPaths: [],
+};
+
+let snapshot: RuntimeSnapshot = {
+  kernelAbiVersion: "1.0.0",
+  settings: {
+    locale: "en", providerId: "deepseek", providerName: "DeepSeek", protocol: "openai_chat_completions",
+    endpoint: "https://api.deepseek.com", model: "deepseek-chat",
+    workspace: "C:\\Users\\Roy\\Documents\\LingShu Workspace", firstRunComplete: true,
+  },
+  platform: "windows",
+  capabilities: { computerControl: false, realtimePerception: false, internalPreview: true, externalOpen: true },
+  messages: [
+    { id: "demo-user", role: "user", text: "Create a concise Project Aurora brief and register the file.", createdAt: now, state: "complete", threadId: demoTask.id },
+    { id: "demo-assistant", role: "assistant", text: "The Project Aurora brief is ready. Its real file is registered below and can be inspected in LingShu's built-in preview.", createdAt: now, state: "complete", threadId: demoTask.id },
+  ],
+  tasks: [demoTask], activeTaskId: undefined, queuedTaskCount: 0, providerConfigured: true,
+};
+
+async function mockInvoke<T>(command: string, args?: Record<string, unknown>): Promise<T> {
+  switch (command) {
+    case "bootstrap": return { snapshot: clone(snapshot), providers } as T;
+    case "get_snapshot": return clone(snapshot) as T;
+    case "save_and_validate_settings": {
+      const settings = args?.settings as RuntimeSettings;
+      snapshot = { ...snapshot, settings, providerConfigured: true };
+      return clone(snapshot) as T;
+    }
+    case "submit_message": {
+      const prompt = String(args?.prompt ?? "").trim();
+      const id = crypto.randomUUID();
+      const createdAt = new Date().toISOString();
+      const task: TaskRecord & { assistantMessageId: string } = {
+        id, title: prompt, prompt, status: "understanding", createdAt, updatedAt: createdAt,
+        steps: [{ id: crypto.randomUUID(), title: "Understand the request", detail: "Generating a complete GoalSpec", status: "understanding", updatedAt: createdAt }],
+        artifacts: [], summary: "", assistantMessageId: crypto.randomUUID(), attachmentPaths: (args?.attachmentPaths as string[]) ?? [],
+      };
+      snapshot = {
+        ...snapshot, activeTaskId: id, tasks: [...snapshot.tasks, task],
+        messages: [...snapshot.messages,
+          { id: crypto.randomUUID(), role: "user", text: prompt, createdAt, state: "complete", threadId: id },
+          { id: task.assistantMessageId, role: "assistant", text: "Understanding…", createdAt, state: "thinking", threadId: id },
+        ],
+      };
+      return { threadId: id, queued: false } as T;
+    }
+    case "cancel_task": {
+      const id = String(args?.threadId ?? "");
+      snapshot = { ...snapshot, activeTaskId: undefined, tasks: snapshot.tasks.map((task) => task.id === id ? { ...task, status: "cancelled" } : task) };
+      return true as T;
+    }
+    case "preview_path": return {
+      name: "Project-Aurora-Brief.md", path: demoArtifactPath, kind: "markdown", mimeType: "text/markdown", sizeBytes: 1840,
+      content: "# Project Aurora\n\n## Objective\nImprove release quality with a visible, repeatable verification loop.\n\n## Delivery plan\n\n1. Define measurable acceptance criteria.\n2. Produce the requested artifact.\n3. Verify the real file before completion.", sections: [],
+    } satisfies PreviewPayload as T;
+    case "open_external":
+    case "reveal_path": return undefined as T;
+    default: throw new Error(`Unsupported development bridge command: ${command}`);
+  }
+}
+
+function clone<T>(value: T): T {
+  return structuredClone(value);
+}
