@@ -153,6 +153,45 @@ async fn cancel_task(state: State<'_, AppState>, thread_id: String) -> Result<bo
 }
 
 #[tauri::command]
+async fn resume_task(
+    state: State<'_, AppState>,
+    thread_id: String,
+    answer: String,
+) -> Result<bool, String> {
+    let id = Uuid::parse_str(&thread_id).map_err(|error| error.to_string())?;
+    let task = state
+        .kernel
+        .store()
+        .task(id)
+        .await
+        .ok_or_else(|| format!("task not found: {id}"))?;
+    if task.status != lingshu_runtime_core::TaskStatus::NeedsUserAction {
+        return Ok(false);
+    }
+    let settings = state.kernel.store().settings().await;
+    let key = load_api_key(&settings.provider_id)?;
+    if provider_needs_key(&settings.provider_id) && key.is_none() {
+        return Err(format!("{} requires an API token", settings.provider_name));
+    }
+    let kernel = state.kernel.clone();
+    tauri::async_runtime::spawn(async move {
+        if let Err(error) = kernel.resume(id, answer, key).await {
+            let locale = kernel.store().settings().await.locale;
+            let message = match locale {
+                lingshu_runtime_core::AppLocale::ZhCn => {
+                    format!("本轮恢复后未能完成：{error}。执行记录已保留。")
+                }
+                lingshu_runtime_core::AppLocale::En => {
+                    format!("The resumed run could not complete: {error}. Its trace was preserved.")
+                }
+            };
+            let _ = kernel.store().fail(id, message, error.to_string()).await;
+        }
+    });
+    Ok(true)
+}
+
+#[tauri::command]
 fn preview_path(path: PathBuf) -> Result<PreviewPayload, String> {
     preview_file(path).map_err(|error| error.to_string())
 }
@@ -207,6 +246,7 @@ pub fn run() {
             save_and_validate_settings,
             submit_message,
             cancel_task,
+            resume_task,
             preview_path,
             open_external,
             reveal_path,

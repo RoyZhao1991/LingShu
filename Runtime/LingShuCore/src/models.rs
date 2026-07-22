@@ -76,6 +76,37 @@ pub enum MessageState {
     NeedsUserAction,
 }
 
+/// Persisted conversation state used by the shared agent loop. This mirrors the
+/// frozen `LingShuAgentSessioning` message contract used by the macOS shell so a
+/// blocked run can be resumed by any desktop shell without rebuilding context.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentRole {
+    System,
+    User,
+    Assistant,
+    Tool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentToolCall {
+    pub id: String,
+    pub name: String,
+    pub arguments_json: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentMessage {
+    pub role: AgentRole,
+    #[serde(default)]
+    pub content: String,
+    #[serde(default)]
+    pub tool_calls: Vec<AgentToolCall>,
+    pub tool_call_id: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ChatMessage {
@@ -183,6 +214,63 @@ impl TaskStatus {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskRole {
+    #[default]
+    Main,
+    Worker,
+    Checker,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskOrigin {
+    #[default]
+    Conversation,
+    Subtask,
+    Verification,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeEventKind {
+    Status,
+    Model,
+    Reasoning,
+    Tool,
+    Plan,
+    Delegation,
+    HumanInteraction,
+    Warning,
+    Result,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeEventState {
+    Running,
+    Completed,
+    Failed,
+    Blocked,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeEvent {
+    pub id: Uuid,
+    pub sequence: u64,
+    pub task_id: Uuid,
+    pub parent_task_id: Option<Uuid>,
+    pub kind: RuntimeEventKind,
+    pub state: RuntimeEventState,
+    pub actor: String,
+    pub title: String,
+    pub detail: String,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct TaskStep {
@@ -221,6 +309,28 @@ pub struct TaskRecord {
     pub assistant_message_id: Uuid,
     #[serde(default)]
     pub attachment_paths: Vec<PathBuf>,
+    #[serde(default)]
+    pub parent_task_id: Option<Uuid>,
+    #[serde(default)]
+    pub root_task_id: Option<Uuid>,
+    #[serde(default)]
+    pub role: TaskRole,
+    #[serde(default)]
+    pub origin: TaskOrigin,
+    #[serde(default = "default_participant_name")]
+    pub participant_name: String,
+    #[serde(default)]
+    pub depth: u8,
+    #[serde(default)]
+    pub session_messages: Vec<AgentMessage>,
+    #[serde(default)]
+    pub pending_tool_call_id: Option<String>,
+    #[serde(default)]
+    pub pending_question: Option<String>,
+}
+
+fn default_participant_name() -> String {
+    "LingShu".into()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -235,6 +345,10 @@ pub struct RuntimeSnapshot {
     pub active_task_id: Option<Uuid>,
     pub queued_task_count: usize,
     pub provider_configured: bool,
+    #[serde(default)]
+    pub events: Vec<RuntimeEvent>,
+    #[serde(default)]
+    pub latest_event_sequence: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

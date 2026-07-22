@@ -26,7 +26,9 @@
   <p>
     <a href="https://royzhao1991.github.io/LingShu/"><strong>Official website</strong></a>
     ·
-    <a href="https://github.com/RoyZhao1991/LingShu/releases/download/v0.1.0-alpha.9/LingShu-0.1.0-12-macOS-universal.dmg"><strong>Download signed macOS alpha</strong></a>
+    <a href="https://github.com/RoyZhao1991/LingShu/releases/download/v0.1.0-alpha.9/LingShu-0.1.0-12-macOS-universal.dmg"><strong>macOS signed alpha</strong></a>
+    ·
+    <a href="https://github.com/RoyZhao1991/LingShu/releases/download/windows-v0.1.0-preview.1/LingShu-Windows-x64-Setup.exe"><strong>Windows x64 preview</strong></a>
     · <a href="#real-public-sample"><strong>Inspect a real sample</strong></a>
     · <a href="#quick-start">Quick start</a>
     · <a href="https://github.com/RoyZhao1991/LingShu/discussions">Community</a>
@@ -136,10 +138,10 @@ The main conversation remains serialized to protect context. Long-running or del
 
 ### Requirements
 
-- macOS 14 or later
+- macOS 14 or later, or Windows 10/11 x64 for the technical preview
 - An API token for one supported model provider, or a compatible custom endpoint
 
-### Install the Signed Alpha (Recommended)
+### Install on macOS (Signed and Notarized)
 
 With [Homebrew](https://brew.sh/), the app and `lingshu` CLI are installed together:
 
@@ -160,6 +162,20 @@ Or install the Universal DMG manually:
 4. Choose a language, connect a model provider, and send a small first request.
 
 The public DMG is Universal (`arm64` + `x86_64`), signed with a Developer ID certificate, notarized by Apple, and carries a stapled notarization ticket. Grant macOS permissions only when a capability you choose requires them.
+
+### Install on Windows (Technical Preview)
+
+1. Download [LingShu-Windows-x64-Setup.exe](https://github.com/RoyZhao1991/LingShu/releases/download/windows-v0.1.0-preview.1/LingShu-Windows-x64-Setup.exe) and [SHA256SUMS.txt](https://github.com/RoyZhao1991/LingShu/releases/download/windows-v0.1.0-preview.1/SHA256SUMS.txt).
+2. Verify the installer in PowerShell:
+
+   ```powershell
+   Get-FileHash .\LingShu-Windows-x64-Setup.exe -Algorithm SHA256
+   Get-Content .\SHA256SUMS.txt
+   ```
+
+3. Run the setup executable, choose a language, connect a model provider, and send a small first request.
+
+The Windows preview preserves the same GoalSpec-driven execution model: one serialized main task, isolated concurrent child sessions, visible reasoning summaries and tool events, human-action pause/resume, independent checking, artifact registration, and built-in preview. It intentionally excludes direct Windows computer control and realtime audio/video perception. See the complete [Windows capability boundary](./Docs/WINDOWS.md).
 
 ### Run a First Traceable Task
 

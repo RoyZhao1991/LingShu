@@ -1,7 +1,7 @@
 import { invoke as tauriInvoke } from "@tauri-apps/api/core";
 import { open as tauriOpen } from "@tauri-apps/plugin-dialog";
 import type {
-  PreviewPayload, ProviderPreset, RuntimeSettings, RuntimeSnapshot, TaskRecord,
+  PreviewPayload, ProviderPreset, RuntimeEvent, RuntimeSettings, RuntimeSnapshot, TaskRecord,
 } from "./types";
 
 export interface BootstrapPayload {
@@ -59,7 +59,14 @@ const demoTask: TaskRecord = {
   ],
   artifacts: [{ id: "demo-artifact", title: "Project Aurora brief", path: demoArtifactPath, kind: "markdown", sizeBytes: 1840, modifiedAt: now }],
   summary: "The Project Aurora brief is ready and registered.", error: undefined, attachmentPaths: [],
+  rootTaskId: "demo-thread", role: "main", origin: "conversation", participantName: "LingShu", depth: 0,
 };
+
+const demoEvents: RuntimeEvent[] = [
+  { id: "demo-event-1", sequence: 1, taskId: demoTask.id, kind: "plan", state: "completed", actor: "GoalSpec", title: "Goal accepted", detail: "Create and verify a concise Project Aurora brief", createdAt: now, updatedAt: now },
+  { id: "demo-event-2", sequence: 2, taskId: demoTask.id, kind: "reasoning", state: "completed", actor: "deepseek-chat", title: "Reasoning summary", detail: "I will create the requested file, inspect the real output, and then report the registered path.", createdAt: now, updatedAt: now },
+  { id: "demo-event-3", sequence: 3, taskId: demoTask.id, kind: "tool", state: "completed", actor: "LingShu", title: "Create artifact", detail: "Project-Aurora-Brief.md was created and registered.", createdAt: now, updatedAt: now },
+];
 
 let snapshot: RuntimeSnapshot = {
   kernelAbiVersion: "1.0.0",
@@ -75,6 +82,7 @@ let snapshot: RuntimeSnapshot = {
     { id: "demo-assistant", role: "assistant", text: "The Project Aurora brief is ready. Its real file is registered below and can be inspected in LingShu's built-in preview.", createdAt: now, state: "complete", threadId: demoTask.id },
   ],
   tasks: [demoTask], activeTaskId: undefined, queuedTaskCount: 0, providerConfigured: true,
+  events: demoEvents, latestEventSequence: 3,
 };
 
 async function mockInvoke<T>(command: string, args?: Record<string, unknown>): Promise<T> {
@@ -94,9 +102,12 @@ async function mockInvoke<T>(command: string, args?: Record<string, unknown>): P
         id, title: prompt, prompt, status: "understanding", createdAt, updatedAt: createdAt,
         steps: [{ id: crypto.randomUUID(), title: "Understand the request", detail: "Generating a complete GoalSpec", status: "understanding", updatedAt: createdAt }],
         artifacts: [], summary: "", assistantMessageId: crypto.randomUUID(), attachmentPaths: (args?.attachmentPaths as string[]) ?? [],
+        rootTaskId: id, role: "main", origin: "conversation", participantName: "LingShu", depth: 0,
       };
+      const event: RuntimeEvent = { id: crypto.randomUUID(), sequence: snapshot.latestEventSequence + 1, taskId: id, kind: "model", state: "running", actor: snapshot.settings.model, title: "Understanding the goal", detail: "Compiling the current input into an executable goal.", createdAt, updatedAt: createdAt };
       snapshot = {
         ...snapshot, activeTaskId: id, tasks: [...snapshot.tasks, task],
+        events: [...snapshot.events, event], latestEventSequence: event.sequence,
         messages: [...snapshot.messages,
           { id: crypto.randomUUID(), role: "user", text: prompt, createdAt, state: "complete", threadId: id },
           { id: task.assistantMessageId, role: "assistant", text: "Understanding…", createdAt, state: "thinking", threadId: id },
@@ -107,6 +118,11 @@ async function mockInvoke<T>(command: string, args?: Record<string, unknown>): P
     case "cancel_task": {
       const id = String(args?.threadId ?? "");
       snapshot = { ...snapshot, activeTaskId: undefined, tasks: snapshot.tasks.map((task) => task.id === id ? { ...task, status: "cancelled" } : task) };
+      return true as T;
+    }
+    case "resume_task": {
+      const id = String(args?.threadId ?? "");
+      snapshot = { ...snapshot, activeTaskId: id, tasks: snapshot.tasks.map((task) => task.id === id ? { ...task, status: "running", pendingQuestion: undefined } : task) };
       return true as T;
     }
     case "preview_path": return {

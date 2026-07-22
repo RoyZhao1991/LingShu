@@ -26,7 +26,9 @@
   <p>
     <a href="https://royzhao1991.github.io/LingShu/"><strong>官方网站</strong></a>
     ·
-    <a href="https://github.com/RoyZhao1991/LingShu/releases/download/v0.1.0-alpha.9/LingShu-0.1.0-12-macOS-universal.dmg"><strong>下载已签名的 macOS Alpha</strong></a>
+    <a href="https://github.com/RoyZhao1991/LingShu/releases/download/v0.1.0-alpha.9/LingShu-0.1.0-12-macOS-universal.dmg"><strong>macOS 签名 Alpha</strong></a>
+    ·
+    <a href="https://github.com/RoyZhao1991/LingShu/releases/download/windows-v0.1.0-preview.1/LingShu-Windows-x64-Setup.exe"><strong>Windows x64 技术预览</strong></a>
     · <a href="#真实公开样例"><strong>检查真实样例</strong></a>
     · <a href="#快速开始">快速开始</a>
     · <a href="https://github.com/RoyZhao1991/LingShu/discussions">社区讨论</a>
@@ -136,10 +138,10 @@ flowchart LR
 
 ### 环境要求
 
-- macOS 14 或更高版本
+- macOS 14 或更高版本；Windows 技术预览支持 Windows 10/11 x64
 - 一个受支持模型服务的 API Token，或自定义兼容端点
 
-### 安装已签名版本（推荐）
+### 在 macOS 安装（签名并公证）
 
 使用 [Homebrew](https://brew.sh/) 可同时安装 App 与 `lingshu` CLI：
 
@@ -160,6 +162,20 @@ brew install --cask RoyZhao1991/tap/lingshu
 4. 选择界面语言、连接模型服务商，并发送一个小型任务完成首次验证。
 
 公开 DMG 同时支持 Apple 芯片和 Intel Mac，使用 Developer ID 签名，已通过 Apple 公证并附加公证票据。只有在所选能力确实需要时再授予对应 macOS 权限。
+
+### 在 Windows 安装（技术预览）
+
+1. 下载 [LingShu-Windows-x64-Setup.exe](https://github.com/RoyZhao1991/LingShu/releases/download/windows-v0.1.0-preview.1/LingShu-Windows-x64-Setup.exe) 与 [SHA256SUMS.txt](https://github.com/RoyZhao1991/LingShu/releases/download/windows-v0.1.0-preview.1/SHA256SUMS.txt)。
+2. 在 PowerShell 中核对安装包：
+
+   ```powershell
+   Get-FileHash .\LingShu-Windows-x64-Setup.exe -Algorithm SHA256
+   Get-Content .\SHA256SUMS.txt
+   ```
+
+3. 运行安装程序，选择界面语言、连接模型服务商，再发送一条小请求完成首跑。
+
+Windows 技术预览保留同一套 GoalSpec 驱动执行范式：单主任务串行、隔离子线程并行、可见的推理摘要与工具事件、人机阻断续跑、独立 checker、产物登记和内置预览。当前只明确不包含 Windows 电脑直接控制与实时音视频感知。完整边界见 [Windows 版说明](./Docs/WINDOWS.md)。
 
 ### 运行第一条可追踪任务
 

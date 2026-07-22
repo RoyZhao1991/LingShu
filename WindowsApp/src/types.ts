@@ -2,6 +2,10 @@ export type Locale = "zh_cn" | "en";
 export type ProviderProtocol = "openai_chat_completions" | "anthropic_messages";
 export type MessageState = "complete" | "thinking" | "failed" | "needs_user_action";
 export type TaskStatus = "queued" | "understanding" | "running" | "needs_user_action" | "completed" | "failed" | "cancelled";
+export type TaskRole = "main" | "worker" | "checker";
+export type TaskOrigin = "conversation" | "subtask" | "verification";
+export type RuntimeEventKind = "status" | "model" | "reasoning" | "tool" | "plan" | "delegation" | "human_interaction" | "warning" | "result";
+export type RuntimeEventState = "running" | "completed" | "failed" | "blocked";
 
 export interface RuntimeSettings {
   locale: Locale;
@@ -75,6 +79,27 @@ export interface TaskRecord {
   summary: string;
   error?: string;
   attachmentPaths: string[];
+  parentTaskId?: string;
+  rootTaskId?: string;
+  role: TaskRole;
+  origin: TaskOrigin;
+  participantName: string;
+  depth: number;
+  pendingQuestion?: string;
+}
+
+export interface RuntimeEvent {
+  id: string;
+  sequence: number;
+  taskId: string;
+  parentTaskId?: string;
+  kind: RuntimeEventKind;
+  state: RuntimeEventState;
+  actor: string;
+  title: string;
+  detail: string;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface RuntimeSnapshot {
@@ -87,6 +112,8 @@ export interface RuntimeSnapshot {
   activeTaskId?: string;
   queuedTaskCount: number;
   providerConfigured: boolean;
+  events: RuntimeEvent[];
+  latestEventSequence: number;
 }
 
 export interface ProviderPreset {

@@ -28,6 +28,10 @@ struct PersistedState {
     messages: Vec<ChatMessage>,
     tasks: Vec<TaskRecord>,
     active_task_id: Option<Uuid>,
+    #[serde(default)]
+    events: Vec<RuntimeEvent>,
+    #[serde(default)]
+    next_event_sequence: u64,
 }
 
 impl Default for PersistedState {
@@ -46,6 +50,8 @@ impl Default for PersistedState {
             }],
             tasks: Vec::new(),
             active_task_id: None,
+            events: Vec::new(),
+            next_event_sequence: 1,
         }
     }
 }
@@ -66,6 +72,15 @@ impl RuntimeStore {
             .ok()
             .and_then(|data| serde_json::from_slice::<PersistedState>(&data).ok())
             .unwrap_or_default();
+        if state.next_event_sequence == 0 {
+            state.next_event_sequence = state
+                .events
+                .iter()
+                .map(|event| event.sequence)
+                .max()
+                .unwrap_or(0)
+                .saturating_add(1);
+        }
         // A process cannot still own an active task after restart. Preserve the thread and make
         // the interruption explicit instead of pretending it is still running.
         if let Some(active) = state.active_task_id.take() {
@@ -132,6 +147,8 @@ impl RuntimeStore {
             active_task_id: state.active_task_id,
             queued_task_count,
             provider_configured,
+            events: state.events.clone(),
+            latest_event_sequence: state.next_event_sequence.saturating_sub(1),
         }
     }
 
@@ -192,6 +209,15 @@ impl RuntimeStore {
             error: None,
             assistant_message_id,
             attachment_paths,
+            parent_task_id: None,
+            root_task_id: Some(thread_id),
+            role: TaskRole::Main,
+            origin: TaskOrigin::Conversation,
+            participant_name: "LingShu".into(),
+            depth: 0,
+            session_messages: Vec::new(),
+            pending_tool_call_id: None,
+            pending_question: None,
         });
         drop(state);
         self.persist().await?;
@@ -237,6 +263,407 @@ impl RuntimeStore {
             .iter()
             .find(|task| task.id == thread_id)
             .cloned()
+    }
+
+    pub async fn children(&self, parent_task_id: Uuid) -> Vec<TaskRecord> {
+        self.state
+            .read()
+            .await
+            .tasks
+            .iter()
+            .filter(|task| task.parent_task_id == Some(parent_task_id))
+            .cloned()
+            .collect()
+    }
+
+    pub async fn task_is_cancelled(&self, thread_id: Uuid) -> bool {
+        self.state
+            .read()
+            .await
+            .tasks
+            .iter()
+            .find(|task| task.id == thread_id)
+            .map(|task| task.status == TaskStatus::Cancelled)
+            .unwrap_or(true)
+    }
+
+    pub async fn events_after(&self, sequence: u64) -> Vec<RuntimeEvent> {
+        self.state
+            .read()
+            .await
+            .events
+            .iter()
+            .filter(|event| event.sequence > sequence)
+            .cloned()
+            .collect()
+    }
+
+    pub async fn append_event(
+        &self,
+        task_id: Uuid,
+        kind: RuntimeEventKind,
+        state_value: RuntimeEventState,
+        actor: impl Into<String>,
+        title: impl Into<String>,
+        detail: impl Into<String>,
+    ) -> Result<RuntimeEvent, StoreError> {
+        let now = Utc::now();
+        let mut state = self.state.write().await;
+        let parent_task_id = state
+            .tasks
+            .iter()
+            .find(|task| task.id == task_id)
+            .and_then(|task| task.parent_task_id);
+        let event = RuntimeEvent {
+            id: Uuid::new_v4(),
+            sequence: state.next_event_sequence,
+            task_id,
+            parent_task_id,
+            kind,
+            state: state_value,
+            actor: actor.into(),
+            title: title.into(),
+            detail: detail.into(),
+            created_at: now,
+            updated_at: now,
+        };
+        state.next_event_sequence = state.next_event_sequence.saturating_add(1);
+        state.events.push(event.clone());
+        if state.events.len() > 8_000 {
+            let remove = state.events.len() - 8_000;
+            state.events.drain(..remove);
+        }
+        drop(state);
+        self.persist().await?;
+        Ok(event)
+    }
+
+    pub async fn append_event_detail(&self, event_id: Uuid, delta: &str) -> Result<(), StoreError> {
+        if delta.is_empty() {
+            return Ok(());
+        }
+        let mut state = self.state.write().await;
+        if let Some(event) = state.events.iter_mut().find(|event| event.id == event_id) {
+            event.detail.push_str(delta);
+            event.updated_at = Utc::now();
+        }
+        drop(state);
+        self.persist().await
+    }
+
+    /// Streaming deltas remain immediately visible through `snapshot()` but are flushed once per
+    /// completed model turn instead of rewriting the state file for every token.
+    pub async fn append_event_detail_live(&self, event_id: Uuid, delta: &str) {
+        if delta.is_empty() {
+            return;
+        }
+        let mut state = self.state.write().await;
+        if let Some(event) = state.events.iter_mut().find(|event| event.id == event_id) {
+            event.detail.push_str(delta);
+            event.updated_at = Utc::now();
+        }
+    }
+
+    pub async fn finish_event(
+        &self,
+        event_id: Uuid,
+        event_state: RuntimeEventState,
+        detail: Option<String>,
+    ) -> Result<(), StoreError> {
+        let mut state = self.state.write().await;
+        if let Some(event) = state.events.iter_mut().find(|event| event.id == event_id) {
+            event.state = event_state;
+            if let Some(detail) = detail {
+                event.detail = detail;
+            }
+            event.updated_at = Utc::now();
+        }
+        drop(state);
+        self.persist().await
+    }
+
+    pub async fn set_session_messages(
+        &self,
+        thread_id: Uuid,
+        messages: Vec<AgentMessage>,
+    ) -> Result<(), StoreError> {
+        let mut state = self.state.write().await;
+        if let Some(task) = state.tasks.iter_mut().find(|task| task.id == thread_id) {
+            task.session_messages = messages;
+            task.updated_at = Utc::now();
+        }
+        drop(state);
+        self.persist().await
+    }
+
+    pub async fn set_assistant_text(
+        &self,
+        thread_id: Uuid,
+        text: String,
+        message_state: MessageState,
+    ) -> Result<(), StoreError> {
+        let mut state = self.state.write().await;
+        let assistant_id = state
+            .tasks
+            .iter()
+            .find(|task| task.id == thread_id)
+            .map(|task| task.assistant_message_id);
+        if let Some(assistant_id) = assistant_id {
+            if let Some(message) = state
+                .messages
+                .iter_mut()
+                .find(|message| message.id == assistant_id)
+            {
+                message.text = text;
+                message.state = message_state;
+            }
+        }
+        drop(state);
+        self.persist().await
+    }
+
+    pub async fn append_assistant_delta(
+        &self,
+        thread_id: Uuid,
+        delta: &str,
+    ) -> Result<(), StoreError> {
+        if delta.is_empty() {
+            return Ok(());
+        }
+        let mut state = self.state.write().await;
+        let assistant_id = state
+            .tasks
+            .iter()
+            .find(|task| task.id == thread_id && task.role == TaskRole::Main)
+            .map(|task| task.assistant_message_id);
+        if let Some(assistant_id) = assistant_id {
+            if let Some(message) = state
+                .messages
+                .iter_mut()
+                .find(|message| message.id == assistant_id)
+            {
+                if message.state != MessageState::Complete {
+                    message.text.push_str(delta);
+                    message.state = MessageState::Thinking;
+                }
+            }
+        }
+        drop(state);
+        self.persist().await
+    }
+
+    pub async fn append_assistant_delta_live(&self, thread_id: Uuid, delta: &str) {
+        if delta.is_empty() {
+            return;
+        }
+        let mut state = self.state.write().await;
+        let assistant_id = state
+            .tasks
+            .iter()
+            .find(|task| task.id == thread_id && task.role == TaskRole::Main)
+            .map(|task| task.assistant_message_id);
+        if let Some(assistant_id) = assistant_id {
+            if let Some(message) = state
+                .messages
+                .iter_mut()
+                .find(|message| message.id == assistant_id)
+            {
+                if message.state != MessageState::Complete {
+                    message.text.push_str(delta);
+                    message.state = MessageState::Thinking;
+                }
+            }
+        }
+    }
+
+    pub async fn flush(&self) -> Result<(), StoreError> {
+        self.persist().await
+    }
+
+    pub async fn update_plan(
+        &self,
+        thread_id: Uuid,
+        items: Vec<(String, String, TaskStatus)>,
+    ) -> Result<(), StoreError> {
+        let now = Utc::now();
+        let mut state = self.state.write().await;
+        if let Some(task) = state.tasks.iter_mut().find(|task| task.id == thread_id) {
+            task.steps = items
+                .into_iter()
+                .map(|(title, detail, status)| TaskStep {
+                    id: Uuid::new_v4(),
+                    title,
+                    detail,
+                    status,
+                    updated_at: now,
+                })
+                .collect();
+            task.updated_at = now;
+        }
+        drop(state);
+        self.persist().await
+    }
+
+    pub async fn add_artifacts(
+        &self,
+        thread_id: Uuid,
+        artifacts: Vec<ArtifactRecord>,
+    ) -> Result<(), StoreError> {
+        let mut state = self.state.write().await;
+        if let Some(task) = state.tasks.iter_mut().find(|task| task.id == thread_id) {
+            for artifact in artifacts {
+                if let Some(existing) = task
+                    .artifacts
+                    .iter_mut()
+                    .find(|item| item.path == artifact.path)
+                {
+                    *existing = artifact;
+                } else {
+                    task.artifacts.push(artifact);
+                }
+            }
+            task.updated_at = Utc::now();
+        }
+        drop(state);
+        self.persist().await
+    }
+
+    pub async fn create_child_task(
+        &self,
+        parent_task_id: Uuid,
+        prompt: String,
+        role: TaskRole,
+        participant_name: String,
+        origin: TaskOrigin,
+    ) -> Result<Uuid, StoreError> {
+        let now = Utc::now();
+        let child_id = Uuid::new_v4();
+        let mut state = self.state.write().await;
+        let parent = state
+            .tasks
+            .iter()
+            .find(|task| task.id == parent_task_id)
+            .cloned();
+        let root_task_id = parent
+            .as_ref()
+            .and_then(|task| task.root_task_id)
+            .or(Some(parent_task_id));
+        let depth = parent
+            .as_ref()
+            .map(|task| task.depth.saturating_add(1))
+            .unwrap_or(1);
+        let localized = copy(state.settings.locale);
+        state.tasks.push(TaskRecord {
+            id: child_id,
+            title: prompt.chars().take(64).collect(),
+            prompt,
+            status: TaskStatus::Understanding,
+            created_at: now,
+            updated_at: now,
+            goal_spec: None,
+            steps: vec![TaskStep {
+                id: Uuid::new_v4(),
+                title: localized.understand.into(),
+                detail: localized.generating_goal.into(),
+                status: TaskStatus::Understanding,
+                updated_at: now,
+            }],
+            artifacts: Vec::new(),
+            summary: String::new(),
+            error: None,
+            assistant_message_id: Uuid::new_v4(),
+            attachment_paths: Vec::new(),
+            parent_task_id: Some(parent_task_id),
+            root_task_id,
+            role,
+            origin,
+            participant_name,
+            depth,
+            session_messages: Vec::new(),
+            pending_tool_call_id: None,
+            pending_question: None,
+        });
+        drop(state);
+        self.persist().await?;
+        Ok(child_id)
+    }
+
+    pub async fn set_needs_user_action(
+        &self,
+        thread_id: Uuid,
+        tool_call_id: Option<String>,
+        question: String,
+    ) -> Result<(), StoreError> {
+        let mut state = self.state.write().await;
+        if let Some(task) = state.tasks.iter_mut().find(|task| task.id == thread_id) {
+            task.status = TaskStatus::NeedsUserAction;
+            task.pending_tool_call_id = tool_call_id;
+            task.pending_question = Some(question.clone());
+            task.updated_at = Utc::now();
+        }
+        let assistant_id = state
+            .tasks
+            .iter()
+            .find(|task| task.id == thread_id && task.role == TaskRole::Main)
+            .map(|task| task.assistant_message_id);
+        if let Some(assistant_id) = assistant_id {
+            if let Some(message) = state
+                .messages
+                .iter_mut()
+                .find(|message| message.id == assistant_id)
+            {
+                message.text = question;
+                message.state = MessageState::NeedsUserAction;
+            }
+        }
+        if state.active_task_id == Some(thread_id) {
+            state.active_task_id = None;
+        }
+        drop(state);
+        self.persist().await
+    }
+
+    pub async fn prepare_resume(
+        &self,
+        thread_id: Uuid,
+        answer: String,
+    ) -> Result<Option<TaskRecord>, StoreError> {
+        let mut state = self.state.write().await;
+        if state.active_task_id.is_some() {
+            return Ok(None);
+        }
+        let Some(task) = state.tasks.iter_mut().find(|task| task.id == thread_id) else {
+            return Ok(None);
+        };
+        if task.status != TaskStatus::NeedsUserAction {
+            return Ok(None);
+        }
+        if let Some(call_id) = task.pending_tool_call_id.take() {
+            task.session_messages.push(AgentMessage {
+                role: AgentRole::Tool,
+                content: answer,
+                tool_calls: Vec::new(),
+                tool_call_id: Some(call_id),
+            });
+        } else {
+            task.session_messages.push(AgentMessage {
+                role: AgentRole::User,
+                content: answer,
+                tool_calls: Vec::new(),
+                tool_call_id: None,
+            });
+        }
+        task.pending_question = None;
+        task.status = TaskStatus::Running;
+        task.updated_at = Utc::now();
+        let resumes_main = task.role == TaskRole::Main;
+        let task = task.clone();
+        if resumes_main {
+            state.active_task_id = Some(thread_id);
+        }
+        drop(state);
+        self.persist().await?;
+        Ok(Some(task))
     }
 
     pub async fn next_queued_id(&self) -> Option<Uuid> {

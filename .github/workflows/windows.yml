@@ -4,6 +4,8 @@ on:
   push:
     branches:
       - main
+    tags:
+      - "windows-v*"
     paths:
       - "WindowsApp/**"
       - "Runtime/LingShuCore/**"
@@ -22,7 +24,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: windows-${{ github.workflow }}-${{ github.ref }}
@@ -72,13 +74,15 @@ jobs:
           $bundle = Join-Path $env:GITHUB_WORKSPACE "WindowsApp/src-tauri/target/release/bundle"
           $output = Join-Path $env:GITHUB_WORKSPACE "dist/windows"
           New-Item -ItemType Directory -Force -Path $output | Out-Null
-          $installers = @(Get-ChildItem -Path $bundle -Recurse -File | Where-Object { $_.Extension -eq ".msi" -or $_.Name -like "*-setup.exe" })
-          if ($installers.Count -lt 2) {
-            throw "Expected MSI and NSIS installers, found $($installers.Count)."
+          $msiInstallers = @(Get-ChildItem -Path $bundle -Recurse -File | Where-Object { $_.Extension -eq ".msi" })
+          $nsisInstallers = @(Get-ChildItem -Path $bundle -Recurse -File | Where-Object { $_.Name -like "*-setup.exe" })
+          if ($msiInstallers.Count -lt 1 -or $nsisInstallers.Count -ne 1) {
+            throw "Expected at least one MSI and exactly one NSIS installer; found $($msiInstallers.Count) MSI and $($nsisInstallers.Count) NSIS."
           }
-          foreach ($installer in $installers) {
+          foreach ($installer in $msiInstallers) {
             Copy-Item $installer.FullName -Destination $output
           }
+          Copy-Item $nsisInstallers[0].FullName -Destination (Join-Path $output "LingShu-Windows-x64-Setup.exe")
           Get-ChildItem $output -File | ForEach-Object {
             $hash = Get-FileHash $_.FullName -Algorithm SHA256
             "$($hash.Hash.ToLower())  $($_.Name)"
@@ -92,3 +96,15 @@ jobs:
           path: dist/windows/*
           if-no-files-found: error
           retention-days: 30
+
+      - name: Publish tagged Windows preview
+        if: startsWith(github.ref, 'refs/tags/windows-v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = "${{ github.ref_name }}"
+          gh release view $tag --repo $env:GITHUB_REPOSITORY *> $null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create $tag --repo $env:GITHUB_REPOSITORY --prerelease --title "LingShu Windows Technical Preview 0.1.0-1" --notes "Windows x64 technical preview built and tested on GitHub's Windows runner. It preserves LingShu's GoalSpec, serialized main task, isolated child sessions, tool and reasoning progress, human-action resume, checker, artifact ledger, and built-in preview. Direct computer control and realtime audio/video perception are not included in this preview."
+          }
+          gh release upload $tag dist/windows/* --repo $env:GITHUB_REPOSITORY --clobber

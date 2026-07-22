@@ -1,15 +1,16 @@
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import {
-  Activity, Bot, Check, ChevronRight, CircleAlert, ExternalLink, FileBox, FileText,
-  FolderOpen, Gauge, LoaderCircle, MessageCircle, MessagesSquare, Paperclip, Play, Search, Send,
-  Settings, ShieldCheck, Square, X,
+  Activity, Bot, BrainCircuit, Check, ChevronRight, CircleAlert, Clock3, ExternalLink,
+  FileBox, FileText, FolderOpen, Gauge, GitBranch, ListChecks, LoaderCircle, MessageCircle,
+  MessagesSquare, Paperclip, Play, Search, Send, Settings, ShieldCheck, Square, UserRound,
+  Wrench, X,
 } from "lucide-react";
 import { strings } from "./i18n";
 import { chooseFiles, runtimeInvoke } from "./bridge";
 import type {
   ArtifactRecord, Locale, Page, PreviewPayload, ProviderPreset, RuntimeSettings,
-  RuntimeSnapshot, TaskRecord, TaskStatus,
+  RuntimeEvent, RuntimeSnapshot, TaskRecord, TaskRole, TaskStatus,
 } from "./types";
 
 import type { BootstrapPayload } from "./bridge";
@@ -29,13 +30,18 @@ export default function App() {
   const [settingsDraft, setSettingsDraft] = useState<RuntimeSettings>();
   const [apiKey, setApiKey] = useState("");
   const [validating, setValidating] = useState(false);
+  const [actionAnswer, setActionAnswer] = useState("");
+  const [resuming, setResuming] = useState(false);
   const messagesEnd = useRef<HTMLDivElement>(null);
+  const messageScroll = useRef<HTMLDivElement>(null);
+  const keepAtBottom = useRef(true);
 
   const locale = settingsDraft?.locale ?? snapshot?.settings.locale ?? "zh_cn";
   const t = strings(locale);
   const activeTask = snapshot?.tasks.find((task) => task.id === snapshot.activeTaskId);
-  const isBusy = Boolean(activeTask) || Boolean(snapshot?.queuedTaskCount);
-  const selectedTask = snapshot?.tasks.find((task) => task.id === selectedTaskId) ?? activeTask ?? snapshot?.tasks.at(-1);
+  const isBusy = Boolean(snapshot?.tasks.some((task) => ["understanding", "running"].includes(task.status))) || Boolean(snapshot?.queuedTaskCount);
+  const selectedTask = snapshot?.tasks.find((task) => task.id === selectedTaskId) ?? activeTask ?? snapshot?.tasks.filter((task) => !task.parentTaskId).at(-1);
+  const actionTask = snapshot?.tasks.find((task) => task.status === "needs_user_action");
 
   const refresh = useCallback(async () => {
     try {
@@ -59,13 +65,21 @@ export default function App() {
 
   useEffect(() => {
     if (!snapshot) return;
-    const interval = window.setInterval(() => void refresh(), isBusy ? 800 : 3_000);
+    const interval = window.setInterval(() => void refresh(), isBusy ? 350 : 1_500);
     return () => window.clearInterval(interval);
   }, [isBusy, refresh, snapshot]);
 
   useEffect(() => {
-    if (page === "chat") messagesEnd.current?.scrollIntoView({ behavior: "smooth", block: "end" });
-  }, [page, snapshot?.messages.length, snapshot?.messages.at(-1)?.text]);
+    if (page === "chat" && keepAtBottom.current) {
+      messagesEnd.current?.scrollIntoView({ behavior: "auto", block: "end" });
+    }
+  }, [page, snapshot?.messages.length, snapshot?.messages.at(-1)?.text, snapshot?.latestEventSequence]);
+
+  const trackMessageScroll = () => {
+    const node = messageScroll.current;
+    if (!node) return;
+    keepAtBottom.current = node.scrollHeight - node.scrollTop - node.clientHeight < 56;
+  };
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
@@ -117,6 +131,22 @@ export default function App() {
     }
   };
 
+  const resumeAction = async () => {
+    if (!actionTask || resuming || !actionAnswer.trim()) return;
+    setResuming(true);
+    setError("");
+    try {
+      const accepted = await runtimeInvoke<boolean>("resume_task", { threadId: actionTask.id, answer: actionAnswer.trim() });
+      if (!accepted) throw new Error(locale === "en" ? "The task is not ready to resume." : "当前任务暂时无法恢复执行。");
+      setActionAnswer("");
+      await refresh();
+    } catch (reason) {
+      setError(String(reason));
+    } finally {
+      setResuming(false);
+    }
+  };
+
   const selectProvider = (providerId: string) => {
     const provider = providers.find((item) => item.id === providerId);
     if (!provider || !settingsDraft) return;
@@ -142,7 +172,7 @@ export default function App() {
       <main className="workspace-shell">
         {page === "chat" && (
           <section className="chat-page">
-            <div className="message-scroll">
+            <div className="message-scroll" ref={messageScroll} onScroll={trackMessageScroll}>
               {snapshot.messages.length === 0 && <EmptyState icon={<MessageCircle />} text={t.noMessages} />}
               {snapshot.messages.map((message) => (
                 <article key={message.id} className={`message ${message.role}`}>
@@ -154,8 +184,11 @@ export default function App() {
                     {message.state === "thinking" && <LoaderCircle className="inline-loader spin" />}
                     <ReactMarkdown>{message.text}</ReactMarkdown>
                   </div>
+                  {message.state === "thinking" && message.threadId && (
+                    <MessageRuntimeStatus event={latestEventForThread(snapshot, message.threadId)} locale={locale} />
+                  )}
                   {message.threadId && message.role === "assistant"
-                    && snapshot.tasks.find((task) => task.id === message.threadId)?.goalSpec?.output_mode !== "chat_reply" && (
+                    && shouldShowExecution(snapshot, message.threadId) && (
                     <button className="thread-link" onClick={() => { setSelectedTaskId(message.threadId); setPage("threads"); }}>
                       <MessagesSquare size={16} /> {locale === "en" ? "View execution" : "查看执行过程"}
                     </button>
@@ -191,7 +224,7 @@ export default function App() {
         )}
 
         {page === "threads" && (
-          <ThreadsPage tasks={snapshot.tasks} selected={selectedTask} locale={locale} onSelect={setSelectedTaskId} onPreview={showPreview} />
+          <ThreadsPage tasks={snapshot.tasks} events={snapshot.events} selected={selectedTask} locale={locale} onSelect={setSelectedTaskId} onPreview={showPreview} />
         )}
 
         {page === "status" && <StatusPage snapshot={snapshot} locale={locale} />}
@@ -207,6 +240,10 @@ export default function App() {
           onDraft={setSettingsDraft} onApiKey={setApiKey} onProvider={selectProvider} onSave={saveSettings} />
       )}
       {preview && <PreviewDialog payload={preview} locale={locale} onClose={() => setPreview(undefined)} />}
+      {actionTask && (
+        <HumanActionDialog task={actionTask} locale={locale} value={actionAnswer} busy={resuming} error={error}
+          onChange={setActionAnswer} onResume={resumeAction} />
+      )}
     </div>
   );
 }
@@ -223,26 +260,56 @@ function Header({ page, setPage, busy, locale }: { page: Page; setPage: (page: P
   </header>;
 }
 
-function ThreadsPage({ tasks, selected, locale, onSelect, onPreview }: { tasks: TaskRecord[]; selected?: TaskRecord; locale: Locale; onSelect: (id: string) => void; onPreview: (artifact: ArtifactRecord) => void }) {
+function ThreadsPage({ tasks, events, selected, locale, onSelect, onPreview }: { tasks: TaskRecord[]; events: RuntimeEvent[]; selected?: TaskRecord; locale: Locale; onSelect: (id: string) => void; onPreview: (artifact: ArtifactRecord) => void }) {
   const t = strings(locale);
-  if (!tasks.length) return <EmptyState icon={<MessagesSquare />} text={t.noTasks} />;
+  const [roleFilter, setRoleFilter] = useState<TaskRole | "all">("all");
+  const roots = useMemo(() => tasks.filter((task) => !task.parentTaskId).sort((a, b) => a.updatedAt.localeCompare(b.updatedAt)), [tasks]);
+  const rootId = selected?.rootTaskId ?? selected?.id;
+  const root = tasks.find((task) => task.id === rootId) ?? selected;
+  const participants = useMemo(() => root ? tasks.filter((task) => (task.rootTaskId ?? task.id) === root.id) : [], [root, tasks]);
+  const participantIds = useMemo(() => new Set(participants.filter((task) => roleFilter === "all" || task.role === roleFilter).map((task) => task.id)), [participants, roleFilter]);
+  const visibleEvents = useMemo(() => events.filter((event) => participantIds.has(event.taskId)).sort((a, b) => a.sequence - b.sequence), [events, participantIds]);
+
+  useEffect(() => setRoleFilter("all"), [root?.id]);
+
+  if (!roots.length) return <EmptyState icon={<MessagesSquare />} text={t.noTasks} />;
   return <section className="threads-page">
     <aside className="thread-list">
-      <div className="section-heading"><MessagesSquare /> <strong>{t.threads}</strong><span>{tasks.length}</span></div>
-      {[...tasks].reverse().map((task) => <button key={task.id} className={selected?.id === task.id ? "selected" : ""} onClick={() => onSelect(task.id)}>
-        <StatusGlyph status={task.status} /><span><strong>{task.title}</strong><small>{statusLabel(task.status, locale)} · {new Date(task.updatedAt).toLocaleString()}</small></span><ChevronRight />
-      </button>)}
+      <div className="section-heading"><MessagesSquare /> <strong>{t.threads}</strong><span>{roots.length}</span></div>
+      {[...roots].reverse().map((task) => {
+        const status = aggregateTaskStatus(task, tasks);
+        return <button key={task.id} className={root?.id === task.id ? "selected" : ""} onClick={() => onSelect(task.id)}>
+          <StatusGlyph status={status} /><span><strong>{task.title}</strong><small>{statusLabel(status, locale)} · {new Date(task.updatedAt).toLocaleString()}</small></span><ChevronRight />
+        </button>;
+      })}
     </aside>
     <div className="thread-detail">
-      {!selected ? <EmptyState icon={<Search />} text={t.selectTask} /> : <>
-        <div className="thread-title"><div><small>{statusLabel(selected.status, locale)}</small><h1>{selected.title}</h1></div><StatusGlyph status={selected.status} /></div>
-        <section className="detail-band"><h2><Gauge />{t.goal}</h2>{selected.goalSpec ? <><p>{selected.goalSpec.objective}</p><TagList values={selected.goalSpec.success_criteria} /></> : <p>{selected.prompt}</p>}</section>
-        <section className="detail-band"><h2><Activity />{t.steps}</h2><ol className="steps">{selected.steps.map((step) => <li key={step.id}><StatusGlyph status={step.status} /><div><strong>{step.title}</strong><p>{step.detail}</p></div></li>)}</ol></section>
-        <section className="detail-band"><h2><FileBox />{t.artifacts}<span>{selected.artifacts.length}</span></h2>
-          {!selected.artifacts.length ? <p className="muted">{locale === "en" ? "No registered artifacts yet." : "暂未登记产出物。"}</p> :
-            <div className="artifact-list">{selected.artifacts.map((artifact) => <div className="artifact-row" key={artifact.id}><FileText /><div><strong>{artifact.title}</strong><small>{fileName(artifact.path)} · {formatBytes(artifact.sizeBytes)}</small></div><button onClick={() => onPreview(artifact)}><Search />{t.preview}</button></div>)}</div>}
-        </section>
-        {selected.error && <div className="task-error"><CircleAlert />{selected.error}</div>}
+      {!root ? <EmptyState icon={<Search />} text={t.selectTask} /> : <>
+        <div className="thread-title"><div><small>{statusLabel(aggregateTaskStatus(root, tasks), locale)}</small><h1>{root.title}</h1><p>{participants.length} {t.participants.toLocaleLowerCase()}</p></div><StatusGlyph status={aggregateTaskStatus(root, tasks)} /></div>
+        <div className="participant-tabs" aria-label={t.participants}>
+          <ParticipantTab role="all" active={roleFilter === "all"} label={t.all} count={participants.length} onSelect={setRoleFilter} />
+          <ParticipantTab role="main" active={roleFilter === "main"} label={t.mainRole} count={participants.filter((task) => task.role === "main").length} onSelect={setRoleFilter} />
+          <ParticipantTab role="worker" active={roleFilter === "worker"} label={t.workerRole} count={participants.filter((task) => task.role === "worker").length} onSelect={setRoleFilter} />
+          <ParticipantTab role="checker" active={roleFilter === "checker"} label={t.checkerRole} count={participants.filter((task) => task.role === "checker").length} onSelect={setRoleFilter} />
+        </div>
+        <div className="thread-workbench">
+          <section className="execution-pane">
+            <div className="pane-heading"><Activity /><div><strong>{t.execution}</strong><small>{t.liveDetail}</small></div><span>{visibleEvents.length}</span></div>
+            {!visibleEvents.length ? <EmptyState icon={<Activity />} text={t.noEvents} /> : <div className="event-timeline">
+              {visibleEvents.map((event) => <ExecutionEvent key={event.id} event={event} task={tasks.find((task) => task.id === event.taskId)} locale={locale} />)}
+            </div>}
+          </section>
+          <aside className="overview-pane">
+            <section className="detail-band"><h2><Gauge />{t.goal}</h2>{root.goalSpec ? <><p>{root.goalSpec.objective}</p><TagList values={root.goalSpec.success_criteria} /></> : <p>{root.prompt}</p>}</section>
+            <section className="detail-band"><h2><ListChecks />{t.steps}</h2><ol className="steps">{root.steps.map((step) => <li key={step.id}><StatusGlyph status={step.status} /><div><strong>{step.title}</strong><p>{step.detail}</p></div></li>)}</ol></section>
+            {participants.length > 1 && <section className="detail-band"><h2><GitBranch />{t.childThreads}<span>{participants.length - 1}</span></h2><div className="child-thread-list">{participants.filter((task) => task.id !== root.id).map((task) => <button key={task.id} onClick={() => setRoleFilter(task.role)}><RoleIcon role={task.role} /><span><strong>{task.participantName}</strong><small>{task.title}</small></span><StatusGlyph status={task.status} /></button>)}</div></section>}
+            <section className="detail-band"><h2><FileBox />{t.artifacts}<span>{root.artifacts.length}</span></h2>
+              {!root.artifacts.length ? <p className="muted">{locale === "en" ? "No registered artifacts yet." : "暂未登记产出物。"}</p> :
+                <div className="artifact-list">{root.artifacts.map((artifact) => <div className="artifact-row" key={artifact.id}><FileText /><div><strong>{artifact.title}</strong><small>{fileName(artifact.path)} · {formatBytes(artifact.sizeBytes)}</small></div><button onClick={() => onPreview(artifact)}><Search />{t.preview}</button></div>)}</div>}
+            </section>
+            {root.error && <div className="task-error"><CircleAlert />{root.error}</div>}
+          </aside>
+        </div>
       </>}
     </div>
   </section>;
@@ -297,6 +364,70 @@ function SetupDialog(props: SettingsProps & { error: string }) {
   </div></div>;
 }
 
+function HumanActionDialog({ task, locale, value, busy, error, onChange, onResume }: { task: TaskRecord; locale: Locale; value: string; busy: boolean; error: string; onChange: (value: string) => void; onResume: () => void }) {
+  const t = strings(locale);
+  return <div className="modal-layer action-layer"><div className="action-dialog" role="dialog" aria-modal="true" aria-labelledby="action-title">
+    <header><div className="action-mark"><UserRound /></div><div><h1 id="action-title">{t.actionRequired}</h1><p>{t.actionBody}</p></div></header>
+    <section><div className="action-actor"><RoleIcon role={task.role} /><span>{task.participantName}</span></div><ReactMarkdown>{task.pendingQuestion ?? task.summary}</ReactMarkdown></section>
+    <textarea autoFocus value={value} onChange={(event) => onChange(event.target.value)} placeholder={t.answerPlaceholder}
+      onKeyDown={(event) => { if ((event.ctrlKey || event.metaKey) && event.key === "Enter") onResume(); }} />
+    {error && <div className="error-strip"><CircleAlert />{error}</div>}
+    <button className="action-resume" disabled={busy || !value.trim()} onClick={onResume}>{busy ? <LoaderCircle className="spin" /> : <Check />}{t.resume}</button>
+  </div></div>;
+}
+
+function MessageRuntimeStatus({ event, locale }: { event?: RuntimeEvent; locale: Locale }) {
+  if (!event) return null;
+  return <div className="message-runtime-status"><EventIcon kind={event.kind} /><span><strong>{event.title}</strong><small>{event.actor}{event.state === "running" ? (locale === "en" ? " · live" : " · 实时") : ""}</small></span></div>;
+}
+
+function ParticipantTab({ role, active, label, count, onSelect }: { role: TaskRole | "all"; active: boolean; label: string; count: number; onSelect: (role: TaskRole | "all") => void }) {
+  return <button className={active ? "active" : ""} onClick={() => onSelect(role)}><RoleIcon role={role} /><span>{label}</span><small>{count}</small></button>;
+}
+
+function ExecutionEvent({ event, task, locale }: { event: RuntimeEvent; task?: TaskRecord; locale: Locale }) {
+  const body = formatEventDetail(event.detail);
+  const hasBody = body.trim().length > 0;
+  const [expanded, setExpanded] = useState(event.state === "running" || event.state === "blocked" || event.kind === "reasoning" || event.kind === "result");
+  useEffect(() => { if (event.state === "running" || event.state === "blocked") setExpanded(true); }, [event.state]);
+  return <article className={`execution-event ${event.kind} ${event.state}`}>
+    <div className="event-rail"><EventStateIcon event={event} /></div>
+    <div className="event-main">
+      <header><span className="event-kind"><EventIcon kind={event.kind} />{event.title}</span><time><Clock3 />{new Date(event.updatedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}</time></header>
+      <div className="event-actor"><RoleIcon role={task?.role ?? "main"} /><strong>{event.actor || task?.participantName || "LingShu"}</strong>{task && <small>{roleLabel(task.role, locale)}</small>}</div>
+      {hasBody && <details open={expanded} onToggle={(toggleEvent) => setExpanded(toggleEvent.currentTarget.open)}>
+        <summary>{locale === "en" ? "Details" : "明细"}</summary>
+        {event.kind === "tool" || event.kind === "delegation" ? <pre>{body}</pre> : <div className="event-markdown markdown-body"><ReactMarkdown>{body}</ReactMarkdown></div>}
+      </details>}
+    </div>
+  </article>;
+}
+
+function EventIcon({ kind }: { kind: RuntimeEvent["kind"] }) {
+  if (kind === "reasoning") return <BrainCircuit />;
+  if (kind === "tool") return <Wrench />;
+  if (kind === "delegation") return <GitBranch />;
+  if (kind === "plan") return <ListChecks />;
+  if (kind === "human_interaction") return <UserRound />;
+  if (kind === "warning") return <CircleAlert />;
+  if (kind === "result") return <Check />;
+  return <Bot />;
+}
+
+function EventStateIcon({ event }: { event: RuntimeEvent }) {
+  if (event.state === "running") return <LoaderCircle className="spin" />;
+  if (event.state === "completed") return <Check />;
+  if (event.state === "blocked") return <UserRound />;
+  return <X />;
+}
+
+function RoleIcon({ role }: { role: TaskRole | "all" }) {
+  if (role === "worker") return <Wrench />;
+  if (role === "checker") return <ShieldCheck />;
+  if (role === "all") return <MessagesSquare />;
+  return <Bot />;
+}
+
 function PreviewDialog({ payload, locale, onClose }: { payload: PreviewPayload; locale: Locale; onClose: () => void }) {
   const t = strings(locale);
   return <div className="modal-layer"><div className="preview-dialog">
@@ -321,4 +452,34 @@ function StatusGlyph({ status }: { status: TaskStatus }) { return terminalStatus
 function TagList({ values }: { values: string[] }) { return <ul className="tag-list">{values.map((value) => <li key={value}>{value}</li>)}</ul>; }
 function fileName(path: string) { return path.split(/[\\/]/).at(-1) ?? path; }
 function formatBytes(value: number) { return value < 1024 ? `${value} B` : value < 1024 * 1024 ? `${(value / 1024).toFixed(1)} KB` : `${(value / 1024 / 1024).toFixed(1)} MB`; }
-function statusLabel(status: TaskStatus, locale: Locale) { const t = strings(locale); if (status === "completed") return t.completed; if (status === "failed") return t.failed; if (status === "cancelled") return t.cancelled; if (status === "queued") return t.queued; return t.running; }
+function statusLabel(status: TaskStatus, locale: Locale) { const t = strings(locale); if (status === "completed") return t.completed; if (status === "failed") return t.failed; if (status === "cancelled") return t.cancelled; if (status === "queued") return t.queued; if (status === "needs_user_action") return t.blocked; return t.running; }
+function roleLabel(role: TaskRole, locale: Locale) { const t = strings(locale); if (role === "worker") return t.workerRole; if (role === "checker") return t.checkerRole; return t.mainRole; }
+
+function aggregateTaskStatus(root: TaskRecord, tasks: TaskRecord[]): TaskStatus {
+  const related = tasks.filter((task) => (task.rootTaskId ?? task.id) === root.id);
+  if (related.some((task) => task.status === "needs_user_action")) return "needs_user_action";
+  if (related.some((task) => ["understanding", "running"].includes(task.status))) return "running";
+  if (related.some((task) => task.status === "queued")) return "queued";
+  return root.status;
+}
+
+function latestEventForThread(snapshot: RuntimeSnapshot, threadId: string): RuntimeEvent | undefined {
+  const root = snapshot.tasks.find((task) => task.id === threadId);
+  if (!root) return undefined;
+  const ids = new Set(snapshot.tasks.filter((task) => (task.rootTaskId ?? task.id) === (root.rootTaskId ?? root.id)).map((task) => task.id));
+  return [...snapshot.events].reverse().find((event) => ids.has(event.taskId));
+}
+
+function shouldShowExecution(snapshot: RuntimeSnapshot, threadId: string): boolean {
+  const task = snapshot.tasks.find((candidate) => candidate.id === threadId);
+  if (!task) return false;
+  if (task.goalSpec?.output_mode && task.goalSpec.output_mode !== "chat_reply") return true;
+  const ids = new Set(snapshot.tasks.filter((candidate) => (candidate.rootTaskId ?? candidate.id) === (task.rootTaskId ?? task.id)).map((candidate) => candidate.id));
+  return snapshot.events.some((event) => ids.has(event.taskId) && ["tool", "delegation", "human_interaction"].includes(event.kind));
+}
+
+function formatEventDetail(detail: string): string {
+  const trimmed = detail.trim();
+  if (!trimmed) return "";
+  try { return JSON.stringify(JSON.parse(trimmed), null, 2); } catch { return trimmed; }
+}
