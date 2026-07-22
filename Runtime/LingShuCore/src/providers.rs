@@ -38,7 +38,7 @@ pub fn provider_catalog() -> Vec<ProviderPreset> {
             name: "OpenAI",
             region: "Global",
             endpoint: "https://api.openai.com/v1",
-            protocol: ProviderProtocol::OpenaiChatCompletions,
+            protocol: ProviderProtocol::OpenaiResponses,
             default_models: &["gpt-5.5", "gpt-5", "gpt-4.1", "gpt-4o"],
             requires_api_key: true,
         },

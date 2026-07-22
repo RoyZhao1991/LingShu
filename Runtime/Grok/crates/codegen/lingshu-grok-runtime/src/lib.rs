@@ -8,6 +8,8 @@ use tokio_util::sync::CancellationToken;
 use xai_grok_shell::agent::app::run_embedded_agent;
 use xai_grok_shell::agent::config::{AgentMode, Config as AgentConfig};
 
+mod kernel_host;
+
 type EventCallback = extern "C" fn(*const c_char, *mut c_void);
 
 #[derive(Deserialize)]

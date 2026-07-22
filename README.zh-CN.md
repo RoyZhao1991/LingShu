@@ -44,7 +44,7 @@
 > [!IMPORTANT]
 > 灵枢仍处于 Alpha 阶段并在快速迭代。它会在获得明确的 macOS 授权后操作本地文件与应用。请确认权限范围，并为重要工作保留备份。
 
-Windows 技术预览与 macOS 版共用版本化内核契约和 Rust 平台无关核心，已经包含主脑配置、持久化对话与任务线程、产物登记和应用内预览；Windows 直接电脑操作与实时感知暂不开放。详见 [Windows 版说明](./Docs/WINDOWS.md)。
+Windows 技术预览与 macOS 版执行的是**同一个 `Runtime/LingShuCore::RuntimeKernel` 实现**：Windows 在 Tauri 后端直接构造，macOS 通过随 App 打包的 Rust 动态库链接。两端只有界面外壳和平台适配器不同，GoalSpec、队列、worker/checker、工具循环、人机续跑、产物、持久化和事件体系都不是复制实现。Windows 直接电脑操作与实时感知暂不开放。详见 [Windows 版说明](./Docs/WINDOWS.md)。
 
 ## 灵枢处在什么赛道
 
@@ -175,7 +175,7 @@ brew install --cask RoyZhao1991/tap/lingshu
 
 3. 运行安装程序，选择界面语言、连接模型服务商，再发送一条小请求完成首跑。
 
-Windows 技术预览保留同一套 GoalSpec 驱动执行范式：单主任务串行、隔离子线程并行、可见的推理摘要与工具事件、人机阻断续跑、独立 checker、产物登记和内置预览。当前只明确不包含 Windows 电脑直接控制与实时音视频感知。首个预览版尚未使用 Authenticode 签名，Windows 可能显示 SmartScreen 提示；安装前请核对 Release 中公布的 SHA-256。完整边界见 [Windows 版说明](./Docs/WINDOWS.md)。
+Windows 技术预览直接运行与 macOS 完全相同的 Rust `RuntimeKernel`：单主任务串行、隔离子线程并行、可见的推理摘要与工具事件、人机阻断续跑、独立 checker、产物登记和内置预览。当前只明确不包含 Windows 电脑直接控制与实时音视频感知。首个预览版尚未使用 Authenticode 签名，Windows 可能显示 SmartScreen 提示；安装前请核对 Release 中公布的 SHA-256。完整边界见 [Windows 版说明](./Docs/WINDOWS.md)。
 
 ### 运行第一条可追踪任务
 

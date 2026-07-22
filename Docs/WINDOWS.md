@@ -1,26 +1,26 @@
 # LingShu for Windows
 
-LingShu's Windows shell is a Tauri 2 desktop application backed by the shared Rust runtime in [`Runtime/LingShuCore`](../Runtime/LingShuCore). It is intentionally not a fork of the agent logic. The macOS embedded worker runtime and the Windows shell both compile against the same versioned kernel contract in [`kernel-contract.json`](../Runtime/LingShuCore/resources/kernel-contract.json).
+LingShu's Windows shell is a Tauri 2 desktop application backed by the canonical Rust runtime in [`Runtime/LingShuCore`](../Runtime/LingShuCore). It is intentionally not a fork or a reimplementation of the agent logic. Windows constructs `RuntimeKernel` directly in its Tauri backend; macOS loads a Rust dynamic-library host that constructs the same `RuntimeKernel` type. The versioned contract in [`kernel-contract.json`](../Runtime/LingShuCore/resources/kernel-contract.json) guards that shared implementation's platform boundary.
 
 ## Architecture
 
 ```mermaid
 flowchart LR
-    C["Shared kernel contract and domain core"] --> M["macOS Swift shell"]
-    C --> W["Windows Tauri shell"]
-    C --> R["Embedded Grok-derived worker runtime"]
+    K["Runtime/LingShuCore::RuntimeKernel\nOne executable implementation"] --> H["macOS Rust dylib host"]
+    K --> W["Windows Tauri backend"]
+    H --> M["macOS Swift UI shell"]
     M --> A["macOS adapters: Keychain, AppKit, perception, Computer Use"]
     W --> B["Windows adapters: Credential Manager, WebView2, Explorer"]
 ```
 
-The frozen ABI includes the core session loop, tool ABI, plugin runner, sensory-source interface, and plugin permission manifest. Swift tests compare every frozen symbol with the JSON contract. The embedded runtime validates the same contract when it loads, and the Windows build consumes it directly.
+GoalSpec generation, the serialized main-task queue, isolated worker/checker sessions, model tool loops, human-action pause/resume, artifacts, persistence, and runtime events live only in `RuntimeKernel`. Swift and Tauri project that canonical state into native UI and provide platform adapters; they do not maintain duplicate agent loops. The frozen ABI covers the platform boundary, and tests verify both shells instantiate the same Rust implementation and produce equal core semantics for the same inputs.
 
 ## Current Windows Scope
 
 Implemented in the Windows technical preview:
 
 - forced first-run language and model-channel setup;
-- OpenAI-compatible and Anthropic-compatible providers, including built-in presets for OpenAI, Claude, DeepSeek, MiniMax, OpenRouter, Qwen, Doubao, Ollama, LM Studio, and custom endpoints;
+- OpenAI Responses, OpenAI-compatible Chat Completions, and Anthropic Messages providers, including built-in presets for OpenAI, Claude, DeepSeek, MiniMax, OpenRouter, Qwen, Doubao, Ollama, LM Studio, and custom endpoints;
 - one serialized main-task queue with persistent conversation and task records;
 - full-history GoalSpec generation without a fabricated default fallback;
 - persistent model/tool sessions with streaming response and concise reasoning-summary events;
@@ -64,6 +64,6 @@ The build produces both an MSI and an NSIS setup executable under `WindowsApp/sr
 
 ## 中文说明
 
-Windows 版采用 Tauri 2 外壳，但任务状态、GoalSpec、模型协议、持久化、产物登记和预览等平台无关逻辑来自同一个 Rust 共享内核。macOS 与 Windows 通过同一份版本化 ABI 契约锁定边界，避免后续演进成两套互不兼容的产品。
+Windows 版采用 Tauri 2 外壳，但不是另写一套 Agent：Windows 后端直接构造 `Runtime/LingShuCore::RuntimeKernel`，macOS 则通过 Rust 动态库宿主构造同一个 `RuntimeKernel` 类型。GoalSpec、单主任务队列、隔离 worker/checker、工具循环、人机阻断续跑、产物、持久化和事件时间线都只在这一份 Rust 实现中维护；Swift 与 Tauri 仅负责界面投影和平台适配。版本化 ABI 用来锁定平台边界，而不是用两套实现“对齐行为”。
 
 当前技术预览已经覆盖首次启动引导、主脑配置、主对话、单主任务队列、隔离子线程并行、worker/checker、流式模型响应、推理摘要与工具事件、人机阻断续跑、线程记录、产物登记和应用内预览。Windows 的直接电脑操作、实时视觉和实时听觉暂不开放。点击“用系统应用打开”或“在文件夹中显示”属于明确的用户动作，模型不能自行触发。

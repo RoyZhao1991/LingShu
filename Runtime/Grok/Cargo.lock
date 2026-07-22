@@ -5843,9 +5843,11 @@ dependencies = [
  "lingshu-runtime-core",
  "serde",
  "serde_json",
+ "tempfile",
  "tokio",
  "tokio-util",
  "toml",
+ "uuid",
  "xai-grok-shell",
 ]
 
@@ -5856,6 +5858,7 @@ dependencies = [
  "base64",
  "chrono",
  "dirs 6.0.0",
+ "futures-util",
  "quick-xml 0.38.3",
  "reqwest 0.12.24",
  "serde",

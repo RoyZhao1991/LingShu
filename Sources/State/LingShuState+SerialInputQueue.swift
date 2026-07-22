@@ -51,6 +51,7 @@ extension LingShuState {
     /// 注意:`waitingForUser`(等用户回答)的派发任务已被 `pruneInactiveDispatchedTaskBubbles` 从活跃集剔除,
     /// 因此**不**算"在跑"——此时用户输入应作为答复喂回那条线程,不入队(那会死锁)。
     func currentlyExecutingTurn() -> Bool {
+        if !sharedKernelActiveThreadIDs.isEmpty { return true }
         if hasActiveModelCall { return true }            // isModelReplying / isModelExecuting
         if executingChatTurnID != nil { return true }    // 问答线当前在跑的那条
         if activeAgentTurnTask != nil { return true }    // 问答 worker 在跑(executingChatTurnID 可能尚未同步置)

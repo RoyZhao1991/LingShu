@@ -1,5 +1,5 @@
 export type Locale = "zh_cn" | "en";
-export type ProviderProtocol = "openai_chat_completions" | "anthropic_messages";
+export type ProviderProtocol = "openai_responses" | "openai_chat_completions" | "anthropic_messages";
 export type MessageState = "complete" | "thinking" | "failed" | "needs_user_action";
 export type TaskStatus = "queued" | "understanding" | "running" | "needs_user_action" | "completed" | "failed" | "cancelled";
 export type TaskRole = "main" | "worker" | "checker";

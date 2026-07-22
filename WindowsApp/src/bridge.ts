@@ -28,7 +28,7 @@ export async function chooseFiles(): Promise<string[]> {
 const providers: ProviderPreset[] = [
   { id: "deepseek", name: "DeepSeek", region: "CN", endpoint: "https://api.deepseek.com", protocol: "openai_chat_completions", defaultModels: ["deepseek-chat", "deepseek-reasoner"], requiresApiKey: true },
   { id: "minimax-official", name: "MiniMax", region: "CN", endpoint: "https://api.minimaxi.com/v1", protocol: "openai_chat_completions", defaultModels: ["MiniMax-M3"], requiresApiKey: true },
-  { id: "openai", name: "OpenAI", region: "Global", endpoint: "https://api.openai.com/v1", protocol: "openai_chat_completions", defaultModels: ["gpt-5.5", "gpt-5"], requiresApiKey: true },
+  { id: "openai", name: "OpenAI", region: "Global", endpoint: "https://api.openai.com/v1", protocol: "openai_responses", defaultModels: ["gpt-5.5", "gpt-5"], requiresApiKey: true },
   { id: "anthropic", name: "Anthropic Claude", region: "Global", endpoint: "https://api.anthropic.com/v1", protocol: "anthropic_messages", defaultModels: ["claude-opus-4-8", "claude-sonnet-4-6"], requiresApiKey: true },
   { id: "custom-compatible", name: "Custom OpenAI-compatible", region: "Custom", endpoint: "https://your-gateway.example.com/v1", protocol: "openai_chat_completions", defaultModels: ["custom-model"], requiresApiKey: true },
 ];

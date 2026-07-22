@@ -309,6 +309,7 @@ impl RuntimeKernel {
 
         let messages = initial_session_messages(
             &settings,
+            &self.capabilities,
             &history,
             &task.prompt,
             &attachment_context,
@@ -865,6 +866,7 @@ impl RuntimeKernel {
                 .ok_or(EngineError::MissingTask(child_id))?;
             let messages = initial_session_messages(
                 settings,
+                &self.capabilities,
                 &child_history,
                 &objective,
                 "(none)",
@@ -1243,14 +1245,22 @@ impl RuntimeKernel {
 
 fn initial_session_messages(
     settings: &RuntimeSettings,
+    capabilities: &PlatformCapabilities,
     history: &[ChatMessage],
     prompt: &str,
     attachment_context: &str,
     goal: &GoalSpec,
     depth: u8,
 ) -> Result<Vec<AgentMessage>, EngineError> {
+    let capability_context = format!(
+        "Host capability metadata: computer_control={}, realtime_perception={}, internal_preview={}, external_open={}. Treat these values as availability signals only. Use only tools actually exposed in this session, and never claim a host action without a corresponding tool result.",
+        capabilities.computer_control,
+        capabilities.realtime_perception,
+        capabilities.internal_preview,
+        capabilities.external_open
+    );
     let system = format!(
-        "{}\nYou are LingShu, an open-model agent runtime. Work in a continuous agent loop: understand the accepted GoalSpec, use tools, inspect their real results, adapt, and only then answer. For a chat_reply, answer in the current model turn unless a tool is genuinely needed. For independent work, call spawn_task; child sessions are isolated and their summaries return as tool results. Use update_plan for multi-step delivery. Use create_artifact for Word/PowerPoint/Markdown/HTML deliverables so they are registered and previewable. Never claim an operation or artifact succeeded without a tool result. Final output must be user-facing Markdown, never an internal JSON wrapper. Do not expose hidden chain-of-thought; concise progress and tool evidence are visible in the execution timeline. This platform does not provide direct computer UI control or realtime audio/video perception; file work, local commands, model reasoning, child agents, verification, and previews remain available. Child depth: {depth}/{MAX_CHILD_DEPTH}.\nAccepted GoalSpec:\n{}",
+        "{}\nYou are LingShu, an open-model agent runtime. Work in a continuous agent loop: understand the accepted GoalSpec, use tools, inspect their real results, adapt, and only then answer. For a chat_reply, answer in the current model turn unless a tool is genuinely needed. For independent work, call spawn_task; child sessions are isolated and their summaries return as tool results. Use update_plan for multi-step delivery. Use create_artifact for Word/PowerPoint/Markdown/HTML deliverables so they are registered and previewable. Never claim an operation or artifact succeeded without a tool result. Final output must be user-facing Markdown, never an internal JSON wrapper. Do not expose hidden chain-of-thought; concise progress and tool evidence are visible in the execution timeline. {capability_context} Child depth: {depth}/{MAX_CHILD_DEPTH}.\nAccepted GoalSpec:\n{}",
         settings.locale.language_directive(),
         serde_json::to_string_pretty(goal).map_err(|error| EngineError::InvalidModelJson(error.to_string()))?
     );
@@ -1790,7 +1800,10 @@ mod tests {
         )
     }
 
-    async fn test_kernel(endpoint: String) -> (tempfile::TempDir, RuntimeStore, RuntimeKernel) {
+    async fn test_kernel_for_platform(
+        endpoint: String,
+        platform: &str,
+    ) -> (tempfile::TempDir, RuntimeStore, RuntimeKernel) {
         let directory = tempdir().unwrap();
         let store = RuntimeStore::open(directory.path().join("State")).unwrap();
         let mut settings = store.settings().await;
@@ -1803,8 +1816,12 @@ mod tests {
         settings.workspace = directory.path().join("Workspace");
         settings.first_run_complete = true;
         store.update_settings(settings).await.unwrap();
-        let kernel = RuntimeKernel::new(store.clone(), "windows").unwrap();
+        let kernel = RuntimeKernel::new(store.clone(), platform).unwrap();
         (directory, store, kernel)
+    }
+
+    async fn test_kernel(endpoint: String) -> (tempfile::TempDir, RuntimeStore, RuntimeKernel) {
+        test_kernel_for_platform(endpoint, "windows").await
     }
 
     #[test]
@@ -1904,6 +1921,155 @@ mod tests {
             .filter(|event| event.kind == RuntimeEventKind::Model)
             .all(|event| event.state == RuntimeEventState::Completed));
         assert_eq!(requests.lock().unwrap().len(), 2);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn macos_and_windows_shells_produce_identical_core_semantics() {
+        let (endpoint, requests, server) = mock_provider(4, |request, _| {
+            if request.get("stream") == Some(&Value::Bool(false)) {
+                goal_response("Introduce LingShu", "question", "chat_reply")
+            } else {
+                openai_response(
+                    Some("I am LingShu, an open-model agent runtime.".into()),
+                    Some("Answer the identity question directly."),
+                    Value::Null,
+                )
+            }
+        });
+
+        let (_mac_directory, mac_store, mac_kernel) =
+            test_kernel_for_platform(endpoint.clone(), "macos").await;
+        let mac_receipt = mac_kernel
+            .submit("Who are you?".into(), Vec::new())
+            .await
+            .unwrap();
+        mac_kernel
+            .run_queue(Some("test-token".into()))
+            .await
+            .unwrap();
+
+        let (_windows_directory, windows_store, windows_kernel) =
+            test_kernel_for_platform(endpoint, "windows").await;
+        let windows_receipt = windows_kernel
+            .submit("Who are you?".into(), Vec::new())
+            .await
+            .unwrap();
+        windows_kernel
+            .run_queue(Some("test-token".into()))
+            .await
+            .unwrap();
+        server.join().unwrap();
+
+        let mac_task = mac_store.task(mac_receipt.thread_id).await.unwrap();
+        let windows_task = windows_store.task(windows_receipt.thread_id).await.unwrap();
+        assert_eq!(mac_task.prompt, windows_task.prompt);
+        assert_eq!(mac_task.status, windows_task.status);
+        assert_eq!(mac_task.goal_spec, windows_task.goal_spec);
+        assert_eq!(mac_task.summary, windows_task.summary);
+        assert_eq!(mac_task.error, windows_task.error);
+        assert_eq!(mac_task.role, windows_task.role);
+        assert_eq!(mac_task.origin, windows_task.origin);
+        assert_eq!(mac_task.participant_name, windows_task.participant_name);
+        assert_eq!(mac_task.depth, windows_task.depth);
+        assert_eq!(mac_task.attachment_paths, windows_task.attachment_paths);
+        assert_eq!(mac_task.artifacts, windows_task.artifacts);
+        assert_eq!(
+            mac_task
+                .steps
+                .iter()
+                .map(|step| (&step.title, &step.detail, &step.status))
+                .collect::<Vec<_>>(),
+            windows_task
+                .steps
+                .iter()
+                .map(|step| (&step.title, &step.detail, &step.status))
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            mac_task.session_messages.iter().skip(1).collect::<Vec<_>>(),
+            windows_task
+                .session_messages
+                .iter()
+                .skip(1)
+                .collect::<Vec<_>>()
+        );
+
+        let mac_events = mac_store.events_after(0).await;
+        let windows_events = windows_store.events_after(0).await;
+        assert_eq!(
+            mac_events
+                .iter()
+                .map(|event| (
+                    event.sequence,
+                    &event.kind,
+                    &event.state,
+                    &event.actor,
+                    &event.title,
+                    &event.detail,
+                ))
+                .collect::<Vec<_>>(),
+            windows_events
+                .iter()
+                .map(|event| (
+                    event.sequence,
+                    &event.kind,
+                    &event.state,
+                    &event.actor,
+                    &event.title,
+                    &event.detail,
+                ))
+                .collect::<Vec<_>>()
+        );
+
+        let mac_snapshot = mac_kernel.snapshot(true).await;
+        let windows_snapshot = windows_kernel.snapshot(true).await;
+        assert_eq!(
+            mac_snapshot.kernel_abi_version,
+            windows_snapshot.kernel_abi_version
+        );
+        assert_eq!(
+            mac_snapshot.queued_task_count,
+            windows_snapshot.queued_task_count
+        );
+        assert_eq!(
+            mac_snapshot.provider_configured,
+            windows_snapshot.provider_configured
+        );
+        assert_eq!(mac_snapshot.platform, "macos");
+        assert_eq!(windows_snapshot.platform, "windows");
+        assert!(mac_snapshot.capabilities.computer_control);
+        assert!(mac_snapshot.capabilities.realtime_perception);
+        assert!(!windows_snapshot.capabilities.computer_control);
+        assert!(!windows_snapshot.capabilities.realtime_perception);
+        assert_eq!(
+            mac_snapshot.capabilities.internal_preview,
+            windows_snapshot.capabilities.internal_preview
+        );
+        assert_eq!(
+            mac_snapshot.capabilities.external_open,
+            windows_snapshot.capabilities.external_open
+        );
+
+        let captured = requests.lock().unwrap();
+        assert_eq!(captured.len(), 4);
+        let streamed_system_prompts = captured
+            .iter()
+            .filter(|request| request.get("stream") == Some(&Value::Bool(true)))
+            .filter_map(|request| {
+                request
+                    .get("messages")?
+                    .as_array()?
+                    .first()?
+                    .get("content")?
+                    .as_str()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(streamed_system_prompts.len(), 2);
+        assert!(
+            streamed_system_prompts[0].contains("computer_control=true, realtime_perception=true")
+        );
+        assert!(streamed_system_prompts[1]
+            .contains("computer_control=false, realtime_perception=false"));
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

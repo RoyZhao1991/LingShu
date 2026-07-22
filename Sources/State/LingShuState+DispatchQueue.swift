@@ -93,6 +93,7 @@ extension LingShuState {
     /// 停止指定派发任务(「进行中」长条的"停止"):recordID → subID → 编排器只取消这一条,
     /// 释放槽位让队列自动晋级;**不动问答线**(区别于 cancelCurrentCall 的全停)。
     func stopDispatchedTask(recordID: String) {
+        if stopSharedKernelTaskIfNeeded(recordID: recordID) { return }
         guard let subID = agentSubTaskRecords.first(where: { $0.value == recordID })?.key else {
             markTaskRecordManuallyStopped(recordID)
             dispatchedTaskBubbles.removeValue(forKey: recordID)

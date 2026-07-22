@@ -147,7 +147,7 @@ impl ModelClient {
         stream: bool,
     ) -> Result<Response, ModelError> {
         for attempt in 0..REQUEST_ATTEMPTS {
-            let request = self.request(settings, api_key, messages, tools, max_tokens, stream);
+            let request = self.request(settings, api_key, messages, tools, max_tokens, stream)?;
             let response = match request.send().await {
                 Ok(response) => response,
                 Err(error) if attempt + 1 < REQUEST_ATTEMPTS => {
@@ -174,8 +174,27 @@ impl ModelClient {
         tools: &[AgentToolDefinition],
         max_tokens: u32,
         stream: bool,
-    ) -> reqwest::RequestBuilder {
+    ) -> Result<reqwest::RequestBuilder, ModelError> {
         match settings.protocol {
+            ProviderProtocol::OpenaiResponses => {
+                let mut body = Map::new();
+                body.insert("model".into(), json!(settings.model));
+                body.insert("input".into(), responses_input(messages));
+                body.insert("max_output_tokens".into(), json!(max_tokens));
+                body.insert("stream".into(), json!(stream));
+                if !tools.is_empty() {
+                    body.insert("tools".into(), responses_tools(tools));
+                    body.insert("tool_choice".into(), json!("auto"));
+                }
+                let mut request = self
+                    .client
+                    .post(endpoint_with_suffix(&settings.endpoint, "responses"))
+                    .json(&Value::Object(body));
+                if let Some(key) = api_key.filter(|key| !key.trim().is_empty()) {
+                    request = request.bearer_auth(key);
+                }
+                Ok(request)
+            }
             ProviderProtocol::OpenaiChatCompletions => {
                 let mut body = Map::new();
                 body.insert("model".into(), json!(settings.model));
@@ -193,7 +212,7 @@ impl ModelClient {
                 if let Some(key) = api_key.filter(|key| !key.trim().is_empty()) {
                     request = request.bearer_auth(key);
                 }
-                request
+                Ok(request)
             }
             ProviderProtocol::AnthropicMessages => {
                 let (system, messages) = anthropic_messages(messages);
@@ -214,10 +233,46 @@ impl ModelClient {
                 if let Some(key) = api_key.filter(|key| !key.trim().is_empty()) {
                     request = request.header("x-api-key", key);
                 }
-                request
+                Ok(request)
             }
         }
     }
+}
+
+fn responses_input(messages: &[AgentMessage]) -> Value {
+    let mut input = Vec::new();
+    for message in messages {
+        match message.role {
+            AgentRole::Assistant if !message.tool_calls.is_empty() => {
+                if !message.content.is_empty() {
+                    input.push(json!({"role":"assistant", "content":message.content}));
+                }
+                input.extend(message.tool_calls.iter().map(|call| {
+                    json!({
+                        "type":"function_call",
+                        "call_id":call.id,
+                        "name":call.name,
+                        "arguments":call.arguments_json,
+                    })
+                }));
+            }
+            AgentRole::Tool => input.push(json!({
+                "type":"function_call_output",
+                "call_id":message.tool_call_id,
+                "output":message.content,
+            })),
+            _ => input.push(json!({
+                "role":match message.role {
+                    AgentRole::System => "system",
+                    AgentRole::User => "user",
+                    AgentRole::Assistant => "assistant",
+                    AgentRole::Tool => "user",
+                },
+                "content":message.content,
+            })),
+        }
+    }
+    Value::Array(input)
 }
 
 fn openai_messages(messages: &[AgentMessage]) -> Value {
@@ -293,6 +348,18 @@ fn anthropic_messages(messages: &[AgentMessage]) -> (String, Value) {
     (system, Value::Array(converted))
 }
 
+fn responses_tools(tools: &[AgentToolDefinition]) -> Value {
+    json!(tools
+        .iter()
+        .map(|tool| json!({
+            "type":"function",
+            "name":tool.name,
+            "description":tool.description,
+            "parameters":tool.parameters,
+        }))
+        .collect::<Vec<_>>())
+}
+
 fn openai_tools(tools: &[AgentToolDefinition]) -> Value {
     json!(tools
         .iter()
@@ -339,6 +406,12 @@ async fn parse_event_stream(
                 let value = serde_json::from_str::<Value>(data)
                     .map_err(|error| ModelError::Malformed(error.to_string()))?;
                 match protocol {
+                    ProviderProtocol::OpenaiResponses => apply_responses_stream_chunk(
+                        &value,
+                        &mut turn,
+                        &mut tools,
+                        delta_tx.as_ref(),
+                    ),
                     ProviderProtocol::OpenaiChatCompletions => {
                         apply_openai_stream_chunk(&value, &mut turn, &mut tools, delta_tx.as_ref())
                     }
@@ -357,6 +430,62 @@ async fn parse_event_stream(
         Err(ModelError::Empty)
     } else {
         Ok(turn)
+    }
+}
+
+fn apply_responses_stream_chunk(
+    value: &Value,
+    turn: &mut ModelTurn,
+    tools: &mut BTreeMap<usize, PartialToolCall>,
+    delta_tx: Option<&mpsc::UnboundedSender<ModelDelta>>,
+) {
+    let event_type = value
+        .get("type")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let index = value
+        .get("output_index")
+        .and_then(Value::as_u64)
+        .unwrap_or(0) as usize;
+    match event_type {
+        "response.output_text.delta" => {
+            if let Some(text) = value.get("delta").and_then(Value::as_str) {
+                turn.text.push_str(text);
+                emit(delta_tx, ModelDelta::Text(text.into()));
+            }
+        }
+        "response.reasoning_summary_text.delta" | "response.reasoning_text.delta" => {
+            if let Some(text) = value.get("delta").and_then(Value::as_str) {
+                turn.reasoning.push_str(text);
+                emit(delta_tx, ModelDelta::Reasoning(text.into()));
+            }
+        }
+        "response.output_item.added" | "response.output_item.done" => {
+            let item = value.get("item").unwrap_or(&Value::Null);
+            if item.get("type").and_then(Value::as_str) == Some("function_call") {
+                let partial = tools.entry(index).or_default();
+                partial.id = item
+                    .get("call_id")
+                    .or_else(|| item.get("id"))
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .into();
+                partial.name = item
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .into();
+                if let Some(arguments) = item.get("arguments").and_then(Value::as_str) {
+                    partial.arguments = arguments.into();
+                }
+            }
+        }
+        "response.function_call_arguments.delta" => {
+            if let Some(fragment) = value.get("delta").and_then(Value::as_str) {
+                tools.entry(index).or_default().arguments.push_str(fragment);
+            }
+        }
+        _ => {}
     }
 }
 
@@ -465,6 +594,64 @@ fn parse_non_stream_turn(
 ) -> Result<ModelTurn, ModelError> {
     let mut turn = ModelTurn::default();
     match protocol {
+        ProviderProtocol::OpenaiResponses => {
+            turn.text = body
+                .get("output_text")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .into();
+            if let Some(output) = body.get("output").and_then(Value::as_array) {
+                for item in output {
+                    match item.get("type").and_then(Value::as_str) {
+                        Some("message") if turn.text.is_empty() => {
+                            if let Some(content) = item.get("content").and_then(Value::as_array) {
+                                for block in content {
+                                    if block.get("type").and_then(Value::as_str)
+                                        == Some("output_text")
+                                    {
+                                        turn.text.push_str(
+                                            block
+                                                .get("text")
+                                                .and_then(Value::as_str)
+                                                .unwrap_or_default(),
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                        Some("function_call") => turn.tool_calls.push(AgentToolCall {
+                            id: item
+                                .get("call_id")
+                                .or_else(|| item.get("id"))
+                                .and_then(Value::as_str)
+                                .unwrap_or_default()
+                                .into(),
+                            name: item
+                                .get("name")
+                                .and_then(Value::as_str)
+                                .unwrap_or_default()
+                                .into(),
+                            arguments_json: item
+                                .get("arguments")
+                                .and_then(Value::as_str)
+                                .unwrap_or("{}")
+                                .into(),
+                        }),
+                        Some("reasoning") => {
+                            if let Some(summary) = item.get("summary").and_then(Value::as_array) {
+                                for block in summary {
+                                    if let Some(text) = block.get("text").and_then(Value::as_str) {
+                                        turn.reasoning.push_str(text);
+                                    }
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            turn.tool_calls.retain(|call| !call.name.is_empty());
+        }
         ProviderProtocol::OpenaiChatCompletions => {
             let message = body
                 .pointer("/choices/0/message")
@@ -638,6 +825,87 @@ mod tests {
         let turn = parse_non_stream_turn(ProviderProtocol::OpenaiChatCompletions, &body).unwrap();
         assert_eq!(turn.reasoning, "plan");
         assert_eq!(turn.tool_calls[0].name, "read_file");
+    }
+
+    #[test]
+    fn parses_responses_text_reasoning_and_tool_turn() {
+        let body = json!({
+            "output": [
+                {"type":"reasoning", "summary":[{"type":"summary_text", "text":"plan"}]},
+                {"type":"message", "content":[{"type":"output_text", "text":"working"}]},
+                {"type":"function_call", "call_id":"c1", "name":"read_file", "arguments":"{\"path\":\"a.md\"}"}
+            ]
+        });
+        let turn = parse_non_stream_turn(ProviderProtocol::OpenaiResponses, &body).unwrap();
+        assert_eq!(turn.text, "working");
+        assert_eq!(turn.reasoning, "plan");
+        assert_eq!(turn.tool_calls[0].id, "c1");
+        assert_eq!(turn.tool_calls[0].name, "read_file");
+    }
+
+    #[test]
+    fn converts_tool_history_for_responses() {
+        let messages = vec![
+            AgentMessage {
+                role: AgentRole::Assistant,
+                content: "checking".into(),
+                tool_calls: vec![AgentToolCall {
+                    id: "c1".into(),
+                    name: "read_file".into(),
+                    arguments_json: "{\"path\":\"a.md\"}".into(),
+                }],
+                tool_call_id: None,
+            },
+            AgentMessage {
+                role: AgentRole::Tool,
+                content: "ok".into(),
+                tool_calls: Vec::new(),
+                tool_call_id: Some("c1".into()),
+            },
+        ];
+        let value = responses_input(&messages);
+        assert_eq!(
+            value.pointer("/1/type").and_then(Value::as_str),
+            Some("function_call")
+        );
+        assert_eq!(
+            value.pointer("/2/type").and_then(Value::as_str),
+            Some("function_call_output")
+        );
+        assert_eq!(
+            value.pointer("/2/call_id").and_then(Value::as_str),
+            Some("c1")
+        );
+    }
+
+    #[test]
+    fn assembles_responses_stream_tool_arguments() {
+        let mut turn = ModelTurn::default();
+        let mut tools = BTreeMap::new();
+        apply_responses_stream_chunk(
+            &json!({
+                "type":"response.output_item.added",
+                "output_index":1,
+                "item":{"type":"function_call", "call_id":"c1", "name":"read_file", "arguments":""}
+            }),
+            &mut turn,
+            &mut tools,
+            None,
+        );
+        apply_responses_stream_chunk(
+            &json!({
+                "type":"response.function_call_arguments.delta",
+                "output_index":1,
+                "delta":"{\"path\":\"a.md\"}"
+            }),
+            &mut turn,
+            &mut tools,
+            None,
+        );
+        let calls = finalize_tool_calls(tools);
+        assert_eq!(calls[0].id, "c1");
+        assert_eq!(calls[0].name, "read_file");
+        assert_eq!(calls[0].arguments_json, "{\"path\":\"a.md\"}");
     }
 
     #[test]

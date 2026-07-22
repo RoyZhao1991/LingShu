@@ -64,6 +64,7 @@
     "open_questions"
   ],
   "providerProtocols": [
+    "openai_responses",
     "openai_chat_completions",
     "anthropic_messages"
   ],

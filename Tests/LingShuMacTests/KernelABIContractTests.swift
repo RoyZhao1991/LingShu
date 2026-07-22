@@ -41,10 +41,55 @@ final class KernelABIContractTests: XCTestCase {
             "reference_evidence", "reference_explicit", "reference_confidence",
             "constraints", "boundaries", "risks", "success_criteria", "open_questions"
         ])
+        XCTAssertEqual(object["providerProtocols"] as? [String], [
+            "openai_responses", "openai_chat_completions", "anthropic_messages"
+        ])
         let platforms = try XCTUnwrap(object["platformCapabilities"] as? [String: Any])
         let windows = try XCTUnwrap(platforms["windows"] as? [String: Any])
         XCTAssertEqual(windows["computerControl"] as? Bool, false)
         XCTAssertEqual(windows["internalPreview"] as? Bool, true)
+    }
+
+    func testMacAndWindowsExecuteTheSameRustRuntimeKernelImplementation() throws {
+        let repository = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let windowsCargo = try String(
+            contentsOf: repository.appendingPathComponent("WindowsApp/src-tauri/Cargo.toml"),
+            encoding: .utf8
+        )
+        let windowsHost = try String(
+            contentsOf: repository.appendingPathComponent("WindowsApp/src-tauri/src/lib.rs"),
+            encoding: .utf8
+        )
+        let macHostCargo = try String(
+            contentsOf: repository.appendingPathComponent(
+                "Runtime/Grok/crates/codegen/lingshu-grok-runtime/Cargo.toml"
+            ),
+            encoding: .utf8
+        )
+        let macHost = try String(
+            contentsOf: repository.appendingPathComponent(
+                "Runtime/Grok/crates/codegen/lingshu-grok-runtime/src/kernel_host.rs"
+            ),
+            encoding: .utf8
+        )
+        let macBridge = try String(
+            contentsOf: repository.appendingPathComponent("Sources/Runtime/LingShuSharedKernelRuntime.swift"),
+            encoding: .utf8
+        )
+        let macMainState = try String(
+            contentsOf: repository.appendingPathComponent("Sources/State/LingShuState.swift"),
+            encoding: .utf8
+        )
+
+        XCTAssertTrue(windowsCargo.contains("lingshu-runtime-core = { path = \"../../Runtime/LingShuCore\" }"))
+        XCTAssertTrue(windowsHost.contains("RuntimeKernel::new(store, \"windows\")"))
+        XCTAssertTrue(macHostCargo.contains("lingshu-runtime-core = { path = \"../../../../LingShuCore\" }"))
+        XCTAssertTrue(macHost.contains("RuntimeKernel::new(store, config.platform)"))
+        XCTAssertTrue(macBridge.contains("lingshu_kernel_runtime_start"))
+        XCTAssertTrue(macBridge.contains("lingshu_kernel_runtime_send"))
+        XCTAssertTrue(macMainState.contains("submitSharedKernelTurn("))
+        XCTAssertTrue(macMainState.contains("if LingShuRuntimeEnvironment.usesSharedRuntimeKernel"))
     }
 
     func testFiveKernelContractsEnumerated() {

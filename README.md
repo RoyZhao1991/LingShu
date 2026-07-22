@@ -44,7 +44,7 @@
 > [!IMPORTANT]
 > LingShu is an alpha-stage project under active development. It can operate local files and apps after explicit macOS authorization. Review requested permissions and keep backups of important work.
 
-The Windows technical preview uses the same versioned kernel contract and shared Rust domain core. It includes model setup, persistent chat and task threads, registered artifacts, and built-in preview; direct Windows computer control and realtime perception are intentionally unavailable. See [LingShu for Windows](./Docs/WINDOWS.md).
+The Windows technical preview and macOS app execute the **same `Runtime/LingShuCore::RuntimeKernel` implementation**. Windows constructs it directly in Tauri; macOS links it through the packaged Rust runtime library. The UI shells and platform adapters differ, but GoalSpec, queues, worker/checker sessions, tool loops, human-action resume, artifacts, persistence, and events do not. Direct Windows computer control and realtime perception are intentionally unavailable. See [LingShu for Windows](./Docs/WINDOWS.md).
 
 ## Where LingShu Fits
 
@@ -175,7 +175,7 @@ The public DMG is Universal (`arm64` + `x86_64`), signed with a Developer ID cer
 
 3. Run the setup executable, choose a language, connect a model provider, and send a small first request.
 
-The Windows preview preserves the same GoalSpec-driven execution model: one serialized main task, isolated concurrent child sessions, visible reasoning summaries and tool events, human-action pause/resume, independent checking, artifact registration, and built-in preview. It intentionally excludes direct Windows computer control and realtime audio/video perception. This first preview is not yet Authenticode-signed, so Windows may show a SmartScreen warning; verify its published SHA-256 before installation. See the complete [Windows capability boundary](./Docs/WINDOWS.md).
+The Windows preview runs the exact same Rust `RuntimeKernel` as macOS: one serialized main task, isolated concurrent child sessions, visible reasoning summaries and tool events, human-action pause/resume, independent checking, artifact registration, and built-in preview. It intentionally excludes direct Windows computer control and realtime audio/video perception. This first preview is not yet Authenticode-signed, so Windows may show a SmartScreen warning; verify its published SHA-256 before installation. See the complete [Windows capability boundary](./Docs/WINDOWS.md).
 
 ### Run a First Traceable Task
 

@@ -24,6 +24,7 @@ impl AppLocale {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ProviderProtocol {
+    OpenaiResponses,
     OpenaiChatCompletions,
     AnthropicMessages,
 }

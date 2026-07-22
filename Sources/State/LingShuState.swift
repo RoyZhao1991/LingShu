@@ -307,6 +307,13 @@ final class LingShuState: ObservableObject {
     @Published var activeTaskThreadRecordIDs: Set<String> = []
     /// 已产生新结果、但用户尚未打开查看的子线程记录。
     @Published var unreadTaskThreadRecordIDs: Set<String> = []
+    /// macOS and Windows share the same Rust RuntimeKernel. These fields only project that
+    /// canonical state into the existing macOS views; they do not implement a second loop.
+    let sharedKernelRuntime = LingShuSharedKernelRuntime.shared
+    var sharedKernelKnownThreadIDs: Set<String> = []
+    var sharedKernelActiveThreadIDs: Set<String> = []
+    var sharedKernelBubbleIDs: [String: UUID] = [:]
+    var sharedKernelPollingTask: Task<Void, Never>?
     @Published var selectedTaskRecordID: String?
     @Published var isTaskRecordPresented = false
     /// 任务窗口的用户反馈:recordID → 👍true/👎false(持久 UserDefaults)。👎 的任务不进 dreaming 固化样本。
@@ -886,7 +893,7 @@ final class LingShuState: ObservableObject {
     }
 
     var hasActiveModelCall: Bool {
-        isModelReplying || isModelExecuting
+        isModelReplying || isModelExecuting || !sharedKernelActiveThreadIDs.isEmpty
     }
 
     var shouldShowTaskRuntime: Bool {
@@ -1086,6 +1093,25 @@ final class LingShuState: ObservableObject {
     }
 
     func cancelCurrentCall() {
+        if LingShuRuntimeEnvironment.usesSharedRuntimeKernel,
+           !sharedKernelActiveThreadIDs.isEmpty {
+            builtinSkills.forEach { $0.onCancel() }
+            batchInterruptRequested = true
+            interruptSpeechOutput?()
+            let recordIDs = sharedKernelActiveThreadIDs
+            for recordID in recordIDs {
+                _ = stopSharedKernelTaskIfNeeded(recordID: recordID)
+            }
+            appendTrace(
+                kind: .warning,
+                actor: loc("用户", "User"),
+                title: loc("停止共享内核任务", "Stop shared-kernel task"),
+                detail: loc("已请求取消 \(recordIDs.count) 条正在执行的共享内核会话。", "Cancellation requested for \(recordIDs.count) shared-kernel session(s).")
+            )
+            missionTitle = loc("正在停止", "Stopping")
+            missionStatus = loc("正在等待共享内核确认取消。", "Waiting for the shared kernel to confirm cancellation.")
+            return
+        }
         let currentChatTurnID = executingChatTurnID
         let currentRecordID = currentChatTurnID.flatMap { id in
             chatMessages.first(where: { $0.id == id })?.taskRecordID ?? pendingMainTurns[id]?.taskRecordID
@@ -1588,7 +1614,8 @@ final class LingShuState: ObservableObject {
 
         // 弱脑确定性闭环:稳定本体事实/本机时间日期这类问题不需要远端强脑。
         // 仍然创建任务记录、落执行记录、沉淀记忆,避免网关抖动把低风险直答挂起。
-        if existingTaskRecordID == nil,
+        if !LingShuRuntimeEnvironment.usesSharedRuntimeKernel,
+           existingTaskRecordID == nil,
            pendingMainQuestionRecordID == nil,
            let localAnswer = LingShuLocalIntentResolver.answer(for: deterministicRoutingPrompt) {
             let recordID = createTaskExecutionRecord(for: userFacingPrompt)
@@ -1601,7 +1628,8 @@ final class LingShuState: ObservableObject {
             rememberMainThreadTurn(prompt: deterministicRoutingPrompt, reply: localAnswer)
             return localAnswer
         }
-        if existingTaskRecordID == nil,
+        if !LingShuRuntimeEnvironment.usesSharedRuntimeKernel,
+           existingTaskRecordID == nil,
            pendingMainQuestionRecordID == nil,
            let localAnswer = localWorkingMemoryAnswer(for: deterministicRoutingPrompt) {
             let recordID = createTaskExecutionRecord(for: userFacingPrompt)
@@ -1650,6 +1678,15 @@ final class LingShuState: ObservableObject {
 
         // 续接/追问(已有记录)→ 直接主回合,不分诊(继续这件事,不重新派发)。
         if let existing = existingTaskRecordID {
+            if LingShuRuntimeEnvironment.usesSharedRuntimeKernel,
+               sharedKernelKnownThreadIDs.contains(existing) {
+                submitSharedKernelTurn(
+                    prompt: trimmedPrompt,
+                    attachmentPaths: attachmentPaths,
+                    reusePlaceholderID: reusePlaceholderID
+                )
+                return ""
+            }
             let wasWaiting = taskExecutionRecords.first { $0.id == existing }?.taskOutcome == .waitingForUser
             if wasWaiting && Self.userInputDeniesPrerequisite(userFacingPrompt) {
                 closeDispatchedTaskForDeniedPrerequisite(recordID: existing, answer: userFacingPrompt, appendChatUser: false)
@@ -1682,6 +1719,18 @@ final class LingShuState: ObservableObject {
                 visiblePrompt: userFacingPrompt,
                 attachmentNames: attachmentNames,
                 attachmentPaths: attachmentPaths
+            )
+            return ""
+        }
+
+        // macOS 与 Windows 的常规主线程、GoalSpec、子线程、checker 和人机恢复统一由
+        // Runtime/LingShuCore::RuntimeKernel 驱动。此前的 Swift agent 管线只保留为测试夹具
+        // 与旧任务迁移路径；生产环境缺少共享内核时会显式失败，不静默退回另一套行为。
+        if LingShuRuntimeEnvironment.usesSharedRuntimeKernel {
+            submitSharedKernelTurn(
+                prompt: trimmedPrompt,
+                attachmentPaths: attachmentPaths,
+                reusePlaceholderID: reusePlaceholderID
             )
             return ""
         }
