@@ -29,7 +29,8 @@ fn is_github_actions() -> bool {
 /// Search order:
 /// 1. `$PROTOC` environment variable (set by Bazel `build_script_env` or user override)
 /// 2. `bin/protoc` walking up parent directories (dotslash wrapper for local dev)
-/// 3. `protoc` on `$PATH` (system install or other tooling)
+/// 3. Cargo-locked vendored `protoc` (portable clean-build fallback)
+/// 4. `protoc` on `$PATH` (system install or other tooling)
 ///
 /// When `bin/protoc` exists but fails to execute (e.g. the dotslash wrapper running
 /// in Bazel remote execution where `dotslash` is not installed), the error is not fatal —
@@ -77,12 +78,19 @@ pub fn find_protoc() -> anyhow::Result<Option<PathBuf>> {
         dir_rel.push("..");
     }
 
-    // 3. Try protoc from PATH (system install or other tooling).
+    // 3. Use the Cargo-locked vendored binary so clean clones and CI do not require
+    //    an independently installed DotSlash or protobuf toolchain.
+    if let Ok(vendored) = protoc_bin_vendored::protoc_bin_path() {
+        check_protoc_good(&vendored)?;
+        return Ok(Some(vendored));
+    }
+
+    // 4. Try protoc from PATH (system install or other tooling).
     if check_protoc_good(Path::new("protoc")).is_ok() {
         return Ok(Some(PathBuf::from("protoc")));
     }
 
-    // 4. Not found anywhere.
+    // 5. Not found anywhere.
     if is_github_actions() {
         return Err(anyhow::anyhow!(
             "`protoc` not found (checked $PROTOC env, bin/protoc, and PATH)"
