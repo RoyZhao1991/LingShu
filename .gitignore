@@ -11,6 +11,8 @@ WindowsApp/src-tauri/icons/ios/
 WindowsApp/src-tauri/icons/icon.icns
 WindowsApp/src-tauri/icons/icon.png
 build/
+!Runtime/Grok/crates/build/
+!Runtime/Grok/crates/build/**
 dist/
 .site-output/
 XcodeDerived/
