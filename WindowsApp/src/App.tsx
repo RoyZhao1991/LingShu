@@ -76,6 +76,13 @@ export default function App() {
     }
   }, [page, snapshot?.messages.length, snapshot?.messages.at(-1)?.text, snapshot?.latestEventSequence]);
 
+  useEffect(() => {
+    document.title = t.appName;
+    void import("@tauri-apps/api/window")
+      .then(({ getCurrentWindow }) => getCurrentWindow().setTitle(t.appName))
+      .catch(() => undefined);
+  }, [t.appName]);
+
   const trackMessageScroll = () => {
     const node = messageScroll.current;
     if (!node) return;
@@ -177,7 +184,7 @@ export default function App() {
   };
 
   if (!snapshot || !settingsDraft) {
-    return <main className="boot"><LoaderCircle className="spin" /><span>LingShu Runtime Core</span></main>;
+    return <main className="boot"><BrandMark /><span>{t.runtimeName}</span></main>;
   }
 
   const setupRequired = !snapshot.providerConfigured || !snapshot.settings.firstRunComplete;
@@ -193,7 +200,7 @@ export default function App() {
               {snapshot.messages.map((message) => (
                 <article key={message.id} className={`message ${message.role}`}>
                   <div className="message-meta">
-                    <span>{message.role === "user" ? (locale === "en" ? "You" : "你") : "LingShu"}</span>
+                    <span>{message.role === "user" ? (locale === "en" ? "You" : "你") : t.appName}</span>
                     <time>{new Date(message.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</time>
                   </div>
                   <div className="markdown-body">
@@ -273,7 +280,7 @@ function Header({ page, setPage, busy, locale }: { page: Page; setPage: (page: P
     ["chat", MessageCircle, t.chat], ["threads", MessagesSquare, t.threads], ["status", Activity, t.status], ["settings", Settings, t.settings],
   ];
   return <header className="app-header">
-    <div className="brand"><div className="brand-mark"><Bot /></div><div><strong>LingShu</strong><small>NOUS · AGENT RUNTIME</small></div></div>
+    <div className="brand"><BrandMark /><div><strong>{t.appName}</strong><small>{t.tagline}</small></div></div>
     <nav>{navigation.map(([id, Icon, label]) => <button key={id} className={page === id ? "active" : ""} onClick={() => setPage(id)}><Icon />{label}</button>)}</nav>
     <div className="runtime-state"><small>STATE</small><strong className={busy ? "active" : ""}>{busy ? t.running : t.standby}</strong></div>
   </header>;
@@ -341,7 +348,7 @@ function StatusPage({ snapshot, locale }: { snapshot: RuntimeSnapshot; locale: L
     [t.computerControl, snapshot.capabilities.computerControl], [t.realtimePerception, snapshot.capabilities.realtimePerception],
   ] as const;
   return <section className="status-page">
-    <div className="status-intro"><div><small>LINGSHU RUNTIME CORE</small><h1>{t.kernel} ABI {snapshot.kernelAbiVersion}</h1><p>{t.windowsBoundary}</p></div><ShieldCheck /></div>
+    <div className="status-intro"><div><small>{t.runtimeName.toUpperCase()}</small><h1>{t.kernel} ABI {snapshot.kernelAbiVersion}</h1><p>{t.windowsBoundary}</p></div><ShieldCheck /></div>
     <div className="metrics"><div><span>{t.active}</span><strong>{snapshot.activeTaskId ? snapshot.tasks.find((task) => task.id === snapshot.activeTaskId)?.title : t.none}</strong></div><div><span>{t.queue}</span><strong>{snapshot.queuedTaskCount}</strong></div><div><span>{t.modelChannels}</span><strong>{snapshot.settings.providerName} / {snapshot.settings.model}</strong></div></div>
     <div className="capability-table"><h2>{t.capabilities}</h2>{capabilities.map(([label, enabled]) => <div key={label}><span>{enabled ? <Check /> : <X />}{label}</span><strong className={enabled ? "available" : "unavailable"}>{enabled ? t.available : t.unavailable}</strong></div>)}</div>
   </section>;
@@ -398,7 +405,7 @@ function PermissionSelector({ mode, locale, compact = false, disabled, onChange 
 function SetupDialog(props: SettingsProps & { error: string }) {
   const t = strings(props.locale);
   return <div className="modal-layer setup-layer"><div className="setup-dialog">
-    <div className="setup-mark"><Bot /></div><h1>{t.firstRunTitle}</h1><p>{t.firstRunBody}</p>
+    <div className="setup-mark"><BrandMark /></div><h1>{t.firstRunTitle}</h1><p>{t.firstRunBody}</p>
     <SettingsForm {...props} />
     {props.error && <div className="error-strip"><CircleAlert />{props.error}</div>}
   </div></div>;
@@ -434,7 +441,7 @@ function ExecutionEvent({ event, task, locale }: { event: RuntimeEvent; task?: T
     <div className="event-rail"><EventStateIcon event={event} /></div>
     <div className="event-main">
       <header><span className="event-kind"><EventIcon kind={event.kind} />{event.title}</span><time><Clock3 />{new Date(event.updatedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}</time></header>
-      <div className="event-actor"><RoleIcon role={task?.role ?? "main"} /><strong>{event.actor || task?.participantName || "LingShu"}</strong>{task && <small>{roleLabel(task.role, locale)}</small>}</div>
+      <div className="event-actor"><RoleIcon role={task?.role ?? "main"} /><strong>{localizedActor(event.actor || task?.participantName, locale)}</strong>{task && <small>{roleLabel(task.role, locale)}</small>}</div>
       {hasBody && <details open={expanded} onToggle={(toggleEvent) => setExpanded(toggleEvent.currentTarget.open)}>
         <summary>{locale === "en" ? "Details" : "明细"}</summary>
         {event.kind === "tool" || event.kind === "delegation" ? <pre>{body}</pre> : <div className="event-markdown markdown-body"><ReactMarkdown>{body}</ReactMarkdown></div>}
@@ -466,6 +473,17 @@ function RoleIcon({ role }: { role: TaskRole | "all" }) {
   if (role === "checker") return <ShieldCheck />;
   if (role === "all") return <MessagesSquare />;
   return <Bot />;
+}
+
+function BrandMark() {
+  return <div className="brand-mark" aria-hidden="true"><img src="/brand/nous-orb.svg" alt="" /></div>;
+}
+
+function localizedActor(actor: string | undefined, locale: Locale): string {
+  if (!actor || ["lingshu", "nous", "灵枢"].includes(actor.trim().toLocaleLowerCase())) {
+    return strings(locale).appName;
+  }
+  return actor;
 }
 
 function PreviewDialog({ payload, locale, onClose }: { payload: PreviewPayload; locale: Locale; onClose: () => void }) {
