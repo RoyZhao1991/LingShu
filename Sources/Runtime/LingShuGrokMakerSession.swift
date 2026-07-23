@@ -8,7 +8,7 @@ struct LingShuGrokRuntimeEvent: Sendable {
     var detail: LingShuTaskExecutionDetail?
 }
 
-private struct LingShuGrokNewSessionParams: Codable, Sendable {
+struct LingShuGrokNewSessionParams: Codable, Sendable {
     struct AgentProfile: Codable, Sendable {
         var name: String
         var description: String
@@ -48,6 +48,27 @@ private struct LingShuGrokNewSessionParams: Codable, Sendable {
     }
 }
 
+func lingShuGrokNewSessionParams(
+    workingDirectory: String,
+    modelID: String,
+    systemPrompt: String,
+    role: LingShuEmbeddedAgentRole,
+    permissionMode: LingShuExecutionPermissionMode
+) -> LingShuGrokNewSessionParams {
+    let permissionRule = permissionMode == .fullAccess
+        ? "Execution permission is full_access. Local commands, network access, dependency installation, and paths outside the working directory are already authorized. Do not ask again solely for those operations. Login, credentials, payment, physical actions, and OS privacy grants still require the user."
+        : "Execution permission is sandbox. Network access and writes outside the working directory require explicit user authorization; request the exact permission instead of claiming the platform permanently lacks the capability."
+    return LingShuGrokNewSessionParams(
+        cwd: workingDirectory,
+        meta: .init(
+            modelId: modelID,
+            rules: systemPrompt + "\n\n" + permissionRule,
+            agentProfile: role == .checker ? .checker : nil,
+            yoloMode: permissionMode == .fullAccess
+        )
+    )
+}
+
 private struct LingShuGrokPromptParams: Codable, Sendable {
     struct ContentBlock: Codable, Sendable {
         var type: String
@@ -80,6 +101,7 @@ actor LingShuGrokAgentSession: LingShuAgentSessioning {
     let role: LingShuEmbeddedAgentRole
     let workingDirectory: String
     let modelID: String
+    let permissionMode: LingShuExecutionPermissionMode
 
     private let systemPrompt: String
     private let client: LingShuEmbeddedGrokClient
@@ -107,6 +129,7 @@ actor LingShuGrokAgentSession: LingShuAgentSessioning {
         role: LingShuEmbeddedAgentRole,
         workingDirectory: String,
         modelID: String,
+        permissionMode: LingShuExecutionPermissionMode,
         systemPrompt: String,
         initialMessages: [LingShuAgentMessage],
         client: LingShuEmbeddedGrokClient,
@@ -116,6 +139,7 @@ actor LingShuGrokAgentSession: LingShuAgentSessioning {
         self.role = role
         self.workingDirectory = workingDirectory
         self.modelID = modelID
+        self.permissionMode = permissionMode
         let bootstrap = initialMessages.map { message in
             "【\(message.role.rawValue)上下文】\n\(message.content)"
         }.joined(separator: "\n\n")
@@ -234,13 +258,12 @@ actor LingShuGrokAgentSession: LingShuAgentSessioning {
 
     private func ensureRuntimeSession() async throws {
         guard runtimeSessionID == nil else { return }
-        let params = LingShuGrokNewSessionParams(
-            cwd: workingDirectory,
-            meta: .init(
-                modelId: modelID,
-                rules: systemPrompt,
-                agentProfile: role == .checker ? .checker : nil
-            )
+        let params = lingShuGrokNewSessionParams(
+            workingDirectory: workingDirectory,
+            modelID: modelID,
+            systemPrompt: systemPrompt,
+            role: role,
+            permissionMode: permissionMode
         )
         let response = try await client.request("session/new", params: params)
         guard let object = try JSONSerialization.jsonObject(with: response) as? [String: Any],

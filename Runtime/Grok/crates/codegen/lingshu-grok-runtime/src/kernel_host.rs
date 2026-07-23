@@ -1,13 +1,13 @@
 use libc::{c_char, c_int, c_void};
 use lingshu_runtime_core::{
-    KERNEL_ABI_VERSION, RuntimeKernel, RuntimeSettings, RuntimeStore, provider_catalog,
+    provider_catalog, RuntimeKernel, RuntimeSettings, RuntimeStore, KERNEL_ABI_VERSION,
 };
 use serde::Deserialize;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::ffi::{CStr, CString};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock};
-use tokio::sync::{RwLock, mpsc};
+use tokio::sync::{mpsc, RwLock};
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
@@ -357,7 +357,7 @@ pub extern "C" fn lingshu_kernel_runtime_stop() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lingshu_runtime_core::{AppLocale, ProviderProtocol};
+    use lingshu_runtime_core::{AppLocale, ExecutionPermissionMode, ProviderProtocol};
     use tempfile::tempdir;
 
     #[tokio::test]
@@ -375,6 +375,7 @@ mod tests {
             endpoint: "https://example.invalid/v1".into(),
             model: "test-model".into(),
             workspace: workspace.clone(),
+            execution_permission_mode: ExecutionPermissionMode::FullAccess,
             first_run_complete: true,
         };
         let request = RPCRequest {
@@ -392,6 +393,10 @@ mod tests {
         assert_eq!(
             value["result"]["settings"]["workspace"],
             workspace.to_string_lossy().as_ref()
+        );
+        assert_eq!(
+            value["result"]["settings"]["executionPermissionMode"],
+            "full_access"
         );
         assert_eq!(api_key.read().await.as_deref(), Some("secret"));
     }

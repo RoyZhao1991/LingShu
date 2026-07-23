@@ -78,6 +78,12 @@ svg { flex: 0 0 auto; }
 .composer-actions { display: flex; align-items: center; gap: 10px; padding: 10px 2px 0; }
 .icon-button { width: 40px; height: 40px; display: inline-grid; place-items: center; border: 0; background: #edf0ef; color: #37413f; border-radius: 6px; }
 .icon-button svg { width: 20px; }
+.permission-selector { min-width: 0; height: 42px; display: inline-flex; align-items: center; gap: 7px; padding: 0 8px; color: #52605e; background: #edf0ef; border: 1px solid #c5cecc; border-radius: 6px; }
+.permission-selector.full { color: #a95416; background: #fff4e9; border-color: #efb47f; }
+.permission-selector svg { width: 17px; }
+.permission-selector select { min-width: 0; height: 100%; padding: 0 24px 0 0; color: inherit; background: transparent; border: 0; outline: 0; font-weight: 700; cursor: pointer; }
+.permission-selector.compact { height: 36px; flex: 0 0 auto; }
+.permission-selector.compact select { max-width: 118px; font-size: 12px; }
 .channel-state { margin-right: auto; color: #77817f; font-size: 12px; display: flex; align-items: center; gap: 7px; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .dot { width: 7px; height: 7px; border-radius: 50%; background: #b8bfbe; }
 .dot.good { background: #3db37b; }
@@ -201,6 +207,8 @@ svg { flex: 0 0 auto; }
 .settings-form label { display: grid; gap: 7px; color: #47514f; font-size: 13px; font-weight: 700; }
 .settings-form input, .settings-form select { min-width: 0; height: 42px; padding: 0 11px; color: var(--ink); background: #fff; border: 1px solid #bbc5c3; border-radius: 5px; outline: 0; }
 .settings-form input:focus, .settings-form select:focus { border-color: var(--teal); box-shadow: 0 0 0 3px rgba(7,143,131,.12); }
+.settings-form .permission-selector { width: 100%; }
+.settings-form .permission-selector select { height: 100%; color: inherit; background: transparent; border: 0; box-shadow: none; }
 .settings-form label small { color: var(--muted); font-weight: 400; line-height: 1.45; }
 .primary-command { grid-column: 1 / -1; min-height: 46px; display: flex; align-items: center; justify-content: center; gap: 9px; border: 0; background: var(--teal); color: #fff; font-weight: 750; border-radius: 6px; }
 .primary-command svg { width: 19px; }
@@ -274,6 +282,9 @@ svg { flex: 0 0 auto; }
   .message.user { background: #17302d; }
   .markdown-body pre, .composer textarea, .thread-list, .setup-dialog, .action-dialog { background: #111716; }
   .composer, .artifact-row, .settings-form input, .settings-form select, .preview-dialog { background: #171d1c; color: #edf4f2; }
+  .permission-selector { color: #dbe5e3; background: #222a29; border-color: #3a4644; }
+  .permission-selector.full { color: #ffd0aa; background: #33251b; border-color: #88552e; }
+  .settings-form .permission-selector select { background: transparent; }
   .thread-list > button { color: #edf4f2; }
   .thread-list > button:hover, .thread-list > button.selected { background: #17302d; }
   .participant-tabs button { color: #dbe5e3; background: #26302e; }

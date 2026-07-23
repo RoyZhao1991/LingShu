@@ -73,7 +73,8 @@ let snapshot: RuntimeSnapshot = {
   settings: {
     locale: "en", providerId: "deepseek", providerName: "DeepSeek", protocol: "openai_chat_completions",
     endpoint: "https://api.deepseek.com", model: "deepseek-chat",
-    workspace: "C:\\Users\\Roy\\Documents\\LingShu Workspace", firstRunComplete: true,
+    workspace: "C:\\Users\\Roy\\Documents\\LingShu Workspace",
+    executionPermissionMode: "sandbox", firstRunComplete: true,
   },
   platform: "windows",
   capabilities: { computerControl: false, realtimePerception: false, internalPreview: true, externalOpen: true },
@@ -92,6 +93,11 @@ async function mockInvoke<T>(command: string, args?: Record<string, unknown>): P
     case "save_and_validate_settings": {
       const settings = args?.settings as RuntimeSettings;
       snapshot = { ...snapshot, settings, providerConfigured: true };
+      return clone(snapshot) as T;
+    }
+    case "update_execution_permission_mode": {
+      const executionPermissionMode = args?.mode as RuntimeSettings["executionPermissionMode"];
+      snapshot = { ...snapshot, settings: { ...snapshot.settings, executionPermissionMode } };
       return clone(snapshot) as T;
     }
     case "submit_message": {
