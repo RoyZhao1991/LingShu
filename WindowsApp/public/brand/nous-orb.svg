@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-label="Nous">
+  <circle cx="64" cy="64" r="60" fill="#e8f5f3" stroke="#b8ddd8" stroke-width="2"/>
+  <circle cx="64" cy="64" r="53" fill="#f8fbfa" stroke="#79c9c1" stroke-width="2"/>
+  <g fill="none" stroke-linecap="round">
+    <circle cx="64" cy="64" r="45" stroke="#0c9d91" stroke-width="4" stroke-dasharray="47 18 20 15" transform="rotate(-22 64 64)"/>
+    <circle cx="64" cy="64" r="35" stroke="#79d4cc" stroke-width="3" stroke-dasharray="23 10 45 14" transform="rotate(31 64 64)"/>
+    <circle cx="64" cy="64" r="26" stroke="#117b73" stroke-width="4" stroke-dasharray="34 14 17 12" transform="rotate(-48 64 64)"/>
+    <path d="M44 68c3 9 10 15 20 15 11 0 20-8 22-18" stroke="#23b8ac" stroke-width="3"/>
+    <path d="M48 55c4-7 10-11 17-11 8 0 14 4 18 11" stroke="#263b39" stroke-width="3"/>
+  </g>
+  <circle cx="64" cy="64" r="11" fill="#d6efec" stroke="#0c9d91" stroke-width="3"/>
+  <circle cx="64" cy="64" r="4.5" fill="#183c39"/>
+  <g fill="#26b9ad">
+    <circle cx="64" cy="14" r="3.5"/>
+    <circle cx="107" cy="40" r="3.5"/>
+    <circle cx="106" cy="89" r="3.5"/>
+    <circle cx="64" cy="114" r="3.5"/>
+    <circle cx="21" cy="89" r="3.5"/>
+    <circle cx="21" cy="40" r="3.5"/>
+  </g>
+</svg>

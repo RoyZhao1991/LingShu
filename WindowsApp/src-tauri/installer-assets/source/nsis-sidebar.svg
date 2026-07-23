@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="164" height="314" viewBox="0 0 164 314">
+  <rect width="164" height="314" fill="#075f59"/>
+  <path d="M0 226c47-35 104-53 164-52v140H0Z" fill="#087d74"/>
+  <path d="M0 253c50-29 106-40 164-35v96H0Z" fill="#09978b"/>
+  <g transform="translate(26 28)">
+    <circle cx="56" cy="56" r="52" fill="#eef8f6" stroke="#8bd0c9" stroke-width="2"/>
+    <circle cx="56" cy="56" r="41" fill="#ffffff" stroke="#43b8ae" stroke-width="2"/>
+    <circle cx="56" cy="56" r="31" fill="none" stroke="#0b978c" stroke-width="4" stroke-dasharray="34 12 18 10" transform="rotate(-18 56 56)"/>
+    <circle cx="56" cy="56" r="21" fill="none" stroke="#63cec5" stroke-width="3" stroke-dasharray="17 8 25 9" transform="rotate(29 56 56)"/>
+    <circle cx="56" cy="56" r="9" fill="#d8f0ed" stroke="#0b978c" stroke-width="3"/>
+    <circle cx="56" cy="56" r="3.5" fill="#173f3b"/>
+  </g>
+  <text x="82" y="166" text-anchor="middle" fill="#ffffff" font-family="Segoe UI, Microsoft YaHei, sans-serif" font-size="27" font-weight="700">灵枢</text>
+  <text x="82" y="193" text-anchor="middle" fill="#b9eee8" font-family="Segoe UI, sans-serif" font-size="18" font-weight="700">NOUS</text>
+  <line x1="48" y1="211" x2="116" y2="211" stroke="#91d9d2"/>
+  <text x="82" y="236" text-anchor="middle" fill="#e8f7f5" font-family="Segoe UI, sans-serif" font-size="8" font-weight="600" letter-spacing="1.6">GENERAL AGENT HUB</text>
+  <text x="82" y="283" text-anchor="middle" fill="#d5f1ee" font-family="Segoe UI, sans-serif" font-size="9">Open model · Shared runtime</text>
+</svg>

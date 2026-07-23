@@ -27,8 +27,8 @@ svg { flex: 0 0 auto; }
 .app-shell { height: 100%; display: grid; grid-template-rows: 76px minmax(0, 1fr); background: #edf1f1; }
 .app-header { display: grid; grid-template-columns: minmax(220px, 1fr) auto minmax(150px, 1fr); align-items: center; gap: 24px; padding: 0 28px; background: rgba(255,255,255,.96); border-bottom: 1px solid var(--line); position: relative; z-index: 10; }
 .brand { display: flex; align-items: center; gap: 12px; min-width: 0; white-space: nowrap; }
-.brand-mark { width: 42px; height: 42px; display: grid; place-items: center; color: #fff; background: var(--teal); border: 3px solid #d7f0ed; border-radius: 50%; }
-.brand-mark svg { width: 23px; }
+.brand-mark { width: 48px; height: 48px; flex: 0 0 auto; display: grid; place-items: center; }
+.brand-mark img { display: block; width: 100%; height: 100%; object-fit: contain; }
 .brand strong { display: block; font-size: 21px; line-height: 1.05; }
 .brand small { display: block; margin-top: 5px; color: var(--teal); font: 700 9px/1 ui-monospace, SFMono-Regular, Consolas, monospace; letter-spacing: 2px; }
 .app-header nav { height: 100%; display: flex; align-items: stretch; gap: 6px; }
@@ -43,8 +43,10 @@ svg { flex: 0 0 auto; }
 
 .workspace-shell { min-height: 0; }
 .boot { width: 100%; height: 100%; display: grid; place-content: center; justify-items: center; gap: 12px; color: var(--teal); font-weight: 700; }
+.boot .brand-mark { width: 72px; height: 72px; animation: breathe 1.8s ease-in-out infinite; }
 .spin { animation: spin .9s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
+@keyframes breathe { 50% { transform: scale(1.045); opacity: .86; } }
 
 .chat-page { height: 100%; display: grid; grid-template-rows: minmax(0, 1fr) auto; }
 .message-scroll { overflow-y: auto; padding: 26px max(36px, calc((100vw - 1280px) / 2)); scroll-behavior: smooth; }
@@ -221,7 +223,8 @@ svg { flex: 0 0 auto; }
 .setup-dialog > h1 { margin: 14px 0 6px; }
 .setup-dialog > p { margin: 0; color: var(--muted); }
 .setup-dialog .settings-form { grid-template-columns: 1fr 1fr; }
-.setup-mark { width: 52px; height: 52px; display: grid; place-items: center; color: #fff; background: var(--teal); border-radius: 50%; }
+.setup-mark { width: 60px; height: 60px; display: grid; place-items: center; }
+.setup-mark .brand-mark { width: 60px; height: 60px; }
 .action-layer { z-index: 120; }
 .action-dialog { width: min(680px, 100%); max-height: calc(100vh - 44px); overflow-y: auto; padding: 26px; color: var(--ink); background: #f8faf9; border: 1px solid #bfd0cd; box-shadow: var(--shadow); border-radius: 8px; }
 .action-dialog > header { display: flex; align-items: center; gap: 14px; }

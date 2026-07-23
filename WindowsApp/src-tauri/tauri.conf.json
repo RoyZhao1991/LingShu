@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "LingShu",
+  "productName": "Nous",
   "version": "0.1.0-2",
   "identifier": "com.royzhao.lingshu.windows",
   "build": {
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "LingShu",
+        "title": "Nous",
         "width": 1440,
         "height": 940,
         "minWidth": 980,
@@ -29,8 +29,8 @@
     "active": true,
     "targets": ["msi", "nsis"],
     "category": "Productivity",
-    "shortDescription": "Open-model agent runtime for Windows",
-    "longDescription": "LingShu is an open-model desktop agent runtime with persistent task threads, registered artifacts, and built-in file preview.",
+    "shortDescription": "Nous (LingShu), an open-model agent runtime for Windows",
+    "longDescription": "Nous (LingShu) is an open-model desktop agent runtime with persistent task threads, registered artifacts, and built-in file preview.",
     "copyright": "Copyright © 2026 Roy Zhao",
     "icon": [
       "icons/32x32.png",
@@ -42,11 +42,16 @@
       "nsis": {
         "installMode": "currentUser",
         "installerIcon": "icons/icon.ico",
+        "uninstallerIcon": "icons/icon.ico",
+        "headerImage": "installer-assets/nsis-header.bmp",
+        "sidebarImage": "installer-assets/nsis-sidebar.bmp",
         "displayLanguageSelector": true,
         "languages": ["English", "SimpChinese"]
       },
       "wix": {
-        "language": ["en-US", "zh-CN"]
+        "language": ["en-US", "zh-CN"],
+        "bannerPath": "installer-assets/wix-banner.bmp",
+        "dialogImagePath": "installer-assets/wix-dialog.bmp"
       }
     }
   }
