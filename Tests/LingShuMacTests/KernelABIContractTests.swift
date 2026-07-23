@@ -19,6 +19,79 @@ final class KernelABIContractTests: XCTestCase {
         XCTAssertTrue(LingShuKernelABI.selfCheck(), "内核 ABI 清单自洽校验失败(契约数/重名/空冻结面)")
     }
 
+    func testWindowsRuntimeUsesTheSameKernelContract() throws {
+        let contractURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Runtime/LingShuCore/resources/kernel-contract.json")
+        let object = try XCTUnwrap(
+            try JSONSerialization.jsonObject(with: Data(contentsOf: contractURL)) as? [String: Any]
+        )
+        XCTAssertEqual(object["abiVersion"] as? String, LingShuKernelABI.version)
+        let portableContracts = try XCTUnwrap(object["contracts"] as? [[String: Any]])
+        XCTAssertEqual(
+            portableContracts.compactMap { $0["symbol"] as? String },
+            LingShuKernelABI.contracts.map(\.symbol),
+            "Windows 与 macOS 必须由同一份五协议内核 ABI 驱动"
+        )
+        for (portable, native) in zip(portableContracts, LingShuKernelABI.contracts) {
+            XCTAssertEqual(portable["frozenSurface"] as? [String], native.frozenSurface)
+        }
+        XCTAssertEqual(object["goalSpecFields"] as? [String], [
+            "objective", "kind", "output_mode", "reference_scope",
+            "reference_evidence", "reference_explicit", "reference_confidence",
+            "constraints", "boundaries", "risks", "success_criteria", "open_questions"
+        ])
+        XCTAssertEqual(object["providerProtocols"] as? [String], [
+            "openai_responses", "openai_chat_completions", "anthropic_messages"
+        ])
+        let platforms = try XCTUnwrap(object["platformCapabilities"] as? [String: Any])
+        let windows = try XCTUnwrap(platforms["windows"] as? [String: Any])
+        XCTAssertEqual(windows["computerControl"] as? Bool, false)
+        XCTAssertEqual(windows["internalPreview"] as? Bool, true)
+    }
+
+    func testMacAndWindowsExecuteTheSameRustRuntimeKernelImplementation() throws {
+        let repository = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let windowsCargo = try String(
+            contentsOf: repository.appendingPathComponent("WindowsApp/src-tauri/Cargo.toml"),
+            encoding: .utf8
+        )
+        let windowsHost = try String(
+            contentsOf: repository.appendingPathComponent("WindowsApp/src-tauri/src/lib.rs"),
+            encoding: .utf8
+        )
+        let macHostCargo = try String(
+            contentsOf: repository.appendingPathComponent(
+                "Runtime/Grok/crates/codegen/lingshu-grok-runtime/Cargo.toml"
+            ),
+            encoding: .utf8
+        )
+        let macHost = try String(
+            contentsOf: repository.appendingPathComponent(
+                "Runtime/Grok/crates/codegen/lingshu-grok-runtime/src/kernel_host.rs"
+            ),
+            encoding: .utf8
+        )
+        let macBridge = try String(
+            contentsOf: repository.appendingPathComponent("Sources/Runtime/LingShuSharedKernelRuntime.swift"),
+            encoding: .utf8
+        )
+        let macMainState = try String(
+            contentsOf: repository.appendingPathComponent("Sources/State/LingShuState.swift"),
+            encoding: .utf8
+        )
+
+        XCTAssertTrue(windowsCargo.contains("lingshu-runtime-core = { path = \"../../Runtime/LingShuCore\" }"))
+        XCTAssertTrue(windowsHost.contains("RuntimeKernel::new(store, \"windows\")"))
+        XCTAssertTrue(macHostCargo.contains("lingshu-runtime-core = { path = \"../../../../LingShuCore\" }"))
+        XCTAssertTrue(macHost.contains("RuntimeKernel::new(store, config.platform)"))
+        XCTAssertTrue(macBridge.contains("lingshu_kernel_runtime_start"))
+        XCTAssertTrue(macBridge.contains("lingshu_kernel_runtime_send"))
+        XCTAssertTrue(macMainState.contains("submitSharedKernelTurn("))
+        XCTAssertTrue(macMainState.contains("if LingShuRuntimeEnvironment.usesSharedRuntimeKernel"))
+    }
+
     func testFiveKernelContractsEnumerated() {
         let symbols = LingShuKernelABI.contracts.map(\.symbol)
         XCTAssertEqual(symbols, [

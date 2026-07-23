@@ -1,9 +1,9 @@
 <div align="center">
   <img src="./lingshu-icon-preview.png" width="112" alt="LingShu app icon">
   <h1>LingShu</h1>
-  <p><strong>A fully open-source, model-agnostic macOS execution agent in the Codex / Claude Code category.</strong></p>
+  <p><strong>A fully open-source, model-agnostic execution agent in the Codex / Claude Code category.</strong></p>
   <p><strong>Code is one deliverable, not the boundary: ship verified software, presentations, documents, and authorized Mac workflows.</strong></p>
-  <p>Use OpenAI, Claude, DeepSeek, MiniMax, or a compatible endpoint. Keep the agent runtime, orchestration, tools, memory, and artifacts on your Mac.</p>
+  <p>Use OpenAI, Claude, DeepSeek, MiniMax, or a compatible endpoint. Keep the agent runtime, orchestration, memory, and artifacts on your own computer.</p>
 
   <p>
     <a href="./README.md">English</a> |
@@ -12,11 +12,13 @@
 
   <p>
     <img alt="macOS 14+" src="https://img.shields.io/badge/macOS-14%2B-111111?logo=apple">
+    <img alt="Windows preview" src="https://img.shields.io/badge/Windows-technical%20preview-2F6FED?logo=windows11&logoColor=white">
     <img alt="Swift 6" src="https://img.shields.io/badge/Swift-6-F05138?logo=swift&logoColor=white">
     <img alt="Apache-2.0" src="https://img.shields.io/badge/license-Apache--2.0-2C8C7F">
     <img alt="Project status: alpha" src="https://img.shields.io/badge/status-alpha-E9A23B">
     <img alt="1,500+ tests" src="https://img.shields.io/badge/tests-1%2C500%2B-2C8C7F">
     <a href="https://github.com/RoyZhao1991/LingShu/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/RoyZhao1991/LingShu/actions/workflows/ci.yml/badge.svg"></a>
+    <a href="https://github.com/RoyZhao1991/LingShu/actions/workflows/windows.yml"><img alt="Windows build" src="https://github.com/RoyZhao1991/LingShu/actions/workflows/windows.yml/badge.svg"></a>
     <a href="https://github.com/RoyZhao1991/LingShu/releases/tag/v0.1.0-alpha.9"><img alt="Latest release" src="https://img.shields.io/github/v/release/RoyZhao1991/LingShu?include_prereleases&label=download"></a>
     <a href="https://github.com/jaywcjlove/awesome-mac#ai-tools"><img alt="Listed in awesome-mac" src="https://img.shields.io/badge/listed-awesome--mac-2C8C7F"></a>
     <a href="https://star-history.com/#RoyZhao1991/LingShu&Date"><img alt="Star History" src="https://api.star-history.com/svg?repos=RoyZhao1991/LingShu&type=Date"></a>
@@ -25,7 +27,9 @@
   <p>
     <a href="https://royzhao1991.github.io/LingShu/"><strong>Official website</strong></a>
     ·
-    <a href="https://github.com/RoyZhao1991/LingShu/releases/download/v0.1.0-alpha.9/LingShu-0.1.0-12-macOS-universal.dmg"><strong>Download signed macOS alpha</strong></a>
+    <a href="https://github.com/RoyZhao1991/LingShu/releases/download/v0.1.0-alpha.9/LingShu-0.1.0-12-macOS-universal.dmg"><strong>macOS signed alpha</strong></a>
+    ·
+    <a href="https://github.com/RoyZhao1991/LingShu/releases/download/windows-v0.1.0-preview.2/LingShu-Windows-x64-Setup.exe"><strong>Windows x64 preview</strong></a>
     · <a href="#real-public-sample"><strong>Inspect a real sample</strong></a>
     · <a href="#quick-start">Quick start</a>
     · <a href="https://github.com/RoyZhao1991/LingShu/discussions">Community</a>
@@ -41,13 +45,15 @@
 > [!IMPORTANT]
 > LingShu is an alpha-stage project under active development. It can operate local files and apps after explicit macOS authorization. Review requested permissions and keep backups of important work.
 
+The Windows technical preview and macOS app execute the **same `Runtime/LingShuCore::RuntimeKernel` implementation**. Windows constructs it directly in Tauri; macOS links it through the packaged Rust runtime library. The UI shells and platform adapters differ, but GoalSpec, queues, worker/checker sessions, tool loops, human-action resume, artifacts, persistence, and events do not. Direct Windows computer control and realtime perception are intentionally unavailable. See [LingShu for Windows](./Docs/WINDOWS.md).
+
 ## Where LingShu Fits
 
 Codex and Claude Code set the standard for execution-oriented coding agents. LingShu belongs in that same agent category—not the chat-app category—but makes a different architectural choice: the complete native app and runtime are Apache-2.0 open source, the model backend is replaceable, and code is one deliverable among several.
 
 | Dimension | LingShu | OpenAI Codex | Claude Code |
 | --- | --- | --- | --- |
-| Primary product focus | General execution on macOS: code, office documents, local computer workflows | Software engineering | Software engineering |
+| Primary product focus | General execution: code and office documents on macOS/Windows, plus authorized computer workflows on macOS | Software engineering | Software engineering |
 | Publicly open-sourced surface | Native app + agent runtime, Apache-2.0 | Codex CLI, Apache-2.0 | Official repository is all rights reserved |
 | Default model layer | User-selected OpenAI, Claude, DeepSeek, MiniMax, or compatible endpoint | OpenAI models | Claude models |
 | Default deliverables | Code, PPTX, DOCX, PDF, local media, and authorized Mac actions | Code changes and engineering work | Code changes and engineering work |
@@ -133,10 +139,10 @@ The main conversation remains serialized to protect context. Long-running or del
 
 ### Requirements
 
-- macOS 14 or later
+- macOS 14 or later, or Windows 10/11 x64 for the technical preview
 - An API token for one supported model provider, or a compatible custom endpoint
 
-### Install the Signed Alpha (Recommended)
+### Install on macOS (Signed and Notarized)
 
 With [Homebrew](https://brew.sh/), the app and `lingshu` CLI are installed together:
 
@@ -157,6 +163,20 @@ Or install the Universal DMG manually:
 4. Choose a language, connect a model provider, and send a small first request.
 
 The public DMG is Universal (`arm64` + `x86_64`), signed with a Developer ID certificate, notarized by Apple, and carries a stapled notarization ticket. Grant macOS permissions only when a capability you choose requires them.
+
+### Install on Windows (Technical Preview)
+
+1. Download [LingShu-Windows-x64-Setup.exe](https://github.com/RoyZhao1991/LingShu/releases/download/windows-v0.1.0-preview.2/LingShu-Windows-x64-Setup.exe) and [SHA256SUMS.txt](https://github.com/RoyZhao1991/LingShu/releases/download/windows-v0.1.0-preview.2/SHA256SUMS.txt).
+2. Verify the installer in PowerShell:
+
+   ```powershell
+   Get-FileHash .\LingShu-Windows-x64-Setup.exe -Algorithm SHA256
+   Get-Content .\SHA256SUMS.txt
+   ```
+
+3. Run the setup executable, choose a language, connect a model provider, and send a small first request.
+
+The Windows preview runs the exact same Rust `RuntimeKernel` as macOS: one serialized main task, isolated concurrent child sessions, visible reasoning summaries and tool events, human-action pause/resume, independent checking, artifact registration, and built-in preview. PDF, DOCX, and PPTX embedded text is read by the shared runtime without a host plugin; scanned PDFs return a structured OCR capability gap so the agent can acquire or compose a fallback instead of stopping at “no plugin.” It intentionally excludes direct Windows computer control and realtime audio/video perception. This preview is not yet Authenticode-signed, so Windows may show a SmartScreen warning; verify its published SHA-256 before installation. See the complete [Windows capability boundary](./Docs/WINDOWS.md).
 
 ### Run a First Traceable Task
 
@@ -244,6 +264,7 @@ LingShu is usable for development and controlled local workflows, but it is not 
 | Area | Status |
 | --- | --- |
 | Native macOS app and agent loop | Active development |
+| Windows desktop shell | Technical preview; shared kernel, built-in preview, no direct computer control |
 | Multi-provider model setup | Implemented |
 | Native Computer Use | Implemented; requires explicit macOS authorization |
 | End-to-end presentation, document, and code artifact workflow | Implemented |

@@ -1,9 +1,9 @@
 <div align="center">
   <img src="./lingshu-icon-preview.png" width="112" alt="灵枢应用图标">
   <h1>灵枢 LingShu</h1>
-  <p><strong>一套与 Codex / Claude Code 同类的原生 macOS 执行型 Agent：完整 App 与运行时开源，主脑不绑定厂商。</strong></p>
+  <p><strong>一套与 Codex / Claude Code 同类的开源执行型 Agent：完整 App 与运行时开源，主脑不绑定厂商。</strong></p>
   <p><strong>代码只是交付物之一，不是能力边界：还可完成 PPT、文档、媒体与授权后的 Mac 工作流。</strong></p>
-  <p>支持 OpenAI、Claude、DeepSeek、MiniMax 与兼容端点；Agent 运行时、编排、工具、记忆和产物留在你的 Mac 上。</p>
+  <p>支持 OpenAI、Claude、DeepSeek、MiniMax 与兼容端点；Agent 运行时、编排、记忆和产物留在你自己的电脑上。</p>
 
   <p>
     <a href="./README.md">English</a> |
@@ -12,11 +12,13 @@
 
   <p>
     <img alt="macOS 14+" src="https://img.shields.io/badge/macOS-14%2B-111111?logo=apple">
+    <img alt="Windows 技术预览" src="https://img.shields.io/badge/Windows-技术预览-2F6FED?logo=windows11&logoColor=white">
     <img alt="Swift 6" src="https://img.shields.io/badge/Swift-6-F05138?logo=swift&logoColor=white">
     <img alt="Apache-2.0" src="https://img.shields.io/badge/license-Apache--2.0-2C8C7F">
     <img alt="项目阶段 Alpha" src="https://img.shields.io/badge/status-alpha-E9A23B">
     <img alt="1,500+ 项测试" src="https://img.shields.io/badge/tests-1%2C500%2B-2C8C7F">
     <a href="https://github.com/RoyZhao1991/LingShu/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/RoyZhao1991/LingShu/actions/workflows/ci.yml/badge.svg"></a>
+    <a href="https://github.com/RoyZhao1991/LingShu/actions/workflows/windows.yml"><img alt="Windows 构建" src="https://github.com/RoyZhao1991/LingShu/actions/workflows/windows.yml/badge.svg"></a>
     <a href="https://github.com/RoyZhao1991/LingShu/releases/tag/v0.1.0-alpha.9"><img alt="最新版本" src="https://img.shields.io/github/v/release/RoyZhao1991/LingShu?include_prereleases&label=download"></a>
     <a href="https://github.com/jaywcjlove/awesome-mac#ai-tools"><img alt="已收录于 awesome-mac" src="https://img.shields.io/badge/listed-awesome--mac-2C8C7F"></a>
     <a href="https://star-history.com/#RoyZhao1991/LingShu&Date"><img alt="Star 历史" src="https://api.star-history.com/svg?repos=RoyZhao1991/LingShu&type=Date"></a>
@@ -25,7 +27,9 @@
   <p>
     <a href="https://royzhao1991.github.io/LingShu/"><strong>官方网站</strong></a>
     ·
-    <a href="https://github.com/RoyZhao1991/LingShu/releases/download/v0.1.0-alpha.9/LingShu-0.1.0-12-macOS-universal.dmg"><strong>下载已签名的 macOS Alpha</strong></a>
+    <a href="https://github.com/RoyZhao1991/LingShu/releases/download/v0.1.0-alpha.9/LingShu-0.1.0-12-macOS-universal.dmg"><strong>macOS 签名 Alpha</strong></a>
+    ·
+    <a href="https://github.com/RoyZhao1991/LingShu/releases/download/windows-v0.1.0-preview.2/LingShu-Windows-x64-Setup.exe"><strong>Windows x64 技术预览</strong></a>
     · <a href="#真实公开样例"><strong>检查真实样例</strong></a>
     · <a href="#快速开始">快速开始</a>
     · <a href="https://github.com/RoyZhao1991/LingShu/discussions">社区讨论</a>
@@ -41,13 +45,15 @@
 > [!IMPORTANT]
 > 灵枢仍处于 Alpha 阶段并在快速迭代。它会在获得明确的 macOS 授权后操作本地文件与应用。请确认权限范围，并为重要工作保留备份。
 
+Windows 技术预览与 macOS 版执行的是**同一个 `Runtime/LingShuCore::RuntimeKernel` 实现**：Windows 在 Tauri 后端直接构造，macOS 通过随 App 打包的 Rust 动态库链接。两端只有界面外壳和平台适配器不同，GoalSpec、队列、worker/checker、工具循环、人机续跑、产物、持久化和事件体系都不是复制实现。Windows 直接电脑操作与实时感知暂不开放。详见 [Windows 版说明](./Docs/WINDOWS.md)。
+
 ## 灵枢处在什么赛道
 
 Codex 与 Claude Code 定义了现代执行型编程 Agent 的标杆。灵枢与它们属于同一个 Agent 赛道，而不是聊天工具赛道；不同之处在于：灵枢把完整原生 App 与运行时以 Apache-2.0 开源，主脑可以替换，而且代码只是多种交付物之一。
 
 | 维度 | 灵枢 LingShu | OpenAI Codex | Claude Code |
 | --- | --- | --- | --- |
-| 主要产品定位 | macOS 通用执行：代码、Office 文档、本地电脑工作流 | 软件工程 | 软件工程 |
+| 主要产品定位 | macOS/Windows 上的代码与 Office 文档执行，以及 macOS 上经授权的电脑工作流 | 软件工程 | 软件工程 |
 | 公开开源范围 | 原生 App + Agent 运行时，Apache-2.0 | Codex CLI，Apache-2.0 | 官方仓库采用 All Rights Reserved |
 | 默认模型层 | 用户选择 OpenAI、Claude、DeepSeek、MiniMax 或兼容端点 | OpenAI 模型 | Claude 模型 |
 | 默认交付范围 | 代码、PPTX、DOCX、PDF、本地媒体与授权后的 Mac 操作 | 代码修改与工程任务 | 代码修改与工程任务 |
@@ -133,10 +139,10 @@ flowchart LR
 
 ### 环境要求
 
-- macOS 14 或更高版本
+- macOS 14 或更高版本；Windows 技术预览支持 Windows 10/11 x64
 - 一个受支持模型服务的 API Token，或自定义兼容端点
 
-### 安装已签名版本（推荐）
+### 在 macOS 安装（签名并公证）
 
 使用 [Homebrew](https://brew.sh/) 可同时安装 App 与 `lingshu` CLI：
 
@@ -157,6 +163,20 @@ brew install --cask RoyZhao1991/tap/lingshu
 4. 选择界面语言、连接模型服务商，并发送一个小型任务完成首次验证。
 
 公开 DMG 同时支持 Apple 芯片和 Intel Mac，使用 Developer ID 签名，已通过 Apple 公证并附加公证票据。只有在所选能力确实需要时再授予对应 macOS 权限。
+
+### 在 Windows 安装（技术预览）
+
+1. 下载 [LingShu-Windows-x64-Setup.exe](https://github.com/RoyZhao1991/LingShu/releases/download/windows-v0.1.0-preview.2/LingShu-Windows-x64-Setup.exe) 与 [SHA256SUMS.txt](https://github.com/RoyZhao1991/LingShu/releases/download/windows-v0.1.0-preview.2/SHA256SUMS.txt)。
+2. 在 PowerShell 中核对安装包：
+
+   ```powershell
+   Get-FileHash .\LingShu-Windows-x64-Setup.exe -Algorithm SHA256
+   Get-Content .\SHA256SUMS.txt
+   ```
+
+3. 运行安装程序，选择界面语言、连接模型服务商，再发送一条小请求完成首跑。
+
+Windows 技术预览直接运行与 macOS 完全相同的 Rust `RuntimeKernel`：单主任务串行、隔离子线程并行、可见的推理摘要与工具事件、人机阻断续跑、独立 checker、产物登记和内置预览。当前只明确不包含 Windows 电脑直接控制与实时音视频感知。首个预览版尚未使用 Authenticode 签名，Windows 可能显示 SmartScreen 提示；安装前请核对 Release 中公布的 SHA-256。完整边界见 [Windows 版说明](./Docs/WINDOWS.md)。
 
 ### 运行第一条可追踪任务
 
@@ -244,6 +264,7 @@ API 凭据保存在 macOS 钥匙串中，只属于本地运行配置，禁止提
 | 模块 | 状态 |
 | --- | --- |
 | 原生 macOS App 与 Agent 循环 | 持续开发中 |
+| Windows 桌面外壳 | 技术预览；共用内核、内置预览，暂不支持直接电脑操作 |
 | 多服务商主脑配置 | 已实现 |
 | 原生 Computer Use | 已实现；需用户明确授予 macOS 权限 |
 | PPT、文档与代码的端到端产物工作流 | 已实现 |

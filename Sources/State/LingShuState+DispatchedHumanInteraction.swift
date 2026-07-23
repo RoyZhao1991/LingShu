@@ -51,6 +51,13 @@ extension LingShuState {
 
     /// 气泡内的回答直达原隔离会话，并按恢复令牌接回精确的工作流或验收节点。
     func answerDispatchedTask(recordID: String, answer: String, displayAnswer: String? = nil) {
+        if answerSharedKernelTaskIfNeeded(
+            recordID: recordID,
+            answer: answer,
+            displayAnswer: displayAnswer
+        ) {
+            return
+        }
         let trimmed = answer.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         let interaction = pendingDispatchedHumanInteractions.removeValue(forKey: recordID)

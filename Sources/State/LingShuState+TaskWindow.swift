@@ -229,6 +229,7 @@ extension LingShuState {
     /// - 已卡住/待用户但不在编排器内的记录:直接收口成失败,避免窗口和队列长期悬挂。
     func stopTaskWindowRecord(_ recordID: String) {
         guard canStopTaskWindowRecord(recordID) else { return }
+        if stopSharedKernelTaskIfNeeded(recordID: recordID) { return }
         cancelledPipelineRecords.insert(recordID)   // **角色管线内联跑,靠这个标志在角色边界收口**(编排器 cancel 管不到它)
         if agentSubTaskRecords.values.contains(recordID) || dispatchedTaskBubbles[recordID] != nil {
             stopDispatchedTask(recordID: recordID)

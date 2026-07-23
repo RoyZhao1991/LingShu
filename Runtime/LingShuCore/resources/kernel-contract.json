@@ -1,0 +1,97 @@
+{
+  "abiVersion": "1.0.0",
+  "product": "LingShu",
+  "stateSchemaVersion": 1,
+  "contracts": [
+    {
+      "symbol": "LingShuAgentSessioning",
+      "role": "core_loop",
+      "frozenSurface": [
+        "isBlocked",
+        "turnsUsed",
+        "toolInvocations",
+        "messages",
+        "setTextDeltaSink",
+        "send",
+        "resume",
+        "continueLoop",
+        "injectCorrection",
+        "injectBriefing"
+      ]
+    },
+    {
+      "symbol": "LingShuAgentTool",
+      "role": "tool_abi",
+      "frozenSurface": ["name", "description", "parametersJSON", "handler"]
+    },
+    {
+      "symbol": "LingShuPluginToolProvider",
+      "role": "plugin_runner",
+      "frozenSurface": ["ToolSpec", "makeTools", "runRunner"]
+    },
+    {
+      "symbol": "LingShuExternalSensorySource",
+      "role": "sensory_input",
+      "frozenSurface": ["descriptor", "activate", "deactivate"]
+    },
+    {
+      "symbol": "LingShuPluginManifest",
+      "role": "plugin_permissions",
+      "frozenSurface": [
+        "id",
+        "name",
+        "version",
+        "providedTools",
+        "permissions",
+        "source",
+        "from",
+        "permissionSummary"
+      ]
+    }
+  ],
+  "goalSpecFields": [
+    "objective",
+    "kind",
+    "output_mode",
+    "reference_scope",
+    "reference_evidence",
+    "reference_explicit",
+    "reference_confidence",
+    "constraints",
+    "boundaries",
+    "risks",
+    "success_criteria",
+    "open_questions"
+  ],
+  "providerProtocols": [
+    "openai_responses",
+    "openai_chat_completions",
+    "anthropic_messages"
+  ],
+  "runtimeFeatures": [
+    "main_conversation",
+    "single_main_task_queue",
+    "goal_spec",
+    "task_threads",
+    "persistent_memory",
+    "attachments",
+    "artifact_registry",
+    "internal_preview",
+    "external_open",
+    "human_approval"
+  ],
+  "platformCapabilities": {
+    "windows": {
+      "computerControl": false,
+      "realtimePerception": false,
+      "internalPreview": true,
+      "externalOpen": true
+    },
+    "macos": {
+      "computerControl": true,
+      "realtimePerception": true,
+      "internalPreview": true,
+      "externalOpen": true
+    }
+  }
+}

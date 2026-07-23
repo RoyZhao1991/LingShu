@@ -74,6 +74,21 @@ enum LingShuRuntimeEnvironment {
 
     private static let processEnvironment = ProcessInfo.processInfo.environment
 
+    /// Production uses the cross-platform Rust kernel by default. XCTest keeps the legacy
+    /// state harness unless a bridge test opts in explicitly, so unit tests do not depend on
+    /// a prebuilt dylib or mutate the persisted runtime store.
+    static var usesSharedRuntimeKernel: Bool {
+        if processEnvironment["LINGSHU_DISABLE_SHARED_KERNEL"] == "1" { return false }
+        if processEnvironment["LINGSHU_ENABLE_SHARED_KERNEL"] == "1" { return true }
+        let runningTests = processEnvironment["XCTestConfigurationFilePath"] != nil
+            || processEnvironment["SWIFT_TESTING"] != nil
+            || ProcessInfo.processInfo.arguments.contains { argument in
+                argument.contains(".xctest") || argument.hasSuffix("xctest")
+            }
+            || NSClassFromString("XCTestCase") != nil
+        return !runningTests
+    }
+
     static let cleanUserSmoke: CleanUserSmokeConfiguration? = {
         guard processEnvironment["LINGSHU_CLEAN_USER_SMOKE"] == "1" else { return nil }
         do {

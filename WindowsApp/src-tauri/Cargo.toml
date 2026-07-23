@@ -1,0 +1,31 @@
+[package]
+name = "lingshu-windows"
+version = "0.1.0-2"
+description = "LingShu Windows desktop shell"
+authors = ["Roy Zhao"]
+license = "Apache-2.0"
+repository = "https://github.com/RoyZhao1991/LingShu"
+edition = "2021"
+
+[lib]
+name = "lingshu_windows_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.6", features = [] }
+
+[dependencies]
+lingshu-runtime-core = { path = "../../Runtime/LingShuCore" }
+dirs = "6"
+open = "5.3"
+serde = { version = "1", features = ["derive"] }
+tauri = { version = "2.11", features = [] }
+tauri-plugin-dialog = "2.7"
+tokio = { version = "1", features = ["sync"] }
+uuid = "1"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+keyring = { version = "3.6", default-features = false, features = ["windows-native"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+keyring = { version = "3.6", default-features = false, features = ["apple-native"] }

@@ -1,0 +1,113 @@
+name: Windows
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - "windows-v*"
+    paths:
+      - "WindowsApp/**"
+      - "Runtime/LingShuCore/**"
+      - "Runtime/Grok/crates/codegen/lingshu-grok-runtime/**"
+      - "Tests/LingShuMacTests/KernelABIContractTests.swift"
+      - ".github/workflows/windows.yml"
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "WindowsApp/**"
+      - "Runtime/LingShuCore/**"
+      - "Runtime/Grok/crates/codegen/lingshu-grok-runtime/**"
+      - "Tests/LingShuMacTests/KernelABIContractTests.swift"
+      - ".github/workflows/windows.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: windows-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Windows x64 installers
+    runs-on: windows-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: WindowsApp/package-lock.json
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: Install frontend dependencies
+        working-directory: WindowsApp
+        run: npm ci
+
+      - name: Verify shared runtime kernel
+        run: cargo test --manifest-path Runtime/LingShuCore/Cargo.toml
+
+      - name: Verify frontend
+        working-directory: WindowsApp
+        run: npm run build
+
+      - name: Build MSI and NSIS installers
+        working-directory: WindowsApp
+        run: npm run tauri -- build
+
+      - name: Collect installers and checksums
+        run: |
+          $bundle = Join-Path $env:GITHUB_WORKSPACE "WindowsApp/src-tauri/target/release/bundle"
+          $output = Join-Path $env:GITHUB_WORKSPACE "dist/windows"
+          New-Item -ItemType Directory -Force -Path $output | Out-Null
+          $msiInstallers = @(Get-ChildItem -Path $bundle -Recurse -File | Where-Object { $_.Extension -eq ".msi" })
+          $nsisInstallers = @(Get-ChildItem -Path $bundle -Recurse -File | Where-Object { $_.Name -like "*-setup.exe" })
+          if ($msiInstallers.Count -lt 1 -or $nsisInstallers.Count -ne 1) {
+            throw "Expected at least one MSI and exactly one NSIS installer; found $($msiInstallers.Count) MSI and $($nsisInstallers.Count) NSIS."
+          }
+          foreach ($installer in $msiInstallers) {
+            Copy-Item $installer.FullName -Destination $output
+          }
+          Copy-Item $nsisInstallers[0].FullName -Destination (Join-Path $output "LingShu-Windows-x64-Setup.exe")
+          $checksumLines = @(Get-ChildItem $output -File | ForEach-Object {
+            $hash = Get-FileHash $_.FullName -Algorithm SHA256
+            "$($hash.Hash.ToLower())  $($_.Name)"
+          })
+          $checksumPath = Join-Path $output "SHA256SUMS.txt"
+          $checksumText = ($checksumLines -join "`n") + "`n"
+          [System.IO.File]::WriteAllText($checksumPath, $checksumText, [System.Text.UTF8Encoding]::new($false))
+          Get-ChildItem $output -File | Format-Table Name, Length
+
+      - name: Upload Windows installers
+        uses: actions/upload-artifact@v4
+        with:
+          name: LingShu-Windows-x64
+          path: dist/windows/*
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish tagged Windows preview
+        if: startsWith(github.ref, 'refs/tags/windows-v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = "${{ github.ref_name }}"
+          gh release view $tag --repo $env:GITHUB_REPOSITORY *> $null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create $tag --repo $env:GITHUB_REPOSITORY --prerelease --title "LingShu Windows Technical Preview 0.1.0-2" --notes "Windows x64 technical preview built and tested on GitHub's Windows runner. It uses the shared LingShu runtime and adds built-in PDF text extraction, PDF attachment context, and structured capability recovery for scanned documents instead of stopping at 'no plugin'. It also preserves GoalSpec, the serialized main task, isolated child sessions, tool and reasoning progress, human-action resume, checker, artifact ledger, and built-in preview. Direct computer control and realtime audio/video perception are not included in this preview."
+          }
+          gh release upload $tag dist/windows/* --repo $env:GITHUB_REPOSITORY --clobber

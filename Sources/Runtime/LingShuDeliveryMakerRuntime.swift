@@ -61,6 +61,7 @@ enum LingShuEmbeddedGrokRuntimeError: LocalizedError, Sendable {
     case startFailed(Int32)
     case sendFailed(Int32)
     case invalidRuntimeMessage
+    case incompatibleKernel(String)
     case runtimeStopped
     case rpc(String)
 
@@ -71,6 +72,7 @@ enum LingShuEmbeddedGrokRuntimeError: LocalizedError, Sendable {
         case .startFailed(let code): "内嵌 Runtime 启动失败（\(code)）"
         case .sendFailed(let code): "向内嵌 Runtime 发送消息失败（\(code)）"
         case .invalidRuntimeMessage: "内嵌 Runtime 返回了无法解析的消息"
+        case .incompatibleKernel(let reason): "内嵌 Runtime 与灵枢内核 ABI 不兼容：\(reason)"
         case .runtimeStopped: "内嵌 Runtime 尚未启动"
         case .rpc(let message): message
         }
@@ -83,6 +85,7 @@ private typealias LingShuGrokSendFunction = @convention(c) (UnsafePointer<CChar>
 private typealias LingShuGrokStopFunction = @convention(c) () -> Void
 private typealias LingShuGrokRunningFunction = @convention(c) () -> Bool
 private typealias LingShuGrokVersionFunction = @convention(c) () -> UnsafePointer<CChar>?
+private typealias LingShuGrokKernelContractFunction = @convention(c) () -> UnsafePointer<CChar>?
 
 fileprivate final class LingShuEmbeddedGrokDynamicBridge: @unchecked Sendable {
     private let library: UnsafeMutableRawPointer
@@ -91,6 +94,7 @@ fileprivate final class LingShuEmbeddedGrokDynamicBridge: @unchecked Sendable {
     private let stopFunction: LingShuGrokStopFunction
     private let runningFunction: LingShuGrokRunningFunction
     private let versionFunction: LingShuGrokVersionFunction
+    private let kernelContractFunction: LingShuGrokKernelContractFunction
 
     init() throws {
         guard let loaded = Self.libraryCandidates().compactMap({ dlopen($0, RTLD_NOW | RTLD_LOCAL) }).first else {
@@ -102,6 +106,8 @@ fileprivate final class LingShuEmbeddedGrokDynamicBridge: @unchecked Sendable {
         stopFunction = try Self.load("lingshu_grok_runtime_stop", from: loaded)
         runningFunction = try Self.load("lingshu_grok_runtime_is_running", from: loaded)
         versionFunction = try Self.load("lingshu_grok_runtime_version", from: loaded)
+        kernelContractFunction = try Self.load("lingshu_grok_runtime_kernel_contract", from: loaded)
+        try validateKernelContract()
     }
 
     deinit { dlclose(library) }
@@ -111,6 +117,23 @@ fileprivate final class LingShuEmbeddedGrokDynamicBridge: @unchecked Sendable {
     }
 
     var isRunning: Bool { runningFunction() }
+
+    private func validateKernelContract() throws {
+        guard let pointer = kernelContractFunction(),
+              let data = String(cString: pointer).data(using: .utf8),
+              let object = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw LingShuEmbeddedGrokRuntimeError.invalidRuntimeMessage
+        }
+        guard object["abiVersion"] as? String == LingShuKernelABI.version else {
+            throw LingShuEmbeddedGrokRuntimeError.incompatibleKernel("ABI version mismatch")
+        }
+        let runtimeSymbols = (object["contracts"] as? [[String: Any]])?
+            .compactMap { $0["symbol"] as? String } ?? []
+        let appSymbols = LingShuKernelABI.contracts.map(\.symbol)
+        guard runtimeSymbols == appSymbols else {
+            throw LingShuEmbeddedGrokRuntimeError.incompatibleKernel("contract surface mismatch")
+        }
+    }
 
     func start(configuration: LingShuEmbeddedGrokStartConfiguration, callback: LingShuGrokEventCallback, context: UnsafeMutableRawPointer) throws {
         let data = try JSONEncoder().encode(configuration)
