@@ -44,6 +44,11 @@ enum LingShuKernelProviderProtocol: String, Codable, Sendable {
     case anthropicMessages = "anthropic_messages"
 }
 
+enum LingShuKernelExecutionPermissionMode: String, Codable, Sendable {
+    case sandbox
+    case fullAccess = "full_access"
+}
+
 struct LingShuKernelRuntimeSettings: Codable, Sendable, Equatable {
     var locale: LingShuKernelLocale
     var providerId: String
@@ -52,6 +57,7 @@ struct LingShuKernelRuntimeSettings: Codable, Sendable, Equatable {
     var endpoint: String
     var model: String
     var workspace: String
+    var executionPermissionMode: LingShuKernelExecutionPermissionMode
     var firstRunComplete: Bool
 }
 

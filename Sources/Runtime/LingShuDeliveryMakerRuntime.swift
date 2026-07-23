@@ -417,6 +417,7 @@ final class LingShuEmbeddedGrokRuntime: ObservableObject {
         role: LingShuEmbeddedAgentRole,
         workingDirectory: String,
         modelID: String,
+        permissionMode: LingShuExecutionPermissionMode,
         systemPrompt: String,
         initialMessages: [LingShuAgentMessage] = [],
         eventSink: @escaping @Sendable (LingShuGrokRuntimeEvent) async -> Void
@@ -427,6 +428,7 @@ final class LingShuEmbeddedGrokRuntime: ObservableObject {
             role: role,
             workingDirectory: workingDirectory,
             modelID: modelID,
+            permissionMode: permissionMode,
             systemPrompt: systemPrompt,
             initialMessages: initialMessages,
             client: client,

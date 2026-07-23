@@ -416,7 +416,7 @@ impl RuntimeKernel {
                     tool_call_id: None,
                 });
             }
-            let definitions = tool_definitions(task.depth);
+            let definitions = tool_definitions(task.depth, settings.execution_permission_mode);
             let mut signatures: Vec<String> = Vec::new();
             let mut last_text = String::new();
             for turn_index in 1..=MAX_AGENT_TURNS {
@@ -807,7 +807,13 @@ impl RuntimeKernel {
             }
             "run_command" => {
                 let args = parse_arguments::<CommandArguments>(&call)?;
-                run_local_command(&settings.workspace, &args.command, args.timeout_seconds).await?
+                run_local_command(
+                    &settings.workspace,
+                    &args.command,
+                    args.timeout_seconds,
+                    settings.execution_permission_mode,
+                )
+                .await?
             }
             "spawn_task" => {
                 let args = parse_arguments::<SpawnArguments>(&call)?;
@@ -1291,8 +1297,11 @@ fn initial_session_messages(
         capabilities.external_open
     );
     let system = format!(
-        "{}\nYou are LingShu, an open-model agent runtime. Work in a continuous agent loop: understand the accepted GoalSpec, use tools, inspect their real results, adapt, and only then answer. For a chat_reply, answer in the current model turn unless a tool is genuinely needed. For independent work, call spawn_task; child sessions are isolated and their summaries return as tool results. Use update_plan for multi-step delivery. Use create_artifact for Word/PowerPoint/Markdown/HTML deliverables so they are registered and previewable. Never claim an operation or artifact succeeded without a tool result. A missing plugin is not a final answer: first try built-in tools, inspect the local environment, compose a safe fallback, or acquire the smallest suitable capability. When installation, credentials, authorization, payment, login, or a physical action is genuinely required, use ask_user with the exact requirement and continue from the same point after approval. Never silently install untrusted code. Final output must be user-facing Markdown, never an internal JSON wrapper. Do not expose hidden chain-of-thought; concise progress and tool evidence are visible in the execution timeline. {capability_context} Child depth: {depth}/{MAX_CHILD_DEPTH}.\nAccepted GoalSpec:\n{}",
+        "{}\n{}\nYou are LingShu, an open-model agent runtime. Work in a continuous agent loop: understand the accepted GoalSpec, use tools, inspect their real results, adapt, and only then answer. For a chat_reply, answer in the current model turn unless a tool is genuinely needed. For independent work, call spawn_task; child sessions are isolated and their summaries return as tool results. Use update_plan for multi-step delivery. Use create_artifact for Word/PowerPoint/Markdown/HTML deliverables so they are registered and previewable. Never claim an operation or artifact succeeded without a tool result. A missing plugin is not a final answer: first try built-in tools, inspect the local environment, compose a safe fallback, or acquire the smallest suitable capability. When installation, credentials, authorization, payment, login, or a physical action is genuinely required, use ask_user with the exact requirement and continue from the same point after approval. If a tool returns needs_user_action, do not retry it blindly; use ask_user and explain the exact blocked capability. Never silently install untrusted code. Final output must be user-facing Markdown, never an internal JSON wrapper. Do not expose hidden chain-of-thought; concise progress and tool evidence are visible in the execution timeline. {capability_context} Child depth: {depth}/{MAX_CHILD_DEPTH}.\nAccepted GoalSpec:\n{}",
         settings.locale.language_directive(),
+        settings
+            .execution_permission_mode
+            .prompt_directive(settings.locale),
         serde_json::to_string_pretty(goal).map_err(|error| EngineError::InvalidModelJson(error.to_string()))?
     );
     let mut messages = vec![AgentMessage {
@@ -1328,7 +1337,18 @@ fn initial_session_messages(
     Ok(messages)
 }
 
-fn tool_definitions(depth: u8) -> Vec<AgentToolDefinition> {
+fn tool_definitions(
+    depth: u8,
+    permission_mode: ExecutionPermissionMode,
+) -> Vec<AgentToolDefinition> {
+    let command_description = match permission_mode {
+        ExecutionPermissionMode::Sandbox => {
+            "Run a local command with the Workspace as working directory. Network access and writes outside the Workspace require user authorization; a blocked result contains needs_user_action. This is terminal execution, not computer UI control."
+        }
+        ExecutionPermissionMode::FullAccess => {
+            "Run a local command with the Workspace as working directory. Full access is already authorized for local commands, network access, dependency installation, and paths outside the Workspace. This is terminal execution, not computer UI control."
+        }
+    };
     let mut tools = vec![
         tool("update_plan", "Create or update the visible execution plan. Keep exactly one item in_progress.", json!({"type":"object","properties":{"items":{"type":"array","items":{"type":"object","properties":{"title":{"type":"string"},"detail":{"type":"string"},"status":{"type":"string","enum":["pending","in_progress","completed"]}},"required":["title","status"]}}},"required":["items"]})),
         tool("read_file", "Read text and extract embedded text from PDF, DOCX, and PPTX files in the Workspace or current task attachments. Text PDFs need no plugin. A scanned PDF returns a structured OCR capability gap so you can recover instead of stopping.", json!({"type":"object","properties":{"path":{"type":"string"}},"required":["path"]})),
@@ -1336,7 +1356,7 @@ fn tool_definitions(depth: u8) -> Vec<AgentToolDefinition> {
         tool("write_file", "Write a UTF-8 text file inside LingShu's Workspace. Use create_artifact for Office deliverables.", json!({"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"}},"required":["path","content"]})),
         tool("create_artifact", "Create and register a previewable Markdown, text, JSON, HTML, Word (.docx), or PowerPoint (.pptx) artifact.", json!({"type":"object","properties":{"title":{"type":"string"},"file_name":{"type":"string"},"kind":{"type":"string","enum":["markdown","text","json","html","docx","pptx"]},"content":{"type":"string"},"slides":{"type":"array","items":{"type":"object","properties":{"title":{"type":"string"},"bullets":{"type":"array","items":{"type":"string"}},"notes":{"type":"string"}},"required":["title"]}}},"required":["title","file_name","kind"]})),
         tool("register_artifact", "Register an existing Workspace file as a task artifact after verifying it exists.", json!({"type":"object","properties":{"path":{"type":"string"}},"required":["path"]})),
-        tool("run_command", "Run a local command with the Workspace as working directory. This is terminal execution, not computer UI control.", json!({"type":"object","properties":{"command":{"type":"string"},"timeout_seconds":{"type":"integer","minimum":1,"maximum":300}},"required":["command"]})),
+        tool("run_command", command_description, json!({"type":"object","properties":{"command":{"type":"string"},"timeout_seconds":{"type":"integer","minimum":1,"maximum":300}},"required":["command"]})),
         tool("ask_user", "Pause this exact session when human input, authorization, login, scanning, or a physical action is required.", json!({"type":"object","properties":{"prompt":{"type":"string"}},"required":["prompt"]})),
     ];
     if depth < MAX_CHILD_DEPTH {
@@ -1445,7 +1465,21 @@ async fn run_local_command(
     workspace: &Path,
     command: &str,
     timeout_seconds: Option<u64>,
+    permission_mode: ExecutionPermissionMode,
 ) -> Result<String, EngineError> {
+    if permission_mode == ExecutionPermissionMode::Sandbox {
+        if let Some((capability, reason)) = sandbox_permission_requirement(command) {
+            return Ok(json!({
+                "ok": false,
+                "needs_user_action": true,
+                "permission_mode": permission_mode.as_str(),
+                "required_capability": capability,
+                "reason": reason,
+                "recovery": "Ask the user to switch this session to Full Access, then resume from the same task checkpoint."
+            })
+            .to_string());
+        }
+    }
     let timeout_seconds = timeout_seconds.unwrap_or(120).clamp(1, 300);
     #[cfg(target_os = "windows")]
     let mut process = {
@@ -1467,6 +1501,19 @@ async fn run_local_command(
     };
     process
         .current_dir(workspace)
+        .env(
+            "LINGSHU_EXECUTION_PERMISSION_MODE",
+            permission_mode.as_str(),
+        )
+        .env(
+            "LINGSHU_NETWORK_ACCESS",
+            if permission_mode == ExecutionPermissionMode::FullAccess {
+                "allowed"
+            } else {
+                "restricted"
+            },
+        )
+        .env("LINGSHU_WORKSPACE", workspace)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -1477,11 +1524,64 @@ async fn run_local_command(
         })?
         .map_err(|error| EngineError::LocalOperation(error.to_string()))?;
     Ok(json!({
+        "ok":output.status.success(),
+        "permission_mode":permission_mode.as_str(),
         "exit_code":output.status.code(),
         "stdout":truncate(&String::from_utf8_lossy(&output.stdout), 40_000),
         "stderr":truncate(&String::from_utf8_lossy(&output.stderr), 20_000)
     })
     .to_string())
+}
+
+fn sandbox_permission_requirement(command: &str) -> Option<(&'static str, &'static str)> {
+    let lower = command.to_ascii_lowercase();
+    let network_markers = [
+        "http://",
+        "https://",
+        "ftp://",
+        "curl ",
+        "wget ",
+        "invoke-webrequest",
+        "invoke-restmethod",
+        "start-bitstransfer",
+        "git clone",
+        "git fetch",
+        "git pull",
+        "npm install",
+        "pnpm install",
+        "yarn install",
+        "pip install",
+        "pip3 install",
+        "cargo install",
+        "ssh ",
+        "scp ",
+    ];
+    if network_markers.iter().any(|marker| lower.contains(marker)) {
+        return Some((
+            "network",
+            "Sandbox mode does not authorize network access for local commands.",
+        ));
+    }
+
+    let outside_workspace_markers = [
+        "../",
+        "..\\",
+        "~/",
+        "$home",
+        "${home}",
+        "%userprofile%",
+        "$env:userprofile",
+    ];
+    if outside_workspace_markers
+        .iter()
+        .any(|marker| lower.contains(marker))
+    {
+        return Some((
+            "filesystem_outside_workspace",
+            "Sandbox mode does not authorize filesystem access outside the Workspace.",
+        ));
+    }
+    None
 }
 
 fn artifact_record_for_path(path: &Path) -> Result<ArtifactRecord, EngineError> {
@@ -1910,6 +2010,132 @@ mod tests {
         assert!(resolve_workspace_path(workspace, "reports/result.md").is_ok());
     }
 
+    #[tokio::test]
+    async fn sandbox_blocks_parent_write_but_full_access_propagates_to_the_process() {
+        let root = tempdir().unwrap();
+        let workspace = root.path().join("Workspace");
+        std::fs::create_dir_all(&workspace).unwrap();
+        let marker = root.path().join("Outside").join("permission.txt");
+
+        #[cfg(target_os = "windows")]
+        let command = r#"New-Item -ItemType Directory -Force ..\Outside | Out-Null; "$env:LINGSHU_EXECUTION_PERMISSION_MODE`:$env:LINGSHU_NETWORK_ACCESS" | Set-Content -NoNewline ..\Outside\permission.txt"#;
+        #[cfg(not(target_os = "windows"))]
+        let command = r#"mkdir -p ../Outside && printf '%s:%s' "$LINGSHU_EXECUTION_PERMISSION_MODE" "$LINGSHU_NETWORK_ACCESS" > ../Outside/permission.txt"#;
+
+        let blocked = run_local_command(
+            &workspace,
+            command,
+            Some(10),
+            ExecutionPermissionMode::Sandbox,
+        )
+        .await
+        .unwrap();
+        let blocked: Value = serde_json::from_str(&blocked).unwrap();
+        assert_eq!(blocked["needs_user_action"], true);
+        assert_eq!(
+            blocked["required_capability"],
+            "filesystem_outside_workspace"
+        );
+        assert!(!marker.exists());
+
+        let allowed = run_local_command(
+            &workspace,
+            command,
+            Some(10),
+            ExecutionPermissionMode::FullAccess,
+        )
+        .await
+        .unwrap();
+        let allowed: Value = serde_json::from_str(&allowed).unwrap();
+        assert_eq!(allowed["ok"], true);
+        assert_eq!(allowed["permission_mode"], "full_access");
+        assert_eq!(
+            std::fs::read_to_string(marker).unwrap(),
+            "full_access:allowed"
+        );
+    }
+
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
+    #[tokio::test]
+    async fn full_access_permits_a_real_local_network_request() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            let started = Instant::now();
+            while started.elapsed() < Duration::from_secs(5) {
+                match listener.accept() {
+                    Ok((mut stream, _)) => {
+                        stream.set_nonblocking(false).unwrap();
+                        stream
+                            .set_read_timeout(Some(Duration::from_secs(2)))
+                            .unwrap();
+                        let mut request = Vec::new();
+                        let mut chunk = [0_u8; 1_024];
+                        while !request.windows(4).any(|window| window == b"\r\n\r\n") {
+                            let read = stream.read(&mut chunk).unwrap();
+                            assert!(read > 0, "request ended before its headers");
+                            request.extend_from_slice(&chunk[..read]);
+                        }
+                        let response = b"HTTP/1.1 200 OK\r\nContent-Length: 13\r\nConnection: close\r\n\r\npermission-ok";
+                        stream.write_all(response).unwrap();
+                        stream.flush().unwrap();
+                        return true;
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(_) => return false,
+                }
+            }
+            false
+        });
+        let workspace = tempdir().unwrap();
+        let url = format!("http://{address}");
+        let marker = workspace.path().join("network-permission.txt");
+
+        #[cfg(target_os = "windows")]
+        let command = format!(
+            "$response = Invoke-WebRequest -UseBasicParsing '{url}'; \
+             if ($response.StatusCode -ne 200) {{ exit 1 }}; \
+             [System.IO.File]::WriteAllText((Join-Path (Get-Location) 'network-permission.txt'), \
+             'permission-ok', [System.Text.Encoding]::ASCII)"
+        );
+        #[cfg(target_os = "macos")]
+        let command = format!("/usr/bin/curl -fsS '{url}' > network-permission.txt");
+
+        let output = run_local_command(
+            workspace.path(),
+            &command,
+            Some(10),
+            ExecutionPermissionMode::FullAccess,
+        )
+        .await
+        .unwrap();
+        let output: Value = serde_json::from_str(&output).unwrap();
+        assert_eq!(output["ok"], true);
+        assert_eq!(output["permission_mode"], "full_access");
+        assert_eq!(std::fs::read_to_string(marker).unwrap(), "permission-ok");
+        assert!(server.join().unwrap());
+    }
+
+    #[tokio::test]
+    async fn sandbox_reports_network_authorization_instead_of_platform_unavailability() {
+        let workspace = tempdir().unwrap();
+        let output = run_local_command(
+            workspace.path(),
+            "curl https://example.com",
+            Some(10),
+            ExecutionPermissionMode::Sandbox,
+        )
+        .await
+        .unwrap();
+        let output: Value = serde_json::from_str(&output).unwrap();
+        assert_eq!(output["needs_user_action"], true);
+        assert_eq!(output["required_capability"], "network");
+        assert!(output["recovery"].as_str().unwrap().contains("Full Access"));
+    }
+
     #[test]
     fn simple_questions_keep_the_full_agent_contract_without_forcing_tools() {
         let goal = GoalSpec {
@@ -1927,14 +2153,14 @@ mod tests {
             open_questions: Vec::new(),
         };
         assert!(!should_run_checker(&goal, &None));
-        assert!(tool_definitions(0)
+        assert!(tool_definitions(0, ExecutionPermissionMode::Sandbox)
             .iter()
             .any(|tool| tool.name == "spawn_task"));
     }
 
     #[test]
     fn read_file_tool_advertises_builtin_document_extraction() {
-        let tool = tool_definitions(0)
+        let tool = tool_definitions(0, ExecutionPermissionMode::Sandbox)
             .into_iter()
             .find(|tool| tool.name == "read_file")
             .expect("read_file tool must exist");

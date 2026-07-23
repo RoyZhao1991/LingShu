@@ -29,6 +29,40 @@ pub enum ProviderProtocol {
     AnthropicMessages,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ExecutionPermissionMode {
+    #[default]
+    Sandbox,
+    FullAccess,
+}
+
+impl ExecutionPermissionMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Sandbox => "sandbox",
+            Self::FullAccess => "full_access",
+        }
+    }
+
+    pub fn prompt_directive(self, locale: AppLocale) -> &'static str {
+        match (self, locale) {
+            (Self::Sandbox, AppLocale::ZhCn) => {
+                "当前执行权限：sandbox。工作目录外写入和联网操作尚未获授权；确有必要时使用 ask_user 明确说明所需权限，不得把它误报为平台永久不支持。"
+            }
+            (Self::Sandbox, AppLocale::En) => {
+                "Execution permission: sandbox. Network access and writes outside the Workspace are not authorized. If genuinely required, use ask_user to request the exact permission; never misreport this as a permanent platform limitation."
+            }
+            (Self::FullAccess, AppLocale::ZhCn) => {
+                "当前执行权限：full_access。用户已预先授权本会话使用本地命令、联网、安装依赖和访问工作目录外路径；不得仅因这些操作再次索要权限，也不得声称沙箱阻止了网络。登录、凭据、付款、物理操作和操作系统隐私授权仍需用户参与。"
+            }
+            (Self::FullAccess, AppLocale::En) => {
+                "Execution permission: full_access. The user has pre-authorized local commands, network access, dependency installation, and paths outside the Workspace for this session. Do not ask again solely for those operations or claim that a sandbox blocks networking. Login, credentials, payment, physical actions, and OS privacy grants still require the user."
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct RuntimeSettings {
@@ -39,6 +73,8 @@ pub struct RuntimeSettings {
     pub endpoint: String,
     pub model: String,
     pub workspace: PathBuf,
+    #[serde(default)]
+    pub execution_permission_mode: ExecutionPermissionMode,
     pub first_run_complete: bool,
 }
 
@@ -55,6 +91,7 @@ impl Default for RuntimeSettings {
             endpoint: "https://api.deepseek.com".into(),
             model: "deepseek-chat".into(),
             workspace,
+            execution_permission_mode: ExecutionPermissionMode::Sandbox,
             first_run_complete: false,
         }
     }
@@ -387,4 +424,29 @@ pub struct TaskCompletion {
     pub reply: String,
     #[serde(default)]
     pub artifacts: Vec<ArtifactSpec>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn legacy_settings_without_permission_mode_default_to_sandbox() {
+        let settings: RuntimeSettings = serde_json::from_value(serde_json::json!({
+            "locale": "en",
+            "providerId": "legacy-provider",
+            "providerName": "Legacy Provider",
+            "protocol": "openai_chat_completions",
+            "endpoint": "https://example.invalid/v1",
+            "model": "legacy-model",
+            "workspace": "/tmp/lingshu-legacy",
+            "firstRunComplete": true
+        }))
+        .expect("legacy settings should remain readable");
+
+        assert_eq!(
+            settings.execution_permission_mode,
+            ExecutionPermissionMode::Sandbox
+        );
+    }
 }

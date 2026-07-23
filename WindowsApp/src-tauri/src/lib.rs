@@ -1,6 +1,6 @@
 use lingshu_runtime_core::{
-    preview_file, provider_catalog, PreviewPayload, ProviderPreset, RuntimeKernel, RuntimeSettings,
-    RuntimeSnapshot, RuntimeStore, SubmitReceipt,
+    preview_file, provider_catalog, ExecutionPermissionMode, PreviewPayload, ProviderPreset,
+    RuntimeKernel, RuntimeSettings, RuntimeSnapshot, RuntimeStore, SubmitReceipt,
 };
 use serde::Serialize;
 use std::path::PathBuf;
@@ -104,6 +104,25 @@ async fn save_and_validate_settings(
     if let Some(value) = supplied.as_deref() {
         save_api_key(&settings.provider_id, value)?;
     }
+    state
+        .kernel
+        .store()
+        .update_settings(settings.clone())
+        .await
+        .map_err(|error| error.to_string())?;
+    Ok(state
+        .kernel
+        .snapshot(is_provider_configured(&settings).await)
+        .await)
+}
+
+#[tauri::command]
+async fn update_execution_permission_mode(
+    state: State<'_, AppState>,
+    mode: ExecutionPermissionMode,
+) -> Result<RuntimeSnapshot, String> {
+    let mut settings = state.kernel.store().settings().await;
+    settings.execution_permission_mode = mode;
     state
         .kernel
         .store()
@@ -244,6 +263,7 @@ pub fn run() {
             bootstrap,
             get_snapshot,
             save_and_validate_settings,
+            update_execution_permission_mode,
             submit_message,
             cancel_task,
             resume_task,

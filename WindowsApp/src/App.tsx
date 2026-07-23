@@ -9,7 +9,7 @@ import {
 import { strings } from "./i18n";
 import { chooseFiles, runtimeInvoke } from "./bridge";
 import type {
-  ArtifactRecord, Locale, Page, PreviewPayload, ProviderPreset, RuntimeSettings,
+  ArtifactRecord, ExecutionPermissionMode, Locale, Page, PreviewPayload, ProviderPreset, RuntimeSettings,
   RuntimeEvent, RuntimeSnapshot, TaskRecord, TaskRole, TaskStatus,
 } from "./types";
 
@@ -30,6 +30,7 @@ export default function App() {
   const [settingsDraft, setSettingsDraft] = useState<RuntimeSettings>();
   const [apiKey, setApiKey] = useState("");
   const [validating, setValidating] = useState(false);
+  const [permissionUpdating, setPermissionUpdating] = useState(false);
   const [actionAnswer, setActionAnswer] = useState("");
   const [resuming, setResuming] = useState(false);
   const messagesEnd = useRef<HTMLDivElement>(null);
@@ -131,6 +132,21 @@ export default function App() {
     }
   };
 
+  const updateExecutionPermission = async (mode: ExecutionPermissionMode) => {
+    if (!snapshot || permissionUpdating || snapshot.settings.executionPermissionMode === mode) return;
+    setPermissionUpdating(true);
+    setError("");
+    try {
+      const next = await runtimeInvoke<RuntimeSnapshot>("update_execution_permission_mode", { mode });
+      setSnapshot(next);
+      setSettingsDraft((draft) => draft ? { ...draft, executionPermissionMode: next.settings.executionPermissionMode } : next.settings);
+    } catch (reason) {
+      setError(String(reason));
+    } finally {
+      setPermissionUpdating(false);
+    }
+  };
+
   const resumeAction = async () => {
     if (!actionTask || resuming || !actionAnswer.trim()) return;
     setResuming(true);
@@ -212,6 +228,7 @@ export default function App() {
                 onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); event.currentTarget.form?.requestSubmit(); } }} />
               <div className="composer-actions">
                 <button type="button" className="icon-button" title={t.attach} onClick={chooseAttachments}><Paperclip /></button>
+                <PermissionSelector mode={snapshot.settings.executionPermissionMode} locale={locale} compact disabled={permissionUpdating} onChange={updateExecutionPermission} />
                 <span className="channel-state"><span className={snapshot.providerConfigured ? "dot good" : "dot"} />{snapshot.settings.providerName} · {snapshot.settings.model}</span>
                 {activeTask ? (
                   <button type="button" className="stop-button" onClick={() => void runtimeInvoke("cancel_task", { threadId: activeTask.id }).then(refresh)}><Square size={16} />{t.stop}</button>
@@ -231,13 +248,15 @@ export default function App() {
 
         {page === "settings" && (
           <SettingsPage draft={settingsDraft} providers={providers} apiKey={apiKey} locale={locale} validating={validating}
-            connected={snapshot.providerConfigured} onDraft={setSettingsDraft} onApiKey={setApiKey} onProvider={selectProvider} onSave={saveSettings} />
+            permissionUpdating={permissionUpdating} connected={snapshot.providerConfigured} onDraft={setSettingsDraft} onApiKey={setApiKey}
+            onProvider={selectProvider} onPermission={updateExecutionPermission} onSave={saveSettings} />
         )}
       </main>
 
       {setupRequired && (
-        <SetupDialog draft={settingsDraft} providers={providers} apiKey={apiKey} locale={locale} validating={validating} error={error}
-          onDraft={setSettingsDraft} onApiKey={setApiKey} onProvider={selectProvider} onSave={saveSettings} />
+        <SetupDialog draft={settingsDraft} providers={providers} apiKey={apiKey} locale={locale} validating={validating}
+          permissionUpdating={permissionUpdating} error={error} onDraft={setSettingsDraft} onApiKey={setApiKey}
+          onProvider={selectProvider} onPermission={updateExecutionPermission} onSave={saveSettings} />
       )}
       {preview && <PreviewDialog payload={preview} locale={locale} onClose={() => setPreview(undefined)} />}
       {actionTask && (
@@ -330,7 +349,9 @@ function StatusPage({ snapshot, locale }: { snapshot: RuntimeSnapshot; locale: L
 
 interface SettingsProps {
   draft: RuntimeSettings; providers: ProviderPreset[]; apiKey: string; locale: Locale; validating: boolean; connected?: boolean;
-  onDraft: (settings: RuntimeSettings) => void; onApiKey: (key: string) => void; onProvider: (id: string) => void; onSave: () => void;
+  permissionUpdating: boolean;
+  onDraft: (settings: RuntimeSettings) => void; onApiKey: (key: string) => void; onProvider: (id: string) => void;
+  onPermission: (mode: ExecutionPermissionMode) => void; onSave: () => void;
 }
 
 function SettingsPage(props: SettingsProps) {
@@ -341,7 +362,7 @@ function SettingsPage(props: SettingsProps) {
   </section>;
 }
 
-function SettingsForm({ draft, providers, apiKey, locale, validating, onDraft, onApiKey, onProvider, onSave }: SettingsProps) {
+function SettingsForm({ draft, providers, apiKey, locale, validating, permissionUpdating, onDraft, onApiKey, onProvider, onPermission, onSave }: SettingsProps) {
   const t = strings(locale);
   const selected = providers.find((provider) => provider.id === draft.providerId);
   return <div className="settings-form">
@@ -351,8 +372,27 @@ function SettingsForm({ draft, providers, apiKey, locale, validating, onDraft, o
     <label>{t.endpoint}<input value={draft.endpoint} onChange={(event) => onDraft({ ...draft, endpoint: event.target.value })} /></label>
     <label>{t.token}<input type="password" value={apiKey} placeholder="••••••••••••••••" onChange={(event) => onApiKey(event.target.value)} /><small>{t.apiHint}</small></label>
     <label>{t.workspace}<input value={draft.workspace} onChange={(event) => onDraft({ ...draft, workspace: event.target.value })} /></label>
+    <label>{t.executionPermission}
+      <PermissionSelector mode={draft.executionPermissionMode} locale={locale} disabled={permissionUpdating} onChange={onPermission} />
+      <small>{draft.executionPermissionMode === "full_access" ? t.fullAccessHint : t.sandboxHint}</small>
+    </label>
     <button className="primary-command" onClick={onSave} disabled={validating}>{validating ? <LoaderCircle className="spin" /> : <Play />}{validating ? t.validating : t.saveValidate}</button>
   </div>;
+}
+
+function PermissionSelector({ mode, locale, compact = false, disabled, onChange }: {
+  mode: ExecutionPermissionMode; locale: Locale; compact?: boolean; disabled: boolean;
+  onChange: (mode: ExecutionPermissionMode) => void;
+}) {
+  const t = strings(locale);
+  return <span className={`permission-selector ${compact ? "compact" : ""} ${mode === "full_access" ? "full" : ""}`}>
+    <ShieldCheck />
+    <select aria-label={t.executionPermission} value={mode} disabled={disabled}
+      onChange={(event) => onChange(event.target.value as ExecutionPermissionMode)}>
+      <option value="sandbox">{t.sandbox}</option>
+      <option value="full_access">{t.fullAccess}</option>
+    </select>
+  </span>;
 }
 
 function SetupDialog(props: SettingsProps & { error: string }) {

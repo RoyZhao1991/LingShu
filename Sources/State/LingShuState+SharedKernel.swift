@@ -39,6 +39,7 @@ extension LingShuState {
             endpoint: endpoint,
             model: modelName,
             workspace: agentWorkingDirectory,
+            executionPermissionMode: executionPermissionMode == .fullAccess ? .fullAccess : .sandbox,
             firstRunComplete: true
         )
     }

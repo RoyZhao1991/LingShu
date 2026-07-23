@@ -25,6 +25,7 @@ final class SharedKernelRuntimeBridgeTests: XCTestCase {
                     endpoint: "http://127.0.0.1:9",
                     model: "mock-agent",
                     workspace: workspace.path,
+                    executionPermissionMode: .fullAccess,
                     firstRunComplete: true
                 ),
                 apiKey: nil,
@@ -42,6 +43,7 @@ final class SharedKernelRuntimeBridgeTests: XCTestCase {
             XCTAssertEqual(snapshot.settings.providerId, "bridge-test")
             XCTAssertEqual(snapshot.settings.protocol, .openAIResponses)
             XCTAssertEqual(snapshot.settings.workspace, workspace.path)
+            XCTAssertEqual(snapshot.settings.executionPermissionMode, .fullAccess)
             XCTAssertFalse(snapshot.providerConfigured)
             XCTAssertEqual(snapshot.queuedTaskCount, 0)
         } catch {

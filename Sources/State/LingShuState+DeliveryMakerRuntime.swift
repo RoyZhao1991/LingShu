@@ -51,6 +51,7 @@ extension LingShuState {
             role: role,
             workingDirectory: workingDirectory,
             modelID: "lingshu-active",
+            permissionMode: executionPermissionMode,
             systemPrompt: systemPrompt,
             initialMessages: initialMessages,
             eventSink: { [weak self] event in
@@ -130,7 +131,15 @@ extension LingShuState {
         return .init(
             grokHome: home.path,
             configToml: toml,
-            environment: [:]
+            environment: [
+                "LINGSHU_EXECUTION_PERMISSION_MODE": executionPermissionMode == .fullAccess
+                    ? "full_access"
+                    : "sandbox",
+                "LINGSHU_NETWORK_ACCESS": executionPermissionMode == .fullAccess
+                    ? "allowed"
+                    : "restricted",
+                "LINGSHU_WORKSPACE": agentWorkingDirectory,
+            ]
         )
     }
 
