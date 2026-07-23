@@ -732,10 +732,41 @@ impl RuntimeKernel {
                 let args = parse_arguments::<PathArguments>(&call)?;
                 let path =
                     resolve_read_path(&settings.workspace, &task.attachment_paths, &args.path)?;
-                let content = tokio::fs::read_to_string(&path)
-                    .await
+                let preview = preview_file(&path)
                     .map_err(|error| EngineError::LocalOperation(error.to_string()))?;
-                json!({"path":path,"content":truncate(&content, 80_000)}).to_string()
+                let extracted_text = if preview.kind == PreviewKind::Unsupported {
+                    tokio::fs::read_to_string(&path).await.ok()
+                } else {
+                    readable_preview_text(&preview)
+                };
+                match extracted_text {
+                    Some(content) => json!({
+                        "ok":true,
+                        "path":path,
+                        "kind":preview.kind,
+                        "content":truncate(&content, 80_000),
+                        "section_count":preview.sections.len()
+                    })
+                    .to_string(),
+                    None if preview.kind == PreviewKind::Pdf => json!({
+                        "ok":false,
+                        "path":path,
+                        "kind":"pdf",
+                        "error":"The PDF has no extractable embedded text. OCR is required.",
+                        "missing_capability":"document_ocr",
+                        "recovery":"Inspect available tools and local software first. If OCR installation is required, ask for that exact installation approval and continue after approval; do not stop at 'no plugin'."
+                    })
+                    .to_string(),
+                    None => json!({
+                        "ok":false,
+                        "path":path,
+                        "kind":preview.kind,
+                        "error":"This binary file has no locally extractable text.",
+                        "missing_capability":"binary_document_understanding",
+                        "recovery":"Inspect available tools and compose a safe fallback. Ask the user only for an unavoidable installation, credential, authorization, or physical action."
+                    })
+                    .to_string(),
+                }
             }
             "list_files" => {
                 let args = parse_arguments::<ListArguments>(&call)?;
@@ -1260,7 +1291,7 @@ fn initial_session_messages(
         capabilities.external_open
     );
     let system = format!(
-        "{}\nYou are LingShu, an open-model agent runtime. Work in a continuous agent loop: understand the accepted GoalSpec, use tools, inspect their real results, adapt, and only then answer. For a chat_reply, answer in the current model turn unless a tool is genuinely needed. For independent work, call spawn_task; child sessions are isolated and their summaries return as tool results. Use update_plan for multi-step delivery. Use create_artifact for Word/PowerPoint/Markdown/HTML deliverables so they are registered and previewable. Never claim an operation or artifact succeeded without a tool result. Final output must be user-facing Markdown, never an internal JSON wrapper. Do not expose hidden chain-of-thought; concise progress and tool evidence are visible in the execution timeline. {capability_context} Child depth: {depth}/{MAX_CHILD_DEPTH}.\nAccepted GoalSpec:\n{}",
+        "{}\nYou are LingShu, an open-model agent runtime. Work in a continuous agent loop: understand the accepted GoalSpec, use tools, inspect their real results, adapt, and only then answer. For a chat_reply, answer in the current model turn unless a tool is genuinely needed. For independent work, call spawn_task; child sessions are isolated and their summaries return as tool results. Use update_plan for multi-step delivery. Use create_artifact for Word/PowerPoint/Markdown/HTML deliverables so they are registered and previewable. Never claim an operation or artifact succeeded without a tool result. A missing plugin is not a final answer: first try built-in tools, inspect the local environment, compose a safe fallback, or acquire the smallest suitable capability. When installation, credentials, authorization, payment, login, or a physical action is genuinely required, use ask_user with the exact requirement and continue from the same point after approval. Never silently install untrusted code. Final output must be user-facing Markdown, never an internal JSON wrapper. Do not expose hidden chain-of-thought; concise progress and tool evidence are visible in the execution timeline. {capability_context} Child depth: {depth}/{MAX_CHILD_DEPTH}.\nAccepted GoalSpec:\n{}",
         settings.locale.language_directive(),
         serde_json::to_string_pretty(goal).map_err(|error| EngineError::InvalidModelJson(error.to_string()))?
     );
@@ -1300,7 +1331,7 @@ fn initial_session_messages(
 fn tool_definitions(depth: u8) -> Vec<AgentToolDefinition> {
     let mut tools = vec![
         tool("update_plan", "Create or update the visible execution plan. Keep exactly one item in_progress.", json!({"type":"object","properties":{"items":{"type":"array","items":{"type":"object","properties":{"title":{"type":"string"},"detail":{"type":"string"},"status":{"type":"string","enum":["pending","in_progress","completed"]}},"required":["title","status"]}}},"required":["items"]})),
-        tool("read_file", "Read a UTF-8 text file from the Workspace or from the current task's attachments.", json!({"type":"object","properties":{"path":{"type":"string"}},"required":["path"]})),
+        tool("read_file", "Read text and extract embedded text from PDF, DOCX, and PPTX files in the Workspace or current task attachments. Text PDFs need no plugin. A scanned PDF returns a structured OCR capability gap so you can recover instead of stopping.", json!({"type":"object","properties":{"path":{"type":"string"}},"required":["path"]})),
         tool("list_files", "List files under LingShu's Workspace.", json!({"type":"object","properties":{"path":{"type":"string"},"recursive":{"type":"boolean"}}})),
         tool("write_file", "Write a UTF-8 text file inside LingShu's Workspace. Use create_artifact for Office deliverables.", json!({"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"}},"required":["path","content"]})),
         tool("create_artifact", "Create and register a previewable Markdown, text, JSON, HTML, Word (.docx), or PowerPoint (.pptx) artifact.", json!({"type":"object","properties":{"title":{"type":"string"},"file_name":{"type":"string"},"kind":{"type":"string","enum":["markdown","text","json","html","docx","pptx"]},"content":{"type":"string"},"slides":{"type":"array","items":{"type":"object","properties":{"title":{"type":"string"},"bullets":{"type":"array","items":{"type":"string"}},"notes":{"type":"string"}},"required":["title"]}}},"required":["title","file_name","kind"]})),
@@ -1567,11 +1598,22 @@ fn attachment_context(paths: &[PathBuf]) -> String {
         .map(|path| match preview_file(path) {
             Ok(preview) => {
                 let body = match preview.kind {
-                    PreviewKind::Image | PreviewKind::Pdf => {
-                        "Binary media is available for in-app preview; no text was extracted."
+                    PreviewKind::Image => {
+                        "Binary image is available for in-app preview; no local text was extracted."
                             .into()
                     }
-                    _ => truncate(&preview.content, 24_000),
+                    PreviewKind::Pdf => readable_preview_text(&preview)
+                        .map(|text| truncate(&text, 24_000))
+                        .unwrap_or_else(|| {
+                            "The PDF is previewable but has no embedded text; OCR capability is required."
+                                .into()
+                        }),
+                    _ => readable_preview_text(&preview)
+                        .map(|text| truncate(&text, 24_000))
+                        .unwrap_or_else(|| {
+                            "Binary media is available for in-app preview; no local text was extracted."
+                                .into()
+                        }),
                 };
                 format!(
                     "FILE: {}\nPATH: {}\nTYPE: {:?}\nCONTENT:\n{}",
@@ -1582,6 +1624,26 @@ fn attachment_context(paths: &[PathBuf]) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n\n")
+}
+
+fn readable_preview_text(preview: &crate::preview::PreviewPayload) -> Option<String> {
+    let text = match preview.kind {
+        PreviewKind::Pdf => preview
+            .sections
+            .iter()
+            .enumerate()
+            .map(|(index, page)| format!("[Page {}]\n{}", index + 1, page))
+            .collect::<Vec<_>>()
+            .join("\n\n"),
+        PreviewKind::Document
+        | PreviewKind::Presentation
+        | PreviewKind::Text
+        | PreviewKind::Markdown
+        | PreviewKind::Code
+        | PreviewKind::Html => preview.content.clone(),
+        PreviewKind::Image | PreviewKind::Unsupported => return None,
+    };
+    (!text.trim().is_empty()).then_some(text)
 }
 
 fn truncate(value: &str, max_chars: usize) -> String {
@@ -1868,6 +1930,30 @@ mod tests {
         assert!(tool_definitions(0)
             .iter()
             .any(|tool| tool.name == "spawn_task"));
+    }
+
+    #[test]
+    fn read_file_tool_advertises_builtin_document_extraction() {
+        let tool = tool_definitions(0)
+            .into_iter()
+            .find(|tool| tool.name == "read_file")
+            .expect("read_file tool must exist");
+
+        assert!(tool.description.contains("PDF"));
+        assert!(tool.description.contains("DOCX"));
+        assert!(tool.description.contains("PPTX"));
+        assert!(tool.description.contains("OCR capability gap"));
+    }
+
+    #[test]
+    fn pdf_attachment_context_contains_extracted_text() {
+        let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../Examples/project-aurora/project-aurora-demo.pdf");
+        let context = attachment_context(&[fixture]);
+
+        assert!(context.contains("TYPE: Pdf"));
+        assert!(context.contains("Project Aurora"));
+        assert!(!context.contains("no text was extracted"));
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

@@ -104,6 +104,14 @@ pub fn preview_file(path: impl AsRef<Path>) -> Result<PreviewPayload, PreviewErr
         "pdf" => {
             payload.kind = PreviewKind::Pdf;
             payload.mime_type = "application/pdf".into();
+            // Preserve the original bytes for preview while exposing embedded text to the
+            // cross-platform agent kernel. This pure-Rust path needs no host PDF plugin.
+            payload.sections = pdf_extract::extract_text_from_mem_by_pages(&bytes)
+                .unwrap_or_default()
+                .into_iter()
+                .map(|page| page.trim().to_string())
+                .filter(|page| !page.is_empty())
+                .collect();
             payload.content = format!(
                 "data:application/pdf;base64,{}",
                 base64::engine::general_purpose::STANDARD.encode(bytes)
@@ -203,4 +211,22 @@ fn xml_text(xml: &str) -> String {
         }
     }
     lines.join("\n")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    #[test]
+    fn pdf_preview_keeps_bytes_and_extracts_text_for_the_agent() {
+        let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../Examples/project-aurora/project-aurora-demo.pdf");
+        let preview = preview_file(fixture).expect("fixture PDF should be readable");
+
+        assert_eq!(preview.kind, PreviewKind::Pdf);
+        assert!(preview.content.starts_with("data:application/pdf;base64,"));
+        assert!(!preview.sections.is_empty());
+        assert!(preview.sections.join("\n").contains("Project Aurora"));
+    }
 }

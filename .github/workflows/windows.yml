@@ -108,6 +108,6 @@ jobs:
           $tag = "${{ github.ref_name }}"
           gh release view $tag --repo $env:GITHUB_REPOSITORY *> $null
           if ($LASTEXITCODE -ne 0) {
-            gh release create $tag --repo $env:GITHUB_REPOSITORY --prerelease --title "LingShu Windows Technical Preview 0.1.0-1" --notes "Windows x64 technical preview built and tested on GitHub's Windows runner. It preserves LingShu's GoalSpec, serialized main task, isolated child sessions, tool and reasoning progress, human-action resume, checker, artifact ledger, and built-in preview. Direct computer control and realtime audio/video perception are not included in this preview."
+            gh release create $tag --repo $env:GITHUB_REPOSITORY --prerelease --title "LingShu Windows Technical Preview 0.1.0-2" --notes "Windows x64 technical preview built and tested on GitHub's Windows runner. It uses the shared LingShu runtime and adds built-in PDF text extraction, PDF attachment context, and structured capability recovery for scanned documents instead of stopping at 'no plugin'. It also preserves GoalSpec, the serialized main task, isolated child sessions, tool and reasoning progress, human-action resume, checker, artifact ledger, and built-in preview. Direct computer control and realtime audio/video perception are not included in this preview."
           }
           gh release upload $tag dist/windows/* --repo $env:GITHUB_REPOSITORY --clobber

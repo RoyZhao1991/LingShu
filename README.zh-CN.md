@@ -28,7 +28,7 @@
     ·
     <a href="https://github.com/RoyZhao1991/LingShu/releases/download/v0.1.0-alpha.9/LingShu-0.1.0-12-macOS-universal.dmg"><strong>macOS 签名 Alpha</strong></a>
     ·
-    <a href="https://github.com/RoyZhao1991/LingShu/releases/download/windows-v0.1.0-preview.1/LingShu-Windows-x64-Setup.exe"><strong>Windows x64 技术预览</strong></a>
+    <a href="https://github.com/RoyZhao1991/LingShu/releases/download/windows-v0.1.0-preview.2/LingShu-Windows-x64-Setup.exe"><strong>Windows x64 技术预览</strong></a>
     · <a href="#真实公开样例"><strong>检查真实样例</strong></a>
     · <a href="#快速开始">快速开始</a>
     · <a href="https://github.com/RoyZhao1991/LingShu/discussions">社区讨论</a>
@@ -165,7 +165,7 @@ brew install --cask RoyZhao1991/tap/lingshu
 
 ### 在 Windows 安装（技术预览）
 
-1. 下载 [LingShu-Windows-x64-Setup.exe](https://github.com/RoyZhao1991/LingShu/releases/download/windows-v0.1.0-preview.1/LingShu-Windows-x64-Setup.exe) 与 [SHA256SUMS.txt](https://github.com/RoyZhao1991/LingShu/releases/download/windows-v0.1.0-preview.1/SHA256SUMS.txt)。
+1. 下载 [LingShu-Windows-x64-Setup.exe](https://github.com/RoyZhao1991/LingShu/releases/download/windows-v0.1.0-preview.2/LingShu-Windows-x64-Setup.exe) 与 [SHA256SUMS.txt](https://github.com/RoyZhao1991/LingShu/releases/download/windows-v0.1.0-preview.2/SHA256SUMS.txt)。
 2. 在 PowerShell 中核对安装包：
 
    ```powershell

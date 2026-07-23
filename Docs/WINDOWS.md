@@ -29,6 +29,7 @@ Implemented in the Windows technical preview:
 - exact-session pause and resume when a tool requires user input;
 - failure and timeout cleanup that leaves no task or event falsely marked as running;
 - registered local artifacts and built-in preview for text, Markdown, code, HTML, images, PDF, DOCX, and PPTX;
+- built-in embedded-text extraction for PDF, DOCX, and PPTX, with a structured OCR recovery path for scanned PDFs instead of a terminal "no plugin" response;
 - explicit buttons to open a file in its Windows default application or reveal it in Explorer;
 - API tokens stored in Windows Credential Manager;
 - bilingual Chinese and English UI.
@@ -43,9 +44,9 @@ Opening an artifact in a Windows application is always an explicit user click. T
 
 ## Download
 
-- [Windows x64 setup executable](https://github.com/RoyZhao1991/LingShu/releases/download/windows-v0.1.0-preview.1/LingShu-Windows-x64-Setup.exe)
-- [Windows preview release and MSI alternatives](https://github.com/RoyZhao1991/LingShu/releases/tag/windows-v0.1.0-preview.1)
-- [SHA-256 checksums](https://github.com/RoyZhao1991/LingShu/releases/download/windows-v0.1.0-preview.1/SHA256SUMS.txt)
+- [Windows x64 setup executable](https://github.com/RoyZhao1991/LingShu/releases/download/windows-v0.1.0-preview.2/LingShu-Windows-x64-Setup.exe)
+- [Windows preview release and MSI alternatives](https://github.com/RoyZhao1991/LingShu/releases/tag/windows-v0.1.0-preview.2)
+- [SHA-256 checksums](https://github.com/RoyZhao1991/LingShu/releases/download/windows-v0.1.0-preview.2/SHA256SUMS.txt)
 - [Signed and notarized macOS alpha](https://github.com/RoyZhao1991/LingShu/releases/download/v0.1.0-alpha.9/LingShu-0.1.0-12-macOS-universal.dmg)
 
 The first Windows preview is not yet Authenticode-signed. Windows may show a SmartScreen warning; verify the downloaded file against `SHA256SUMS.txt` before installing it.
