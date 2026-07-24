@@ -1,7 +1,7 @@
 [package]
 name = "lingshu-windows"
-version = "0.1.0-2"
-description = "LingShu Windows desktop shell"
+version = "0.1.0-3"
+description = "Nous (LingShu) Windows desktop shell"
 authors = ["Roy Zhao"]
 license = "Apache-2.0"
 repository = "https://github.com/RoyZhao1991/LingShu"

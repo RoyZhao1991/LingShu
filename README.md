@@ -29,7 +29,7 @@
     ·
     <a href="https://github.com/RoyZhao1991/LingShu/releases/download/v0.1.0-alpha.9/LingShu-0.1.0-12-macOS-universal.dmg"><strong>macOS signed alpha</strong></a>
     ·
-    <a href="https://github.com/RoyZhao1991/LingShu/releases/download/windows-v0.1.0-preview.2/LingShu-Windows-x64-Setup.exe"><strong>Windows x64 preview</strong></a>
+    <a href="https://github.com/RoyZhao1991/LingShu/releases/download/windows-v0.1.0-preview.3/Nous-Windows-x64-Setup.exe"><strong>Windows x64 preview</strong></a>
     · <a href="#real-public-sample"><strong>Inspect a real sample</strong></a>
     · <a href="#quick-start">Quick start</a>
     · <a href="https://github.com/RoyZhao1991/LingShu/discussions">Community</a>
@@ -166,11 +166,11 @@ The public DMG is Universal (`arm64` + `x86_64`), signed with a Developer ID cer
 
 ### Install on Windows (Technical Preview)
 
-1. Download [LingShu-Windows-x64-Setup.exe](https://github.com/RoyZhao1991/LingShu/releases/download/windows-v0.1.0-preview.2/LingShu-Windows-x64-Setup.exe) and [SHA256SUMS.txt](https://github.com/RoyZhao1991/LingShu/releases/download/windows-v0.1.0-preview.2/SHA256SUMS.txt).
+1. Download [Nous-Windows-x64-Setup.exe](https://github.com/RoyZhao1991/LingShu/releases/download/windows-v0.1.0-preview.3/Nous-Windows-x64-Setup.exe) and [SHA256SUMS.txt](https://github.com/RoyZhao1991/LingShu/releases/download/windows-v0.1.0-preview.3/SHA256SUMS.txt).
 2. Verify the installer in PowerShell:
 
    ```powershell
-   Get-FileHash .\LingShu-Windows-x64-Setup.exe -Algorithm SHA256
+   Get-FileHash .\Nous-Windows-x64-Setup.exe -Algorithm SHA256
    Get-Content .\SHA256SUMS.txt
    ```
 

@@ -82,7 +82,7 @@ jobs:
           foreach ($installer in $msiInstallers) {
             Copy-Item $installer.FullName -Destination $output
           }
-          Copy-Item $nsisInstallers[0].FullName -Destination (Join-Path $output "LingShu-Windows-x64-Setup.exe")
+          Copy-Item $nsisInstallers[0].FullName -Destination (Join-Path $output "Nous-Windows-x64-Setup.exe")
           $checksumLines = @(Get-ChildItem $output -File | ForEach-Object {
             $hash = Get-FileHash $_.FullName -Algorithm SHA256
             "$($hash.Hash.ToLower())  $($_.Name)"
@@ -95,7 +95,7 @@ jobs:
       - name: Upload Windows installers
         uses: actions/upload-artifact@v4
         with:
-          name: LingShu-Windows-x64
+          name: Nous-Windows-x64
           path: dist/windows/*
           if-no-files-found: error
           retention-days: 30
@@ -108,6 +108,6 @@ jobs:
           $tag = "${{ github.ref_name }}"
           gh release view $tag --repo $env:GITHUB_REPOSITORY *> $null
           if ($LASTEXITCODE -ne 0) {
-            gh release create $tag --repo $env:GITHUB_REPOSITORY --prerelease --title "LingShu Windows Technical Preview 0.1.0-2" --notes "Windows x64 technical preview built and tested on GitHub's Windows runner. It uses the shared LingShu runtime and adds built-in PDF text extraction, PDF attachment context, and structured capability recovery for scanned documents instead of stopping at 'no plugin'. It also preserves GoalSpec, the serialized main task, isolated child sessions, tool and reasoning progress, human-action resume, checker, artifact ledger, and built-in preview. Direct computer control and realtime audio/video perception are not included in this preview."
+            gh release create $tag --repo $env:GITHUB_REPOSITORY --prerelease --title "Nous (LingShu) Windows Technical Preview 0.1.0-3" --notes "Windows x64 technical preview built and tested on GitHub's Windows runner. This release introduces the unified Nous / 灵枢 identity, branded NSIS and MSI installers, and locale-aware application naming while retaining the shared LingShu runtime. It includes built-in PDF text extraction, PDF attachment context, structured capability recovery, GoalSpec, serialized main tasks, isolated child sessions, tool and reasoning progress, human-action resume, checker, artifact ledger, and built-in preview. Direct computer control and realtime audio/video perception are not included in this preview."
           }
           gh release upload $tag dist/windows/* --repo $env:GITHUB_REPOSITORY --clobber
