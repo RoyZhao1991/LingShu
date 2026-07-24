@@ -9,14 +9,17 @@ import {
 } from "lucide-react";
 import { strings } from "./i18n";
 import { chooseFiles, runtimeInvoke } from "./bridge";
+import { normalizeMarkdownTables } from "./markdown";
+import packageMetadata from "../package.json";
 import type {
-  ArtifactRecord, ExecutionPermissionMode, Locale, Page, PreviewPayload, ProviderPreset, RuntimeSettings,
+  ArtifactRecord, ChatMessage, ExecutionPermissionMode, Locale, Page, PreviewPayload, ProviderPreset, RuntimeSettings,
   RuntimeEvent, RuntimeSnapshot, TaskRecord, TaskRole, TaskStatus,
 } from "./types";
 
 import type { BootstrapPayload } from "./bridge";
 
 const terminalStatuses = new Set<TaskStatus>(["completed", "failed", "cancelled"]);
+const appVersion = packageMetadata.version;
 const markdownComponents: Components = {
   table: ({ node: _node, ...props }) => <div className="markdown-table-scroll"><table {...props} /></div>,
 };
@@ -203,8 +206,9 @@ export default function App() {
           <section className="chat-page">
             <div className="message-scroll" ref={messageScroll} onScroll={trackMessageScroll}>
               {snapshot.messages.length === 0 && <EmptyState icon={<MessageCircle />} text={t.noMessages} />}
-              {snapshot.messages.map((message) => (
-                <article key={message.id} className={`message ${message.role}`}>
+              {snapshot.messages.map((message) => {
+                const messageAttachments = attachmentPathsForMessage(snapshot, message);
+                return <article key={message.id} className={`message ${message.role}`}>
                   <div className="message-meta">
                     <span>{message.role === "user" ? (locale === "en" ? "You" : "你") : t.appName}</span>
                     <time>{new Date(message.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</time>
@@ -213,9 +217,9 @@ export default function App() {
                     {message.state === "thinking" && <LoaderCircle className="inline-loader spin" />}
                     <MarkdownContent>{message.text}</MarkdownContent>
                   </div>
-                  {message.attachmentPaths.length > 0 && (
+                  {messageAttachments.length > 0 && (
                     <div className="message-attachments" aria-label={locale === "en" ? "Message attachments" : "消息附件"}>
-                      {message.attachmentPaths.map((path) => (
+                      {messageAttachments.map((path) => (
                         <button type="button" key={path} className="message-attachment" title={path} onClick={() => void showPathPreview(path)}>
                           <FileText />
                           <span><strong>{fileName(path)}</strong><small>{locale === "en" ? "Attachment · Preview" : "附件 · 点击预览"}</small></span>
@@ -233,8 +237,8 @@ export default function App() {
                       <MessagesSquare size={16} /> {locale === "en" ? "View execution" : "查看执行过程"}
                     </button>
                   )}
-                </article>
-              ))}
+                </article>;
+              })}
               <div ref={messagesEnd} />
             </div>
             <form className="composer" onSubmit={submit}>
@@ -297,7 +301,7 @@ function Header({ page, setPage, busy, locale }: { page: Page; setPage: (page: P
     ["chat", MessageCircle, t.chat], ["threads", MessagesSquare, t.threads], ["status", Activity, t.status], ["settings", Settings, t.settings],
   ];
   return <header className="app-header">
-    <div className="brand"><BrandMark /><div><strong>{t.appName}</strong><small>{t.tagline}</small></div></div>
+    <div className="brand"><BrandMark /><div><div className="brand-title"><strong>{t.appName}</strong><span>v{appVersion}</span></div><small>{t.tagline}</small></div></div>
     <nav>{navigation.map(([id, Icon, label]) => <button key={id} className={page === id ? "active" : ""} onClick={() => setPage(id)}><Icon />{label}</button>)}</nav>
     <div className="runtime-state"><small>STATE</small><strong className={busy ? "active" : ""}>{busy ? t.running : t.standby}</strong></div>
   </header>;
@@ -524,11 +528,16 @@ function PreviewBody({ payload, unsupported }: { payload: PreviewPayload; unsupp
 
 function EmptyState({ icon, text }: { icon: React.ReactNode; text: string }) { return <div className="empty-state">{icon}<p>{text}</p></div>; }
 function MarkdownContent({ children }: { children: string }) {
-  return <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>{children}</ReactMarkdown>;
+  return <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>{normalizeMarkdownTables(children)}</ReactMarkdown>;
 }
 function StatusGlyph({ status }: { status: TaskStatus }) { return terminalStatuses.has(status) ? (status === "completed" ? <Check className="status-glyph done" /> : <X className="status-glyph failed" />) : <LoaderCircle className="status-glyph spin active" />; }
 function TagList({ values }: { values: string[] }) { return <ul className="tag-list">{values.map((value) => <li key={value}>{value}</li>)}</ul>; }
 function fileName(path: string) { return path.split(/[\\/]/).at(-1) ?? path; }
+function attachmentPathsForMessage(snapshot: RuntimeSnapshot, message: ChatMessage): string[] {
+  const direct = message.attachmentPaths ?? [];
+  if (direct.length > 0 || message.role !== "user" || !message.threadId) return direct;
+  return snapshot.tasks.find((task) => task.id === message.threadId)?.attachmentPaths ?? [];
+}
 function formatBytes(value: number) { return value < 1024 ? `${value} B` : value < 1024 * 1024 ? `${(value / 1024).toFixed(1)} KB` : `${(value / 1024 / 1024).toFixed(1)} MB`; }
 function statusLabel(status: TaskStatus, locale: Locale) { const t = strings(locale); if (status === "completed") return t.completed; if (status === "failed") return t.failed; if (status === "cancelled") return t.cancelled; if (status === "queued") return t.queued; if (status === "needs_user_action") return t.blocked; return t.running; }
 function roleLabel(role: TaskRole, locale: Locale) { const t = strings(locale); if (role === "worker") return t.workerRole; if (role === "checker") return t.checkerRole; return t.mainRole; }

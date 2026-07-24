@@ -29,7 +29,9 @@ svg { flex: 0 0 auto; }
 .brand { display: flex; align-items: center; gap: 12px; min-width: 0; white-space: nowrap; }
 .brand-mark { width: 48px; height: 48px; flex: 0 0 auto; display: grid; place-items: center; }
 .brand-mark img { display: block; width: 100%; height: 100%; object-fit: contain; }
+.brand-title { display: flex; align-items: baseline; gap: 7px; min-width: 0; }
 .brand strong { display: block; font-size: 21px; line-height: 1.05; }
+.brand-title span { color: var(--teal); font: 800 11px/1 ui-monospace, SFMono-Regular, Consolas, monospace; }
 .brand small { display: block; margin-top: 5px; color: var(--teal); font: 700 9px/1 ui-monospace, SFMono-Regular, Consolas, monospace; letter-spacing: 2px; }
 .app-header nav { height: 100%; display: flex; align-items: stretch; gap: 6px; }
 .app-header nav button { min-width: 94px; border: 0; background: transparent; color: #596462; display: flex; align-items: center; justify-content: center; gap: 8px; font-weight: 650; position: relative; }
