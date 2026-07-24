@@ -150,7 +150,15 @@ impl RuntimeStore {
             provider_configured,
             events: state.events.clone(),
             latest_event_sequence: state.next_event_sequence.saturating_sub(1),
+            plugins: Vec::new(),
         }
+    }
+
+    pub fn data_dir(&self) -> PathBuf {
+        self.data_file
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(Self::default_data_dir)
     }
 
     pub async fn enqueue(

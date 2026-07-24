@@ -4,15 +4,15 @@ import remarkGfm from "remark-gfm";
 import {
   Activity, Bot, BrainCircuit, Check, ChevronRight, CircleAlert, Clock3, ExternalLink,
   FileBox, FileText, FolderOpen, Gauge, GitBranch, ListChecks, LoaderCircle, MessageCircle,
-  MessagesSquare, Paperclip, Play, Search, Send, Settings, ShieldCheck, Square, UserRound,
-  Wrench, X,
+  MessagesSquare, PackageCheck, PackagePlus, Paperclip, Play, Puzzle, RefreshCw, Search, Send,
+  Settings, ShieldCheck, Square, Trash2, UserRound, Wrench, X,
 } from "lucide-react";
 import { strings } from "./i18n";
-import { chooseFiles, runtimeInvoke } from "./bridge";
+import { chooseFiles, choosePluginManifest, runtimeInvoke } from "./bridge";
 import { normalizeMarkdownTables } from "./markdown";
 import packageMetadata from "../package.json";
 import type {
-  ArtifactRecord, ChatMessage, ExecutionPermissionMode, Locale, Page, PreviewPayload, ProviderPreset, RuntimeSettings,
+  ArtifactRecord, ChatMessage, ExecutionPermissionMode, Locale, Page, PluginRecord, PreviewPayload, ProviderPreset, RuntimeSettings,
   RuntimeEvent, RuntimeSnapshot, TaskRecord, TaskRole, TaskStatus,
 } from "./types";
 
@@ -40,6 +40,7 @@ export default function App() {
   const [permissionUpdating, setPermissionUpdating] = useState(false);
   const [actionAnswer, setActionAnswer] = useState("");
   const [resuming, setResuming] = useState(false);
+  const [pluginBusy, setPluginBusy] = useState("");
   const messagesEnd = useRef<HTMLDivElement>(null);
   const messageScroll = useRef<HTMLDivElement>(null);
   const keepAtBottom = useRef(true);
@@ -179,6 +180,62 @@ export default function App() {
     }
   };
 
+  const installPlugin = async () => {
+    const manifestPath = await choosePluginManifest();
+    if (!manifestPath) return;
+    setPluginBusy("install");
+    setError("");
+    try {
+      await runtimeInvoke<PluginRecord>("install_plugin", { manifestPath });
+      await refresh();
+    } catch (reason) {
+      setError(String(reason));
+    } finally {
+      setPluginBusy("");
+    }
+  };
+
+  const setPluginEnabled = async (plugin: PluginRecord, enabled: boolean) => {
+    setPluginBusy(plugin.id);
+    setError("");
+    try {
+      await runtimeInvoke<PluginRecord>("set_plugin_enabled", { id: plugin.id, enabled });
+      await refresh();
+    } catch (reason) {
+      setError(String(reason));
+    } finally {
+      setPluginBusy("");
+    }
+  };
+
+  const probePlugin = async (plugin: PluginRecord) => {
+    setPluginBusy(plugin.id);
+    setError("");
+    try {
+      await runtimeInvoke<PluginRecord>("probe_plugin", { id: plugin.id });
+      await refresh();
+    } catch (reason) {
+      setError(String(reason));
+    } finally {
+      setPluginBusy("");
+    }
+  };
+
+  const removePlugin = async (plugin: PluginRecord) => {
+    const confirmed = window.confirm(locale === "en" ? `Remove ${plugin.name}?` : `确认卸载 ${plugin.name}？`);
+    if (!confirmed) return;
+    setPluginBusy(plugin.id);
+    setError("");
+    try {
+      await runtimeInvoke("remove_plugin", { id: plugin.id });
+      await refresh();
+    } catch (reason) {
+      setError(String(reason));
+    } finally {
+      setPluginBusy("");
+    }
+  };
+
   const selectProvider = (providerId: string) => {
     const provider = providers.find((item) => item.id === providerId);
     if (!provider || !settingsDraft) return;
@@ -274,6 +331,12 @@ export default function App() {
 
         {page === "status" && <StatusPage snapshot={snapshot} locale={locale} />}
 
+        {page === "plugins" && (
+          <PluginsPage plugins={snapshot.plugins} locale={locale} busy={pluginBusy} error={error}
+            onInstall={installPlugin} onRefresh={refresh} onProbe={probePlugin}
+            onEnabled={setPluginEnabled} onRemove={removePlugin} />
+        )}
+
         {page === "settings" && (
           <SettingsPage draft={settingsDraft} providers={providers} apiKey={apiKey} locale={locale} validating={validating}
             permissionUpdating={permissionUpdating} connected={snapshot.providerConfigured} onDraft={setSettingsDraft} onApiKey={setApiKey}
@@ -298,7 +361,8 @@ export default function App() {
 function Header({ page, setPage, busy, locale }: { page: Page; setPage: (page: Page) => void; busy: boolean; locale: Locale }) {
   const t = strings(locale);
   const navigation: Array<[Page, typeof MessageCircle, string]> = [
-    ["chat", MessageCircle, t.chat], ["threads", MessagesSquare, t.threads], ["status", Activity, t.status], ["settings", Settings, t.settings],
+    ["chat", MessageCircle, t.chat], ["threads", MessagesSquare, t.threads], ["status", Activity, t.status],
+    ["plugins", Puzzle, t.plugins], ["settings", Settings, t.settings],
   ];
   return <header className="app-header">
     <div className="brand"><BrandMark /><div><div className="brand-title"><strong>{t.appName}</strong><span>v{appVersion}</span></div><small>{t.tagline}</small></div></div>
@@ -360,6 +424,77 @@ function ThreadsPage({ tasks, events, selected, locale, onSelect, onPreview }: {
       </>}
     </div>
   </section>;
+}
+
+function PluginsPage({ plugins, locale, busy, error, onInstall, onRefresh, onProbe, onEnabled, onRemove }: {
+  plugins: PluginRecord[]; locale: Locale; busy: string; error: string;
+  onInstall: () => void; onRefresh: () => void; onProbe: (plugin: PluginRecord) => void;
+  onEnabled: (plugin: PluginRecord, enabled: boolean) => void; onRemove: (plugin: PluginRecord) => void;
+}) {
+  const t = strings(locale);
+  return <section className="plugins-page">
+    <div className="page-heading plugin-heading">
+      <Puzzle />
+      <div><h1>{t.pluginTitle}</h1><p>{t.pluginSubtitle}</p></div>
+      <div className="page-commands">
+        <button onClick={onRefresh} disabled={Boolean(busy)}><RefreshCw />{t.refreshPlugins}</button>
+        <button className="primary" onClick={onInstall} disabled={Boolean(busy)}><PackagePlus />{t.installPlugin}</button>
+      </div>
+    </div>
+    {error && <div className="error-strip plugin-error"><CircleAlert size={16} />{error}</div>}
+    <div className="plugin-callout"><BrainCircuit /><span>{t.designKbActive}</span></div>
+    {!plugins.length ? <EmptyState icon={<Puzzle />} text={t.noPlugins} /> : (
+      <div className="plugin-grid">
+        {plugins.map((plugin) => {
+          const description = locale === "zh_cn" && plugin.descriptionZh ? plugin.descriptionZh : plugin.description;
+          const state = !plugin.available ? t.pluginUnavailable : !plugin.runtimeReady ? t.pluginDegraded : t.pluginReady;
+          const permissions = pluginPermissionLabels(plugin, locale);
+          return <article className={`plugin-card ${plugin.enabled ? "" : "disabled"}`} key={plugin.id}>
+            <header>
+              <span className="plugin-icon">{plugin.id === "lingshu.design-kb" ? <PackageCheck /> : <Puzzle />}</span>
+              <div><div className="plugin-name"><h2>{plugin.name}</h2><code>v{plugin.version}</code></div><p>{description}</p></div>
+              <span className={`plugin-state ${plugin.available && plugin.runtimeReady ? "ready" : "warning"}`}>
+                <span className="dot" />{state}
+              </span>
+            </header>
+            <div className="plugin-meta">
+              <span>{plugin.source === "built_in" ? t.builtIn : t.userPlugin}</span>
+              <span>{plugin.enabled ? t.pluginEnabled : t.pluginDisabled}</span>
+              <code>{plugin.id}</code>
+            </div>
+            <section>
+              <h3>{t.modelTools}</h3>
+              <div className="tool-list">{plugin.tools.map((tool) => <div key={tool.exposedName}><Wrench /><span><strong>{tool.exposedName}</strong><small>{locale === "zh_cn" && tool.descriptionZh ? tool.descriptionZh : tool.description}</small></span></div>)}</div>
+            </section>
+            <section>
+              <h3>{t.pluginPermissions}</h3>
+              <div className="permission-tags">{permissions.length ? permissions.map((label) => <span key={label}><ShieldCheck />{label}</span>) : <span>{t.permissionNone}</span>}</div>
+            </section>
+            <footer>
+              <div className="plugin-path" title={plugin.rootPath}><small>{t.pluginLocation}</small><code>{plugin.rootPath || plugin.statusDetail}</code></div>
+              <div className="plugin-actions">
+                <button onClick={() => onProbe(plugin)} disabled={busy === plugin.id}>{busy === plugin.id ? <LoaderCircle className="spin" /> : <RefreshCw />}{t.pluginProbe}</button>
+                {plugin.source === "user" && <button onClick={() => onEnabled(plugin, !plugin.enabled)} disabled={busy === plugin.id}>{plugin.enabled ? t.pluginDisable : t.pluginEnable}</button>}
+                {plugin.source === "user" && <button className="danger" onClick={() => onRemove(plugin)} disabled={busy === plugin.id}><Trash2 />{t.pluginRemove}</button>}
+              </div>
+            </footer>
+          </article>;
+        })}
+      </div>
+    )}
+    <p className="plugin-install-hint">{t.pluginInstallHint}</p>
+  </section>;
+}
+
+function pluginPermissionLabels(plugin: PluginRecord, locale: Locale): string[] {
+  const t = strings(locale);
+  return [
+    [plugin.permissions.fileRead, t.permissionFileRead],
+    [plugin.permissions.fileWrite, t.permissionFileWrite],
+    [plugin.permissions.network, t.permissionNetwork],
+    [plugin.permissions.shell, t.permissionShell],
+    [plugin.permissions.systemSensitive, t.permissionSensitive],
+  ].filter(([enabled]) => enabled).map(([, label]) => String(label));
 }
 
 function StatusPage({ snapshot, locale }: { snapshot: RuntimeSnapshot; locale: Locale }) {

@@ -3,6 +3,7 @@ pub mod contract;
 pub mod engine;
 pub mod model_client;
 pub mod models;
+pub mod plugins;
 pub mod preview;
 pub mod providers;
 pub mod store;
@@ -13,6 +14,7 @@ pub use contract::{
 };
 pub use engine::RuntimeKernel;
 pub use models::*;
+pub use plugins::{PluginError, PluginRegistry};
 pub use preview::{preview_file, PreviewKind, PreviewPayload};
 pub use providers::{provider_catalog, ProviderPreset};
 pub use store::RuntimeStore;

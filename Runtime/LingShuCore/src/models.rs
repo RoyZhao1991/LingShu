@@ -1,6 +1,7 @@
 use crate::contract::PlatformCapabilities;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::path::PathBuf;
 use uuid::Uuid;
 
@@ -389,6 +390,66 @@ pub struct RuntimeSnapshot {
     pub events: Vec<RuntimeEvent>,
     #[serde(default)]
     pub latest_event_sequence: u64,
+    #[serde(default)]
+    pub plugins: Vec<PluginRecord>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginPermissions {
+    #[serde(default)]
+    pub file_read: bool,
+    #[serde(default)]
+    pub file_write: bool,
+    #[serde(default)]
+    pub network: bool,
+    #[serde(default)]
+    pub shell: bool,
+    #[serde(default)]
+    pub system_sensitive: bool,
+}
+
+impl PluginPermissions {
+    pub fn requires_full_access(&self) -> bool {
+        self.network || self.shell || self.system_sensitive
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginToolRecord {
+    pub name: String,
+    pub exposed_name: String,
+    pub description: String,
+    #[serde(default)]
+    pub description_zh: String,
+    #[serde(default)]
+    pub parameters: Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PluginSource {
+    BuiltIn,
+    User,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginRecord {
+    pub id: String,
+    pub name: String,
+    pub version: String,
+    pub description: String,
+    pub description_zh: String,
+    pub source: PluginSource,
+    pub enabled: bool,
+    pub available: bool,
+    pub runtime_ready: bool,
+    pub root_path: PathBuf,
+    pub permissions: PluginPermissions,
+    pub tools: Vec<PluginToolRecord>,
+    pub status_detail: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

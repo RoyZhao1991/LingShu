@@ -39,6 +39,7 @@ outputs/
 Resources/RuntimeConfig/*.token
 Resources/RuntimeConfig/*.secret
 Resources/RuntimeConfig/*secrets*.plist
+Resources/DesignKB/bin/
 Drivers/LingShuAudioDriver/build/
 
 # SenseVoice 本地 ASR 运行时+模型(~250MB,由 Scripts/install-sensevoice.sh 下载,不入 git)

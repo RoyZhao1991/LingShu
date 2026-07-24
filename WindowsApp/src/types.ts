@@ -105,6 +105,38 @@ export interface RuntimeEvent {
   updatedAt: string;
 }
 
+export interface PluginPermissions {
+  fileRead: boolean;
+  fileWrite: boolean;
+  network: boolean;
+  shell: boolean;
+  systemSensitive: boolean;
+}
+
+export interface PluginToolRecord {
+  name: string;
+  exposedName: string;
+  description: string;
+  descriptionZh: string;
+  parameters: Record<string, unknown>;
+}
+
+export interface PluginRecord {
+  id: string;
+  name: string;
+  version: string;
+  description: string;
+  descriptionZh: string;
+  source: "built_in" | "user";
+  enabled: boolean;
+  available: boolean;
+  runtimeReady: boolean;
+  rootPath: string;
+  permissions: PluginPermissions;
+  tools: PluginToolRecord[];
+  statusDetail: string;
+}
+
 export interface RuntimeSnapshot {
   kernelAbiVersion: string;
   settings: RuntimeSettings;
@@ -117,6 +149,7 @@ export interface RuntimeSnapshot {
   providerConfigured: boolean;
   events: RuntimeEvent[];
   latestEventSequence: number;
+  plugins: PluginRecord[];
 }
 
 export interface ProviderPreset {
@@ -139,4 +172,4 @@ export interface PreviewPayload {
   sizeBytes: number;
 }
 
-export type Page = "chat" | "threads" | "status" | "settings";
+export type Page = "chat" | "threads" | "status" | "plugins" | "settings";

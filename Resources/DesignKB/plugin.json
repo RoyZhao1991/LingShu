@@ -1,0 +1,55 @@
+{
+  "schemaVersion": 1,
+  "id": "lingshu.design-kb",
+  "name": "DesignKB",
+  "version": "1.0.0",
+  "description": "Built-in presentation layouts, palettes, typography, icons, generator, and review rubric.",
+  "descriptionZh": "内置演示文稿版式、配色、字体、图标、生成器与验收规范。",
+  "enabled": true,
+  "aliases": [
+    "DesignKB",
+    "PPT",
+    "演示文稿"
+  ],
+  "permissions": {
+    "fileRead": true,
+    "fileWrite": true,
+    "network": false,
+    "shell": false,
+    "systemSensitive": false
+  },
+  "entrypoint": {
+    "command": "bin/designkb-generator.exe",
+    "arguments": [],
+    "timeoutSeconds": 300
+  },
+  "tools": [
+    {
+      "name": "create_designed_presentation",
+      "description": "Create a polished PowerPoint using LingShu DesignKB layouts, palettes, typography, icons, and review rules.",
+      "descriptionZh": "使用灵枢 DesignKB 的版式、配色、字体、图标和验收规则生成高质量 PowerPoint。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string"
+          },
+          "file_name": {
+            "type": "string"
+          },
+          "theme": {
+            "type": "string"
+          },
+          "slides": {
+            "type": "array"
+          }
+        },
+        "required": [
+          "title",
+          "file_name",
+          "slides"
+        ]
+      }
+    }
+  ]
+}

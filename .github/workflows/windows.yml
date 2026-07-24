@@ -54,9 +54,45 @@ jobs:
         with:
           components: rustfmt
 
+      - name: Set up Python for the bundled DesignKB generator
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
       - name: Install frontend dependencies
         working-directory: WindowsApp
         run: npm ci
+
+      - name: Build the self-contained DesignKB generator
+        run: |
+          python -m pip install --disable-pip-version-check python-pptx pillow pyinstaller
+          $bin = Join-Path $env:GITHUB_WORKSPACE "Resources/DesignKB/bin"
+          $work = Join-Path $env:RUNNER_TEMP "designkb-pyinstaller"
+          $spec = Join-Path $env:RUNNER_TEMP "designkb-spec"
+          New-Item -ItemType Directory -Force -Path $bin, $work, $spec | Out-Null
+          python -m PyInstaller --noconfirm --clean --onefile --name designkb-generator --distpath $bin --workpath $work --specpath $spec Resources/DesignKB/generator.py
+          $helper = Join-Path $bin "designkb-generator.exe"
+          if (-not (Test-Path $helper)) {
+            throw "The self-contained DesignKB generator was not produced."
+          }
+          $smokeInput = Join-Path $env:RUNNER_TEMP "designkb-smoke.json"
+          $smokeOutput = Join-Path $env:RUNNER_TEMP "designkb-smoke.pptx"
+          @{
+            title = "DesignKB Windows smoke test"
+            theme = "midnight"
+            slides = @(
+              @{
+                layout = "cover"
+                title = "DesignKB Windows smoke test"
+                subtitle = "Bundled generator verified"
+              }
+            )
+          } | ConvertTo-Json -Depth 8 | Set-Content -Path $smokeInput -Encoding utf8
+          & $helper $smokeInput $smokeOutput (Join-Path $env:GITHUB_WORKSPACE "Resources/DesignKB")
+          if ($LASTEXITCODE -ne 0 -or -not (Test-Path $smokeOutput) -or (Get-Item $smokeOutput).Length -lt 1000) {
+            throw "The bundled DesignKB generator failed its real PowerPoint smoke test."
+          }
+          Write-Host "Bundled DesignKB generator: $helper"
 
       - name: Verify shared runtime kernel
         run: cargo test --manifest-path Runtime/LingShuCore/Cargo.toml
@@ -111,6 +147,6 @@ jobs:
           $tag = "${{ github.ref_name }}"
           gh release view $tag --repo $env:GITHUB_REPOSITORY *> $null
           if ($LASTEXITCODE -ne 0) {
-            gh release create $tag --repo $env:GITHUB_REPOSITORY --prerelease --title "Nous (LingShu) Windows Technical Preview 0.1.0-6" --notes "Windows x64 technical preview built and tested on GitHub's Windows runner. Full Access is now a live shared-runtime contract: permission changes apply to already-running tasks, command and network tools read the latest setting at execution time, unsupported sandbox/offline claims are corrected with real tool evidence, and the Windows build performs a public HTTPS smoke test through the same runtime. The release retains the visible build version, attachment cards, responsive Markdown tables, built-in document extraction and preview, GoalSpec, serialized main tasks, isolated child sessions, human-action resume, checker, and artifact ledger. Direct computer control and realtime audio/video perception are not included in this preview."
+            gh release create $tag --repo $env:GITHUB_REPOSITORY --prerelease --title "Nous (LingShu) Windows Technical Preview 0.1.0-7" --notes "Windows x64 technical preview built and tested on GitHub's Windows runner. This build adds the shared Runtime Core plugin contract and the complete bundled DesignKB presentation system. Plugins are registered as model-callable tools, declare permissions, can be installed, enabled, probed, and removed from the Windows plugin page, and register real output files in the same artifact ledger. DesignKB ships with its layouts, palettes, typography, icons, rubric, and a self-contained Windows generator, so polished PowerPoint delivery does not require a separate Python installation. The release retains Full Access propagation, attachment cards, responsive Markdown tables, document extraction and preview, GoalSpec, serialized main tasks, isolated child sessions, human-action resume, and independent checking. Direct computer control and realtime audio/video perception are not included in this preview."
           }
           gh release upload $tag dist/windows/* --repo $env:GITHUB_REPOSITORY --clobber

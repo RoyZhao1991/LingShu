@@ -1,10 +1,10 @@
 use lingshu_runtime_core::{
-    preview_file, provider_catalog, ExecutionPermissionMode, PreviewPayload, ProviderPreset,
-    RuntimeKernel, RuntimeSettings, RuntimeSnapshot, RuntimeStore, SubmitReceipt,
+    preview_file, provider_catalog, ExecutionPermissionMode, PluginRecord, PreviewPayload,
+    ProviderPreset, RuntimeKernel, RuntimeSettings, RuntimeSnapshot, RuntimeStore, SubmitReceipt,
 };
 use serde::Serialize;
 use std::path::PathBuf;
-use tauri::State;
+use tauri::{Manager, State};
 use uuid::Uuid;
 
 const KEYRING_SERVICE: &str = "com.royzhao.lingshu";
@@ -251,14 +251,64 @@ fn reveal_path(path: PathBuf) -> Result<(), String> {
     Ok(())
 }
 
+#[tauri::command]
+fn list_plugins(state: State<'_, AppState>) -> Vec<PluginRecord> {
+    state.kernel.plugins().list()
+}
+
+#[tauri::command]
+fn install_plugin(
+    state: State<'_, AppState>,
+    manifest_path: PathBuf,
+) -> Result<PluginRecord, String> {
+    state
+        .kernel
+        .plugins()
+        .install(manifest_path)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn set_plugin_enabled(
+    state: State<'_, AppState>,
+    id: String,
+    enabled: bool,
+) -> Result<PluginRecord, String> {
+    state
+        .kernel
+        .plugins()
+        .set_enabled(&id, enabled)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn remove_plugin(state: State<'_, AppState>, id: String) -> Result<(), String> {
+    state
+        .kernel
+        .plugins()
+        .remove(&id)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn probe_plugin(state: State<'_, AppState>, id: String) -> Result<PluginRecord, String> {
+    state
+        .kernel
+        .plugins()
+        .probe(&id)
+        .map_err(|error| error.to_string())
+}
+
 pub fn run() {
-    let store =
-        RuntimeStore::open(runtime_data_dir()).expect("LingShu runtime store must initialize");
-    let kernel = RuntimeKernel::new(store, "windows")
-        .expect("Windows capabilities must exist in the shared kernel contract");
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .manage(AppState { kernel })
+        .setup(|app| {
+            let store = RuntimeStore::open(runtime_data_dir())?;
+            let resource_root = app.path().resource_dir().ok();
+            let kernel = RuntimeKernel::new_with_resources(store, "windows", resource_root)?;
+            app.manage(AppState { kernel });
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             bootstrap,
             get_snapshot,
@@ -270,6 +320,11 @@ pub fn run() {
             preview_path,
             open_external,
             reveal_path,
+            list_plugins,
+            install_plugin,
+            set_plugin_enabled,
+            remove_plugin,
+            probe_plugin,
         ])
         .run(tauri::generate_context!())
         .expect("error while running LingShu");

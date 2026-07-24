@@ -1,7 +1,7 @@
 import { invoke as tauriInvoke } from "@tauri-apps/api/core";
 import { open as tauriOpen } from "@tauri-apps/plugin-dialog";
 import type {
-  PreviewPayload, ProviderPreset, RuntimeEvent, RuntimeSettings, RuntimeSnapshot, TaskRecord,
+  PluginRecord, PreviewPayload, ProviderPreset, RuntimeEvent, RuntimeSettings, RuntimeSnapshot, TaskRecord,
 } from "./types";
 
 export interface BootstrapPayload {
@@ -23,6 +23,16 @@ export async function chooseFiles(): Promise<string[]> {
   const selected = await tauriOpen({ multiple: true, directory: false });
   if (!selected) return [];
   return Array.isArray(selected) ? selected : [selected];
+}
+
+export async function choosePluginManifest(): Promise<string | undefined> {
+  if (!hasNativeBridge()) return "C:\\Users\\Roy\\Downloads\\demo-plugin\\plugin.json";
+  const selected = await tauriOpen({
+    multiple: false,
+    directory: false,
+    filters: [{ name: "LingShu plugin manifest", extensions: ["json"] }],
+  });
+  return typeof selected === "string" ? selected : undefined;
 }
 
 const providers: ProviderPreset[] = [
@@ -69,6 +79,30 @@ const demoEvents: RuntimeEvent[] = [
   { id: "demo-event-3", sequence: 3, taskId: demoTask.id, kind: "tool", state: "completed", actor: "LingShu", title: "Create artifact", detail: "Project-Aurora-Brief.md was created and registered.", createdAt: now, updatedAt: now },
 ];
 
+const demoPlugins: PluginRecord[] = [
+  {
+    id: "lingshu.design-kb",
+    name: "DesignKB",
+    version: "1.0.0",
+    description: "Built-in presentation layouts, palettes, typography, icons, generator, and review rubric.",
+    descriptionZh: "内置演示文稿版式、配色、字体、图标、生成器与验收规范。",
+    source: "built_in",
+    enabled: true,
+    available: true,
+    runtimeReady: true,
+    rootPath: "C:\\Program Files\\Nous\\resources\\DesignKB",
+    permissions: { fileRead: true, fileWrite: true, network: false, shell: false, systemSensitive: false },
+    tools: [{
+      name: "create_designed_presentation",
+      exposedName: "create_designed_presentation",
+      description: "Create and register a polished PowerPoint with DesignKB.",
+      descriptionZh: "使用 DesignKB 生成并登记高质量 PowerPoint。",
+      parameters: { type: "object" },
+    }],
+    statusDetail: "Knowledge and generator ready",
+  },
+];
+
 let snapshot: RuntimeSnapshot = {
   kernelAbiVersion: "1.0.0",
   settings: {
@@ -84,7 +118,7 @@ let snapshot: RuntimeSnapshot = {
     { id: "demo-assistant", role: "assistant", text: "The attached resume has been reviewed.\n\nDimension | Assessment || Delivery | Strong || Architecture | Good fit || Risk | Needs validation\n\nThe Project Aurora brief is ready and can be inspected in Nous's built-in preview.", createdAt: now, state: "complete", threadId: demoTask.id, attachmentPaths: [] },
   ],
   tasks: [demoTask], activeTaskId: undefined, queuedTaskCount: 0, providerConfigured: true,
-  events: demoEvents, latestEventSequence: 3,
+  events: demoEvents, latestEventSequence: 3, plugins: demoPlugins,
 };
 
 async function mockInvoke<T>(command: string, args?: Record<string, unknown>): Promise<T> {
@@ -131,6 +165,23 @@ async function mockInvoke<T>(command: string, args?: Record<string, unknown>): P
       const id = String(args?.threadId ?? "");
       snapshot = { ...snapshot, activeTaskId: id, tasks: snapshot.tasks.map((task) => task.id === id ? { ...task, status: "running", pendingQuestion: undefined } : task) };
       return true as T;
+    }
+    case "list_plugins": return clone(snapshot.plugins) as T;
+    case "install_plugin": return clone(snapshot.plugins[0]) as T;
+    case "set_plugin_enabled": {
+      const id = String(args?.id ?? "");
+      const enabled = Boolean(args?.enabled);
+      snapshot = { ...snapshot, plugins: snapshot.plugins.map((plugin) => plugin.id === id ? { ...plugin, enabled } : plugin) };
+      return clone(snapshot.plugins.find((plugin) => plugin.id === id)) as T;
+    }
+    case "probe_plugin": {
+      const id = String(args?.id ?? "");
+      return clone(snapshot.plugins.find((plugin) => plugin.id === id)) as T;
+    }
+    case "remove_plugin": {
+      const id = String(args?.id ?? "");
+      snapshot = { ...snapshot, plugins: snapshot.plugins.filter((plugin) => plugin.id !== id) };
+      return undefined as T;
     }
     case "preview_path": return {
       name: "Project-Aurora-Brief.md", path: demoArtifactPath, kind: "markdown", mimeType: "text/markdown", sizeBytes: 1840,

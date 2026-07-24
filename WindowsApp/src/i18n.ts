@@ -3,7 +3,7 @@ import type { Locale } from "./types";
 const copy = {
   zh_cn: {
     appName: "灵枢", runtimeName: "灵枢 Runtime Core", tagline: "NOUS · GENERAL AGENT HUB",
-    chat: "对话", threads: "线程", status: "状态", settings: "配置",
+    chat: "对话", threads: "线程", status: "状态", plugins: "插件", settings: "配置",
     standby: "待机中", running: "执行中", queued: "排队中", failed: "未完成", completed: "已完成", cancelled: "已停止",
     placeholder: "有什么需要我做的？", send: "发送", attach: "添加附件", stop: "停止",
     noMessages: "配置主脑后即可开始对话或交付文件。", noTasks: "还没有任务线程。",
@@ -25,10 +25,17 @@ const copy = {
     windowsBoundary: "Windows 外壳与 macOS 共用灵枢 Runtime Core；本版本不暴露电脑控制和实时感知工具。",
     selectTask: "选择左侧线程查看目标、步骤和产出物。", unsupported: "此格式暂不支持内置预览，可使用系统应用打开。",
     saveError: "保存失败", requestError: "请求失败", bytes: "字节", apiHint: "Token 仅存入当前 Windows 用户的凭据管理器。",
+    pluginTitle: "插件与内嵌知识", pluginSubtitle: "插件由共享 Runtime Core 注册为模型可调用工具，并受当前执行权限约束。",
+    installPlugin: "安装本地插件", refreshPlugins: "刷新状态", builtIn: "内置", userPlugin: "用户安装",
+    pluginReady: "可调用", pluginDegraded: "能力不完整", pluginUnavailable: "不可用", pluginEnabled: "已启用", pluginDisabled: "已停用",
+    modelTools: "模型工具", pluginPermissions: "权限", pluginLocation: "位置", pluginProbe: "检测", pluginEnable: "启用", pluginDisable: "停用", pluginRemove: "卸载",
+    noPlugins: "当前没有登记插件。", pluginInstallHint: "选择包含 plugin.json 的本地插件包。安装后，工具会在下一次模型回合自动加入能力列表。",
+    permissionFileRead: "读取文件", permissionFileWrite: "写入文件", permissionNetwork: "联网", permissionShell: "命令", permissionSensitive: "系统敏感", permissionNone: "无额外权限",
+    designKbActive: "DesignKB 已进入模型上下文；生成 PowerPoint 时会优先使用其版式、主题、字体、图标和验收规范。",
   },
   en: {
     appName: "Nous", runtimeName: "Nous Runtime Core", tagline: "NOUS · GENERAL AGENT HUB",
-    chat: "Chat", threads: "Threads", status: "Status", settings: "Settings",
+    chat: "Chat", threads: "Threads", status: "Status", plugins: "Plugins", settings: "Settings",
     standby: "Standby", running: "Running", queued: "Queued", failed: "Failed", completed: "Completed", cancelled: "Cancelled",
     placeholder: "What can I do for you?", send: "Send", attach: "Add attachments", stop: "Stop",
     noMessages: "Connect a brain channel to chat or deliver files.", noTasks: "No task threads yet.",
@@ -50,6 +57,13 @@ const copy = {
     windowsBoundary: "The Windows shell and macOS share Nous Runtime Core. This release does not expose computer-control or realtime-perception tools.",
     selectTask: "Select a thread to inspect its goal, steps, and artifacts.", unsupported: "Built-in preview does not support this format yet. You can open it in the system app.",
     saveError: "Could not save", requestError: "Request failed", bytes: "bytes", apiHint: "The token is stored only in the current Windows user's Credential Manager.",
+    pluginTitle: "Plugins & Embedded Knowledge", pluginSubtitle: "The shared Runtime Core registers plugins as model-callable tools and applies the current execution permission.",
+    installPlugin: "Install Local Plugin", refreshPlugins: "Refresh Status", builtIn: "Built in", userPlugin: "User installed",
+    pluginReady: "Callable", pluginDegraded: "Degraded", pluginUnavailable: "Unavailable", pluginEnabled: "Enabled", pluginDisabled: "Disabled",
+    modelTools: "Model Tools", pluginPermissions: "Permissions", pluginLocation: "Location", pluginProbe: "Probe", pluginEnable: "Enable", pluginDisable: "Disable", pluginRemove: "Remove",
+    noPlugins: "No plugins are registered.", pluginInstallHint: "Select a local plugin package's plugin.json. Its tools are added automatically on the next model turn.",
+    permissionFileRead: "File read", permissionFileWrite: "File write", permissionNetwork: "Network", permissionShell: "Shell", permissionSensitive: "System sensitive", permissionNone: "No additional permissions",
+    designKbActive: "DesignKB is injected into model context. PowerPoint delivery prefers its layouts, themes, typography, icons, and review rubric.",
   },
 } as const;
 

@@ -29,7 +29,7 @@
     ·
     <a href="https://github.com/RoyZhao1991/LingShu/releases/download/v0.1.0-alpha.9/LingShu-0.1.0-12-macOS-universal.dmg"><strong>macOS signed alpha</strong></a>
     ·
-    <a href="https://github.com/RoyZhao1991/LingShu/releases/download/windows-v0.1.0-preview.6/Nous-Windows-x64-Setup.exe"><strong>Windows x64 preview</strong></a>
+    <a href="https://github.com/RoyZhao1991/LingShu/releases/download/windows-v0.1.0-preview.7/Nous-Windows-x64-Setup.exe"><strong>Windows x64 preview</strong></a>
     · <a href="#real-public-sample"><strong>Inspect a real sample</strong></a>
     · <a href="#quick-start">Quick start</a>
     · <a href="https://github.com/RoyZhao1991/LingShu/discussions">Community</a>
@@ -166,7 +166,7 @@ The public DMG is Universal (`arm64` + `x86_64`), signed with a Developer ID cer
 
 ### Install on Windows (Technical Preview)
 
-1. Download [Nous-Windows-x64-Setup.exe](https://github.com/RoyZhao1991/LingShu/releases/download/windows-v0.1.0-preview.6/Nous-Windows-x64-Setup.exe) and [SHA256SUMS.txt](https://github.com/RoyZhao1991/LingShu/releases/download/windows-v0.1.0-preview.6/SHA256SUMS.txt).
+1. Download [Nous-Windows-x64-Setup.exe](https://github.com/RoyZhao1991/LingShu/releases/download/windows-v0.1.0-preview.7/Nous-Windows-x64-Setup.exe) and [SHA256SUMS.txt](https://github.com/RoyZhao1991/LingShu/releases/download/windows-v0.1.0-preview.7/SHA256SUMS.txt).
 2. Verify the installer in PowerShell:
 
    ```powershell
@@ -176,7 +176,7 @@ The public DMG is Universal (`arm64` + `x86_64`), signed with a Developer ID cer
 
 3. Run the setup executable, choose a language, connect a model provider, and send a small first request.
 
-The Windows preview runs the exact same Rust `RuntimeKernel` as macOS: one serialized main task, isolated concurrent child sessions, visible reasoning summaries and tool events, human-action pause/resume, independent checking, artifact registration, and built-in preview. PDF, DOCX, and PPTX embedded text is read by the shared runtime without a host plugin; scanned PDFs return a structured OCR capability gap so the agent can acquire or compose a fallback instead of stopping at “no plugin.” It intentionally excludes direct Windows computer control and realtime audio/video perception. This preview is not yet Authenticode-signed, so Windows may show a SmartScreen warning; verify its published SHA-256 before installation. See the complete [Windows capability boundary](./Docs/WINDOWS.md).
+The Windows preview runs the exact same Rust `RuntimeKernel` as macOS: one serialized main task, isolated concurrent child sessions, visible reasoning summaries and tool events, human-action pause/resume, independent checking, artifact registration, and built-in preview. PDF, DOCX, and PPTX embedded text is read by the shared runtime without a host plugin; scanned PDFs return a structured OCR capability gap so the agent can acquire or compose a fallback instead of stopping at “no plugin.” DesignKB is bundled as a model-callable presentation tool, and local plugin packages use the shared runtime registry described in the [Plugin SDK](./Docs/PLUGIN_SDK.md). It intentionally excludes direct Windows computer control and realtime audio/video perception. This preview is not yet Authenticode-signed, so Windows may show a SmartScreen warning; verify its published SHA-256 before installation. See the complete [Windows capability boundary](./Docs/WINDOWS.md).
 
 ### Run a First Traceable Task
 

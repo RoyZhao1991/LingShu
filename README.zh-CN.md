@@ -29,7 +29,7 @@
     ·
     <a href="https://github.com/RoyZhao1991/LingShu/releases/download/v0.1.0-alpha.9/LingShu-0.1.0-12-macOS-universal.dmg"><strong>macOS 签名 Alpha</strong></a>
     ·
-    <a href="https://github.com/RoyZhao1991/LingShu/releases/download/windows-v0.1.0-preview.5/Nous-Windows-x64-Setup.exe"><strong>Windows x64 技术预览</strong></a>
+    <a href="https://github.com/RoyZhao1991/LingShu/releases/download/windows-v0.1.0-preview.7/Nous-Windows-x64-Setup.exe"><strong>Windows x64 技术预览</strong></a>
     · <a href="#真实公开样例"><strong>检查真实样例</strong></a>
     · <a href="#快速开始">快速开始</a>
     · <a href="https://github.com/RoyZhao1991/LingShu/discussions">社区讨论</a>
@@ -166,7 +166,7 @@ brew install --cask RoyZhao1991/tap/lingshu
 
 ### 在 Windows 安装（技术预览）
 
-1. 下载 [Nous-Windows-x64-Setup.exe](https://github.com/RoyZhao1991/LingShu/releases/download/windows-v0.1.0-preview.5/Nous-Windows-x64-Setup.exe) 与 [SHA256SUMS.txt](https://github.com/RoyZhao1991/LingShu/releases/download/windows-v0.1.0-preview.5/SHA256SUMS.txt)。
+1. 下载 [Nous-Windows-x64-Setup.exe](https://github.com/RoyZhao1991/LingShu/releases/download/windows-v0.1.0-preview.7/Nous-Windows-x64-Setup.exe) 与 [SHA256SUMS.txt](https://github.com/RoyZhao1991/LingShu/releases/download/windows-v0.1.0-preview.7/SHA256SUMS.txt)。
 2. 在 PowerShell 中核对安装包：
 
    ```powershell
@@ -176,7 +176,7 @@ brew install --cask RoyZhao1991/tap/lingshu
 
 3. 运行安装程序，选择界面语言、连接模型服务商，再发送一条小请求完成首跑。
 
-Windows 技术预览直接运行与 macOS 完全相同的 Rust `RuntimeKernel`：单主任务串行、隔离子线程并行、可见的推理摘要与工具事件、人机阻断续跑、独立 checker、产物登记和内置预览。当前只明确不包含 Windows 电脑直接控制与实时音视频感知。首个预览版尚未使用 Authenticode 签名，Windows 可能显示 SmartScreen 提示；安装前请核对 Release 中公布的 SHA-256。完整边界见 [Windows 版说明](./Docs/WINDOWS.md)。
+Windows 技术预览直接运行与 macOS 完全相同的 Rust `RuntimeKernel`：单主任务串行、隔离子线程并行、可见的推理摘要与工具事件、人机阻断续跑、独立 checker、产物登记和内置预览。DesignKB 已作为模型可调用的演示文稿工具随安装包提供，本地插件包则通过共享内核注册，规范见[插件 SDK](./Docs/PLUGIN_SDK.md)。当前只明确不包含 Windows 电脑直接控制与实时音视频感知。首个预览版尚未使用 Authenticode 签名，Windows 可能显示 SmartScreen 提示；安装前请核对 Release 中公布的 SHA-256。完整边界见 [Windows 版说明](./Docs/WINDOWS.md)。
 
 ### 运行第一条可追踪任务
 
