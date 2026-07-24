@@ -2513,18 +2513,25 @@ mod tests {
             false
         });
         let workspace = tempdir().unwrap();
-        let url = format!("http://{address}");
         let marker = workspace.path().join("network-permission.txt");
 
         #[cfg(target_os = "windows")]
         let command = format!(
-            "$response = Invoke-WebRequest -UseBasicParsing '{url}'; \
-             if ($response.StatusCode -ne 200) {{ exit 1 }}; \
+            "$client = [System.Net.Sockets.TcpClient]::new('{host}', {port}); \
+             $stream = $client.GetStream(); \
+             $request = [System.Text.Encoding]::ASCII.GetBytes(\"GET / HTTP/1.1`r`nHost: {host}`r`nConnection: close`r`n`r`n\"); \
+             $stream.Write($request, 0, $request.Length); \
+             $reader = [System.IO.StreamReader]::new($stream, [System.Text.Encoding]::ASCII); \
+             $response = $reader.ReadToEnd(); \
+             if (-not $response.Contains('permission-ok')) {{ exit 1 }}; \
              [System.IO.File]::WriteAllText((Join-Path (Get-Location) 'network-permission.txt'), \
-             'permission-ok', [System.Text.Encoding]::ASCII)"
+             'permission-ok', [System.Text.Encoding]::ASCII); \
+             $client.Dispose()",
+            host = address.ip(),
+            port = address.port()
         );
         #[cfg(target_os = "macos")]
-        let command = format!("/usr/bin/curl -fsS '{url}' > network-permission.txt");
+        let command = format!("/usr/bin/curl -fsS 'http://{address}' > network-permission.txt");
 
         let output = run_local_command(
             workspace.path(),

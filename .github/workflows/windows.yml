@@ -97,6 +97,9 @@ jobs:
       - name: Verify shared runtime kernel
         run: cargo test --manifest-path Runtime/LingShuCore/Cargo.toml
 
+      - name: Verify real DesignKB and installed plugin execution
+        run: cargo test --manifest-path Runtime/LingShuCore/Cargo.toml -- --ignored
+
       - name: Verify full-access public HTTPS through shared runtime
         run: cargo test --manifest-path Runtime/LingShuCore/Cargo.toml engine::tests::full_access_permits_public_https_on_windows -- --ignored --exact
 
