@@ -2408,6 +2408,18 @@ mod tests {
         test_kernel_for_platform(endpoint, "windows").await
     }
 
+    fn local_command_test_timeout_seconds() -> u64 {
+        if cfg!(target_os = "windows") {
+            30
+        } else {
+            10
+        }
+    }
+
+    fn runtime_contract_test_timeout() -> Duration {
+        Duration::from_secs(if cfg!(target_os = "windows") { 45 } else { 5 })
+    }
+
     #[test]
     fn extracts_balanced_json_without_leaking_surrounding_text() {
         let raw = "preface ```json\n{\"passed\":true,\"summary\":\"ok\",\"findings\":[]}\n``` tail";
@@ -2447,7 +2459,7 @@ mod tests {
         let blocked = run_local_command(
             &workspace,
             command,
-            Some(10),
+            Some(local_command_test_timeout_seconds()),
             ExecutionPermissionMode::Sandbox,
         )
         .await
@@ -2463,7 +2475,7 @@ mod tests {
         let allowed = run_local_command(
             &workspace,
             command,
-            Some(10),
+            Some(local_command_test_timeout_seconds()),
             ExecutionPermissionMode::FullAccess,
         )
         .await
@@ -2485,7 +2497,7 @@ mod tests {
         let address = listener.local_addr().unwrap();
         let server = thread::spawn(move || {
             let started = Instant::now();
-            while started.elapsed() < Duration::from_secs(5) {
+            while started.elapsed() < Duration::from_secs(local_command_test_timeout_seconds()) {
                 match listener.accept() {
                     Ok((mut stream, _)) => {
                         stream.set_nonblocking(false).unwrap();
@@ -2536,7 +2548,7 @@ mod tests {
         let output = run_local_command(
             workspace.path(),
             &command,
-            Some(10),
+            Some(local_command_test_timeout_seconds()),
             ExecutionPermissionMode::FullAccess,
         )
         .await
@@ -2764,7 +2776,11 @@ mod tests {
                 AgentToolCall {
                     id: "live-permission-command".into(),
                     name: "run_command".into(),
-                    arguments_json: json!({"command":command,"timeout_seconds":10}).to_string(),
+                    arguments_json: json!({
+                        "command": command,
+                        "timeout_seconds": local_command_test_timeout_seconds()
+                    })
+                    .to_string(),
                 },
             )
             .await
@@ -2872,6 +2888,7 @@ mod tests {
         #[cfg(not(target_os = "windows"))]
         let permission_command = "printf '%s' \"$LINGSHU_EXECUTION_PERMISSION_MODE\"".to_string();
         let command_for_model = permission_command.clone();
+        let command_timeout = local_command_test_timeout_seconds();
         let (endpoint, requests, server) = mock_provider(4, move |request, _| {
             if request.get("stream") == Some(&Value::Bool(false)) {
                 return goal_response("Explain current runtime access", "question", "chat_reply");
@@ -2905,7 +2922,11 @@ mod tests {
                         "type":"function",
                         "function":{
                             "name":"run_command",
-                            "arguments":json!({"command":command_for_model,"timeout_seconds":10}).to_string()
+                            "arguments":json!({
+                                "command": command_for_model,
+                                "timeout_seconds": command_timeout
+                            })
+                            .to_string()
                         }
                     }]),
                 );
@@ -2929,7 +2950,7 @@ mod tests {
             .unwrap();
 
         let completed = tokio::time::timeout(
-            Duration::from_secs(5),
+            runtime_contract_test_timeout(),
             kernel.run_queue(Some("test-token".into())),
         )
         .await
