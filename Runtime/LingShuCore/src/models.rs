@@ -154,6 +154,8 @@ pub struct ChatMessage {
     pub created_at: DateTime<Utc>,
     pub state: MessageState,
     pub thread_id: Option<Uuid>,
+    #[serde(default)]
+    pub attachment_paths: Vec<PathBuf>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

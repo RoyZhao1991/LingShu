@@ -1,5 +1,6 @@
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import ReactMarkdown from "react-markdown";
+import ReactMarkdown, { type Components } from "react-markdown";
+import remarkGfm from "remark-gfm";
 import {
   Activity, Bot, BrainCircuit, Check, ChevronRight, CircleAlert, Clock3, ExternalLink,
   FileBox, FileText, FolderOpen, Gauge, GitBranch, ListChecks, LoaderCircle, MessageCircle,
@@ -16,6 +17,9 @@ import type {
 import type { BootstrapPayload } from "./bridge";
 
 const terminalStatuses = new Set<TaskStatus>(["completed", "failed", "cancelled"]);
+const markdownComponents: Components = {
+  table: ({ node: _node, ...props }) => <div className="markdown-table-scroll"><table {...props} /></div>,
+};
 
 export default function App() {
   const [snapshot, setSnapshot] = useState<RuntimeSnapshot>();
@@ -112,13 +116,15 @@ export default function App() {
     if (selected.length) setAttachments(selected);
   };
 
-  const showPreview = async (artifact: ArtifactRecord) => {
+  const showPathPreview = async (path: string) => {
     try {
-      setPreview(await runtimeInvoke<PreviewPayload>("preview_path", { path: artifact.path }));
+      setPreview(await runtimeInvoke<PreviewPayload>("preview_path", { path }));
     } catch (reason) {
       setError(String(reason));
     }
   };
+
+  const showPreview = async (artifact: ArtifactRecord) => showPathPreview(artifact.path);
 
   const saveSettings = async () => {
     if (!settingsDraft) return;
@@ -205,8 +211,19 @@ export default function App() {
                   </div>
                   <div className="markdown-body">
                     {message.state === "thinking" && <LoaderCircle className="inline-loader spin" />}
-                    <ReactMarkdown>{message.text}</ReactMarkdown>
+                    <MarkdownContent>{message.text}</MarkdownContent>
                   </div>
+                  {message.attachmentPaths.length > 0 && (
+                    <div className="message-attachments" aria-label={locale === "en" ? "Message attachments" : "消息附件"}>
+                      {message.attachmentPaths.map((path) => (
+                        <button type="button" key={path} className="message-attachment" title={path} onClick={() => void showPathPreview(path)}>
+                          <FileText />
+                          <span><strong>{fileName(path)}</strong><small>{locale === "en" ? "Attachment · Preview" : "附件 · 点击预览"}</small></span>
+                          <ChevronRight />
+                        </button>
+                      ))}
+                    </div>
+                  )}
                   {message.state === "thinking" && message.threadId && (
                     <MessageRuntimeStatus event={latestEventForThread(snapshot, message.threadId)} locale={locale} />
                   )}
@@ -415,7 +432,7 @@ function HumanActionDialog({ task, locale, value, busy, error, onChange, onResum
   const t = strings(locale);
   return <div className="modal-layer action-layer"><div className="action-dialog" role="dialog" aria-modal="true" aria-labelledby="action-title">
     <header><div className="action-mark"><UserRound /></div><div><h1 id="action-title">{t.actionRequired}</h1><p>{t.actionBody}</p></div></header>
-    <section><div className="action-actor"><RoleIcon role={task.role} /><span>{task.participantName}</span></div><ReactMarkdown>{task.pendingQuestion ?? task.summary}</ReactMarkdown></section>
+    <section><div className="action-actor"><RoleIcon role={task.role} /><span>{task.participantName}</span></div><MarkdownContent>{task.pendingQuestion ?? task.summary}</MarkdownContent></section>
     <textarea autoFocus value={value} onChange={(event) => onChange(event.target.value)} placeholder={t.answerPlaceholder}
       onKeyDown={(event) => { if ((event.ctrlKey || event.metaKey) && event.key === "Enter") onResume(); }} />
     {error && <div className="error-strip"><CircleAlert />{error}</div>}
@@ -444,7 +461,7 @@ function ExecutionEvent({ event, task, locale }: { event: RuntimeEvent; task?: T
       <div className="event-actor"><RoleIcon role={task?.role ?? "main"} /><strong>{localizedActor(event.actor || task?.participantName, locale)}</strong>{task && <small>{roleLabel(task.role, locale)}</small>}</div>
       {hasBody && <details open={expanded} onToggle={(toggleEvent) => setExpanded(toggleEvent.currentTarget.open)}>
         <summary>{locale === "en" ? "Details" : "明细"}</summary>
-        {event.kind === "tool" || event.kind === "delegation" ? <pre>{body}</pre> : <div className="event-markdown markdown-body"><ReactMarkdown>{body}</ReactMarkdown></div>}
+        {event.kind === "tool" || event.kind === "delegation" ? <pre>{body}</pre> : <div className="event-markdown markdown-body"><MarkdownContent>{body}</MarkdownContent></div>}
       </details>}
     </div>
   </article>;
@@ -498,7 +515,7 @@ function PreviewBody({ payload, unsupported }: { payload: PreviewPayload; unsupp
   if (payload.kind === "image") return <img className="image-preview" src={payload.content} alt={payload.name} />;
   if (payload.kind === "pdf") return <embed className="pdf-preview" src={payload.content} type="application/pdf" />;
   if (payload.kind === "html") return <iframe className="html-preview" sandbox="" srcDoc={payload.content} title={payload.name} />;
-  if (payload.kind === "markdown") return <div className="document-preview markdown-body"><ReactMarkdown>{payload.content}</ReactMarkdown></div>;
+  if (payload.kind === "markdown") return <div className="document-preview markdown-body"><MarkdownContent>{payload.content}</MarkdownContent></div>;
   if (payload.kind === "presentation") return <div className="slide-preview">{payload.sections.map((section, index) => { const [title, ...body] = section.split("\n"); return <section key={`${index}-${title}`}><small>{String(index + 1).padStart(2, "0")}</small><h2>{title}</h2><ul>{body.map((line) => <li key={line}>{line}</li>)}</ul></section>; })}</div>;
   if (payload.kind === "document") return <div className="document-preview">{payload.sections.map((section, index) => index === 0 ? <h1 key={index}>{section}</h1> : <p key={index}>{section}</p>)}</div>;
   if (["text", "code"].includes(payload.kind)) return <pre className="code-preview">{payload.content}</pre>;
@@ -506,6 +523,9 @@ function PreviewBody({ payload, unsupported }: { payload: PreviewPayload; unsupp
 }
 
 function EmptyState({ icon, text }: { icon: React.ReactNode; text: string }) { return <div className="empty-state">{icon}<p>{text}</p></div>; }
+function MarkdownContent({ children }: { children: string }) {
+  return <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>{children}</ReactMarkdown>;
+}
 function StatusGlyph({ status }: { status: TaskStatus }) { return terminalStatuses.has(status) ? (status === "completed" ? <Check className="status-glyph done" /> : <X className="status-glyph failed" />) : <LoaderCircle className="status-glyph spin active" />; }
 function TagList({ values }: { values: string[] }) { return <ul className="tag-list">{values.map((value) => <li key={value}>{value}</li>)}</ul>; }
 function fileName(path: string) { return path.split(/[\\/]/).at(-1) ?? path; }

@@ -44,9 +44,9 @@ Opening an artifact in a Windows application is always an explicit user click. T
 
 ## Download
 
-- [Windows x64 setup executable](https://github.com/RoyZhao1991/LingShu/releases/download/windows-v0.1.0-preview.3/Nous-Windows-x64-Setup.exe)
-- [Windows preview release and MSI alternatives](https://github.com/RoyZhao1991/LingShu/releases/tag/windows-v0.1.0-preview.3)
-- [SHA-256 checksums](https://github.com/RoyZhao1991/LingShu/releases/download/windows-v0.1.0-preview.3/SHA256SUMS.txt)
+- [Windows x64 setup executable](https://github.com/RoyZhao1991/LingShu/releases/download/windows-v0.1.0-preview.4/Nous-Windows-x64-Setup.exe)
+- [Windows preview release and MSI alternatives](https://github.com/RoyZhao1991/LingShu/releases/tag/windows-v0.1.0-preview.4)
+- [SHA-256 checksums](https://github.com/RoyZhao1991/LingShu/releases/download/windows-v0.1.0-preview.4/SHA256SUMS.txt)
 - [Signed and notarized macOS alpha](https://github.com/RoyZhao1991/LingShu/releases/download/v0.1.0-alpha.9/LingShu-0.1.0-12-macOS-universal.dmg)
 
 The first Windows preview is not yet Authenticode-signed. Windows may show a SmartScreen warning; verify the downloaded file against `SHA256SUMS.txt` before installing it.
