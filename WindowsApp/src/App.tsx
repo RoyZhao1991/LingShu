@@ -99,7 +99,7 @@ export default function App() {
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     const text = prompt.trim();
-    if (!text || sending) return;
+    if (!text || sending || permissionUpdating) return;
     setSending(true);
     setError("");
     try {
@@ -261,7 +261,7 @@ export default function App() {
                 {activeTask ? (
                   <button type="button" className="stop-button" onClick={() => void runtimeInvoke("cancel_task", { threadId: activeTask.id }).then(refresh)}><Square size={16} />{t.stop}</button>
                 ) : (
-                  <button className="send-button" type="submit" disabled={sending || !prompt.trim()} title={t.send}><Send /></button>
+                  <button className="send-button" type="submit" disabled={sending || permissionUpdating || !prompt.trim()} title={t.send}><Send /></button>
                 )}
               </div>
             </form>

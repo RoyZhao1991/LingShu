@@ -25,6 +25,7 @@ const GOAL_ATTEMPTS: usize = 3;
 const MAX_AGENT_TURNS: usize = 40;
 const MAX_CHILD_DEPTH: u8 = 3;
 const STUCK_REPEAT_THRESHOLD: usize = 5;
+const MAX_RUNTIME_CONTRACT_CORRECTIONS: usize = 2;
 const MIN_GOAL_TIMEOUT_SECONDS: u64 = 30;
 const MAX_GOAL_TIMEOUT_SECONDS: [u64; GOAL_ATTEMPTS] = [75, 120, 180];
 
@@ -75,6 +76,8 @@ enum SessionOutcome {
 struct ToolExecution {
     call: AgentToolCall,
     output: String,
+    network_command: bool,
+    command_succeeded: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -309,7 +312,10 @@ impl RuntimeKernel {
 
         let messages = initial_session_messages(
             &settings,
-            &self.capabilities,
+            RuntimeAuthorityContext {
+                platform: &self.platform,
+                capabilities: &self.capabilities,
+            },
             &history,
             &task.prompt,
             &attachment_context,
@@ -400,6 +406,9 @@ impl RuntimeKernel {
     ) -> Pin<Box<dyn Future<Output = Result<SessionOutcome, EngineError>> + Send + 'a>> {
         Box::pin(async move {
             let mut messages = task.session_messages.clone();
+            let mut active_permission = settings.execution_permission_mode;
+            let (mut executed_tools, mut failed_network_command) = session_tool_evidence(&messages);
+            let mut runtime_contract_corrections = 0_usize;
             if let Some(correction) = correction {
                 messages.push(AgentMessage {
                     role: AgentRole::User,
@@ -416,13 +425,39 @@ impl RuntimeKernel {
                     tool_call_id: None,
                 });
             }
-            let definitions = tool_definitions(task.depth, settings.execution_permission_mode);
             let mut signatures: Vec<String> = Vec::new();
             let mut last_text = String::new();
             for turn_index in 1..=MAX_AGENT_TURNS {
                 if self.store.task_is_cancelled(task.id).await {
                     return Ok(SessionOutcome::Cancelled);
                 }
+                let latest_permission = self.store.settings().await.execution_permission_mode;
+                if latest_permission != active_permission {
+                    active_permission = latest_permission;
+                    messages.push(runtime_authority_message(
+                        &settings,
+                        &self.platform,
+                        &self.capabilities,
+                        active_permission,
+                    ));
+                    self.store
+                        .append_event(
+                            task.id,
+                            RuntimeEventKind::Status,
+                            RuntimeEventState::Completed,
+                            "Runtime",
+                            localized(
+                                &settings.locale,
+                                "执行权限已更新",
+                                "Execution permission updated",
+                            ),
+                            format!("permission_mode={}", active_permission.as_str()),
+                        )
+                        .await?;
+                }
+                let definitions = tool_definitions(task.depth, active_permission);
+                let mut turn_settings = settings.clone();
+                turn_settings.execution_permission_mode = active_permission;
                 self.store
                     .set_session_messages(task.id, messages.clone())
                     .await?;
@@ -437,7 +472,7 @@ impl RuntimeKernel {
                     .stream_model_turn(
                         task.id,
                         turn_index,
-                        &settings,
+                        &turn_settings,
                         api_key.as_deref(),
                         &messages,
                         &definitions,
@@ -456,6 +491,65 @@ impl RuntimeKernel {
                         return Err(EngineError::InvalidModelJson(
                             "agent ended without a user-facing response".into(),
                         ));
+                    }
+                    let latest_permission = self.store.settings().await.execution_permission_mode;
+                    if latest_permission != active_permission {
+                        active_permission = latest_permission;
+                        messages.push(AgentMessage {
+                            role: AgentRole::Assistant,
+                            content: final_text,
+                            tool_calls: Vec::new(),
+                            tool_call_id: None,
+                        });
+                        messages.push(runtime_authority_message(
+                            &settings,
+                            &self.platform,
+                            &self.capabilities,
+                            active_permission,
+                        ));
+                        continue;
+                    }
+                    if let Some(issue) = completion_contract_issue(
+                        &goal,
+                        &final_text,
+                        active_permission,
+                        executed_tools,
+                        failed_network_command,
+                    ) {
+                        if runtime_contract_corrections >= MAX_RUNTIME_CONTRACT_CORRECTIONS {
+                            return Err(EngineError::LocalOperation(format!(
+                                "model repeatedly contradicted the runtime contract: {issue}"
+                            )));
+                        }
+                        runtime_contract_corrections += 1;
+                        messages.push(AgentMessage {
+                            role: AgentRole::Assistant,
+                            content: final_text,
+                            tool_calls: Vec::new(),
+                            tool_call_id: None,
+                        });
+                        messages.push(runtime_contract_correction_message(
+                            &settings,
+                            &self.platform,
+                            &self.capabilities,
+                            active_permission,
+                            issue,
+                        ));
+                        self.store
+                            .append_event(
+                                task.id,
+                                RuntimeEventKind::Warning,
+                                RuntimeEventState::Completed,
+                                "Runtime",
+                                localized(
+                                    &settings.locale,
+                                    "运行时契约自纠",
+                                    "Runtime contract correction",
+                                ),
+                                issue.to_string(),
+                            )
+                            .await?;
+                        continue;
                     }
                     messages.push(AgentMessage {
                         role: AgentRole::Assistant,
@@ -531,6 +625,10 @@ impl RuntimeKernel {
                 .await;
                 for execution in executions {
                     let execution = execution?;
+                    executed_tools += 1;
+                    if execution.network_command && execution.command_succeeded == Some(false) {
+                        failed_network_command = true;
+                    }
                     messages.push(AgentMessage {
                         role: AgentRole::Tool,
                         content: execution.output,
@@ -693,6 +791,10 @@ impl RuntimeKernel {
         api_key: Option<String>,
         call: AgentToolCall,
     ) -> Result<ToolExecution, EngineError> {
+        let network_command = call.name == "run_command"
+            && serde_json::from_str::<CommandArguments>(&call.arguments_json)
+                .ok()
+                .is_some_and(|args| command_uses_network(&args.command));
         let event = self
             .store
             .append_event(
@@ -711,6 +813,16 @@ impl RuntimeKernel {
             )
             .await?;
         let result = match call.name.as_str() {
+            "inspect_runtime" => {
+                let latest = self.store.settings().await;
+                runtime_authority_payload(
+                    &latest,
+                    &self.platform,
+                    &self.capabilities,
+                    latest.execution_permission_mode,
+                )
+                .to_string()
+            }
             "update_plan" => {
                 let args = parse_arguments::<PlanArguments>(&call)?;
                 let items = args
@@ -807,11 +919,12 @@ impl RuntimeKernel {
             }
             "run_command" => {
                 let args = parse_arguments::<CommandArguments>(&call)?;
+                let latest_permission = self.store.settings().await.execution_permission_mode;
                 run_local_command(
                     &settings.workspace,
                     &args.command,
                     args.timeout_seconds,
-                    settings.execution_permission_mode,
+                    latest_permission,
                 )
                 .await?
             }
@@ -833,9 +946,18 @@ impl RuntimeKernel {
                 Some(truncate(&result, 2_400)),
             )
             .await?;
+        let command_succeeded = (call.name == "run_command")
+            .then(|| {
+                serde_json::from_str::<Value>(&result)
+                    .ok()
+                    .and_then(|value| value.get("ok").and_then(Value::as_bool))
+            })
+            .flatten();
         Ok(ToolExecution {
             call,
             output: result,
+            network_command,
+            command_succeeded,
         })
     }
 
@@ -904,7 +1026,10 @@ impl RuntimeKernel {
                 .ok_or(EngineError::MissingTask(child_id))?;
             let messages = initial_session_messages(
                 settings,
-                &self.capabilities,
+                RuntimeAuthorityContext {
+                    platform: &self.platform,
+                    capabilities: &self.capabilities,
+                },
                 &child_history,
                 &objective,
                 "(none)",
@@ -1281,9 +1406,206 @@ impl RuntimeKernel {
     }
 }
 
+fn runtime_authority_payload(
+    settings: &RuntimeSettings,
+    platform: &str,
+    capabilities: &PlatformCapabilities,
+    permission_mode: ExecutionPermissionMode,
+) -> Value {
+    json!({
+        "source": "lingshu_runtime_store",
+        "authoritative": true,
+        "platform": platform,
+        "execution_permission_mode": permission_mode.as_str(),
+        "local_command": "available",
+        "network_authorization": if permission_mode == ExecutionPermissionMode::FullAccess {
+            "allowed"
+        } else {
+            "requires_full_access"
+        },
+        "network_reachability": "not_probed",
+        "lingshu_process_sandbox": if permission_mode == ExecutionPermissionMode::FullAccess {
+            "not_applied"
+        } else {
+            "workspace_and_network_guard"
+        },
+        "workspace": settings.workspace,
+        "capabilities": capabilities,
+        "rule": "Authorization is a runtime fact. Reachability or command failure must be established by a real tool result, never guessed from model identity or conversation history."
+    })
+}
+
+fn runtime_authority_message(
+    settings: &RuntimeSettings,
+    platform: &str,
+    capabilities: &PlatformCapabilities,
+    permission_mode: ExecutionPermissionMode,
+) -> AgentMessage {
+    AgentMessage {
+        role: AgentRole::System,
+        content: format!(
+            "{}\nAuthoritative LingShu runtime state update:\n{}",
+            permission_mode.prompt_directive(settings.locale),
+            serde_json::to_string_pretty(&runtime_authority_payload(
+                settings,
+                platform,
+                capabilities,
+                permission_mode,
+            ))
+            .unwrap_or_else(|_| "{}".into())
+        ),
+        tool_calls: Vec::new(),
+        tool_call_id: None,
+    }
+}
+
+fn runtime_contract_correction_message(
+    settings: &RuntimeSettings,
+    platform: &str,
+    capabilities: &PlatformCapabilities,
+    permission_mode: ExecutionPermissionMode,
+    issue: &str,
+) -> AgentMessage {
+    let instruction = localized(
+        &settings.locale,
+        "【运行时事实纠正，最高优先级】上一版回复与宿主运行时事实冲突，不能交付。不要重复无证据的限制结论。先调用 inspect_runtime；若问题涉及命令、联网、安装或目录访问，再调用 run_command 做真实验证，然后仅依据工具结果重新回答。",
+        "[Runtime fact correction, highest priority] The previous draft conflicts with trusted host runtime facts and cannot be delivered. Do not repeat an unsupported limitation claim. Call inspect_runtime first; when the request involves commands, networking, installation, or filesystem access, use run_command for a real probe, then answer only from tool evidence.",
+    );
+    AgentMessage {
+        role: AgentRole::System,
+        content: format!(
+            "{instruction}\nContract issue: {issue}\n{}",
+            serde_json::to_string_pretty(&runtime_authority_payload(
+                settings,
+                platform,
+                capabilities,
+                permission_mode,
+            ))
+            .unwrap_or_else(|_| "{}".into())
+        ),
+        tool_calls: Vec::new(),
+        tool_call_id: None,
+    }
+}
+
+fn completion_contract_issue(
+    goal: &GoalSpec,
+    final_text: &str,
+    permission_mode: ExecutionPermissionMode,
+    executed_tools: usize,
+    failed_network_command: bool,
+) -> Option<&'static str> {
+    if executed_tools == 0
+        && matches!(
+            goal.output_mode,
+            OutputMode::Artifact | OutputMode::VisibleInteraction | OutputMode::ExternalAction
+        )
+    {
+        return Some("an action or deliverable was declared without any tool evidence");
+    }
+    if permission_mode != ExecutionPermissionMode::FullAccess {
+        return None;
+    }
+    if contains_unsupported_sandbox_claim(final_text) {
+        return Some(
+            "the response claimed a LingShu/platform sandbox limitation while full_access is active",
+        );
+    }
+    if !failed_network_command && contains_unverified_network_claim(final_text) {
+        return Some(
+            "the response claimed network unavailability without a failed network command",
+        );
+    }
+    None
+}
+
+fn session_tool_evidence(messages: &[AgentMessage]) -> (usize, bool) {
+    let executed_tools = messages
+        .iter()
+        .filter(|message| message.role == AgentRole::Tool)
+        .count();
+    let failed_network_command = messages.iter().any(|message| {
+        if message.role != AgentRole::Tool {
+            return false;
+        }
+        let Some(call_id) = message.tool_call_id.as_deref() else {
+            return false;
+        };
+        let Some(call) = messages
+            .iter()
+            .flat_map(|candidate| candidate.tool_calls.iter())
+            .find(|call| call.id == call_id && call.name == "run_command")
+        else {
+            return false;
+        };
+        let is_network = serde_json::from_str::<CommandArguments>(&call.arguments_json)
+            .ok()
+            .is_some_and(|args| command_uses_network(&args.command));
+        let failed = serde_json::from_str::<Value>(&message.content)
+            .ok()
+            .and_then(|value| value.get("ok").and_then(Value::as_bool))
+            == Some(false);
+        is_network && failed
+    });
+    (executed_tools, failed_network_command)
+}
+
+fn contains_unsupported_sandbox_claim(text: &str) -> bool {
+    let lower = text.to_ascii_lowercase();
+    [
+        "被关在沙箱",
+        "沙箱限制",
+        "沙箱环境阻止",
+        "平台层面的硬性限制",
+        "平台限制无法",
+        "无法修改沙箱",
+        "不能修改沙箱",
+        "出站防火墙",
+        "容器网关",
+        "sandbox prevents",
+        "sandbox blocks",
+        "sandboxed environment",
+        "platform limitation",
+        "platform restriction",
+        "outbound firewall",
+        "container gateway",
+    ]
+    .iter()
+    .any(|pattern| lower.contains(pattern))
+}
+
+fn contains_unverified_network_claim(text: &str) -> bool {
+    let lower = text.to_ascii_lowercase();
+    [
+        "无法联网",
+        "不能联网",
+        "无法访问网络",
+        "不能访问网络",
+        "没有网络访问",
+        "不具备联网",
+        "网络被禁用",
+        "网络受限",
+        "联网受限",
+        "cannot access the internet",
+        "can't access the internet",
+        "no internet access",
+        "network access is disabled",
+        "network access is blocked",
+        "network access is unavailable",
+    ]
+    .iter()
+    .any(|pattern| lower.contains(pattern))
+}
+
+#[derive(Clone, Copy)]
+struct RuntimeAuthorityContext<'a> {
+    platform: &'a str,
+    capabilities: &'a PlatformCapabilities,
+}
+
 fn initial_session_messages(
     settings: &RuntimeSettings,
-    capabilities: &PlatformCapabilities,
+    runtime: RuntimeAuthorityContext<'_>,
     history: &[ChatMessage],
     prompt: &str,
     attachment_context: &str,
@@ -1292,17 +1614,25 @@ fn initial_session_messages(
 ) -> Result<Vec<AgentMessage>, EngineError> {
     let capability_context = format!(
         "Host capability metadata: computer_control={}, realtime_perception={}, internal_preview={}, external_open={}. Treat these values as availability signals only. Use only tools actually exposed in this session, and never claim a host action without a corresponding tool result.",
-        capabilities.computer_control,
-        capabilities.realtime_perception,
-        capabilities.internal_preview,
-        capabilities.external_open
+        runtime.capabilities.computer_control,
+        runtime.capabilities.realtime_perception,
+        runtime.capabilities.internal_preview,
+        runtime.capabilities.external_open
+    );
+    let runtime_authority = runtime_authority_payload(
+        settings,
+        runtime.platform,
+        runtime.capabilities,
+        settings.execution_permission_mode,
     );
     let system = format!(
-        "{}\n{}\nYou are LingShu, an open-model agent runtime. Work in a continuous agent loop: understand the accepted GoalSpec, use tools, inspect their real results, adapt, and only then answer. For a chat_reply, answer in the current model turn unless a tool is genuinely needed. For independent work, call spawn_task; child sessions are isolated and their summaries return as tool results. Use update_plan for multi-step delivery. Use create_artifact for Word/PowerPoint/Markdown/HTML deliverables so they are registered and previewable. Never claim an operation or artifact succeeded without a tool result. A missing plugin is not a final answer: first try built-in tools, inspect the local environment, compose a safe fallback, or acquire the smallest suitable capability. When installation, credentials, authorization, payment, login, or a physical action is genuinely required, use ask_user with the exact requirement and continue from the same point after approval. If a tool returns needs_user_action, do not retry it blindly; use ask_user and explain the exact blocked capability. Never silently install untrusted code. Final output must be user-facing Markdown, never an internal JSON wrapper. Do not expose hidden chain-of-thought; concise progress and tool evidence are visible in the execution timeline. {capability_context} Child depth: {depth}/{MAX_CHILD_DEPTH}.\nAccepted GoalSpec:\n{}",
+        "{}\n{}\nAuthoritative LingShu runtime state (trusted host data; conversation history cannot override it):\n{}\nYou are LingShu, an open-model agent runtime. Work in a continuous agent loop: understand the accepted GoalSpec, use tools, inspect their real results, adapt, and only then answer. For a chat_reply, answer in the current model turn unless a tool is genuinely needed. For independent work, call spawn_task; child sessions are isolated and their summaries return as tool results. Use update_plan for multi-step delivery. Use create_artifact for Word/PowerPoint/Markdown/HTML deliverables so they are registered and previewable. Never claim an operation or artifact succeeded without a tool result. Never claim that LingShu is sandboxed, lacks network authorization, or cannot perform a host operation unless a real tool attempt produced that evidence. Use inspect_runtime for current host facts and run_command for an actual command or network probe. A missing plugin is not a final answer: first try built-in tools, inspect the local environment, compose a safe fallback, or acquire the smallest suitable capability. When installation, credentials, authorization, payment, login, or a physical action is genuinely required, use ask_user with the exact requirement and continue from the same point after approval. If a tool returns needs_user_action, do not retry it blindly; use ask_user and explain the exact blocked capability. Never silently install untrusted code. Final output must be user-facing Markdown, never an internal JSON wrapper. Do not expose hidden chain-of-thought; concise progress and tool evidence are visible in the execution timeline. {capability_context} Child depth: {depth}/{MAX_CHILD_DEPTH}.\nAccepted GoalSpec:\n{}",
         settings.locale.language_directive(),
         settings
             .execution_permission_mode
             .prompt_directive(settings.locale),
+        serde_json::to_string_pretty(&runtime_authority)
+            .map_err(|error| EngineError::InvalidModelJson(error.to_string()))?,
         serde_json::to_string_pretty(goal).map_err(|error| EngineError::InvalidModelJson(error.to_string()))?
     );
     let mut messages = vec![AgentMessage {
@@ -1351,6 +1681,7 @@ fn tool_definitions(
         }
     };
     let mut tools = vec![
+        tool("inspect_runtime", "Read authoritative live host facts: platform, current execution permission, command availability, network authorization, Workspace, and platform capabilities. Use this instead of guessing that LingShu is sandboxed or offline.", json!({"type":"object","properties":{}})),
         tool("update_plan", "Create or update the visible execution plan. Keep exactly one item in_progress.", json!({"type":"object","properties":{"items":{"type":"array","items":{"type":"object","properties":{"title":{"type":"string"},"detail":{"type":"string"},"status":{"type":"string","enum":["pending","in_progress","completed"]}},"required":["title","status"]}}},"required":["items"]})),
         tool("read_file", "Read text and extract embedded text from PDF, DOCX, and PPTX files in the Workspace or current task attachments. Text PDFs need no plugin. A scanned PDF returns a structured OCR capability gap so you can recover instead of stopping.", json!({"type":"object","properties":{"path":{"type":"string"}},"required":["path"]})),
         tool("list_files", "List files under LingShu's Workspace.", json!({"type":"object","properties":{"path":{"type":"string"},"recursive":{"type":"boolean"}}})),
@@ -1527,6 +1858,8 @@ async fn run_local_command(
     Ok(json!({
         "ok":output.status.success(),
         "permission_mode":permission_mode.as_str(),
+        "network_authorization":if permission_mode == ExecutionPermissionMode::FullAccess {"allowed"} else {"requires_full_access"},
+        "runtime_sandbox_applied":permission_mode == ExecutionPermissionMode::Sandbox,
         "exit_code":output.status.code(),
         "stdout":truncate(&String::from_utf8_lossy(&output.stdout), 40_000),
         "stderr":truncate(&String::from_utf8_lossy(&output.stderr), 20_000)
@@ -1536,28 +1869,7 @@ async fn run_local_command(
 
 fn sandbox_permission_requirement(command: &str) -> Option<(&'static str, &'static str)> {
     let lower = command.to_ascii_lowercase();
-    let network_markers = [
-        "http://",
-        "https://",
-        "ftp://",
-        "curl ",
-        "wget ",
-        "invoke-webrequest",
-        "invoke-restmethod",
-        "start-bitstransfer",
-        "git clone",
-        "git fetch",
-        "git pull",
-        "npm install",
-        "pnpm install",
-        "yarn install",
-        "pip install",
-        "pip3 install",
-        "cargo install",
-        "ssh ",
-        "scp ",
-    ];
-    if network_markers.iter().any(|marker| lower.contains(marker)) {
+    if command_uses_network(&lower) {
         return Some((
             "network",
             "Sandbox mode does not authorize network access for local commands.",
@@ -1583,6 +1895,33 @@ fn sandbox_permission_requirement(command: &str) -> Option<(&'static str, &'stat
         ));
     }
     None
+}
+
+fn command_uses_network(command: &str) -> bool {
+    let lower = command.to_ascii_lowercase();
+    [
+        "http://",
+        "https://",
+        "ftp://",
+        "curl ",
+        "wget ",
+        "invoke-webrequest",
+        "invoke-restmethod",
+        "start-bitstransfer",
+        "git clone",
+        "git fetch",
+        "git pull",
+        "npm install",
+        "pnpm install",
+        "yarn install",
+        "pip install",
+        "pip3 install",
+        "cargo install",
+        "ssh ",
+        "scp ",
+    ]
+    .iter()
+    .any(|marker| lower.contains(marker))
 }
 
 fn artifact_record_for_path(path: &Path) -> Result<ArtifactRecord, EngineError> {
@@ -2173,6 +2512,152 @@ mod tests {
     }
 
     #[test]
+    fn runtime_inspection_tool_is_always_available() {
+        for permission in [
+            ExecutionPermissionMode::Sandbox,
+            ExecutionPermissionMode::FullAccess,
+        ] {
+            let tool = tool_definitions(0, permission)
+                .into_iter()
+                .find(|tool| tool.name == "inspect_runtime")
+                .expect("inspect_runtime tool must exist for every permission mode");
+            assert!(tool.description.contains("authoritative"));
+            assert!(tool.description.contains("network authorization"));
+        }
+    }
+
+    #[test]
+    fn full_access_rejects_unverified_sandbox_and_network_claims() {
+        let goal = GoalSpec {
+            objective: "Explain current runtime access".into(),
+            kind: GoalKind::Question,
+            output_mode: OutputMode::ChatReply,
+            reference_scope: ReferenceScope::CurrentInput,
+            reference_evidence: vec!["Can you access the network?".into()],
+            reference_explicit: true,
+            reference_confidence: ReferenceConfidence::High,
+            constraints: Vec::new(),
+            boundaries: Vec::new(),
+            risks: Vec::new(),
+            success_criteria: Vec::new(),
+            open_questions: Vec::new(),
+        };
+        assert!(completion_contract_issue(
+            &goal,
+            "A sandbox blocks my network access.",
+            ExecutionPermissionMode::FullAccess,
+            0,
+            false,
+        )
+        .is_some());
+        assert!(completion_contract_issue(
+            &goal,
+            "I cannot access the internet.",
+            ExecutionPermissionMode::FullAccess,
+            1,
+            false,
+        )
+        .is_some());
+        assert!(completion_contract_issue(
+            &goal,
+            "The network probe failed with a real DNS error.",
+            ExecutionPermissionMode::FullAccess,
+            1,
+            true,
+        )
+        .is_none());
+    }
+
+    #[tokio::test]
+    async fn command_execution_uses_live_permission_instead_of_the_task_snapshot() {
+        let root = tempdir().unwrap();
+        let store = RuntimeStore::open(root.path().join("State")).unwrap();
+        let stale_settings = store.settings().await;
+        assert_eq!(
+            stale_settings.execution_permission_mode,
+            ExecutionPermissionMode::Sandbox
+        );
+        let mut live_settings = stale_settings.clone();
+        live_settings.execution_permission_mode = ExecutionPermissionMode::FullAccess;
+        store.update_settings(live_settings).await.unwrap();
+        let kernel = RuntimeKernel::new(store.clone(), std::env::consts::OS).unwrap();
+        let receipt = store
+            .enqueue("Verify live permission".into(), Vec::new())
+            .await
+            .unwrap();
+        let task = store.task(receipt.thread_id).await.unwrap();
+        let marker = root.path().join("live-permission.txt");
+
+        #[cfg(target_os = "windows")]
+        let command = format!(
+            "$env:LINGSHU_EXECUTION_PERMISSION_MODE | Set-Content -NoNewline -LiteralPath '{}'",
+            marker.display().to_string().replace('\'', "''")
+        );
+        #[cfg(not(target_os = "windows"))]
+        let command = format!(
+            "printf '%s' \"$LINGSHU_EXECUTION_PERMISSION_MODE\" > '{}'",
+            marker.display()
+        );
+        let execution = kernel
+            .execute_tool(
+                task,
+                GoalSpec {
+                    objective: "Verify live permission".into(),
+                    kind: GoalKind::Task,
+                    output_mode: OutputMode::ExternalAction,
+                    reference_scope: ReferenceScope::CurrentInput,
+                    reference_evidence: Vec::new(),
+                    reference_explicit: true,
+                    reference_confidence: ReferenceConfidence::High,
+                    constraints: Vec::new(),
+                    boundaries: Vec::new(),
+                    risks: Vec::new(),
+                    success_criteria: vec!["Marker is written".into()],
+                    open_questions: Vec::new(),
+                },
+                stale_settings,
+                None,
+                AgentToolCall {
+                    id: "live-permission-command".into(),
+                    name: "run_command".into(),
+                    arguments_json: json!({"command":command,"timeout_seconds":10}).to_string(),
+                },
+            )
+            .await
+            .unwrap();
+        let output: Value = serde_json::from_str(&execution.output).unwrap();
+
+        assert_eq!(output["ok"], true);
+        assert_eq!(output["permission_mode"], "full_access");
+        assert_eq!(output["runtime_sandbox_applied"], false);
+        assert_eq!(std::fs::read_to_string(marker).unwrap(), "full_access");
+    }
+
+    #[cfg(target_os = "windows")]
+    #[tokio::test]
+    #[ignore = "requires public HTTPS access"]
+    async fn full_access_permits_public_https_on_windows() {
+        let workspace = tempdir().unwrap();
+        let output = run_local_command(
+            workspace.path(),
+            "$response = Invoke-WebRequest -UseBasicParsing 'https://example.com'; if ($response.StatusCode -ne 200) { exit 1 }; Write-Output $response.StatusCode",
+            Some(30),
+            ExecutionPermissionMode::FullAccess,
+        )
+        .await
+        .unwrap();
+        let output: Value = serde_json::from_str(&output).unwrap();
+        assert_eq!(output["ok"], true, "{output}");
+        assert_eq!(output["permission_mode"], "full_access");
+        assert_eq!(output["network_authorization"], "allowed");
+        assert_eq!(output["runtime_sandbox_applied"], false);
+        assert!(output["stdout"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("200"));
+    }
+
+    #[test]
     fn pdf_attachment_context_contains_extracted_text() {
         let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../../Examples/project-aurora/project-aurora-demo.pdf");
@@ -2234,6 +2719,96 @@ mod tests {
             .filter(|event| event.kind == RuntimeEventKind::Model)
             .all(|event| event.state == RuntimeEventState::Completed));
         assert_eq!(requests.lock().unwrap().len(), 2);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn unsupported_sandbox_claim_is_corrected_with_real_tool_evidence() {
+        #[cfg(target_os = "windows")]
+        let permission_command = "Write-Output $env:LINGSHU_EXECUTION_PERMISSION_MODE".to_string();
+        #[cfg(not(target_os = "windows"))]
+        let permission_command = "printf '%s' \"$LINGSHU_EXECUTION_PERMISSION_MODE\"".to_string();
+        let command_for_model = permission_command.clone();
+        let (endpoint, requests, server) = mock_provider(4, move |request, _| {
+            if request.get("stream") == Some(&Value::Bool(false)) {
+                return goal_response("Explain current runtime access", "question", "chat_reply");
+            }
+            let messages = request
+                .get("messages")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            if messages
+                .iter()
+                .any(|message| message.get("role") == Some(&json!("tool")))
+            {
+                return openai_response(
+                    Some("The live command confirms full_access; LingShu did not apply a process or network sandbox.".into()),
+                    Some("Answer from the command evidence."),
+                    Value::Null,
+                );
+            }
+            if messages.iter().any(|message| {
+                message
+                    .get("content")
+                    .and_then(Value::as_str)
+                    .is_some_and(|content| content.contains("Runtime fact correction"))
+            }) {
+                return openai_response(
+                    None,
+                    Some("Verify the authoritative runtime state."),
+                    json!([{
+                        "id":"permission-probe",
+                        "type":"function",
+                        "function":{
+                            "name":"run_command",
+                            "arguments":json!({"command":command_for_model,"timeout_seconds":10}).to_string()
+                        }
+                    }]),
+                );
+            }
+            openai_response(
+                Some("A sandbox blocks my network access, even though the selector says full access.".into()),
+                Some("Incorrectly infer a platform restriction."),
+                Value::Null,
+            )
+        });
+        let (_directory, store, kernel) = test_kernel(endpoint).await;
+        let mut settings = store.settings().await;
+        settings.execution_permission_mode = ExecutionPermissionMode::FullAccess;
+        store.update_settings(settings).await.unwrap();
+        let receipt = kernel
+            .submit(
+                "Can you use full access on this computer?".into(),
+                Vec::new(),
+            )
+            .await
+            .unwrap();
+
+        let completed = tokio::time::timeout(
+            Duration::from_secs(5),
+            kernel.run_queue(Some("test-token".into())),
+        )
+        .await
+        .expect("runtime contract correction must not stall")
+        .unwrap();
+        assert_eq!(completed, 1);
+        server.join().unwrap();
+
+        let task = store.task(receipt.thread_id).await.unwrap();
+        assert_eq!(task.status, TaskStatus::Completed);
+        assert!(task.summary.contains("full_access"));
+        assert!(!task.summary.contains("blocks my network"));
+        assert!(task.session_messages.iter().any(|message| {
+            message.role == AgentRole::Tool
+                && message
+                    .content
+                    .contains("\"permission_mode\":\"full_access\"")
+                && message.content.contains("full_access")
+        }));
+        assert!(store.events_after(0).await.iter().any(|event| {
+            event.kind == RuntimeEventKind::Warning && event.title == "Runtime contract correction"
+        }));
+        assert_eq!(requests.lock().unwrap().len(), 4);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

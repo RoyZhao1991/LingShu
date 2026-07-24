@@ -1882,7 +1882,7 @@ dependencies = [
 
 [[package]]
 name = "lingshu-windows"
-version = "0.1.0-5"
+version = "0.1.0-6"
 dependencies = [
  "dirs",
  "keyring",

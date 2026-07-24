@@ -11,4 +11,4 @@ npm run tauri -- build
 
 See [`../Docs/WINDOWS.md`](../Docs/WINDOWS.md) for the capability boundary and installer workflow.
 
-Prebuilt x64 preview installers are published at [windows-v0.1.0-preview.5](https://github.com/RoyZhao1991/LingShu/releases/tag/windows-v0.1.0-preview.5). The stable setup filename is [`Nous-Windows-x64-Setup.exe`](https://github.com/RoyZhao1991/LingShu/releases/download/windows-v0.1.0-preview.5/Nous-Windows-x64-Setup.exe).
+Prebuilt x64 preview installers are published at [windows-v0.1.0-preview.6](https://github.com/RoyZhao1991/LingShu/releases/tag/windows-v0.1.0-preview.6). The stable setup filename is [`Nous-Windows-x64-Setup.exe`](https://github.com/RoyZhao1991/LingShu/releases/download/windows-v0.1.0-preview.6/Nous-Windows-x64-Setup.exe).
