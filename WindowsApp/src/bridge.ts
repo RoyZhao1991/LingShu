@@ -59,7 +59,7 @@ const demoTask: TaskRecord = {
     { id: "demo-step-2", title: "Produce the response and artifacts", detail: "Response and artifact registry completed", status: "completed", updatedAt: now },
   ],
   artifacts: [{ id: "demo-artifact", title: "Project Aurora brief", path: demoArtifactPath, kind: "markdown", sizeBytes: 1840, modifiedAt: now }],
-  summary: "The Project Aurora brief is ready and registered.", error: undefined, attachmentPaths: [],
+  summary: "The Project Aurora brief is ready and registered.", error: undefined, attachmentPaths: [demoAttachmentPath],
   rootTaskId: "demo-thread", role: "main", origin: "conversation", participantName: "LingShu", depth: 0,
 };
 
@@ -80,8 +80,8 @@ let snapshot: RuntimeSnapshot = {
   platform: "windows",
   capabilities: { computerControl: false, realtimePerception: false, internalPreview: true, externalOpen: true },
   messages: [
-    { id: "demo-user", role: "user", text: "Review the attached resume and summarize the fit for Project Aurora.", createdAt: now, state: "complete", threadId: demoTask.id, attachmentPaths: [demoAttachmentPath] },
-    { id: "demo-assistant", role: "assistant", text: "The attached resume has been reviewed.\n\n| Dimension | Assessment | Evidence |\n| --- | --- | --- |\n| Delivery | Strong | Led two cross-team releases |\n| Architecture | Good fit | Experience with service boundaries and observability |\n| Risk | Needs validation | Limited evidence for incident ownership |\n\nThe Project Aurora brief is ready and can be inspected in Nous's built-in preview.", createdAt: now, state: "complete", threadId: demoTask.id, attachmentPaths: [] },
+    { id: "demo-user", role: "user", text: "Review the attached resume and summarize the fit for Project Aurora.", createdAt: now, state: "complete", threadId: demoTask.id, attachmentPaths: [] },
+    { id: "demo-assistant", role: "assistant", text: "The attached resume has been reviewed.\n\nDimension | Assessment || Delivery | Strong || Architecture | Good fit || Risk | Needs validation\n\nThe Project Aurora brief is ready and can be inspected in Nous's built-in preview.", createdAt: now, state: "complete", threadId: demoTask.id, attachmentPaths: [] },
   ],
   tasks: [demoTask], activeTaskId: undefined, queuedTaskCount: 0, providerConfigured: true,
   events: demoEvents, latestEventSequence: 3,
