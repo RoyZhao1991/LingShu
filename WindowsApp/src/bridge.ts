@@ -35,6 +35,7 @@ const providers: ProviderPreset[] = [
 
 const now = new Date().toISOString();
 const demoArtifactPath = "C:\\Users\\Roy\\Documents\\LingShu Workspace\\Project-Aurora-Brief.md";
+const demoAttachmentPath = "C:\\Users\\Roy\\Documents\\Project-Aurora-Resume.pdf";
 const demoTask: TaskRecord = {
   id: "demo-thread",
   title: "Create and verify a Project Aurora brief",
@@ -79,8 +80,8 @@ let snapshot: RuntimeSnapshot = {
   platform: "windows",
   capabilities: { computerControl: false, realtimePerception: false, internalPreview: true, externalOpen: true },
   messages: [
-    { id: "demo-user", role: "user", text: "Create a concise Project Aurora brief and register the file.", createdAt: now, state: "complete", threadId: demoTask.id },
-    { id: "demo-assistant", role: "assistant", text: "The Project Aurora brief is ready. Its real file is registered below and can be inspected in LingShu's built-in preview.", createdAt: now, state: "complete", threadId: demoTask.id },
+    { id: "demo-user", role: "user", text: "Review the attached resume and summarize the fit for Project Aurora.", createdAt: now, state: "complete", threadId: demoTask.id, attachmentPaths: [demoAttachmentPath] },
+    { id: "demo-assistant", role: "assistant", text: "The attached resume has been reviewed.\n\n| Dimension | Assessment | Evidence |\n| --- | --- | --- |\n| Delivery | Strong | Led two cross-team releases |\n| Architecture | Good fit | Experience with service boundaries and observability |\n| Risk | Needs validation | Limited evidence for incident ownership |\n\nThe Project Aurora brief is ready and can be inspected in Nous's built-in preview.", createdAt: now, state: "complete", threadId: demoTask.id, attachmentPaths: [] },
   ],
   tasks: [demoTask], activeTaskId: undefined, queuedTaskCount: 0, providerConfigured: true,
   events: demoEvents, latestEventSequence: 3,
@@ -115,8 +116,8 @@ async function mockInvoke<T>(command: string, args?: Record<string, unknown>): P
         ...snapshot, activeTaskId: id, tasks: [...snapshot.tasks, task],
         events: [...snapshot.events, event], latestEventSequence: event.sequence,
         messages: [...snapshot.messages,
-          { id: crypto.randomUUID(), role: "user", text: prompt, createdAt, state: "complete", threadId: id },
-          { id: task.assistantMessageId, role: "assistant", text: "Understanding…", createdAt, state: "thinking", threadId: id },
+          { id: crypto.randomUUID(), role: "user", text: prompt, createdAt, state: "complete", threadId: id, attachmentPaths: task.attachmentPaths },
+          { id: task.assistantMessageId, role: "assistant", text: "Understanding…", createdAt, state: "thinking", threadId: id, attachmentPaths: [] },
         ],
       };
       return { threadId: id, queued: false } as T;

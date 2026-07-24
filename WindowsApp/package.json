@@ -1,7 +1,7 @@
 {
   "name": "lingshu-windows",
   "private": true,
-  "version": "0.1.0-3",
+  "version": "0.1.0-4",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -14,7 +14,8 @@
     "lucide-react": "^0.468.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
-    "react-markdown": "^10.1.0"
+    "react-markdown": "^10.1.0",
+    "remark-gfm": "^4.0.1"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.11.4",

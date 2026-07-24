@@ -65,8 +65,12 @@ svg { flex: 0 0 auto; }
 .markdown-body pre, .markdown-body code { font-family: "Cascadia Code", Consolas, monospace; }
 .markdown-body pre { overflow: auto; padding: 14px; border: 1px solid var(--line); background: #f7f9f8; }
 .markdown-body code { font-size: .92em; }
-.markdown-body table { border-collapse: collapse; width: 100%; }
-.markdown-body th, .markdown-body td { padding: 8px 10px; border-bottom: 1px solid var(--line); text-align: left; }
+.markdown-table-scroll { width: 100%; max-width: 100%; margin: 14px 0; overflow-x: auto; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); }
+.markdown-table-scroll table { width: max-content; min-width: 100%; border-collapse: collapse; }
+.markdown-table-scroll th, .markdown-table-scroll td { min-width: 110px; padding: 9px 11px; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; overflow-wrap: anywhere; }
+.markdown-table-scroll th { color: var(--teal-dark); background: #e7f3f1; font-weight: 750; }
+.markdown-table-scroll tr:last-child td { border-bottom: 0; }
+.markdown-table-scroll th:last-child, .markdown-table-scroll td:last-child { border-right: 0; }
 .inline-loader { width: 18px; vertical-align: middle; margin-right: 8px; color: var(--teal); }
 .thread-link { border: 1px solid #a8d5d0; color: var(--teal-dark); background: #e7f3f1; padding: 7px 10px; display: inline-flex; align-items: center; gap: 7px; border-radius: 6px; }
 .message-runtime-status { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line); display: flex; align-items: center; gap: 9px; color: var(--teal-dark); }
@@ -94,6 +98,14 @@ svg { flex: 0 0 auto; }
 .attachment-strip { display: flex; gap: 8px; overflow-x: auto; padding: 0 0 9px; }
 .attachment-chip { max-width: 240px; min-width: 0; display: flex; align-items: center; gap: 6px; border: 1px solid #abd6d2; background: #edf7f5; color: #31504d; padding: 6px 8px; border-radius: 6px; }
 .attachment-chip span { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.message-attachments { display: grid; gap: 7px; margin-top: 12px; }
+.message-attachment { width: min(100%, 420px); min-width: 0; display: grid; grid-template-columns: 30px minmax(0, 1fr) 18px; align-items: center; gap: 9px; padding: 9px 10px; border: 1px solid #9dcfc9; border-radius: 6px; color: var(--ink); background: rgba(255,255,255,.58); text-align: left; }
+.message-attachment:hover { border-color: var(--teal); background: #edf7f5; }
+.message-attachment > svg:first-child { width: 19px; color: var(--teal); }
+.message-attachment > svg:last-child { width: 16px; color: var(--muted); }
+.message-attachment span, .message-attachment strong, .message-attachment small { min-width: 0; display: block; }
+.message-attachment strong { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 13px; }
+.message-attachment small { margin-top: 3px; color: var(--muted); font-size: 11px; }
 .error-strip { display: flex; align-items: flex-start; gap: 8px; padding: 9px 11px; margin-bottom: 8px; color: #a42b35; background: #fff0f1; border-left: 3px solid var(--red); font-size: 13px; overflow-wrap: anywhere; }
 
 .threads-page { height: 100%; display: grid; grid-template-columns: 320px minmax(0, 1fr); }
@@ -283,6 +295,8 @@ svg { flex: 0 0 auto; }
   .app-header { background: rgba(12,16,16,.97); }
   .message { background: #171d1c; }
   .message.user { background: #17302d; }
+  .markdown-table-scroll th { color: #9ce0d8; background: #18302d; }
+  .message-attachment, .message-attachment:hover { color: #edf4f2; background: #142624; }
   .markdown-body pre, .composer textarea, .thread-list, .setup-dialog, .action-dialog { background: #111716; }
   .composer, .artifact-row, .settings-form input, .settings-form select, .preview-dialog { background: #171d1c; color: #edf4f2; }
   .permission-selector { color: #dbe5e3; background: #222a29; border-color: #3a4644; }

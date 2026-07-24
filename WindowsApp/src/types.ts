@@ -34,6 +34,7 @@ export interface ChatMessage {
   createdAt: string;
   state: MessageState;
   threadId?: string;
+  attachmentPaths: string[];
 }
 
 export interface GoalSpec {

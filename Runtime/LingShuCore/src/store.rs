@@ -47,6 +47,7 @@ impl Default for PersistedState {
                 created_at: Utc::now(),
                 state: MessageState::Complete,
                 thread_id: None,
+                attachment_paths: Vec::new(),
             }],
             tasks: Vec::new(),
             active_task_id: None,
@@ -175,6 +176,7 @@ impl RuntimeStore {
             created_at: now,
             state: MessageState::Complete,
             thread_id: Some(thread_id),
+            attachment_paths: attachment_paths.clone(),
         });
         state.messages.push(ChatMessage {
             id: assistant_message_id,
@@ -188,6 +190,7 @@ impl RuntimeStore {
             created_at: now,
             state: MessageState::Thinking,
             thread_id: Some(thread_id),
+            attachment_paths: Vec::new(),
         });
         state.tasks.push(TaskRecord {
             id: thread_id,
@@ -955,5 +958,38 @@ mod tests {
 
         let reopened = RuntimeStore::open(directory.path()).unwrap();
         assert_eq!(reopened.settings().await.locale, AppLocale::En);
+    }
+
+    #[tokio::test]
+    async fn enqueue_persists_attachments_on_the_user_message() {
+        let directory = tempdir().unwrap();
+        let store = RuntimeStore::open(directory.path()).unwrap();
+        let attachment = PathBuf::from(r"C:\Users\Roy\Documents\resume.pdf");
+
+        let receipt = store
+            .enqueue("Review this resume".into(), vec![attachment.clone()])
+            .await
+            .unwrap();
+        let snapshot = store
+            .snapshot(
+                "windows",
+                PlatformCapabilities {
+                    computer_control: false,
+                    realtime_perception: false,
+                    internal_preview: true,
+                    external_open: true,
+                },
+                true,
+            )
+            .await;
+        let user_message = snapshot
+            .messages
+            .iter()
+            .find(|message| {
+                message.thread_id == Some(receipt.thread_id) && message.role == MessageRole::User
+            })
+            .unwrap();
+
+        assert_eq!(user_message.attachment_paths, vec![attachment]);
     }
 }

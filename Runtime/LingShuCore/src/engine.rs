@@ -884,6 +884,7 @@ impl RuntimeKernel {
                 created_at: Utc::now(),
                 state: MessageState::Complete,
                 thread_id: Some(parent.id),
+                attachment_paths: Vec::new(),
             }];
             let goal = self
                 .generate_goal(
