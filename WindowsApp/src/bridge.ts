@@ -9,6 +9,12 @@ export interface BootstrapPayload {
   providers: ProviderPreset[];
 }
 
+export type WindowFileDropEvent =
+  | { type: "enter"; paths: string[] }
+  | { type: "over" }
+  | { type: "drop"; paths: string[] }
+  | { type: "leave" };
+
 export function hasNativeBridge(): boolean {
   return Reflect.has(window, "__TAURI_INTERNALS__");
 }
@@ -23,6 +29,20 @@ export async function chooseFiles(): Promise<string[]> {
   const selected = await tauriOpen({ multiple: true, directory: false });
   if (!selected) return [];
   return Array.isArray(selected) ? selected : [selected];
+}
+
+export async function listenForWindowFileDrops(
+  handler: (event: WindowFileDropEvent) => void,
+): Promise<() => void> {
+  if (!hasNativeBridge()) return () => undefined;
+  const { getCurrentWindow } = await import("@tauri-apps/api/window");
+  return getCurrentWindow().onDragDropEvent(({ payload }) => {
+    if (payload.type === "enter" || payload.type === "drop") {
+      handler({ type: payload.type, paths: payload.paths });
+      return;
+    }
+    handler({ type: payload.type });
+  });
 }
 
 export async function choosePluginManifest(): Promise<string | undefined> {
@@ -71,6 +91,7 @@ const demoTask: TaskRecord = {
   artifacts: [{ id: "demo-artifact", title: "Project Aurora brief", path: demoArtifactPath, kind: "markdown", sizeBytes: 1840, modifiedAt: now }],
   summary: "The Project Aurora brief is ready and registered.", error: undefined, attachmentPaths: [demoAttachmentPath],
   rootTaskId: "demo-thread", role: "main", origin: "conversation", participantName: "LingShu", depth: 0,
+  loopEngine: "grok",
 };
 
 const demoEvents: RuntimeEvent[] = [
@@ -83,7 +104,7 @@ const demoPlugins: PluginRecord[] = [
   {
     id: "lingshu.design-kb",
     name: "DesignKB",
-    version: "1.0.0",
+    version: "1.1.0",
     description: "Built-in presentation layouts, palettes, typography, icons, generator, and review rubric.",
     descriptionZh: "内置演示文稿版式、配色、字体、图标、生成器与验收规范。",
     source: "built_in",
@@ -104,12 +125,12 @@ const demoPlugins: PluginRecord[] = [
 ];
 
 let snapshot: RuntimeSnapshot = {
-  kernelAbiVersion: "1.0.0",
+  kernelAbiVersion: "1.1.0",
   settings: {
     locale: "en", providerId: "deepseek", providerName: "DeepSeek", protocol: "openai_chat_completions",
     endpoint: "https://api.deepseek.com", model: "deepseek-chat",
     workspace: "C:\\Users\\Roy\\Documents\\LingShu Workspace",
-    executionPermissionMode: "sandbox", firstRunComplete: true,
+    executionPermissionMode: "sandbox", loopEngine: "grok", firstRunComplete: true,
   },
   platform: "windows",
   capabilities: { computerControl: false, realtimePerception: false, internalPreview: true, externalOpen: true },
@@ -119,6 +140,28 @@ let snapshot: RuntimeSnapshot = {
   ],
   tasks: [demoTask], activeTaskId: undefined, queuedTaskCount: 0, providerConfigured: true,
   events: demoEvents, latestEventSequence: 3, plugins: demoPlugins,
+  memory: {
+    schemaVersion: 1,
+    totalCount: 0,
+    hotCount: 0,
+    coldCount: 0,
+    countsByKind: {},
+    importedSources: {},
+  },
+  loopEngines: [
+    {
+      id: "grok", name: "Grok Loop", description: "Built-in Loop harness", descriptionZh: "内置 Loop harness",
+      adapterBuiltin: true, available: true, selected: true, executionMode: "in_process",
+      statusDetail: "Built-in adapter and engine are ready", harnessOnly: true, transportOwner: "lingshu",
+      nativeAuthDisabled: true, nativeQuotaDisabled: true,
+    },
+    {
+      id: "codex", name: "Codex Loop", description: "LingShu-managed Loop harness", descriptionZh: "灵枢托管 Loop harness",
+      adapterBuiltin: true, available: false, selected: false, executionMode: "external_cli",
+      statusDetail: "Harness executable not found", harnessOnly: true, transportOwner: "lingshu",
+      nativeAuthDisabled: true, nativeQuotaDisabled: true,
+    },
+  ],
 };
 
 async function mockInvoke<T>(command: string, args?: Record<string, unknown>): Promise<T> {
@@ -144,6 +187,7 @@ async function mockInvoke<T>(command: string, args?: Record<string, unknown>): P
         steps: [{ id: crypto.randomUUID(), title: "Understand the request", detail: "Generating a complete GoalSpec", status: "understanding", updatedAt: createdAt }],
         artifacts: [], summary: "", assistantMessageId: crypto.randomUUID(), attachmentPaths: (args?.attachmentPaths as string[]) ?? [],
         rootTaskId: id, role: "main", origin: "conversation", participantName: "LingShu", depth: 0,
+        loopEngine: snapshot.settings.loopEngine,
       };
       const event: RuntimeEvent = { id: crypto.randomUUID(), sequence: snapshot.latestEventSequence + 1, taskId: id, kind: "model", state: "running", actor: snapshot.settings.model, title: "Understanding the goal", detail: "Compiling the current input into an executable goal.", createdAt, updatedAt: createdAt };
       snapshot = {

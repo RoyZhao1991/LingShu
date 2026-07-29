@@ -238,7 +238,9 @@ extension LingShuState {
         existingBubbleID: UUID? = nil,
         imageDataURLs: [String]? = nil,
         contextPlan: LingShuContextAssemblyPlan? = nil,
-        acceptanceCheckpoint: LingShuAgentRunResult? = nil
+        acceptanceCheckpoint: LingShuAgentRunResult? = nil,
+        speechRequest: String? = nil,
+        inputSource: LingShuDialogueInputSource = .typed
     ) -> String {
         // 新一轮开始:先掐掉上一条回复还在放的 TTS,避免旧音频盖到新轮(音频/文字 desync)。
         interruptSpeechOutput?()
@@ -260,6 +262,9 @@ extension LingShuState {
             let pending = ChatMessage(speaker: "灵枢", text: "", isUser: false, isLoading: true, taskRecordID: taskRecordID)
             chatMessages.append(pending)
             pendingID = pending.id
+        }
+        if let speechRequest {
+            registerSpeechIntent(for: pendingID, request: speechRequest, source: inputSource)
         }
         let turn = LingShuPendingMainTurn(
             bubbleID: pendingID,

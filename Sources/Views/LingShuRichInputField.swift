@@ -19,6 +19,7 @@ struct LingShuRichInputField: NSViewRepresentable {
     var accent: Color
     var onSubmit: () -> Void
     var onPasteImage: ((Data) -> Void)?
+    var onDropFiles: (([URL]) -> Void)?
     /// **@ 自动补全**:光标处的活跃 mention 变化(打 `@c` → query="c";nil=当前不在 mention 里)。驱动 SwiftUI 弹补全列表。
     var onMentionChange: (LingShuMentionQuery?) -> Void = { _ in }
     /// 补全列表打开时的键盘操作(上/下移高亮、回车选中、Esc 关)——由 SwiftUI 侧据当前匹配执行。
@@ -65,6 +66,8 @@ struct LingShuRichInputField: NSViewRepresentable {
         tv.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
         tv.placeholderString = placeholder
         tv.onPasteImage = onPasteImage
+        tv.onDropFiles = onDropFiles
+        tv.registerForDraggedTypes([.fileURL])
         tv.string = text
 
         context.coordinator.textView = tv
@@ -80,6 +83,7 @@ struct LingShuRichInputField: NSViewRepresentable {
         context.coordinator.parent = self
         tv.placeholderString = placeholder
         tv.onPasteImage = onPasteImage
+        tv.onDropFiles = onDropFiles
         // 同步 binding→视图,但**只在真外部变更时**(「+」菜单插入 / 清空 / 程序替换):
         // 快速输入时 SwiftUI 会把**滞后的** binding 值送进来——若 binding 只是视图已打内容的前缀(打字滞后),**绝不覆盖**(以视图为准),
         // 否则会把刚打的几个字吞掉/错位(实测 @Codex 被重复就是这个)。清空(空串)/插入(更长且非前缀)才应用。
@@ -222,6 +226,7 @@ struct LingShuRichInputField: NSViewRepresentable {
 final class LingShuInputTextView: NSTextView {
     var placeholderString: String = ""
     var onPasteImage: ((Data) -> Void)?
+    var onDropFiles: (([URL]) -> Void)?
 
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
@@ -258,6 +263,38 @@ final class LingShuInputTextView: NSTextView {
             return
         }
         super.pasteAsPlainText(sender)   // 纯文本粘贴(不带富文本格式,与原 TextField 一致)
+    }
+
+    /// NSTextView 默认会把 Finder 文件拖放转换成路径文字。这里先接管 fileURL，
+    /// 让落点命中输入框时也与窗口其它区域一致地进入附件托盘。
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        if onDropFiles != nil, !Self.fileURLs(from: sender.draggingPasteboard).isEmpty {
+            return .copy
+        }
+        return super.draggingEntered(sender)
+    }
+
+    override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
+        if onDropFiles != nil, !Self.fileURLs(from: sender.draggingPasteboard).isEmpty {
+            return .copy
+        }
+        return super.draggingUpdated(sender)
+    }
+
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        let urls = Self.fileURLs(from: sender.draggingPasteboard)
+        guard let onDropFiles, !urls.isEmpty else {
+            return super.performDragOperation(sender)
+        }
+        onDropFiles(urls)
+        return true
+    }
+
+    nonisolated static func fileURLs(from pasteboard: NSPasteboard) -> [URL] {
+        (pasteboard.readObjects(
+            forClasses: [NSURL.self],
+            options: [.urlReadingFileURLsOnly: true]
+        ) as? [URL]) ?? []
     }
 
     /// 从剪贴板尽力抽出一张图片并归一成 PNG,覆盖:截图原始 PNG / 截图原始 TIFF / NSImage / 复制的图片文件 URL。

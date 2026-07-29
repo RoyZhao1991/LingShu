@@ -1,6 +1,7 @@
 export type Locale = "zh_cn" | "en";
 export type ProviderProtocol = "openai_responses" | "openai_chat_completions" | "anthropic_messages";
 export type ExecutionPermissionMode = "sandbox" | "full_access";
+export type LoopEngine = "grok" | "codex";
 export type MessageState = "complete" | "thinking" | "failed" | "needs_user_action";
 export type TaskStatus = "queued" | "understanding" | "running" | "needs_user_action" | "completed" | "failed" | "cancelled";
 export type TaskRole = "main" | "worker" | "checker";
@@ -17,6 +18,7 @@ export interface RuntimeSettings {
   model: string;
   workspace: string;
   executionPermissionMode: ExecutionPermissionMode;
+  loopEngine: LoopEngine;
   firstRunComplete: boolean;
 }
 
@@ -88,7 +90,25 @@ export interface TaskRecord {
   origin: TaskOrigin;
   participantName: string;
   depth: number;
+  loopEngine: LoopEngine;
   pendingQuestion?: string;
+}
+
+export interface LoopEngineRecord {
+  id: LoopEngine;
+  name: string;
+  description: string;
+  descriptionZh: string;
+  adapterBuiltin: boolean;
+  available: boolean;
+  selected: boolean;
+  executionMode: string;
+  executable?: string;
+  statusDetail: string;
+  harnessOnly: boolean;
+  transportOwner: string;
+  nativeAuthDisabled: boolean;
+  nativeQuotaDisabled: boolean;
 }
 
 export interface RuntimeEvent {
@@ -137,6 +157,17 @@ export interface PluginRecord {
   statusDetail: string;
 }
 
+export interface MemorySnapshot {
+  schemaVersion: number;
+  totalCount: number;
+  hotCount: number;
+  coldCount: number;
+  countsByKind: Record<string, number>;
+  latestUpdatedAt?: string;
+  lastConsolidatedAt?: string;
+  importedSources: Record<string, string>;
+}
+
 export interface RuntimeSnapshot {
   kernelAbiVersion: string;
   settings: RuntimeSettings;
@@ -150,6 +181,8 @@ export interface RuntimeSnapshot {
   events: RuntimeEvent[];
   latestEventSequence: number;
   plugins: PluginRecord[];
+  memory: MemorySnapshot;
+  loopEngines: LoopEngineRecord[];
 }
 
 export interface ProviderPreset {

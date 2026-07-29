@@ -19,8 +19,35 @@ enum LingShuVisibleModelText {
         let original = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         if !visible.isEmpty, visible != original { return visible }
         if let reply = bestEffortReply(from: original), !reply.isEmpty { return reply }
+        if let progress = readablePrefixBeforeInternalPayload(from: original) { return progress }
         if let legacy = legacyRolePipelineSummary(from: original) { return legacy }
         return visible.isEmpty ? original : visible
+    }
+
+    /// 工具事件偶尔会被错误投影成“可读进展 + 原始参数 JSON”。主对话只保留前面的
+    /// 自然语言；原始 payload 仍留在任务执行记录中。这里只处理宿主明确加过
+    /// `[truncated]` 的内部明细，避免把用户正常要求展示的 JSON 示例误删。
+    private static func readablePrefixBeforeInternalPayload(from raw: String) -> String? {
+        let candidates = ["\n{", "\n["].compactMap { marker -> String.Index? in
+            raw.range(of: marker)?.lowerBound
+        }
+        guard let payloadStart = candidates.min(),
+              payloadStart > raw.startIndex else { return nil }
+
+        let prefix = raw[..<payloadStart]
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !prefix.isEmpty else { return nil }
+
+        let payload = String(raw[payloadStart...])
+        let internalMarkers = [
+            "\"file_name\"", "\"slides\"", "\"layout\"", "\"theme\"",
+            "\"tool_calls\"", "\"arguments\"", "\"recursive\"", "\"command\""
+        ]
+        let markerCount = internalMarkers.reduce(into: 0) { count, marker in
+            if payload.contains(marker) { count += 1 }
+        }
+        guard payload.contains("[truncated]"), markerCount >= 1 else { return nil }
+        return prefix
     }
 
     /// 模型偶尔在长回复中把最终 JSON 截断。流程层仍然拒绝这种无效协议,

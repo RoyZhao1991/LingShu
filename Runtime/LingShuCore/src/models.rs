@@ -64,6 +64,24 @@ impl ExecutionPermissionMode {
     }
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum LoopEngineKind {
+    #[default]
+    #[serde(alias = "native", alias = "embeddedGrok", alias = "embedded_grok")]
+    Grok,
+    Codex,
+}
+
+impl LoopEngineKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Grok => "grok",
+            Self::Codex => "codex",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct RuntimeSettings {
@@ -76,6 +94,13 @@ pub struct RuntimeSettings {
     pub workspace: PathBuf,
     #[serde(default)]
     pub execution_permission_mode: ExecutionPermissionMode,
+    #[serde(
+        default,
+        alias = "workerLoopEngine",
+        alias = "worker_loop_engine",
+        alias = "engine"
+    )]
+    pub loop_engine: LoopEngineKind,
     pub first_run_complete: bool,
 }
 
@@ -93,6 +118,7 @@ impl Default for RuntimeSettings {
             model: "deepseek-chat".into(),
             workspace,
             execution_permission_mode: ExecutionPermissionMode::Sandbox,
+            loop_engine: LoopEngineKind::Grok,
             first_run_complete: false,
         }
     }
@@ -363,6 +389,8 @@ pub struct TaskRecord {
     #[serde(default)]
     pub depth: u8,
     #[serde(default)]
+    pub loop_engine: LoopEngineKind,
+    #[serde(default)]
     pub session_messages: Vec<AgentMessage>,
     #[serde(default)]
     pub pending_tool_call_id: Option<String>,
@@ -392,6 +420,231 @@ pub struct RuntimeSnapshot {
     pub latest_event_sequence: u64,
     #[serde(default)]
     pub plugins: Vec<PluginRecord>,
+    #[serde(default)]
+    pub memory: MemorySnapshot,
+    #[serde(default)]
+    pub loop_engines: Vec<LoopEngineRecord>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct LoopEngineRecord {
+    pub id: LoopEngineKind,
+    pub name: String,
+    pub description: String,
+    pub description_zh: String,
+    #[serde(default)]
+    pub adapter_builtin: bool,
+    pub available: bool,
+    pub selected: bool,
+    pub execution_mode: String,
+    pub executable: Option<PathBuf>,
+    pub status_detail: String,
+    #[serde(default = "default_true")]
+    pub harness_only: bool,
+    #[serde(default = "default_loop_transport_owner")]
+    pub transport_owner: String,
+    #[serde(default = "default_true")]
+    pub native_auth_disabled: bool,
+    #[serde(default = "default_true")]
+    pub native_quota_disabled: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn default_loop_transport_owner() -> String {
+    "lingshu".into()
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum MemoryKind {
+    #[default]
+    Conversation,
+    Task,
+    Fact,
+    Preference,
+    Experience,
+    Artifact,
+    Knowledge,
+}
+
+impl MemoryKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Conversation => "conversation",
+            Self::Task => "task",
+            Self::Fact => "fact",
+            Self::Preference => "preference",
+            Self::Experience => "experience",
+            Self::Artifact => "artifact",
+            Self::Knowledge => "knowledge",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum MemoryTier {
+    #[default]
+    Hot,
+    Cold,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum MemorySource {
+    #[default]
+    Runtime,
+    UserExplicit,
+    Task,
+    LegacySwift,
+    Platform,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryEntry {
+    pub id: String,
+    pub kind: MemoryKind,
+    pub tier: MemoryTier,
+    pub title: String,
+    pub content: String,
+    #[serde(default)]
+    pub last_prompt: String,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    pub source: MemorySource,
+    pub importance: f64,
+    pub confidence: f64,
+    #[serde(default)]
+    pub sensitive: bool,
+    #[serde(default)]
+    pub message_count: u32,
+    pub task_id: Option<String>,
+    pub execution_record_id: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub archived_at: Option<DateTime<Utc>>,
+    pub compressed_at: Option<DateTime<Utc>>,
+    #[serde(default)]
+    pub aliases: Vec<String>,
+    #[serde(default)]
+    pub access_count: u32,
+    pub last_accessed_at: Option<DateTime<Utc>>,
+    pub fingerprint: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryHit {
+    pub entry: MemoryEntry,
+    pub score: f64,
+    pub matched_by: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryRecall {
+    pub query: String,
+    #[serde(default)]
+    pub hits: Vec<MemoryHit>,
+    #[serde(default)]
+    pub context: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct MemorySnapshot {
+    pub schema_version: u32,
+    pub total_count: usize,
+    pub hot_count: usize,
+    pub cold_count: usize,
+    #[serde(default)]
+    pub counts_by_kind: std::collections::BTreeMap<String, usize>,
+    pub latest_updated_at: Option<DateTime<Utc>>,
+    pub last_consolidated_at: Option<DateTime<Utc>>,
+    #[serde(default)]
+    pub imported_sources: std::collections::BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryImportEntry {
+    pub id: String,
+    #[serde(default)]
+    pub kind: MemoryKind,
+    #[serde(default)]
+    pub tier: MemoryTier,
+    pub title: String,
+    pub content: String,
+    #[serde(default)]
+    pub last_prompt: String,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    #[serde(default)]
+    pub source: MemorySource,
+    #[serde(default = "default_memory_importance")]
+    pub importance: f64,
+    #[serde(default = "default_memory_confidence")]
+    pub confidence: f64,
+    #[serde(default)]
+    pub sensitive: bool,
+    #[serde(default)]
+    pub message_count: u32,
+    pub task_id: Option<String>,
+    pub execution_record_id: Option<String>,
+    pub created_at: Option<DateTime<Utc>>,
+    pub updated_at: Option<DateTime<Utc>>,
+    pub archived_at: Option<DateTime<Utc>>,
+    pub compressed_at: Option<DateTime<Utc>>,
+    #[serde(default)]
+    pub aliases: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryImportPayload {
+    pub source: String,
+    pub source_version: String,
+    #[serde(default)]
+    pub entries: Vec<MemoryImportEntry>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryImportResult {
+    pub imported: usize,
+    pub updated: usize,
+    pub skipped: usize,
+    pub snapshot: MemorySnapshot,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryWriteRequest {
+    #[serde(default)]
+    pub kind: MemoryKind,
+    pub title: String,
+    pub content: String,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    #[serde(default = "default_memory_importance")]
+    pub importance: f64,
+    #[serde(default = "default_memory_confidence")]
+    pub confidence: f64,
+    #[serde(default)]
+    pub sensitive: bool,
+}
+
+fn default_memory_importance() -> f64 {
+    0.5
+}
+
+fn default_memory_confidence() -> f64 {
+    0.7
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -450,6 +703,41 @@ pub struct PluginRecord {
     pub permissions: PluginPermissions,
     pub tools: Vec<PluginToolRecord>,
     pub status_detail: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginScaffoldRequest {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub description_zh: String,
+    pub tool_name: String,
+    pub tool_description: String,
+    #[serde(default)]
+    pub tool_description_zh: String,
+    #[serde(default)]
+    pub permissions: PluginPermissions,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginScaffoldResult {
+    pub root_path: PathBuf,
+    pub manifest_path: PathBuf,
+    pub entrypoint_path: PathBuf,
+    pub plugin: PluginRecord,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct KnowledgeImportRequest {
+    pub path: PathBuf,
+    pub title: Option<String>,
+    #[serde(default)]
+    pub tags: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -511,5 +799,6 @@ mod tests {
             settings.execution_permission_mode,
             ExecutionPermissionMode::Sandbox
         );
+        assert_eq!(settings.loop_engine, LoopEngineKind::Grok);
     }
 }

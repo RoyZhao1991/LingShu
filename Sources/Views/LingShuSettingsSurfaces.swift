@@ -41,7 +41,7 @@ struct LingShuOperationsSurface: View {
                 LazyVGrid(columns: gridColumns, spacing: 12) {
                     policyCell(state.loc("人工确认", "Human approval"), on: state.requireHumanApproval, onText: state.loc("高风险拦截", "High-risk blocked"), offText: state.loc("已放行", "Allowed"))
                     policyCell(state.loc("本地审计", "Local audit"), on: state.enableLocalAudit, onText: state.loc("记录在册", "Recorded"), offText: state.loc("未记录", "Not recorded"))
-                    policyCell(state.loc("语音播报", "Voice output"), on: state.voiceOutputEnabled, onText: state.loc("已开启", "On"), offText: state.loc("静默", "Silent"))
+                    policyCell(state.loc("持续朗读", "Always read"), on: state.voiceOutputEnabled, onText: state.loc("全部回复", "All replies"), offText: state.loc("按需发声", "On demand"))
                     policyCell(state.loc("流式多轮", "Streaming"), on: state.localStreamingDialogueEnabled, onText: state.loc("流式", "Streaming"), offText: state.loc("整段", "Buffered"))
                     LingShuDualLayerCell(
                         label: state.loc("会话池", "Session pool"),
@@ -507,7 +507,10 @@ struct LingShuModelGatewaySurface: View {
 /// 执行策略=独立配置(不在模型通道里):工作目录 · 常规偏好(语音/随机性)· 高风险边界(权限模式/人工确认/计算机操作)。
 struct LingShuExecutionPolicySurface: View {
     @ObservedObject var state: LingShuState
-    @ObservedObject private var loopRuntime = LingShuEmbeddedGrokRuntime.shared
+
+    private var selectedLoopRecord: LingShuKernelLoopEngineRecord? {
+        state.sharedKernelLoopEngines.first { $0.id == state.loopEngine.kernelKind }
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -524,7 +527,7 @@ struct LingShuExecutionPolicySurface: View {
                     TextField(state.loc("项目目录绝对路径", "Absolute project path"), text: $state.agentWorkingDirectory)
                         .textFieldStyle(.roundedBorder).font(.system(size: 12.5, design: .monospaced)).frame(maxWidth: 460)
                 }
-                row(state.loc("语音朗读", "Speak aloud")) {
+                row(state.loc("持续朗读回复", "Always read replies")) {
                     Toggle("", isOn: $state.voiceOutputEnabled).toggleStyle(.switch).labelsHidden()
                 }
                 row(state.loc("随机性", "Temperature")) {
@@ -544,16 +547,20 @@ struct LingShuExecutionPolicySurface: View {
                     .labelsHidden()
                     .frame(width: 250, alignment: .leading)
                     .help(state.loc(
-                        "灵枢原生 Loop 使用同进程常驻 Runtime，同时控制默认 Maker 与 Checker；显式外部 Agent 优先",
-                        "LingShu Native Loop uses the in-process resident runtime for the default Maker and Checker; explicit external agents take priority"
+                        "所有 Loop 只负责推理与工具编排；模型通道、账号额度、权限、记忆、插件、产物和验收均由灵枢共享内核管理",
+                        "Every Loop provides reasoning and tool orchestration only. LingShu's shared kernel owns model transport, identity, quota, permissions, memory, plugins, artifacts, and verification"
                     ))
 
                     Circle()
-                        .fill(loopRuntime.status.isReady ? Color.green : Color.lingFg.opacity(0.28))
+                        .fill(selectedLoopRecord?.available == true ? Color.green : Color.orange)
                         .frame(width: 7, height: 7)
-                    Text(loopRuntime.status.displayText(language: state.language))
+                    Text(selectedLoopRecord.map {
+                        state.language == .english
+                            ? $0.statusDetail
+                            : ($0.available ? state.loc("适配器可用", "Adapter ready") : state.loc("Harness 未安装", "Harness not installed"))
+                    } ?? state.loc("等待共享内核检测", "Waiting for shared-kernel probe"))
                         .font(.system(size: 10.5, design: .monospaced))
-                        .foregroundStyle(loopRuntime.status.isReady ? Color.green : Color.lingFg.opacity(0.5))
+                        .foregroundStyle(selectedLoopRecord?.available == true ? Color.green : Color.orange)
                         .lineLimit(1)
                 }
 

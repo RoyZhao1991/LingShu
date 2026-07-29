@@ -191,9 +191,13 @@ extension LingShuState {
         let text = (Self.jsonField(argumentsJSON, "text") ?? argumentsJSON)
             .trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return "(没有要说的内容)" }
+        guard shouldAllowDirectSpeech() else {
+            return "(本轮没有明确要求语音、演示或对话，已保持静默；请继续用文字完成。)"
+        }
         guard let voiceManager else { return "语音未就绪(UI 未注入),本次无法出声。" }
 
         lingShuControlLog("TTS来源①: speak工具(模型主动) 文本「\(text.prefix(40))」")
+        markCurrentReplyAsSpoken()
         voiceManager.speak(text)
         recordSpokenLine(text)
         await voiceManager.awaitPlaybackDone()

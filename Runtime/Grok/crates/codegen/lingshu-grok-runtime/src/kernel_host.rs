@@ -1,13 +1,14 @@
 use libc::{c_char, c_int, c_void};
 use lingshu_runtime_core::{
-    provider_catalog, RuntimeKernel, RuntimeSettings, RuntimeStore, KERNEL_ABI_VERSION,
+    KERNEL_ABI_VERSION, MemoryImportPayload, RuntimeKernel, RuntimeSettings, RuntimeStore,
+    provider_catalog,
 };
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::ffi::{CStr, CString};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock};
-use tokio::sync::{mpsc, RwLock};
+use tokio::sync::{RwLock, mpsc};
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
@@ -142,6 +143,15 @@ async fn process_request(
         },
         "kernel/snapshot" => match decoded::<SnapshotParams>(request.params) {
             Ok(params) => serde_json::to_value(kernel.snapshot(params.provider_configured).await)
+                .map_err(|error| error.to_string()),
+            Err(error) => Err(error),
+        },
+        "kernel/import_memory" => match decoded::<MemoryImportPayload>(request.params) {
+            Ok(payload) => kernel
+                .memory()
+                .import_legacy(payload)
+                .await
+                .and_then(|result| serde_json::to_value(result).map_err(Into::into))
                 .map_err(|error| error.to_string()),
             Err(error) => Err(error),
         },
@@ -357,7 +367,9 @@ pub extern "C" fn lingshu_kernel_runtime_stop() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lingshu_runtime_core::{AppLocale, ExecutionPermissionMode, ProviderProtocol};
+    use lingshu_runtime_core::{
+        AppLocale, ExecutionPermissionMode, LoopEngineKind, ProviderProtocol,
+    };
     use tempfile::tempdir;
 
     #[tokio::test]
@@ -376,6 +388,7 @@ mod tests {
             model: "test-model".into(),
             workspace: workspace.clone(),
             execution_permission_mode: ExecutionPermissionMode::FullAccess,
+            loop_engine: LoopEngineKind::Grok,
             first_run_complete: true,
         };
         let request = RPCRequest {
@@ -399,5 +412,44 @@ mod tests {
             "full_access"
         );
         assert_eq!(api_key.read().await.as_deref(), Some("secret"));
+
+        let import = process_request(
+            &kernel,
+            &api_key,
+            RPCRequest {
+                id: 8,
+                method: "kernel/import_memory".into(),
+                params: json!({
+                    "source":"swift-memory",
+                    "sourceVersion":"v1",
+                    "entries":[{
+                        "id":"legacy-preference",
+                        "kind":"preference",
+                        "tier":"hot",
+                        "title":"Language preference",
+                        "content":"The user prefers concise English answers."
+                    }]
+                }),
+            },
+            None,
+            0,
+        )
+        .await;
+        assert_eq!(import["result"]["imported"], 1);
+        assert_eq!(import["result"]["snapshot"]["totalCount"], 1);
+
+        let snapshot = process_request(
+            &kernel,
+            &api_key,
+            RPCRequest {
+                id: 9,
+                method: "kernel/snapshot".into(),
+                params: json!({"providerConfigured":true}),
+            },
+            None,
+            0,
+        )
+        .await;
+        assert_eq!(snapshot["result"]["memory"]["hotCount"], 1);
     }
 }

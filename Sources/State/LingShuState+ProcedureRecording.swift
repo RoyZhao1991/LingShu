@@ -129,11 +129,18 @@ extension LingShuState {
 
     // MARK: 小工具
 
-    /// 进聊天 + 出声(录制/replay 的旁白)。
-    func speakAndChat(_ text: String) {
-        chatMessages.append(.init(speaker: "灵枢", text: text, isUser: false))
-        voiceManager?.speak(text)
-        recordSpokenLine(text)
+    /// 进聊天；仅在本轮明确要求语音/演示，或调用方属于已确认的演示流程时出声。
+    func speakAndChat(_ text: String, forceSpeech: Bool = false) {
+        let message = ChatMessage(speaker: "灵枢", text: text, isUser: false)
+        let shouldSpeak = forceSpeech || shouldAllowDirectSpeech()
+        if shouldSpeak {
+            lastSpokenMessageID = message.id
+        }
+        chatMessages.append(message)
+        if shouldSpeak {
+            voiceManager?.speak(text)
+            recordSpokenLine(text)
+        }
     }
 
     /// 抽第一个完整 JSON 对象({…})。

@@ -49,6 +49,11 @@ enum LingShuKernelExecutionPermissionMode: String, Codable, Sendable {
     case fullAccess = "full_access"
 }
 
+enum LingShuKernelLoopEngine: String, Codable, Sendable {
+    case grok
+    case codex
+}
+
 struct LingShuKernelRuntimeSettings: Codable, Sendable, Equatable {
     var locale: LingShuKernelLocale
     var providerId: String
@@ -58,6 +63,7 @@ struct LingShuKernelRuntimeSettings: Codable, Sendable, Equatable {
     var model: String
     var workspace: String
     var executionPermissionMode: LingShuKernelExecutionPermissionMode
+    var loopEngine: LingShuKernelLoopEngine
     var firstRunComplete: Bool
 }
 
@@ -66,6 +72,75 @@ struct LingShuKernelPlatformCapabilities: Codable, Sendable, Equatable {
     var realtimePerception: Bool
     var internalPreview: Bool
     var externalOpen: Bool
+}
+
+enum LingShuKernelMemoryKind: String, Codable, Sendable {
+    case conversation
+    case task
+    case fact
+    case preference
+    case experience
+    case artifact
+    case knowledge
+}
+
+enum LingShuKernelMemoryTier: String, Codable, Sendable {
+    case hot
+    case cold
+}
+
+enum LingShuKernelMemorySource: String, Codable, Sendable {
+    case runtime
+    case userExplicit = "user_explicit"
+    case task
+    case legacySwift = "legacy_swift"
+    case platform
+}
+
+struct LingShuKernelMemorySnapshot: Codable, Sendable, Equatable {
+    var schemaVersion: UInt32
+    var totalCount: Int
+    var hotCount: Int
+    var coldCount: Int
+    var countsByKind: [String: Int]
+    var latestUpdatedAt: String?
+    var lastConsolidatedAt: String?
+    var importedSources: [String: String]
+}
+
+struct LingShuKernelMemoryImportEntry: Codable, Sendable {
+    var id: String
+    var kind: LingShuKernelMemoryKind
+    var tier: LingShuKernelMemoryTier
+    var title: String
+    var content: String
+    var lastPrompt: String
+    var tags: [String]
+    var source: LingShuKernelMemorySource
+    var importance: Double
+    var confidence: Double
+    var sensitive: Bool
+    var messageCount: UInt32
+    var taskId: String?
+    var executionRecordId: String?
+    var createdAt: String?
+    var updatedAt: String?
+    var archivedAt: String?
+    var compressedAt: String?
+    var aliases: [String]
+}
+
+struct LingShuKernelMemoryImportPayload: Codable, Sendable {
+    var source: String
+    var sourceVersion: String
+    var entries: [LingShuKernelMemoryImportEntry]
+}
+
+struct LingShuKernelMemoryImportResult: Codable, Sendable {
+    var imported: Int
+    var updated: Int
+    var skipped: Int
+    var snapshot: LingShuKernelMemorySnapshot
 }
 
 enum LingShuKernelMessageRole: String, Codable, Sendable {
@@ -211,7 +286,25 @@ struct LingShuKernelTaskRecord: Codable, Sendable {
     var origin: LingShuKernelTaskOrigin
     var participantName: String
     var depth: UInt8
+    var loopEngine: LingShuKernelLoopEngine
     var pendingQuestion: String?
+}
+
+struct LingShuKernelLoopEngineRecord: Codable, Sendable, Equatable {
+    var id: LingShuKernelLoopEngine
+    var name: String
+    var description: String
+    var descriptionZh: String
+    var adapterBuiltin: Bool
+    var available: Bool
+    var selected: Bool
+    var executionMode: String
+    var executable: String?
+    var statusDetail: String
+    var harnessOnly: Bool
+    var transportOwner: String
+    var nativeAuthDisabled: Bool
+    var nativeQuotaDisabled: Bool
 }
 
 enum LingShuKernelEventKind: String, Codable, Sendable {
@@ -259,6 +352,8 @@ struct LingShuKernelRuntimeSnapshot: Codable, Sendable {
     var providerConfigured: Bool
     var events: [LingShuKernelRuntimeEvent]
     var latestEventSequence: UInt64
+    var memory: LingShuKernelMemorySnapshot?
+    var loopEngines: [LingShuKernelLoopEngineRecord]
 }
 
 struct LingShuKernelSubmitReceipt: Codable, Sendable {
@@ -525,6 +620,12 @@ final class LingShuSharedKernelRuntime: ObservableObject {
             "kernel/snapshot",
             params: LingShuKernelSnapshotParams(providerConfigured: providerConfigured)
         )
+    }
+
+    func importMemory(
+        _ payload: LingShuKernelMemoryImportPayload
+    ) async throws -> LingShuKernelMemoryImportResult {
+        try await client.request("kernel/import_memory", params: payload)
     }
 
     func submit(prompt: String, attachmentPaths: [String]) async throws -> LingShuKernelSubmitReceipt {

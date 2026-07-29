@@ -1,11 +1,12 @@
 # 灵枢内核 ABI（契约接口)
 
-> **内核 ABI 版本:1.0.0**
+> **内核 ABI 版本:1.1.0**
 >
 > 目的:把灵枢的核心能力固化成**稳定平台**。外围组件(插件 / 感知源 / 执行器)无论怎么自我生长,
 > **只能通过下面五个协议接内核**;内核版本化、由契约测试守住,绝不被外围改坏。
 >
-> 真相源 = 代码 `Sources/Kernel/LingShuKernelABI.swift`(版本 + 协议清单)+ 各协议定义文件。
+> 跨平台 Runtime 真相源 = `Runtime/LingShuCore` 与 `Runtime/LingShuCore/resources/kernel-contract.json`。
+> `Sources/Kernel/LingShuKernelABI.swift` 是 macOS 原生外围协议镜像，版本必须与 Rust 契约一致。
 > 守门 = `Tests/LingShuMacTests/KernelABIContractTests.swift`(协议形状变 → 编译/断言红)。
 >
 > 维护规则:**改动任一内核协议的形状(增删/改字段、改方法签名、改名)= 破坏性契约改动**,必须:
@@ -143,6 +144,7 @@ print(...)                     # 结果写 stdout
 
 ## 变更日志
 
+- **2026-07-28 v1.1.0**：新增跨平台可替换 Loop Harness 契约。Grok、Codex 与后续 Harness 只负责推理和工具编排；模型传输、身份、额度、权限、记忆、插件、任务账本、产物与验收统一归 `Runtime/LingShuCore`。外部 Harness 只能使用短期本地网关令牌和隔离 HOME，禁止继承厂商登录态、原生 API 凭据或订阅额度。Runtime 快照同步新增 Loop 选择、可用性与归属策略字段，供 macOS/Windows 共用。
 - **2026-06-20 v1.0.0**:首版。五大内核协议固化(核心循环/工具 ABI/runner 契约/感知输入/清单权限)+ 契约测试守门 + `LingShuKernelABI` 单一真相源。M1 `author_component` 自编工具型外围闭环落地。
 - **2026-06-20 (v1.0.0,无协议形状变更)**:M2 自编传感器型外围落地——感知输入协议④补**运行时动态注册**(`registerSource`/`unregisterSource`)+ `LingShuRunnerSensorySource`(runner 驱动源,复用契约③)+ `author_component(component_kind=sensor)`。数据真进感知链、`perceive` 拉得到、跨重启持久化。五大协议**形状未变**故 ABI 版本不动(纯 additive 实现 + Hub 方法)。
 - **2026-06-20 (v1.0.0,无协议形状变更)**:M4 执行器/动作型外围架构——`author_component` 第三类 `component_kind=actuator`(控制真实设备,暴露工具 + `actuator_target`/`actuator_risk`);执行安全模型 `LingShuActuatorSafety`(reversible 首次审批 / **physical 每次执行强制确认**,非交互安全拒绝);`actuatorGatedTool` 在工具装配处给 physical 执行器包每次确认门(复用 run_command `forceConfirm` 审批);`LoadedSkill.frontmatter` 补字段供识别 actuator_risk/sensor_channel。实测:可逆音量执行器真改硬件输出、physical 舵机执行器每次确认拦截。执行器 runner 在现有 P3 沙箱即可 effect(osascript/Apple Events 通)。

@@ -114,4 +114,58 @@ extension LingShuState {
         case .cancelled: english ? "Cancelled" : "已取消"
         }
     }
+
+    /// Main chat receives only a concise, user-facing progress sentence. Event detail is the
+    /// diagnostic payload and remains available in the task execution record.
+    nonisolated static func sharedKernelUserFacingEventText(
+        _ event: LingShuKernelRuntimeEvent,
+        language: LingShuVoiceLanguage
+    ) -> String? {
+        let title = event.title.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        switch event.kind {
+        case .tool, .plan, .delegation:
+            return sharedKernelNonEmpty(title)
+        case .reasoning:
+            return language == .english ? "Thinking…" : "思考中…"
+        case .model:
+            return sharedKernelReadableEventDetail(event.detail)
+                ?? sharedKernelNonEmpty(title)
+                ?? (language == .english ? "Thinking…" : "思考中…")
+        case .status, .humanInteraction, .warning, .result:
+            guard let detail = sharedKernelReadableEventDetail(event.detail) else {
+                return sharedKernelNonEmpty(title)
+            }
+            guard let visibleTitle = sharedKernelNonEmpty(title),
+                  detail != visibleTitle,
+                  !detail.hasPrefix(visibleTitle) else {
+                return detail
+            }
+            return "\(visibleTitle)\n\(detail)"
+        }
+    }
+
+    private nonisolated static func sharedKernelReadableEventDetail(_ raw: String) -> String? {
+        let visible = LingShuVisibleModelText.clean(raw)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !visible.isEmpty else { return nil }
+
+        let lowercased = visible.lowercased()
+        let internalMarkers = [
+            "\"file_name\"", "\"slides\"", "\"layout\"", "\"theme\"",
+            "\"tool_calls\"", "\"arguments\"", "\"recursive\"", "\"command\"",
+            "\"ok\"", "\"path\"", "[truncated]"
+        ]
+        let beginsLikePayload = visible.hasPrefix("{") || visible.hasPrefix("[")
+        let markerCount = internalMarkers.reduce(into: 0) { count, marker in
+            if lowercased.contains(marker) { count += 1 }
+        }
+        guard !beginsLikePayload || markerCount < 2 else { return nil }
+        guard !lowercased.contains("[truncated]") else { return nil }
+        return visible
+    }
+
+    private nonisolated static func sharedKernelNonEmpty(_ value: String) -> String? {
+        value.isEmpty ? nil : value
+    }
 }

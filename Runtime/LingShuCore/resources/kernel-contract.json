@@ -1,5 +1,5 @@
 {
-  "abiVersion": "1.0.0",
+  "abiVersion": "1.1.0",
   "product": "LingShu",
   "stateSchemaVersion": 1,
   "contracts": [
@@ -78,7 +78,14 @@
     "artifact_registry",
     "internal_preview",
     "external_open",
-    "human_approval"
+    "human_approval",
+    "durable_memory_kernel",
+    "plugin_runtime",
+    "replaceable_loop_harnesses",
+    "lingshu_managed_model_transport",
+    "native_harness_auth_disabled",
+    "native_harness_quota_disabled",
+    "dynamic_parallel_subagents"
   ],
   "platformCapabilities": {
     "windows": {

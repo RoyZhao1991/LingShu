@@ -31,7 +31,6 @@ extension LingShuState {
         // 尝试把 TTS 定向到灵枢虚拟麦克风(装了才有);没装则回落系统默认输出(本机闭环仍可验证)。
         let routed = LingShuAudioRouting.selectOutputDevice(named: "灵枢虚拟麦")
         meetingConversation.start(state: self, voice: voice)
-        voiceOutputEnabled = true   // 会议里必须出声
         appendTrace(kind: .runtime, actor: "会议", title: "开始会议对话",
                     detail: "系统音频→ASR→应答→TTS;输出路由\(routed ? "已定向灵枢虚拟麦克风" : "走系统默认(未检测到虚拟麦,先装 HAL 驱动)")")
         missionStatus = "会议对话中:听对方发言并应答。"

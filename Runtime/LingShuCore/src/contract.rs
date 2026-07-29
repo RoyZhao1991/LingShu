@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-pub const KERNEL_ABI_VERSION: &str = "1.0.0";
+pub const KERNEL_ABI_VERSION: &str = "1.1.0";
 pub const KERNEL_CONTRACT_JSON: &str = include_str!("../resources/kernel-contract.json");
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

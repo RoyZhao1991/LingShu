@@ -151,6 +151,8 @@ impl RuntimeStore {
             events: state.events.clone(),
             latest_event_sequence: state.next_event_sequence.saturating_sub(1),
             plugins: Vec::new(),
+            memory: MemorySnapshot::default(),
+            loop_engines: Vec::new(),
         }
     }
 
@@ -177,6 +179,7 @@ impl RuntimeStore {
                 .tasks
                 .iter()
                 .any(|task| task.status == TaskStatus::Queued);
+        let loop_engine = state.settings.loop_engine;
         state.messages.push(ChatMessage {
             id: user_message_id,
             role: MessageRole::User,
@@ -226,6 +229,7 @@ impl RuntimeStore {
             origin: TaskOrigin::Conversation,
             participant_name: "LingShu".into(),
             depth: 0,
+            loop_engine,
             session_messages: Vec::new(),
             pending_tool_call_id: None,
             pending_question: None,
@@ -546,6 +550,7 @@ impl RuntimeStore {
         role: TaskRole,
         participant_name: String,
         origin: TaskOrigin,
+        loop_engine: LoopEngineKind,
     ) -> Result<Uuid, StoreError> {
         let now = Utc::now();
         let child_id = Uuid::new_v4();
@@ -590,6 +595,7 @@ impl RuntimeStore {
             origin,
             participant_name,
             depth,
+            loop_engine,
             session_messages: Vec::new(),
             pending_tool_call_id: None,
             pending_question: None,

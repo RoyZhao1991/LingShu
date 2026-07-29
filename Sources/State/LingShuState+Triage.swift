@@ -208,7 +208,11 @@ extension LingShuState {
     /// 移除一个**还在 loading 的占位气泡**(分诊判为入队/续接到已有线程时,submitTextInput 预放的答复占位不再用)。
     /// 只移除 loading 态,避免误删已有正文的真气泡。
     func removeChatBubble(_ id: UUID) {
+        let removed = chatMessages.contains { $0.id == id && $0.isLoading }
         chatMessages.removeAll { $0.id == id && $0.isLoading }
+        if removed {
+            clearSpeechIntent(for: id)
+        }
     }
 
     @discardableResult

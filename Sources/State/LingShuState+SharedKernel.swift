@@ -40,6 +40,7 @@ extension LingShuState {
             model: modelName,
             workspace: agentWorkingDirectory,
             executionPermissionMode: executionPermissionMode == .fullAccess ? .fullAccess : .sandbox,
+            loopEngine: loopEngine.kernelKind,
             firstRunComplete: true
         )
     }
@@ -47,7 +48,9 @@ extension LingShuState {
     func submitSharedKernelTurn(
         prompt: String,
         attachmentPaths: [String],
-        reusePlaceholderID: UUID?
+        reusePlaceholderID: UUID?,
+        speechRequest: String,
+        inputSource: LingShuDialogueInputSource
     ) {
         let placeholderID: UUID
         if let reusePlaceholderID,
@@ -66,6 +69,7 @@ extension LingShuState {
             chatMessages.append(placeholder)
             placeholderID = placeholder.id
         }
+        registerSpeechIntent(for: placeholderID, request: speechRequest, source: inputSource)
 
         Task { @MainActor [weak self] in
             guard let self else { return }
@@ -76,6 +80,7 @@ extension LingShuState {
                     apiKey: self.apiKey.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty,
                     providerConfigured: self.isModelConnected
                 )
+                try await self.ensureSharedKernelLegacyMemoryImported()
                 let receipt = try await self.sharedKernelRuntime.submit(
                     prompt: prompt,
                     attachmentPaths: attachmentPaths.filter { !$0.isEmpty }
@@ -151,6 +156,7 @@ extension LingShuState {
             return
         }
         let allKernelIDs = Set(snapshot.tasks.map { $0.id.uuidString.lowercased() })
+        sharedKernelLoopEngines = snapshot.loopEngines
         sharedKernelKnownThreadIDs.formUnion(allKernelIDs)
         let previouslyActive = sharedKernelActiveThreadIDs
         let nowActive = Set(snapshot.tasks.compactMap { task -> String? in
@@ -203,6 +209,219 @@ extension LingShuState {
         missionStatus = nowActive.isEmpty
             ? loc("待机中", "Standby")
             : loc("共享内核正在执行 \(nowActive.count) 个会话", "Shared kernel is running \(nowActive.count) session(s)")
+        if let memory = snapshot.memory {
+            mainMemoryStatus = loc(
+                "Rust 热记忆 \(memory.hotCount) 条",
+                "Rust hot memory: \(memory.hotCount)"
+            )
+            coldMemoryStatus = loc(
+                "Rust 冷记忆 \(memory.coldCount) 条",
+                "Rust cold memory: \(memory.coldCount)"
+            )
+        }
+    }
+
+    private func ensureSharedKernelLegacyMemoryImported() async throws {
+        guard !sharedKernelLegacyMemoryImported else { return }
+        var entries: [LingShuKernelMemoryImportEntry] = []
+
+        entries += memoryService.repository.loadMainThreadRecords().map { record in
+            LingShuKernelMemoryImportEntry(
+                id: "swift-main-\(record.id)",
+                kind: .conversation,
+                tier: .hot,
+                title: record.title,
+                content: Self.sharedKernelMemoryContent(record.summary, fallback: record.lastPrompt),
+                lastPrompt: record.lastPrompt,
+                tags: record.tags + [record.category],
+                source: .legacySwift,
+                importance: 0.55,
+                confidence: 0.8,
+                sensitive: false,
+                messageCount: UInt32(clamping: record.messageCount),
+                taskId: nil,
+                executionRecordId: nil,
+                createdAt: Self.sharedKernelISODate(record.createdAt),
+                updatedAt: Self.sharedKernelISODate(record.updatedAt),
+                archivedAt: nil,
+                compressedAt: record.compressedAt.map(Self.sharedKernelISODate),
+                aliases: []
+            )
+        }
+        entries += memoryService.repository.loadTaskRecords().map { record in
+            LingShuKernelMemoryImportEntry(
+                id: "swift-task-\(record.id)",
+                kind: .task,
+                tier: .hot,
+                title: record.title,
+                content: Self.sharedKernelMemoryContent(record.summary, fallback: record.lastPrompt),
+                lastPrompt: record.lastPrompt,
+                tags: record.tags + [record.status],
+                source: .legacySwift,
+                importance: 0.7,
+                confidence: 0.85,
+                sensitive: false,
+                messageCount: 1,
+                taskId: record.id,
+                executionRecordId: record.executionRecordID,
+                createdAt: nil,
+                updatedAt: Self.sharedKernelISODate(record.updatedAt),
+                archivedAt: nil,
+                compressedAt: nil,
+                aliases: []
+            )
+        }
+        entries += memoryService.repository.loadColdRecords().map { record in
+            let classification = "\(record.source) \(record.category)".lowercased()
+            let taskLike = classification.contains("task") || classification.contains("任务")
+            return LingShuKernelMemoryImportEntry(
+                id: "swift-cold-\(record.id)",
+                kind: taskLike ? .task : .conversation,
+                tier: .cold,
+                title: record.title,
+                content: Self.sharedKernelMemoryContent(record.summary, fallback: record.lastPrompt),
+                lastPrompt: record.lastPrompt,
+                tags: record.tags + [record.category, record.source],
+                source: .legacySwift,
+                importance: taskLike ? 0.65 : 0.45,
+                confidence: 0.75,
+                sensitive: false,
+                messageCount: 1,
+                taskId: taskLike ? record.id : nil,
+                executionRecordId: nil,
+                createdAt: nil,
+                updatedAt: Self.sharedKernelISODate(record.updatedAt),
+                archivedAt: Self.sharedKernelISODate(record.archivedAt),
+                compressedAt: nil,
+                aliases: []
+            )
+        }
+        entries += memoryService.semanticStore.recentEntries(limit: 1_000).map { entry in
+            LingShuKernelMemoryImportEntry(
+                id: "swift-semantic-\(entry.id)",
+                kind: Self.sharedKernelSemanticMemoryKind(entry.kind),
+                tier: .hot,
+                title: entry.title,
+                content: entry.content,
+                lastPrompt: "",
+                tags: entry.tags,
+                source: .legacySwift,
+                importance: entry.importance,
+                confidence: 0.8,
+                sensitive: false,
+                messageCount: 1,
+                taskId: nil,
+                executionRecordId: nil,
+                createdAt: Self.sharedKernelISODate(entry.createdAt),
+                updatedAt: Self.sharedKernelISODate(entry.updatedAt),
+                archivedAt: nil,
+                compressedAt: nil,
+                aliases: []
+            )
+        }
+        entries += knowledgeGraph.notes.map { note in
+            LingShuKernelMemoryImportEntry(
+                id: "swift-graph-\(note.id)",
+                kind: Self.sharedKernelGraphMemoryKind(note.kind),
+                tier: .hot,
+                title: note.title,
+                content: note.body,
+                lastPrompt: "",
+                tags: note.tags + note.links,
+                source: .legacySwift,
+                importance: note.source == .userExplicit ? 0.95 : 0.75,
+                confidence: note.confidence,
+                sensitive: note.sensitive,
+                messageCount: 1,
+                taskId: nil,
+                executionRecordId: nil,
+                createdAt: Self.sharedKernelISODate(note.created),
+                updatedAt: Self.sharedKernelISODate(note.updated),
+                archivedAt: nil,
+                compressedAt: nil,
+                aliases: note.aliases
+            )
+        }
+        entries += recentDeliverables.map { deliverable in
+            let path = deliverable.primaryDir.map { "Path: \($0)\n" } ?? ""
+            return LingShuKernelMemoryImportEntry(
+                id: "swift-deliverable-\(deliverable.id)",
+                kind: .artifact,
+                tier: .hot,
+                title: deliverable.title,
+                content: path + deliverable.summaryExcerpt,
+                lastPrompt: "",
+                tags: ["deliverable", "artifact"],
+                source: .legacySwift,
+                importance: 0.9,
+                confidence: 0.95,
+                sensitive: false,
+                messageCount: 1,
+                taskId: deliverable.id,
+                executionRecordId: deliverable.id,
+                createdAt: Self.sharedKernelISODate(deliverable.completedAt),
+                updatedAt: Self.sharedKernelISODate(deliverable.completedAt),
+                archivedAt: nil,
+                compressedAt: nil,
+                aliases: []
+            )
+        }
+
+        let result = try await sharedKernelRuntime.importMemory(
+            LingShuKernelMemoryImportPayload(
+                source: "swift-memory",
+                sourceVersion: "v1",
+                entries: entries
+            )
+        )
+        sharedKernelLegacyMemoryImported = true
+        mainMemoryStatus = loc(
+            "Rust 热记忆 \(result.snapshot.hotCount) 条",
+            "Rust hot memory: \(result.snapshot.hotCount)"
+        )
+        coldMemoryStatus = loc(
+            "Rust 冷记忆 \(result.snapshot.coldCount) 条",
+            "Rust cold memory: \(result.snapshot.coldCount)"
+        )
+        appendTrace(
+            kind: .runtime,
+            actor: "MemoryKernel",
+            title: loc("旧记忆迁移完成", "Legacy memory imported"),
+            detail: "imported=\(result.imported) updated=\(result.updated) skipped=\(result.skipped)"
+        )
+    }
+
+    private static func sharedKernelMemoryContent(_ value: String, fallback: String) -> String {
+        value.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty
+            ?? fallback.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func sharedKernelSemanticMemoryKind(_ value: String) -> LingShuKernelMemoryKind {
+        let value = value.lowercased()
+        if value.contains("preference") || value.contains("偏好") { return .preference }
+        if value.contains("task") || value.contains("任务") { return .task }
+        if value.contains("fact") || value.contains("事实") { return .fact }
+        if value.contains("experience") || value.contains("经验") { return .experience }
+        return .knowledge
+    }
+
+    private static func sharedKernelGraphMemoryKind(
+        _ kind: LingShuMemoryNote.Kind
+    ) -> LingShuKernelMemoryKind {
+        switch kind {
+        case .preference:
+            .preference
+        case .decision, .fact, .person:
+            .fact
+        case .project, .skill, .glossary:
+            .knowledge
+        }
+    }
+
+    private static func sharedKernelISODate(_ date: Date) -> String {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
+        return formatter.string(from: date)
     }
 
     private func sharedKernelTaskRecord(
@@ -321,13 +540,26 @@ extension LingShuState {
               let index = chatMessages.firstIndex(where: { $0.id == bubbleID }) else { return }
         let assistant = messages.last { $0.id == task.assistantMessageId }
         let latestEvent = events.max { $0.sequence < $1.sequence }
-        let progress = latestEvent.flatMap { event -> String? in
-            let detail = event.detail.trimmingCharacters(in: .whitespacesAndNewlines)
-            return detail.isEmpty ? event.title.nonEmpty : "\(event.title)\n\(detail)"
+        let progress = latestEvent.flatMap {
+            Self.sharedKernelUserFacingEventText($0, language: language)
         }
-        let visible = task.status == .completed
-            ? (assistant?.text.nonEmpty ?? task.summary.nonEmpty ?? progress)
-            : (progress ?? assistant?.text.nonEmpty ?? task.summary.nonEmpty)
+        let assistantVisible = assistant.flatMap { message in
+            LingShuVisibleModelText.clean(message.text)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .nonEmpty
+        }
+        let summaryVisible = LingShuVisibleModelText.clean(task.summary)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .nonEmpty
+        let visible: String?
+        switch task.status {
+        case .completed:
+            visible = assistantVisible ?? summaryVisible ?? progress
+        case .failed, .cancelled:
+            visible = summaryVisible ?? assistantVisible ?? progress
+        case .queued, .understanding, .running, .needsUserAction:
+            visible = progress ?? assistantVisible ?? summaryVisible
+        }
         if let visible { chatMessages[index].text = visible }
         chatMessages[index].taskRecordID = taskID
         chatMessages[index].isLoading = task.status == .queued || task.status == .understanding || task.status == .running

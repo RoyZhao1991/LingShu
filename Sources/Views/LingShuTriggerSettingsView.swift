@@ -14,10 +14,10 @@ struct LingShuTriggerSettingsView: View {
     /// 当前展开看「执行记录」的定时任务 id(点开/收起)。
     @State private var expandedTriggerID: String?
 
-    /// 某定时任务到点跑出来的执行记录(按 prompt 匹配——触发时 submitTextInput(trigger.prompt) 落的记录),最近在前。
+    /// 某定时任务到点跑出来的执行记录。新记录按稳定任务标识关联，旧记录兼容原指令匹配。
     private func recordsFor(_ trigger: LingShuScheduledTrigger) -> [LingShuTaskExecutionRecord] {
         state.taskExecutionRecords
-            .filter { $0.prompt == trigger.prompt }
+            .filter { LingShuState.scheduledTrigger(trigger, matchesExecutionPrompt: $0.prompt) }
             .sorted { $0.updatedAt > $1.updatedAt }
     }
 
@@ -155,6 +155,14 @@ struct LingShuTriggerSettingsView: View {
                 Text(state.loc("上次 \(firedAt.taskRecordDisplayTime)", "Last \(firedAt.taskRecordDisplayTime)"))
                     .font(.system(size: 10, weight: .medium, design: .monospaced))
                     .foregroundStyle(Color.lingFg.opacity(0.32))
+            }
+            if let latest = records.first {
+                Text(state.loc("最近 \(latest.status.rawValue)", "Latest \(latest.status.englishName)"))
+                    .font(.system(size: 9.5, weight: .bold))
+                    .foregroundStyle(latest.status.color)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(latest.status.color.opacity(0.12), in: Capsule())
             }
             Button { expandedTriggerID = expanded ? nil : trigger.id } label: {
                 HStack(spacing: 3) {

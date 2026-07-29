@@ -25,6 +25,11 @@ button:disabled { cursor: not-allowed; opacity: .45; }
 svg { flex: 0 0 auto; }
 
 .app-shell { height: 100%; display: grid; grid-template-rows: 76px minmax(0, 1fr); background: #edf1f1; }
+.window-drop-overlay { position: fixed; inset: 10px; z-index: 160; display: grid; place-items: center; pointer-events: none; color: var(--teal-dark); background: rgba(231, 243, 241, .9); border: 2px dashed var(--teal); border-radius: 8px; backdrop-filter: blur(5px); }
+.window-drop-overlay > div { width: min(460px, calc(100% - 48px)); min-height: 180px; display: grid; place-items: center; align-content: center; gap: 12px; padding: 28px; text-align: center; background: rgba(255,255,255,.92); border: 1px solid #9dcfc9; box-shadow: var(--shadow); border-radius: 8px; }
+.window-drop-overlay svg { width: 42px; height: 42px; }
+.window-drop-overlay strong { font-size: 22px; }
+.window-drop-overlay span { color: var(--muted); font-size: 13px; line-height: 1.45; }
 .app-header { display: grid; grid-template-columns: minmax(220px, 1fr) auto minmax(150px, 1fr); align-items: center; gap: 24px; padding: 0 28px; background: rgba(255,255,255,.96); border-bottom: 1px solid var(--line); position: relative; z-index: 10; }
 .brand { display: flex; align-items: center; gap: 12px; min-width: 0; white-space: nowrap; }
 .brand-mark { width: 48px; height: 48px; flex: 0 0 auto; display: grid; place-items: center; }
@@ -342,6 +347,8 @@ svg { flex: 0 0 auto; }
 @media (prefers-color-scheme: dark) {
   :root { color: #edf4f2; background: #0d1111; --ink: #edf4f2; --muted: #9aa9a6; --line: #313b39; --panel: #171d1c; --soft: #111716; --shadow: 0 18px 48px rgba(0,0,0,.42); }
   .app-shell, .preview-content { background: #0d1111; }
+  .window-drop-overlay { color: #9ce0d8; background: rgba(9, 19, 18, .9); }
+  .window-drop-overlay > div { background: rgba(23, 29, 28, .96); }
   .app-header { background: rgba(12,16,16,.97); }
   .message { background: #171d1c; }
   .message.user { background: #17302d; }

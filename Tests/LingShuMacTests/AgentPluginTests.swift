@@ -6,7 +6,7 @@ final class AgentPluginTests: XCTestCase {
 
     private func sample() -> LingShuAgentPlugin {
         .init(id: "codex", displayName: "Codex", aliases: ["codex"],
-              executable: "/Applications/Codex.app/Contents/Resources/codex",
+              executable: "/usr/local/bin/test-agent",
               argsTemplate: ["exec", "{{objective}}"], role: .maker, subtitle: "写代码", icon: "hammer.fill")
     }
 

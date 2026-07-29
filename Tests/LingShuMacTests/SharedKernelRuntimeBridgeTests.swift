@@ -3,6 +3,53 @@ import XCTest
 @testable import LingShuMac
 
 final class SharedKernelRuntimeBridgeTests: XCTestCase {
+    func testToolEventUsesReadableTitleInMainChatAndKeepsRawDetail() {
+        let detail = """
+        {"title":"基于自学习的标注能力","file_name":"demo.pptx","theme":"midnight","slides":[{"layout":"cover"}]}
+        [truncated]
+        """
+        let event = LingShuKernelRuntimeEvent(
+            id: UUID(),
+            sequence: 1,
+            taskId: UUID(),
+            parentTaskId: nil,
+            kind: .tool,
+            state: .running,
+            actor: "LingShu",
+            title: "使用 DesignKB 生成演示文稿",
+            detail: detail,
+            createdAt: "2026-07-29T00:00:00Z",
+            updatedAt: "2026-07-29T00:00:00Z"
+        )
+
+        XCTAssertEqual(
+            LingShuState.sharedKernelUserFacingEventText(event, language: .chinese),
+            "使用 DesignKB 生成演示文稿"
+        )
+        XCTAssertEqual(event.detail, detail, "执行记录必须继续保留完整工具参数")
+    }
+
+    func testModelEventKeepsReadableStreamingReply() {
+        let event = LingShuKernelRuntimeEvent(
+            id: UUID(),
+            sequence: 1,
+            taskId: UUID(),
+            parentTaskId: nil,
+            kind: .model,
+            state: .running,
+            actor: "deepseek-chat",
+            title: "模型回合 2",
+            detail: "已经完成内容提炼，正在生成演示文稿。",
+            createdAt: "2026-07-29T00:00:00Z",
+            updatedAt: "2026-07-29T00:00:00Z"
+        )
+
+        XCTAssertEqual(
+            LingShuState.sharedKernelUserFacingEventText(event, language: .chinese),
+            "已经完成内容提炼，正在生成演示文稿。"
+        )
+    }
+
     @MainActor
     func testMacShellLoadsAndTalksToCanonicalRuntimeKernel() async throws {
         try Self.ensureRuntimeLibraryBuilt()
@@ -26,10 +73,40 @@ final class SharedKernelRuntimeBridgeTests: XCTestCase {
                     model: "mock-agent",
                     workspace: workspace.path,
                     executionPermissionMode: .fullAccess,
+                    loopEngine: .grok,
                     firstRunComplete: true
                 ),
                 apiKey: nil,
                 providerConfigured: false
+            )
+            let imported = try await runtime.importMemory(
+                LingShuKernelMemoryImportPayload(
+                    source: "bridge-test",
+                    sourceVersion: "v1",
+                    entries: [
+                        LingShuKernelMemoryImportEntry(
+                            id: "bridge-memory",
+                            kind: .preference,
+                            tier: .hot,
+                            title: "Language preference",
+                            content: "The user prefers concise English answers.",
+                            lastPrompt: "",
+                            tags: ["language"],
+                            source: .legacySwift,
+                            importance: 0.8,
+                            confidence: 1,
+                            sensitive: false,
+                            messageCount: 1,
+                            taskId: nil,
+                            executionRecordId: nil,
+                            createdAt: nil,
+                            updatedAt: nil,
+                            archivedAt: nil,
+                            compressedAt: nil,
+                            aliases: []
+                        )
+                    ]
+                )
             )
             let snapshot = try await runtime.snapshot(providerConfigured: false)
 
@@ -44,8 +121,18 @@ final class SharedKernelRuntimeBridgeTests: XCTestCase {
             XCTAssertEqual(snapshot.settings.protocol, .openAIResponses)
             XCTAssertEqual(snapshot.settings.workspace, workspace.path)
             XCTAssertEqual(snapshot.settings.executionPermissionMode, .fullAccess)
+            XCTAssertEqual(snapshot.settings.loopEngine, .grok)
+            XCTAssertTrue(snapshot.loopEngines.allSatisfy {
+                $0.harnessOnly
+                    && $0.transportOwner == "lingshu"
+                    && $0.nativeAuthDisabled
+                    && $0.nativeQuotaDisabled
+            })
             XCTAssertFalse(snapshot.providerConfigured)
             XCTAssertEqual(snapshot.queuedTaskCount, 0)
+            XCTAssertEqual(imported.imported, 1)
+            XCTAssertEqual(snapshot.memory?.totalCount, 1)
+            XCTAssertEqual(snapshot.memory?.countsByKind["preference"], 1)
         } catch {
             await runtime.stop()
             throw error
@@ -63,8 +150,6 @@ final class SharedKernelRuntimeBridgeTests: XCTestCase {
         let library = repository.appendingPathComponent(
             "Runtime/Grok/target/debug/liblingshu_grok_runtime.dylib"
         )
-        guard !FileManager.default.fileExists(atPath: library.path) else { return }
-
         let process = Process()
         let output = Pipe()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/env")

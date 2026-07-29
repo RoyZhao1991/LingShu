@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct LingShuRootView: View {
     @ObservedObject var state: LingShuState
@@ -12,16 +13,50 @@ struct LingShuRootView: View {
     @StateObject private var standingVoiceCall = LingShuVoiceCallController()
     /// 自主模式「只剩本体」终态:进入仪式(融化→离子化)播完后置真,界面整个让位给右上角的悬浮本体。
     @State private var autonomousOrbMode = false
+    /// 主窗口全域文件拖放反馈；真实附件仍统一进入 inputStore.pendingAttachments。
+    @State private var isGlobalAttachmentDropTargeted = false
     private var orbActive: Bool { state.isStandingPersonOnDuty && autonomousOrbMode }
 
     var body: some View {
-        Group {
-            if state.hasCompletedInitialLanguageSelection {
-                operationalBody
-            } else {
-                LingShuInitialLanguageSelectionView(state: state)
+        ZStack {
+            Group {
+                if state.hasCompletedInitialLanguageSelection {
+                    operationalBody
+                } else {
+                    LingShuInitialLanguageSelectionView(state: state)
+                }
+            }
+
+            if isGlobalAttachmentDropTargeted && state.hasCompletedInitialLanguageSelection {
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(Color.lingHolo.opacity(0.05))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .stroke(Color.lingHolo, style: StrokeStyle(lineWidth: 2, dash: [8, 5]))
+                    }
+                    .overlay {
+                        Image(systemName: "paperclip.circle.fill")
+                            .font(.system(size: 44, weight: .semibold))
+                            .foregroundStyle(Color.lingHolo)
+                            .shadow(color: Color.lingHolo.opacity(0.35), radius: 10)
+                    }
+                    .padding(8)
+                    .allowsHitTesting(false)
             }
         }
+        .dropDestination(for: URL.self) { urls, _ in
+            attachDroppedFiles(urls)
+        } isTargeted: { targeted in
+            isGlobalAttachmentDropTargeted = targeted
+        }
+    }
+
+    private func attachDroppedFiles(_ urls: [URL]) -> Bool {
+        guard state.hasCompletedInitialLanguageSelection else { return false }
+        let added = state.ingestDroppedAttachments(at: urls)
+        guard added > 0 else { return false }
+        state.selectedSurface = .chat
+        return true
     }
 
     private var operationalBody: some View {
@@ -117,9 +152,8 @@ struct LingShuRootView: View {
             }
             // 分句早读：语音输出开启时，流式回复每攒满一句立即排队播报，
             // 不必等整段回复生成完才开口。
-            state.streamingSentenceSpeaker = { [weak state, weak voice, weak perceptionGateway] sentence in
-                guard let state, let voice,
-                      state.voiceOutputEnabled || state.isMinimalVoiceMode else { return }
+            state.streamingSentenceSpeaker = { [weak state, weak voice, weak perceptionGateway] messageID, sentence in
+                guard let state, let voice, state.shouldSpeakReply(messageID: messageID) else { return }
                 voice.speakStreamingSentence(sentence)   // 增量无缝流式发声(并行预取+背靠背播)
                 perceptionGateway?.ingestSpeechOutput(sentence)
             }
@@ -131,7 +165,6 @@ struct LingShuRootView: View {
             let standingCall = standingVoiceCall   // 捕获控制器实例(类引用)
             state.startStandingVoiceListening = { [weak state, weak voice, weak perceptionGateway] in
                 guard let state, let voice, let perceptionGateway, !state.isMinimalVoiceMode else { return }
-                state.voiceOutputEnabled = true   // 语音对话:必须能出声回应
                 standingCall.start(state: state, voice: voice, perceptionGateway: perceptionGateway)
             }
             state.stopStandingVoiceListening = { standingCall.stop() }
@@ -208,17 +241,20 @@ struct LingShuRootView: View {
     /// 这里刻意不用 SwiftUI `confirmationDialog`/`sheet`:演示窗正在撑满/还原尺寸时,
     /// 灵枢新回复就播报。集中在根视图，确保普通界面和极简语音模式都会发声。
     private func speakLatestReplyIfNeeded(_ messages: [ChatMessage]) {
-        let shouldSpeak = state.voiceOutputEnabled || state.isMinimalVoiceMode
         // 只看**最后一条**消息:它还在加载(本轮流式中)或是用户消息就不念,等它定稿。
         // 旧逻辑 last(where:!isLoading) 会在本轮气泡 loading 时落到**上一轮**回复、把它再念一遍,
         // 还覆盖 lastSpokenMessageID 去重标记 → 本轮 finalize 设的去重失效 → 又被整段 speak()(→ 某段超时降级)。
-        guard shouldSpeak,
-              let message = messages.last, !message.isUser, !message.isLoading,
+        guard let message = messages.last, !message.isUser, !message.isLoading,
               message.id != state.lastSpokenMessageID else {
+            return
+        }
+        guard state.shouldSpeakReply(messageID: message.id) else {
+            state.clearSpeechIntent(for: message.id)
             return
         }
 
         state.lastSpokenMessageID = message.id
+        state.clearSpeechIntent(for: message.id)
         lingShuControlLog("TTS来源②: 自动朗读回复气泡 id=\(message.id.uuidString.prefix(8)) 文本「\(String(message.text.prefix(40)))」")
         // 任务型交付只念简短摘要(避免整段念路径/英文/代码);对话/汇报型念全文。决策需模型,异步。
         Task { @MainActor in

@@ -105,7 +105,9 @@ jobs:
 
       - name: Verify frontend
         working-directory: WindowsApp
-        run: npm run build
+        run: |
+          npm test
+          npm run build
 
       - name: Build MSI and NSIS installers
         working-directory: WindowsApp
@@ -150,6 +152,6 @@ jobs:
           $tag = "${{ github.ref_name }}"
           gh release view $tag --repo $env:GITHUB_REPOSITORY *> $null
           if ($LASTEXITCODE -ne 0) {
-            gh release create $tag --repo $env:GITHUB_REPOSITORY --prerelease --title "Nous (LingShu) Windows Technical Preview 0.1.0-7" --notes "Windows x64 technical preview built and tested on GitHub's Windows runner. This build adds the shared Runtime Core plugin contract and the complete bundled DesignKB presentation system. Plugins are registered as model-callable tools, declare permissions, can be installed, enabled, probed, and removed from the Windows plugin page, and register real output files in the same artifact ledger. DesignKB ships with its layouts, palettes, typography, icons, rubric, and a self-contained Windows generator, so polished PowerPoint delivery does not require a separate Python installation. The release retains Full Access propagation, attachment cards, responsive Markdown tables, document extraction and preview, GoalSpec, serialized main tasks, isolated child sessions, human-action resume, and independent checking. Direct computer control and realtime audio/video perception are not included in this preview."
+            gh release create $tag --repo $env:GITHUB_REPOSITORY --prerelease --title "Nous (LingShu) Windows Technical Preview 0.1.0-8" --notes "Windows x64 technical preview built and tested on GitHub's Windows runner. This build moves the replaceable Loop Harness, global memory, plugin registry, permissions, task ledger, artifact tracking, worker/checker planning, and human-action resume into the shared Runtime Core used by both macOS and Windows. It also retains full-access propagation, visible attachment cards, responsive Markdown tables, built-in document extraction and preview, bundled DesignKB presentation generation, and independent checking. Direct Windows computer control and realtime audio/video perception are not included in this preview."
           }
           gh release upload $tag dist/windows/* --repo $env:GITHUB_REPOSITORY --clobber

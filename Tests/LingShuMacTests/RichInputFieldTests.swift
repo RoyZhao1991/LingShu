@@ -1,3 +1,4 @@
+import AppKit
 import XCTest
 @testable import LingShuMac
 
@@ -53,6 +54,19 @@ final class RichInputFieldTests: XCTestCase {
         XCTAssertNil(mention("a@b", 3), "@前非边界(邮箱)不算 mention")
         XCTAssertNil(mention("普通文字", 4), "没有 @ 不算")
         XCTAssertNil(mention("", 0))
+    }
+
+    func testFinderFileDropReadsFileURLWithoutInsertingPathText() throws {
+        let file = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lingshu-rich-input-drop-\(UUID().uuidString).txt")
+        try Data("attachment".utf8).write(to: file)
+        defer { try? FileManager.default.removeItem(at: file) }
+
+        let pasteboard = NSPasteboard(name: .init("LingShuRichInputFieldTests.\(UUID().uuidString)"))
+        pasteboard.clearContents()
+        XCTAssertTrue(pasteboard.writeObjects([file as NSURL]))
+
+        XCTAssertEqual(LingShuInputTextView.fileURLs(from: pasteboard), [file])
     }
 
     @MainActor

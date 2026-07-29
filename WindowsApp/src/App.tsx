@@ -1,4 +1,4 @@
-import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, type DragEvent as ReactDragEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
@@ -8,7 +8,8 @@ import {
   Settings, ShieldCheck, Square, Trash2, UserRound, Wrench, X,
 } from "lucide-react";
 import { strings } from "./i18n";
-import { chooseFiles, choosePluginManifest, runtimeInvoke } from "./bridge";
+import { chooseFiles, choosePluginManifest, hasNativeBridge, listenForWindowFileDrops, runtimeInvoke } from "./bridge";
+import { browserDroppedFilePaths, mergeAttachmentPaths } from "./attachments";
 import { normalizeMarkdownTables } from "./markdown";
 import packageMetadata from "../package.json";
 import type {
@@ -41,8 +42,10 @@ export default function App() {
   const [actionAnswer, setActionAnswer] = useState("");
   const [resuming, setResuming] = useState(false);
   const [pluginBusy, setPluginBusy] = useState("");
+  const [dragActive, setDragActive] = useState(false);
   const messagesEnd = useRef<HTMLDivElement>(null);
   const messageScroll = useRef<HTMLDivElement>(null);
+  const composerInput = useRef<HTMLTextAreaElement>(null);
   const keepAtBottom = useRef(true);
 
   const locale = settingsDraft?.locale ?? snapshot?.settings.locale ?? "zh_cn";
@@ -51,6 +54,13 @@ export default function App() {
   const isBusy = Boolean(snapshot?.tasks.some((task) => ["understanding", "running"].includes(task.status))) || Boolean(snapshot?.queuedTaskCount);
   const selectedTask = snapshot?.tasks.find((task) => task.id === selectedTaskId) ?? activeTask ?? snapshot?.tasks.filter((task) => !task.parentTaskId).at(-1);
   const actionTask = snapshot?.tasks.find((task) => task.status === "needs_user_action");
+
+  const bindAttachments = useCallback((paths: readonly string[]) => {
+    if (!paths.some((path) => path.trim())) return;
+    setAttachments((current) => mergeAttachmentPaths(current, paths));
+    setPage("chat");
+    window.setTimeout(() => composerInput.current?.focus(), 0);
+  }, []);
 
   const refresh = useCallback(async () => {
     try {
@@ -91,6 +101,32 @@ export default function App() {
       .catch(() => undefined);
   }, [t.appName]);
 
+  useEffect(() => {
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+
+    void listenForWindowFileDrops((event) => {
+      if (disposed) return;
+      if (event.type === "enter" || event.type === "over") {
+        setDragActive(true);
+        return;
+      }
+      setDragActive(false);
+      if (event.type === "drop") bindAttachments(event.paths);
+    }).then((stopListening) => {
+      if (disposed) stopListening();
+      else unlisten = stopListening;
+    }).catch((reason) => {
+      console.error("Unable to register the native file-drop listener", reason);
+      setDragActive(false);
+    });
+
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, [bindAttachments]);
+
   const trackMessageScroll = () => {
     const node = messageScroll.current;
     if (!node) return;
@@ -117,7 +153,28 @@ export default function App() {
 
   const chooseAttachments = async () => {
     const selected = await chooseFiles();
-    if (selected.length) setAttachments(selected);
+    bindAttachments(selected);
+  };
+
+  const handleBrowserDrag = (event: ReactDragEvent<HTMLDivElement>) => {
+    if (hasNativeBridge() || !event.dataTransfer.types.includes("Files")) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "copy";
+    setDragActive(true);
+  };
+
+  const handleBrowserDragLeave = (event: ReactDragEvent<HTMLDivElement>) => {
+    if (hasNativeBridge()) return;
+    const nextTarget = event.relatedTarget;
+    if (nextTarget instanceof Node && event.currentTarget.contains(nextTarget)) return;
+    setDragActive(false);
+  };
+
+  const handleBrowserDrop = (event: ReactDragEvent<HTMLDivElement>) => {
+    if (hasNativeBridge()) return;
+    event.preventDefault();
+    setDragActive(false);
+    bindAttachments(browserDroppedFilePaths(event.dataTransfer.files));
   };
 
   const showPathPreview = async (path: string) => {
@@ -256,7 +313,9 @@ export default function App() {
   const setupRequired = !snapshot.providerConfigured || !snapshot.settings.firstRunComplete;
 
   return (
-    <div className="app-shell">
+    <div className={`app-shell ${dragActive ? "is-file-dragging" : ""}`}
+      onDragEnter={handleBrowserDrag} onDragOver={handleBrowserDrag}
+      onDragLeave={handleBrowserDragLeave} onDrop={handleBrowserDrop}>
       <Header page={page} setPage={setPage} busy={isBusy} locale={locale} />
       <main className="workspace-shell">
         {page === "chat" && (
@@ -309,7 +368,7 @@ export default function App() {
                   ))}
                 </div>
               )}
-              <textarea value={prompt} onChange={(event) => setPrompt(event.target.value)} placeholder={t.placeholder}
+              <textarea ref={composerInput} value={prompt} onChange={(event) => setPrompt(event.target.value)} placeholder={t.placeholder}
                 onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); event.currentTarget.form?.requestSubmit(); } }} />
               <div className="composer-actions">
                 <button type="button" className="icon-button" title={t.attach} onClick={chooseAttachments}><Paperclip /></button>
@@ -353,6 +412,11 @@ export default function App() {
       {actionTask && (
         <HumanActionDialog task={actionTask} locale={locale} value={actionAnswer} busy={resuming} error={error}
           onChange={setActionAnswer} onResume={resumeAction} />
+      )}
+      {dragActive && (
+        <div className="window-drop-overlay" role="status" aria-live="polite">
+          <div><Paperclip /><strong>{t.dropAttachments}</strong><span>{t.dropAttachmentHint}</span></div>
+        </div>
       )}
     </div>
   );
@@ -532,6 +596,7 @@ function SettingsForm({ draft, providers, apiKey, locale, validating, permission
     <label>{t.language}<select value={draft.locale} onChange={(event) => onDraft({ ...draft, locale: event.target.value as Locale })}><option value="zh_cn">{t.chinese}</option><option value="en">{t.english}</option></select></label>
     <label>{t.provider}<select value={draft.providerId} onChange={(event) => onProvider(event.target.value)}>{providers.map((provider) => <option key={provider.id} value={provider.id}>{provider.name} · {provider.region}</option>)}</select></label>
     <label>{t.model}<input value={draft.model} onChange={(event) => onDraft({ ...draft, model: event.target.value })} list="model-options" /><datalist id="model-options">{selected?.defaultModels.map((model) => <option key={model} value={model} />)}</datalist></label>
+    <label>{t.loopEngine}<select value={draft.loopEngine} onChange={(event) => onDraft({ ...draft, loopEngine: event.target.value as RuntimeSettings["loopEngine"] })}><option value="grok">{t.grokLoop}</option><option value="codex">{t.codexLoop}</option></select></label>
     <label>{t.endpoint}<input value={draft.endpoint} onChange={(event) => onDraft({ ...draft, endpoint: event.target.value })} /></label>
     <label>{t.token}<input type="password" value={apiKey} placeholder="••••••••••••••••" onChange={(event) => onApiKey(event.target.value)} /><small>{t.apiHint}</small></label>
     <label>{t.workspace}<input value={draft.workspace} onChange={(event) => onDraft({ ...draft, workspace: event.target.value })} /></label>

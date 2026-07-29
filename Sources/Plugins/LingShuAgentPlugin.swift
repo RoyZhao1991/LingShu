@@ -10,7 +10,7 @@ struct LingShuAgentPlugin: Codable, Identifiable, Sendable, Equatable {
     let id: String              // 稳定 id,如 "codex" / "claude"
     var displayName: String     // "Codex" / "Claude"
     var aliases: [String]       // @ 触发别名(自动并入 displayName/id)
-    var executable: String      // 可执行路径或命令名(如 /Applications/Codex.app/Contents/Resources/codex)
+    var executable: String      // 可执行路径或命令名(例如用户安装的通用外部 agent)
     var argsTemplate: [String]  // 参数模板,用 {{objective}} 占位(如 ["exec","{{objective}}"] 或 ["-p","{{objective}}"])
     var role: Role              // 在编排里默认承担的角色
     var subtitle: String        // 插件库/「+」菜单里的一句说明
