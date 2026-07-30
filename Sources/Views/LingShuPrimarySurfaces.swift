@@ -347,7 +347,11 @@ struct LingShuStableTopBar: View {
         let digitalHuman = state.digitalHumanSnapshot(voice: voice, vision: vision, perceptionGateway: perceptionGateway)
         HStack(spacing: 16) {
             HStack(spacing: 11) {
-                LingShuDigitalHumanMiniOrb(snapshot: digitalHuman, audioLevel: Double(voice.outputLevel))
+                LingShuDigitalHumanMiniOrb(
+                    snapshot: digitalHuman,
+                    audioLevel: Double(voice.outputLevel),
+                    paused: state.brainSetupPhase.shouldPresentWizard
+                )
                     .frame(width: 48, height: 48)
 
                 VStack(alignment: .leading, spacing: 1) {

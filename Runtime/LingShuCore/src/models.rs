@@ -402,6 +402,34 @@ fn default_participant_name() -> String {
     "LingShu".into()
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeFailureKind {
+    Authentication,
+    Quota,
+    RateLimited,
+    Network,
+    Timeout,
+    InvalidRequest,
+    InvalidResponse,
+    Server,
+    Unknown,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct QueueFailure {
+    pub thread_id: Uuid,
+    pub kind: RuntimeFailureKind,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct QueueRunReport {
+    pub completed: usize,
+    pub failures: Vec<QueueFailure>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct RuntimeSnapshot {

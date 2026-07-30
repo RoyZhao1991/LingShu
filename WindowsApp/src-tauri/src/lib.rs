@@ -1,6 +1,7 @@
 use lingshu_runtime_core::{
     preview_file, provider_catalog, ExecutionPermissionMode, PluginRecord, PreviewPayload,
-    ProviderPreset, RuntimeKernel, RuntimeSettings, RuntimeSnapshot, RuntimeStore, SubmitReceipt,
+    ProviderPreset, RuntimeFailureKind, RuntimeKernel, RuntimeSettings, RuntimeSnapshot,
+    RuntimeStore, SubmitReceipt,
 };
 use serde::Serialize;
 use std::path::PathBuf;
@@ -50,6 +51,21 @@ fn save_api_key(provider_id: &str, value: &str) -> Result<(), String> {
         .map_err(|error| format!("credential store write failed: {error}"))
 }
 
+#[cfg(any(target_os = "windows", target_os = "macos"))]
+fn delete_api_key(provider_id: &str) -> Result<(), String> {
+    let entry = keyring::Entry::new(KEYRING_SERVICE, &key_account(provider_id))
+        .map_err(|error| format!("credential store initialization failed: {error}"))?;
+    match entry.delete_credential() {
+        Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+        Err(error) => Err(format!("credential store delete failed: {error}")),
+    }
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
+fn delete_api_key(_provider_id: &str) -> Result<(), String> {
+    Ok(())
+}
+
 #[cfg(not(any(target_os = "windows", target_os = "macos")))]
 fn save_api_key(_provider_id: &str, _value: &str) -> Result<(), String> {
     Err("secure credential storage is unavailable on this platform".into())
@@ -96,11 +112,12 @@ async fn save_and_validate_settings(
     let supplied = (!api_key.trim().is_empty()).then_some(api_key.trim().to_string());
     let stored = load_api_key(&settings.provider_id)?;
     let effective = supplied.as_deref().or(stored.as_deref());
+    let locale = settings.locale;
     state
         .kernel
         .validate_provider(&settings, effective)
         .await
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| error.user_message(locale))?;
     if let Some(value) = supplied.as_deref() {
         save_api_key(&settings.provider_id, value)?;
     }
@@ -155,8 +172,17 @@ async fn submit_message(
         .await
         .map_err(|error| error.to_string())?;
     let kernel = state.kernel.clone();
+    let provider_id = settings.provider_id;
     tauri::async_runtime::spawn(async move {
-        let _ = kernel.run_queue(key).await;
+        if let Ok(report) = kernel.run_queue_report(key).await {
+            if report
+                .failures
+                .iter()
+                .any(|failure| failure.kind == RuntimeFailureKind::Authentication)
+            {
+                let _ = delete_api_key(&provider_id);
+            }
+        }
     });
     Ok(receipt)
 }
@@ -193,17 +219,14 @@ async fn resume_task(
         return Err(format!("{} requires an API token", settings.provider_name));
     }
     let kernel = state.kernel.clone();
+    let provider_id = settings.provider_id;
     tauri::async_runtime::spawn(async move {
         if let Err(error) = kernel.resume(id, answer, key).await {
             let locale = kernel.store().settings().await.locale;
-            let message = match locale {
-                lingshu_runtime_core::AppLocale::ZhCn => {
-                    format!("本轮恢复后未能完成：{error}。执行记录已保留。")
-                }
-                lingshu_runtime_core::AppLocale::En => {
-                    format!("The resumed run could not complete: {error}. Its trace was preserved.")
-                }
-            };
+            if error.failure_kind() == RuntimeFailureKind::Authentication {
+                let _ = delete_api_key(&provider_id);
+            }
+            let message = error.user_message(locale);
             let _ = kernel.store().fail(id, message, error.to_string()).await;
         }
     });

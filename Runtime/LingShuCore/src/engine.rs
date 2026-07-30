@@ -62,6 +62,30 @@ pub enum EngineError {
     Loop(#[from] LoopError),
 }
 
+impl EngineError {
+    pub fn failure_kind(&self) -> RuntimeFailureKind {
+        match self {
+            Self::MissingApiKey(_) => RuntimeFailureKind::Authentication,
+            Self::Model(error) => error.failure_kind(),
+            Self::ModelTimeout { .. } => RuntimeFailureKind::Timeout,
+            Self::InvalidModelJson(_) => RuntimeFailureKind::InvalidResponse,
+            Self::UnsupportedPlatform(_) => RuntimeFailureKind::InvalidRequest,
+            Self::Cancelled => RuntimeFailureKind::Unknown,
+            Self::MissingTask(_)
+            | Self::LocalOperation(_)
+            | Self::Store(_)
+            | Self::Artifact(_)
+            | Self::Plugin(_)
+            | Self::Memory(_)
+            | Self::Loop(_) => RuntimeFailureKind::Unknown,
+        }
+    }
+
+    pub fn user_message(&self, locale: AppLocale) -> String {
+        localized_failure(locale, self)
+    }
+}
+
 #[derive(Clone)]
 pub struct RuntimeKernel {
     store: RuntimeStore,
@@ -359,25 +383,37 @@ impl RuntimeKernel {
     /// Only the foreground/main queue is serialized. `spawn_task` sessions use independent
     /// persisted contexts and may run concurrently without mutating the main conversation.
     pub async fn run_queue(&self, api_key: Option<String>) -> Result<usize, EngineError> {
+        Ok(self.run_queue_report(api_key).await?.completed)
+    }
+
+    /// Runs the serialized foreground queue and reports typed failures to the host. This keeps the
+    /// Loop engine provider-agnostic while allowing every shell to invalidate stale credentials or
+    /// present an actionable channel state instead of collapsing all failures into one sentence.
+    pub async fn run_queue_report(
+        &self,
+        api_key: Option<String>,
+    ) -> Result<QueueRunReport, EngineError> {
         let _guard = self.queue_guard.lock().await;
-        let mut completed = 0;
+        let mut report = QueueRunReport::default();
         while let Some(thread_id) = self.store.next_queued_id().await {
             if !self.store.claim(thread_id).await? {
                 break;
             }
             match self.execute(thread_id, api_key.as_deref()).await {
-                Ok(()) => completed += 1,
+                Ok(()) => report.completed += 1,
                 Err(EngineError::Cancelled) => {}
                 Err(error) => {
                     let locale = self.store.settings().await.locale;
                     let message = localized_failure(locale, &error);
+                    let kind = error.failure_kind();
                     self.store
                         .fail(thread_id, message, error.to_string())
                         .await?;
+                    report.failures.push(QueueFailure { thread_id, kind });
                 }
             }
         }
-        Ok(completed)
+        Ok(report)
     }
 
     pub async fn resume(
@@ -2825,9 +2861,55 @@ fn ensure_key(settings: &RuntimeSettings, api_key: Option<&str>) -> Result<(), E
 }
 
 fn localized_failure(locale: AppLocale, error: &EngineError) -> String {
-    match locale {
-        AppLocale::ZhCn => format!("本轮未能完成：{error}。会话和执行记录已保留，可以修正或重试。"),
-        AppLocale::En => format!("This run could not be completed: {error}. The session and execution trace were preserved for correction or retry."),
+    match (locale, error.failure_kind()) {
+        (AppLocale::ZhCn, RuntimeFailureKind::Authentication) => {
+            "模型通道认证失败。请重新填写或更新 API Token；任务和执行记录已保留。".into()
+        }
+        (AppLocale::En, RuntimeFailureKind::Authentication) => {
+            "Model authentication failed. Re-enter or update the API token; the task and execution trace were preserved.".into()
+        }
+        (AppLocale::ZhCn, RuntimeFailureKind::Quota) => {
+            "模型服务额度不可用。请补充额度或切换可用通道；任务和执行记录已保留。".into()
+        }
+        (AppLocale::En, RuntimeFailureKind::Quota) => {
+            "The model service has no available quota. Add credit or switch to an available channel; the task and execution trace were preserved.".into()
+        }
+        (AppLocale::ZhCn, RuntimeFailureKind::RateLimited) => {
+            "模型服务当前限流，本轮已停止空转。稍后重试即可，执行记录已保留。".into()
+        }
+        (AppLocale::En, RuntimeFailureKind::RateLimited) => {
+            "The model service is rate-limited, so this run stopped instead of spinning. Retry later; the execution trace was preserved.".into()
+        }
+        (AppLocale::ZhCn, RuntimeFailureKind::Network | RuntimeFailureKind::Timeout) => {
+            "模型通道网络不可达或响应超时。请检查网络后重试，任务和执行记录已保留。".into()
+        }
+        (AppLocale::En, RuntimeFailureKind::Network | RuntimeFailureKind::Timeout) => {
+            "The model channel is unreachable or timed out. Check the network and retry; the task and execution trace were preserved.".into()
+        }
+        (AppLocale::ZhCn, RuntimeFailureKind::InvalidRequest) => {
+            "模型服务拒绝了当前请求。请检查接口、模型名或兼容协议；执行记录已保留。".into()
+        }
+        (AppLocale::En, RuntimeFailureKind::InvalidRequest) => {
+            "The model service rejected the request. Check the endpoint, model name, or compatibility protocol; the execution trace was preserved.".into()
+        }
+        (AppLocale::ZhCn, RuntimeFailureKind::InvalidResponse) => {
+            "模型返回内容不符合当前执行协议。本轮没有降级猜测，原始执行记录已保留。".into()
+        }
+        (AppLocale::En, RuntimeFailureKind::InvalidResponse) => {
+            "The model response did not match the execution protocol. No guessed fallback was used; the original trace was preserved.".into()
+        }
+        (AppLocale::ZhCn, RuntimeFailureKind::Server) => {
+            "模型服务端暂时异常。稍后重试即可，任务和执行记录已保留。".into()
+        }
+        (AppLocale::En, RuntimeFailureKind::Server) => {
+            "The model service is temporarily unavailable. Retry later; the task and execution trace were preserved.".into()
+        }
+        (AppLocale::ZhCn, RuntimeFailureKind::Unknown) => {
+            "任务执行遇到未分类异常，已停止并保留完整执行记录供诊断。".into()
+        }
+        (AppLocale::En, RuntimeFailureKind::Unknown) => {
+            "The task encountered an unclassified runtime failure and stopped with its full execution trace preserved for diagnosis.".into()
+        }
     }
 }
 
@@ -2871,6 +2953,23 @@ mod tests {
     use tempfile::tempdir;
 
     type MockResponder = dyn Fn(&Value, usize) -> Value + Send + Sync + 'static;
+
+    #[test]
+    fn presents_actionable_provider_neutral_failures() {
+        let auth = EngineError::Model(ModelError::Http {
+            status: reqwest::StatusCode::UNAUTHORIZED,
+            message: "secret provider body".into(),
+        });
+        let zh = auth.user_message(AppLocale::ZhCn);
+        let en = auth.user_message(AppLocale::En);
+
+        assert_eq!(auth.failure_kind(), RuntimeFailureKind::Authentication);
+        assert!(zh.contains("API Token"));
+        assert!(en.contains("API token"));
+        assert!(!zh.contains("secret provider body"));
+        assert!(!en.contains("secret provider body"));
+        assert!(!zh.contains("本轮未能完成"));
+    }
 
     fn mock_provider(
         expected_requests: usize,

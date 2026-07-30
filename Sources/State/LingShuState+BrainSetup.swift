@@ -45,6 +45,10 @@ extension LingShuState {
             brainSetupPhase = .ready
             return true
         }
+        if result.failureKind == .auth {
+            _ = credentialStore.setAPIKey("", forProvider: preset.id)
+            apiKey = ""
+        }
         brainSetupPhase = .required(reason: loc("当前主脑不可用：", "The current brain is unavailable: ") + result.detail)
         return false
     }
@@ -60,8 +64,8 @@ extension LingShuState {
         let trimmedKey = configuration.apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
         guard credentialStore.setAPIKey(trimmedKey, forProvider: configuration.providerID) else {
             let detail = loc(
-                "模型连接成功，但 Token 无法安全写入 macOS 钥匙串。请解锁登录钥匙串后重试。",
-                "The model responded, but the token could not be saved securely in macOS Keychain. Unlock the login keychain and try again."
+                "模型连接成功，但 Token 无法写入灵枢的本机加密凭据库。请检查 Application Support 目录权限后重试。",
+                "The model responded, but the token could not be saved to Nous's local encrypted credential store. Check the Application Support directory permissions and try again."
             )
             let storageFailure = LingShuChannelValidation(ok: false, detail: detail, at: Date())
             brainSetupPhase = .required(reason: detail)
@@ -132,6 +136,14 @@ extension LingShuState {
                 at: Date()
             )
         case .interrupted(let reason):
+            if let failure = LingShuModelServiceFailure.decodeReason(reason) {
+                return .init(
+                    ok: false,
+                    detail: LingShuModelServiceFailure.userFacingReason(reason),
+                    at: Date(),
+                    failureKind: failure.kind
+                )
+            }
             return .init(ok: false, detail: String(reason.prefix(160)), at: Date())
         case .blocked:
             return .init(ok: false, detail: loc("连接校验被意外阻塞", "Connection verification was unexpectedly blocked"), at: Date())

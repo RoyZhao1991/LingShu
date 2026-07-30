@@ -16,7 +16,7 @@ pub use contract::{
     kernel_contract, KernelContract, KernelInterfaceContract, PlatformCapabilities,
     KERNEL_ABI_VERSION, KERNEL_CONTRACT_JSON,
 };
-pub use engine::RuntimeKernel;
+pub use engine::{EngineError, RuntimeKernel};
 pub use loops::{LoopError, LoopExecution, LoopExecutionRequest, LoopRegistry};
 pub use memory::{MemoryError, MemoryKernel};
 pub use models::*;

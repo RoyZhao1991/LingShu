@@ -5,6 +5,7 @@ struct LingShuChannelValidation: Codable, Equatable, Sendable {
     var ok: Bool
     var detail: String
     var at: Date
+    var failureKind: LingShuModelServiceFailure.Kind? = nil
 }
 
 /// 能力通道(口/眼/耳)的用户配置:自定义显示名 + 接口地址 + 模型名(密钥另存 credentialStore)。
