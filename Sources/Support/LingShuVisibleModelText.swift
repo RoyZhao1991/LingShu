@@ -3,7 +3,33 @@ import Foundation
 /// UI/账本展示层的模型文本清洗。
 /// 流程控制仍只读取严格 JSON；这里仅负责把违规混合输出里的 `reply` 提取成用户可见文本。
 enum LingShuVisibleModelText {
+    private static let cache = Cache()
+
+    private final class Cache: @unchecked Sendable {
+        final class Entry: NSObject {
+            let value: String
+            init(_ value: String) { self.value = value }
+        }
+
+        let values: NSCache<NSString, Entry> = {
+            let cache = NSCache<NSString, Entry>()
+            cache.countLimit = 384
+            cache.totalCostLimit = 8 * 1_024 * 1_024
+            return cache
+        }()
+    }
+
     static func clean(_ raw: String) -> String {
+        let key = raw as NSString
+        if let cached = cache.values.object(forKey: key) {
+            return cached.value
+        }
+        let value = cleanUncached(raw)
+        cache.values.setObject(Cache.Entry(value), forKey: key, cost: raw.utf8.count)
+        return value
+    }
+
+    private static func cleanUncached(_ raw: String) -> String {
         // Checker 硬驳回不能被展示层的“从混合输出提取 reply”逻辑吃掉。
         // 否则内部状态是未通过，用户却只会看到 Maker 原先的“已完成”自述。
         if LingShuVerificationFailure.isMarked(raw) {

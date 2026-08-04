@@ -743,6 +743,9 @@ function statusLabel(status: TaskStatus, locale: Locale) { const t = strings(loc
 function roleLabel(role: TaskRole, locale: Locale) { const t = strings(locale); if (role === "worker") return t.workerRole; if (role === "checker") return t.checkerRole; return t.mainRole; }
 
 function aggregateTaskStatus(root: TaskRecord, tasks: TaskRecord[]): TaskStatus {
+  // A terminal main task is authoritative. Descendants are execution detail and must not turn a
+  // delivered task back into "running" while their final projection is still arriving.
+  if (terminalStatuses.has(root.status)) return root.status;
   const related = tasks.filter((task) => (task.rootTaskId ?? task.id) === root.id);
   if (related.some((task) => task.status === "needs_user_action")) return "needs_user_action";
   if (related.some((task) => ["understanding", "running"].includes(task.status))) return "running";

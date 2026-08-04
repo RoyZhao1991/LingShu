@@ -373,6 +373,8 @@ pub struct TaskRecord {
     pub artifacts: Vec<ArtifactRecord>,
     pub summary: String,
     pub error: Option<String>,
+    #[serde(default)]
+    pub user_message_id: Option<Uuid>,
     pub assistant_message_id: Uuid,
     #[serde(default)]
     pub attachment_paths: Vec<PathBuf>,
@@ -781,6 +783,7 @@ pub struct SubmitReceipt {
 #[serde(rename_all = "camelCase")]
 pub struct ArtifactSpec {
     pub title: String,
+    #[serde(alias = "file_name")]
     pub file_name: String,
     pub kind: String,
     #[serde(default)]
@@ -808,6 +811,25 @@ pub struct TaskCompletion {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn artifact_spec_accepts_tool_contract_and_persisted_field_names() {
+        let snake_case: ArtifactSpec = serde_json::from_value(serde_json::json!({
+            "title": "Report",
+            "file_name": "report.docx",
+            "kind": "docx"
+        }))
+        .expect("the advertised tool contract must deserialize");
+        let camel_case: ArtifactSpec = serde_json::from_value(serde_json::json!({
+            "title": "Report",
+            "fileName": "report.docx",
+            "kind": "docx"
+        }))
+        .expect("the persisted camelCase contract must remain readable");
+
+        assert_eq!(snake_case.file_name, "report.docx");
+        assert_eq!(camel_case.file_name, "report.docx");
+    }
 
     #[test]
     fn legacy_settings_without_permission_mode_default_to_sandbox() {

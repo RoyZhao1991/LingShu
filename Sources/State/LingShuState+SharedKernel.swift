@@ -8,6 +8,38 @@ extension LingShuState {
             .path
     }
 
+    /// Opens the canonical Rust task store as part of app launch so restart recovery and
+    /// parent/child terminal reconciliation do not wait for the user's next message.
+    /// This is deliberately configuration-free: it neither selects a provider nor starts a task.
+    func prepareSharedKernelOnLaunch() async {
+        guard LingShuRuntimeEnvironment.usesSharedRuntimeKernel else { return }
+        do {
+            try await sharedKernelRuntime.ensureStarted(dataDirectory: sharedKernelDataDirectory)
+            let snapshot = try await sharedKernelRuntime.snapshot(providerConfigured: isModelConnected)
+            await projectSharedKernelSnapshot(snapshot)
+            if snapshot.tasks.contains(where: {
+                $0.status == .queued || $0.status == .understanding || $0.status == .running
+            }) {
+                startSharedKernelPolling()
+            }
+            appendTrace(
+                kind: .runtime,
+                actor: "RuntimeKernel",
+                title: loc("共享任务账本已同步", "Shared task ledger synchronized"),
+                detail: "tasks=\(snapshot.tasks.count) active=\(snapshot.activeTaskId?.uuidString.lowercased() ?? "none")"
+            )
+        } catch {
+            // Launch remains usable on legacy/test builds without the shared library. A real turn
+            // will surface the same error in its own bubble if the runtime is still unavailable.
+            appendTrace(
+                kind: .warning,
+                actor: "RuntimeKernel",
+                title: loc("共享任务账本同步失败", "Shared task ledger synchronization failed"),
+                detail: error.localizedDescription
+            )
+        }
+    }
+
     func sharedKernelSettings() throws -> LingShuKernelRuntimeSettings {
         let protocolName = selectedModelPreset?.protocolName ?? ""
         let requestFormat = LingShuModelGateway().requestFormat(
@@ -70,9 +102,11 @@ extension LingShuState {
             placeholderID = placeholder.id
         }
         registerSpeechIntent(for: placeholderID, request: speechRequest, source: inputSource)
+        sharedKernelSubmissionsInFlight += 1
 
         Task { @MainActor [weak self] in
             guard let self else { return }
+            defer { self.sharedKernelSubmissionsInFlight = max(0, self.sharedKernelSubmissionsInFlight - 1); self.drainSerialInputsIfIdle() }
             do {
                 try await self.sharedKernelRuntime.ensureStarted(dataDirectory: self.sharedKernelDataDirectory)
                 _ = try await self.sharedKernelRuntime.configure(
@@ -117,7 +151,6 @@ extension LingShuState {
                     title: self.loc("共享内核启动失败", "Shared kernel failed to start"),
                     detail: error.localizedDescription
                 )
-                self.drainSerialInputsIfIdle()
             }
         }
     }
@@ -132,7 +165,7 @@ extension LingShuState {
                 do {
                     let snapshot = try await self.sharedKernelRuntime.snapshot(providerConfigured: self.isModelConnected)
                     consecutiveErrors = 0
-                    self.projectSharedKernelSnapshot(snapshot)
+                    await self.projectSharedKernelSnapshot(snapshot)
                     let hasRunnableTask = snapshot.tasks.contains {
                         $0.status == .queued || $0.status == .understanding || $0.status == .running
                     }
@@ -150,55 +183,62 @@ extension LingShuState {
         }
     }
 
-    func projectSharedKernelSnapshot(_ snapshot: LingShuKernelRuntimeSnapshot) {
+    func projectSharedKernelSnapshot(_ snapshot: LingShuKernelRuntimeSnapshot) async {
         guard snapshot.kernelAbiVersion == LingShuKernelABI.version else {
             failSharedKernelBubbles("ABI mismatch: \(snapshot.kernelAbiVersion)")
             return
         }
-        let allKernelIDs = Set(snapshot.tasks.map { $0.id.uuidString.lowercased() })
-        sharedKernelLoopEngines = snapshot.loopEngines
-        sharedKernelKnownThreadIDs.formUnion(allKernelIDs)
+        let existingRecords = Dictionary(
+            uniqueKeysWithValues: taskExecutionRecords.map { ($0.id, $0) }
+        )
+        let previousFingerprints = sharedKernelProjectionFingerprints
+        let english = language == .english
+        let batch = await Task.detached(priority: .userInitiated) {
+            Self.prepareSharedKernelProjection(
+                snapshot,
+                existingRecords: existingRecords,
+                previousFingerprints: previousFingerprints,
+                english: english
+            )
+        }.value
+        guard !Task.isCancelled else { return }
+
+        sharedKernelProjectionFingerprints = batch.fingerprints
+        if sharedKernelLoopEngines != batch.loopEngines {
+            sharedKernelLoopEngines = batch.loopEngines
+        }
+        sharedKernelKnownThreadIDs.formUnion(batch.allKernelIDs)
         let previouslyActive = sharedKernelActiveThreadIDs
-        let nowActive = Set(snapshot.tasks.compactMap { task -> String? in
-            switch task.status {
-            case .queued, .understanding, .running:
-                task.id.uuidString.lowercased()
-            case .needsUserAction, .completed, .failed, .cancelled:
-                nil
-            }
-        })
+        let nowActive = batch.activeKernelIDs
         sharedKernelActiveThreadIDs = nowActive
-        activeTaskThreadRecordIDs.subtract(allKernelIDs)
+        activeTaskThreadRecordIDs.subtract(batch.allKernelIDs)
         activeTaskThreadRecordIDs.formUnion(nowActive)
 
-        let eventsByTask = Dictionary(grouping: snapshot.events, by: \LingShuKernelRuntimeEvent.taskId)
-        let lineageIDs = Dictionary(grouping: snapshot.tasks) { task in
-            task.rootTaskId ?? task.id
-        }.mapValues { $0.map { $0.id.uuidString.lowercased() } }
-
         var recordsChanged = false
-        for task in snapshot.tasks {
-            let taskID = task.id.uuidString.lowercased()
-            let oldRecord = taskExecutionRecords.first(where: { $0.id == taskID })
-            let record = sharedKernelTaskRecord(
-                task,
-                events: eventsByTask[task.id] ?? [],
-                lineageIDs: lineageIDs[task.rootTaskId ?? task.id] ?? [],
-                existing: oldRecord
-            )
-            if oldRecord != record {
-                taskExecutionJournal.upsert(record, into: &taskExecutionRecords)
+        var recordIndexes = Dictionary(
+            uniqueKeysWithValues: taskExecutionRecords.enumerated().map { ($0.element.id, $0.offset) }
+        )
+        for projection in batch.changedTasks {
+            if let index = recordIndexes[projection.record.id] {
+                if taskExecutionRecords[index] != projection.record {
+                    taskExecutionRecords[index] = projection.record
+                    recordsChanged = true
+                }
+            } else {
+                recordIndexes[projection.record.id] = taskExecutionRecords.count
+                taskExecutionRecords.append(projection.record)
                 recordsChanged = true
             }
-            projectSharedKernelBubble(
-                task,
-                messages: snapshot.messages,
-                events: eventsByTask[task.id] ?? []
-            )
+            applySharedKernelBubbleProjection(projection.bubble)
         }
-        if recordsChanged { persistTaskExecutionRecords() }
+        if recordsChanged {
+            taskExecutionRecords.sort { $0.updatedAt > $1.updatedAt }
+        }
 
         let newlyFinished = previouslyActive.subtracting(nowActive)
+        if recordsChanged {
+            scheduleSharedKernelRecordPersistence(immediate: !newlyFinished.isEmpty)
+        }
         for recordID in newlyFinished {
             guard let record = taskExecutionRecords.first(where: { $0.id == recordID }),
                   record.status.isTerminal else { continue }
@@ -209,7 +249,7 @@ extension LingShuState {
         missionStatus = nowActive.isEmpty
             ? loc("待机中", "Standby")
             : loc("共享内核正在执行 \(nowActive.count) 个会话", "Shared kernel is running \(nowActive.count) session(s)")
-        if let memory = snapshot.memory {
+        if let memory = batch.memory {
             mainMemoryStatus = loc(
                 "Rust 热记忆 \(memory.hotCount) 条",
                 "Rust hot memory: \(memory.hotCount)"
@@ -218,6 +258,30 @@ extension LingShuState {
                 "Rust 冷记忆 \(memory.coldCount) 条",
                 "Rust cold memory: \(memory.coldCount)"
             )
+        }
+    }
+
+    /// Coalesces the Swift task journal to at most one write per second while a task streams.
+    /// Terminal transitions flush immediately, so the UI never trades correctness for smoothness.
+    private func scheduleSharedKernelRecordPersistence(immediate: Bool) {
+        if immediate {
+            sharedKernelRecordPersistenceTask?.cancel()
+            sharedKernelRecordPersistenceTask = nil
+            sharedKernelLastRecordPersistenceAt = Date()
+            persistTaskExecutionRecords()
+            return
+        }
+        guard sharedKernelRecordPersistenceTask == nil else { return }
+        let elapsed = Date().timeIntervalSince(sharedKernelLastRecordPersistenceAt)
+        let delay = max(0, 1.0 - elapsed)
+        sharedKernelRecordPersistenceTask = Task { @MainActor [weak self] in
+            if delay > 0 {
+                try? await Task.sleep(for: .seconds(delay))
+            }
+            guard let self, !Task.isCancelled else { return }
+            self.sharedKernelRecordPersistenceTask = nil
+            self.sharedKernelLastRecordPersistenceAt = Date()
+            self.persistTaskExecutionRecords()
         }
     }
 

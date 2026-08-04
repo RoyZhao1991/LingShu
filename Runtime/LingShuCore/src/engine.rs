@@ -25,10 +25,9 @@ use uuid::Uuid;
 
 const CONTEXT_MESSAGE_LIMIT: usize = 80;
 const GOAL_ATTEMPTS: usize = 3;
-const MAX_AGENT_TURNS: usize = 40;
+const AGENT_TURN_CHECKPOINT_INTERVAL: usize = 40;
 const MAX_CHILD_DEPTH: u8 = 3;
 const STUCK_REPEAT_THRESHOLD: usize = 5;
-const MAX_RUNTIME_CONTRACT_CORRECTIONS: usize = 2;
 const MIN_GOAL_TIMEOUT_SECONDS: u64 = 30;
 const MAX_GOAL_TIMEOUT_SECONDS: [u64; GOAL_ATTEMPTS] = [75, 120, 180];
 
@@ -803,7 +802,6 @@ impl RuntimeKernel {
             let mut messages = task.session_messages.clone();
             let mut active_permission = settings.execution_permission_mode;
             let (mut executed_tools, mut failed_network_command) = session_tool_evidence(&messages);
-            let mut runtime_contract_corrections = 0_usize;
             if let Some(correction) = correction {
                 messages.push(AgentMessage {
                     role: AgentRole::User,
@@ -821,119 +819,246 @@ impl RuntimeKernel {
                 });
             }
             let mut signatures: Vec<String> = Vec::new();
-            let mut last_text = String::new();
-            for turn_index in 1..=MAX_AGENT_TURNS {
-                if self.store.task_is_cancelled(task.id).await {
-                    return Ok(SessionOutcome::Cancelled);
-                }
-                let latest_permission = self.store.settings().await.execution_permission_mode;
-                if latest_permission != active_permission {
-                    active_permission = latest_permission;
-                    messages.push(runtime_authority_message(
-                        &settings,
-                        &self.platform,
-                        &self.capabilities,
-                        active_permission,
-                    ));
-                    self.store
-                        .append_event(
-                            task.id,
-                            RuntimeEventKind::Status,
-                            RuntimeEventState::Completed,
-                            "Runtime",
-                            localized(
-                                &settings.locale,
-                                "执行权限已更新",
-                                "Execution permission updated",
-                            ),
-                            format!("permission_mode={}", active_permission.as_str()),
-                        )
-                        .await?;
-                }
-                let mut definitions = tool_definitions(task.depth, active_permission);
-                definitions.extend(plugin_tool_definitions(
-                    &self.plugins.enabled_tools(),
-                    settings.locale,
-                ));
-                let mut turn_settings = settings.clone();
-                turn_settings.execution_permission_mode = active_permission;
-                self.store
-                    .set_session_messages(task.id, messages.clone())
-                    .await?;
-                self.store
-                    .set_assistant_text(
-                        task.id,
-                        localized(&settings.locale, "思考中…", "Thinking…").into(),
-                        MessageState::Thinking,
-                    )
-                    .await?;
-                let turn = self
-                    .stream_model_turn(
-                        task.id,
-                        turn_index,
-                        &turn_settings,
-                        api_key.as_deref(),
-                        &messages,
-                        &definitions,
-                    )
-                    .await?;
-                if !turn.text.trim().is_empty() {
-                    last_text = turn.text.clone();
-                }
-                if turn.tool_calls.is_empty() {
-                    let final_text = if turn.text.trim().is_empty() {
-                        last_text.clone()
-                    } else {
-                        turn.text.clone()
-                    };
-                    if final_text.trim().is_empty() {
-                        return Err(EngineError::InvalidModelJson(
-                            "agent ended without a user-facing response".into(),
-                        ));
+            let mut turn_index = 0_usize;
+            loop {
+                for _ in 0..AGENT_TURN_CHECKPOINT_INTERVAL {
+                    turn_index += 1;
+                    if self.store.task_is_cancelled(task.id).await {
+                        return Ok(SessionOutcome::Cancelled);
                     }
                     let latest_permission = self.store.settings().await.execution_permission_mode;
                     if latest_permission != active_permission {
                         active_permission = latest_permission;
-                        messages.push(AgentMessage {
-                            role: AgentRole::Assistant,
-                            content: final_text,
-                            tool_calls: Vec::new(),
-                            tool_call_id: None,
-                        });
                         messages.push(runtime_authority_message(
                             &settings,
                             &self.platform,
                             &self.capabilities,
                             active_permission,
                         ));
-                        continue;
+                        self.store
+                            .append_event(
+                                task.id,
+                                RuntimeEventKind::Status,
+                                RuntimeEventState::Completed,
+                                "Runtime",
+                                localized(
+                                    &settings.locale,
+                                    "执行权限已更新",
+                                    "Execution permission updated",
+                                ),
+                                format!("permission_mode={}", active_permission.as_str()),
+                            )
+                            .await?;
                     }
-                    if let Some(issue) = completion_contract_issue(
-                        &goal,
-                        &final_text,
-                        active_permission,
-                        executed_tools,
-                        failed_network_command,
-                    ) {
-                        if runtime_contract_corrections >= MAX_RUNTIME_CONTRACT_CORRECTIONS {
-                            return Err(EngineError::LocalOperation(format!(
-                                "model repeatedly contradicted the runtime contract: {issue}"
-                            )));
+                    let mut definitions = tool_definitions(task.depth, active_permission);
+                    definitions.extend(plugin_tool_definitions(
+                        &self.plugins.enabled_tools(),
+                        settings.locale,
+                    ));
+                    let mut turn_settings = settings.clone();
+                    turn_settings.execution_permission_mode = active_permission;
+                    self.store
+                        .set_session_messages(task.id, messages.clone())
+                        .await?;
+                    self.store
+                        .set_assistant_text(
+                            task.id,
+                            localized(&settings.locale, "思考中…", "Thinking…").into(),
+                            MessageState::Thinking,
+                        )
+                        .await?;
+                    let turn = self
+                        .stream_model_turn(
+                            task.id,
+                            turn_index,
+                            &turn_settings,
+                            api_key.as_deref(),
+                            &messages,
+                            &definitions,
+                        )
+                        .await?;
+                    if turn.tool_calls.is_empty() {
+                        if turn.text.trim().is_empty() {
+                            let correction = localized(
+                                &settings.locale,
+                                "本回合没有生成可见答复或工具调用。重新检查已确认的 GoalSpec 与现有结果，选择下一项实际动作继续推进；不要结束任务。",
+                                "This turn produced neither a visible response nor a tool call. Recheck the accepted GoalSpec and existing results, choose the next concrete action, and continue; do not end the task.",
+                            );
+                            messages.push(AgentMessage {
+                                role: AgentRole::User,
+                                content: correction.into(),
+                                tool_calls: Vec::new(),
+                                tool_call_id: None,
+                            });
+                            self.store
+                                .append_event(
+                                    task.id,
+                                    RuntimeEventKind::Warning,
+                                    RuntimeEventState::Completed,
+                                    "Runtime",
+                                    localized(
+                                        &settings.locale,
+                                        "未产生实际内容，继续思考",
+                                        "No actionable content; continuing",
+                                    ),
+                                    correction,
+                                )
+                                .await?;
+                            continue;
                         }
-                        runtime_contract_corrections += 1;
+                        let final_text = turn.text;
+                        let latest_permission =
+                            self.store.settings().await.execution_permission_mode;
+                        if latest_permission != active_permission {
+                            active_permission = latest_permission;
+                            messages.push(AgentMessage {
+                                role: AgentRole::Assistant,
+                                content: final_text,
+                                tool_calls: Vec::new(),
+                                tool_call_id: None,
+                            });
+                            messages.push(runtime_authority_message(
+                                &settings,
+                                &self.platform,
+                                &self.capabilities,
+                                active_permission,
+                            ));
+                            continue;
+                        }
+                        if let Some(issue) = completion_contract_issue(
+                            &goal,
+                            &final_text,
+                            active_permission,
+                            executed_tools,
+                            failed_network_command,
+                        ) {
+                            messages.push(AgentMessage {
+                                role: AgentRole::Assistant,
+                                content: final_text,
+                                tool_calls: Vec::new(),
+                                tool_call_id: None,
+                            });
+                            messages.push(runtime_contract_correction_message(
+                                &settings,
+                                &self.platform,
+                                &self.capabilities,
+                                active_permission,
+                                issue,
+                            ));
+                            self.store
+                                .append_event(
+                                    task.id,
+                                    RuntimeEventKind::Warning,
+                                    RuntimeEventState::Completed,
+                                    "Runtime",
+                                    localized(
+                                        &settings.locale,
+                                        "运行时契约自纠",
+                                        "Runtime contract correction",
+                                    ),
+                                    issue.to_string(),
+                                )
+                                .await?;
+                            continue;
+                        }
                         messages.push(AgentMessage {
                             role: AgentRole::Assistant,
-                            content: final_text,
+                            content: final_text.clone(),
                             tool_calls: Vec::new(),
                             tool_call_id: None,
                         });
-                        messages.push(runtime_contract_correction_message(
-                            &settings,
-                            &self.platform,
-                            &self.capabilities,
-                            active_permission,
-                            issue,
-                        ));
+                        self.store
+                            .set_session_messages(task.id, messages.clone())
+                            .await?;
+                        return Ok(SessionOutcome::Completed {
+                            text: final_text,
+                            messages,
+                        });
+                    }
+
+                    let tool_calls = turn.tool_calls;
+                    let signature = tool_signature(&tool_calls);
+                    signatures.push(signature.clone());
+                    let repeated_plan = signatures.len() >= STUCK_REPEAT_THRESHOLD
+                        && signatures
+                            .iter()
+                            .rev()
+                            .take(STUCK_REPEAT_THRESHOLD)
+                            .all(|candidate| candidate == &signature);
+                    messages.push(AgentMessage {
+                        role: AgentRole::Assistant,
+                        content: turn.text,
+                        tool_calls: tool_calls.clone(),
+                        tool_call_id: None,
+                    });
+                    self.store
+                        .set_session_messages(task.id, messages.clone())
+                        .await?;
+
+                    if let Some(blocking) = tool_calls.iter().find(|call| call.name == "ask_user") {
+                        match serde_json::from_str::<AskArguments>(&blocking.arguments_json) {
+                            Ok(args) => {
+                                self.store
+                                    .set_needs_user_action(
+                                        task.id,
+                                        Some(blocking.id.clone()),
+                                        args.prompt.clone(),
+                                    )
+                                    .await?;
+                                self.store
+                                    .append_event(
+                                        task.id,
+                                        RuntimeEventKind::HumanInteraction,
+                                        RuntimeEventState::Blocked,
+                                        "LingShu",
+                                        localized(
+                                            &settings.locale,
+                                            "等待你的操作",
+                                            "Your action is required",
+                                        ),
+                                        args.prompt,
+                                    )
+                                    .await?;
+                                return Ok(SessionOutcome::Blocked);
+                            }
+                            Err(error) => {
+                                let error = EngineError::InvalidModelJson(format!(
+                                    "{} arguments: {error}",
+                                    blocking.name
+                                ));
+                                messages.push(AgentMessage {
+                                    role: AgentRole::Tool,
+                                    content: recoverable_tool_error_output(
+                                        blocking,
+                                        &error,
+                                        settings.locale,
+                                    ),
+                                    tool_calls: Vec::new(),
+                                    tool_call_id: Some(blocking.id.clone()),
+                                });
+                                append_recoverable_tool_warning(
+                                    &self.store,
+                                    task.id,
+                                    blocking,
+                                    &error,
+                                    settings.locale,
+                                )
+                                .await?;
+                                continue;
+                            }
+                        }
+                    }
+
+                    if repeated_plan {
+                        for call in tool_calls {
+                            messages.push(AgentMessage {
+                                role: AgentRole::Tool,
+                                content: repeated_tool_plan_output(&call, settings.locale),
+                                tool_calls: Vec::new(),
+                                tool_call_id: Some(call.id),
+                            });
+                        }
+                        signatures.clear();
                         self.store
                             .append_event(
                                 task.id,
@@ -942,113 +1067,116 @@ impl RuntimeKernel {
                                 "Runtime",
                                 localized(
                                     &settings.locale,
-                                    "运行时契约自纠",
-                                    "Runtime contract correction",
+                                    "检测到重复方案，正在换路",
+                                    "Repeated plan detected; changing approach",
                                 ),
-                                issue.to_string(),
+                                signature,
                             )
+                            .await?;
+                        self.store
+                            .set_session_messages(task.id, messages.clone())
                             .await?;
                         continue;
                     }
-                    messages.push(AgentMessage {
-                        role: AgentRole::Assistant,
-                        content: final_text.clone(),
-                        tool_calls: Vec::new(),
-                        tool_call_id: None,
-                    });
+
+                    let executions = join_all(tool_calls.into_iter().map(|call| {
+                        let original_call = call.clone();
+                        async {
+                            (
+                                original_call,
+                                self.execute_tool(
+                                    task.clone(),
+                                    goal.clone(),
+                                    settings.clone(),
+                                    api_key.clone(),
+                                    call,
+                                )
+                                .await,
+                            )
+                        }
+                    }))
+                    .await;
+                    for (call, result) in executions {
+                        match result {
+                            Ok(execution) => {
+                                executed_tools += 1;
+                                if execution.network_command
+                                    && execution.command_succeeded == Some(false)
+                                {
+                                    failed_network_command = true;
+                                }
+                                messages.push(AgentMessage {
+                                    role: AgentRole::Tool,
+                                    content: execution.output,
+                                    tool_calls: Vec::new(),
+                                    tool_call_id: Some(execution.call.id),
+                                });
+                            }
+                            Err(error) if is_recoverable_tool_error(&error) => {
+                                messages.push(AgentMessage {
+                                    role: AgentRole::Tool,
+                                    content: recoverable_tool_error_output(
+                                        &call,
+                                        &error,
+                                        settings.locale,
+                                    ),
+                                    tool_calls: Vec::new(),
+                                    tool_call_id: Some(call.id.clone()),
+                                });
+                                append_recoverable_tool_warning(
+                                    &self.store,
+                                    task.id,
+                                    &call,
+                                    &error,
+                                    settings.locale,
+                                )
+                                .await?;
+                            }
+                            Err(error) => return Err(error),
+                        }
+                    }
                     self.store
                         .set_session_messages(task.id, messages.clone())
                         .await?;
-                    return Ok(SessionOutcome::Completed {
-                        text: final_text,
-                        messages,
-                    });
                 }
 
-                let signature = tool_signature(&turn.tool_calls);
-                signatures.push(signature.clone());
-                if signatures.len() >= STUCK_REPEAT_THRESHOLD
-                    && signatures
-                        .iter()
-                        .rev()
-                        .take(STUCK_REPEAT_THRESHOLD)
-                        .all(|candidate| candidate == &signature)
-                {
-                    return Err(EngineError::LocalOperation(format!(
-                        "agent repeated the same tool plan {STUCK_REPEAT_THRESHOLD} times: {signature}"
-                    )));
-                }
+                let checkpoint = localized(
+                    &settings.locale,
+                    "已达到本段执行检查点，但已确认的 GoalSpec 尚未完成。检查现有证据，调整方案并继续下一段执行；不得仅因轮次用尽而结束。",
+                    "This execution segment reached its checkpoint, but the accepted GoalSpec is not complete. Inspect the evidence, change approach, and continue into the next segment; never stop merely because a turn budget was consumed.",
+                );
                 messages.push(AgentMessage {
-                    role: AgentRole::Assistant,
-                    content: turn.text,
-                    tool_calls: turn.tool_calls.clone(),
+                    role: AgentRole::User,
+                    content: checkpoint.into(),
+                    tool_calls: Vec::new(),
                     tool_call_id: None,
                 });
+                signatures.clear();
                 self.store
-                    .set_session_messages(task.id, messages.clone())
-                    .await?;
-
-                if let Some(blocking) = turn.tool_calls.iter().find(|call| call.name == "ask_user")
-                {
-                    let args = serde_json::from_str::<AskArguments>(&blocking.arguments_json)
-                        .map_err(|error| EngineError::InvalidModelJson(error.to_string()))?;
-                    self.store
-                        .set_needs_user_action(
-                            task.id,
-                            Some(blocking.id.clone()),
-                            args.prompt.clone(),
-                        )
-                        .await?;
-                    self.store
-                        .append_event(
-                            task.id,
-                            RuntimeEventKind::HumanInteraction,
-                            RuntimeEventState::Blocked,
-                            "LingShu",
-                            localized(&settings.locale, "等待你的操作", "Your action is required"),
-                            args.prompt,
-                        )
-                        .await?;
-                    return Ok(SessionOutcome::Blocked);
-                }
-
-                let executions = join_all(turn.tool_calls.into_iter().map(|call| {
-                    self.execute_tool(
-                        task.clone(),
-                        goal.clone(),
-                        settings.clone(),
-                        api_key.clone(),
-                        call,
+                    .append_event(
+                        task.id,
+                        RuntimeEventKind::Warning,
+                        RuntimeEventState::Completed,
+                        "Runtime",
+                        localized(
+                            &settings.locale,
+                            "目标尚未达成，继续推进",
+                            "Goal not yet met; continuing",
+                        ),
+                        checkpoint,
                     )
-                }))
-                .await;
-                for execution in executions {
-                    let execution = execution?;
-                    executed_tools += 1;
-                    if execution.network_command && execution.command_succeeded == Some(false) {
-                        failed_network_command = true;
-                    }
-                    messages.push(AgentMessage {
-                        role: AgentRole::Tool,
-                        content: execution.output,
-                        tool_calls: Vec::new(),
-                        tool_call_id: Some(execution.call.id),
-                    });
-                }
+                    .await?;
                 self.store
                     .set_session_messages(task.id, messages.clone())
                     .await?;
             }
-            Err(EngineError::LocalOperation(format!(
-                "agent reached the {MAX_AGENT_TURNS}-turn safety ceiling"
-            )))
         })
     }
 
     async fn stream_model_turn(
         &self,
         task_id: Uuid,
-        turn_index: usize,
+        _turn_index: usize,
         settings: &RuntimeSettings,
         api_key: Option<&str>,
         messages: &[AgentMessage],
@@ -1061,11 +1189,7 @@ impl RuntimeKernel {
                 RuntimeEventKind::Model,
                 RuntimeEventState::Running,
                 settings.model.clone(),
-                localized(
-                    &settings.locale,
-                    &format!("模型回合 {turn_index}"),
-                    &format!("Model turn {turn_index}"),
-                ),
+                localized(&settings.locale, "思考中…", "Thinking…"),
                 String::new(),
             )
             .await?;
@@ -1211,7 +1335,8 @@ impl RuntimeKernel {
                 truncate(&call.arguments_json, 1_200),
             )
             .await?;
-        let result = match call.name.as_str() {
+        let result = async {
+            Ok::<String, EngineError>(match call.name.as_str() {
             "inspect_runtime" => {
                 let latest = self.store.settings().await;
                 runtime_authority_payload(
@@ -1419,7 +1544,22 @@ impl RuntimeKernel {
                 }
                 execution.output
             }
-            other => json!({"ok":false,"error":format!("unknown tool: {other}")}).to_string(),
+                other => json!({"ok":false,"error":format!("unknown tool: {other}")}).to_string(),
+            })
+        }
+        .await;
+        let result = match result {
+            Ok(result) => result,
+            Err(error) => {
+                self.store
+                    .finish_event(
+                        event.id,
+                        RuntimeEventState::Failed,
+                        Some(truncate(&error.to_string(), 2_400)),
+                    )
+                    .await?;
+                return Err(error);
+            }
         };
         let event_state = if serde_json::from_str::<Value>(&result)
             .ok()
@@ -1636,7 +1776,11 @@ impl RuntimeKernel {
         mut final_text: String,
         mut messages: Vec<AgentMessage>,
     ) -> Result<SessionOutcome, EngineError> {
-        for review_round in 1..=2 {
+        let mut review_round = 1_usize;
+        loop {
+            if self.store.task_is_cancelled(thread_id).await {
+                return Ok(SessionOutcome::Cancelled);
+            }
             let verification = self
                 .run_checker(
                     thread_id,
@@ -1653,12 +1797,24 @@ impl RuntimeKernel {
                     messages,
                 });
             }
-            if review_round == 2 {
-                return Err(EngineError::LocalOperation(format!(
-                    "independent checker still rejected the delivery: {}",
-                    verification.findings.join("; ")
-                )));
-            }
+            self.store
+                .append_event(
+                    thread_id,
+                    RuntimeEventKind::Warning,
+                    RuntimeEventState::Completed,
+                    "Checker",
+                    localized(
+                        &settings.locale,
+                        "验收未通过，继续修订",
+                        "Verification rejected; continuing revision",
+                    ),
+                    format!(
+                        "{}\n{}",
+                        verification.summary,
+                        verification.findings.join("\n")
+                    ),
+                )
+                .await?;
             let correction = format!(
                 "{}\n{}",
                 verification.summary,
@@ -1693,8 +1849,8 @@ impl RuntimeKernel {
                 }
                 other => return Ok(other),
             }
+            review_round += 1;
         }
-        unreachable!()
     }
 
     async fn run_checker(
@@ -1792,11 +1948,7 @@ impl RuntimeKernel {
         self.store
             .finish_event(
                 event.id,
-                if result.passed {
-                    RuntimeEventState::Completed
-                } else {
-                    RuntimeEventState::Failed
-                },
+                RuntimeEventState::Completed,
                 Some(format!(
                     "{}\n{}",
                     result.summary,
@@ -2286,10 +2438,10 @@ fn tool_definitions(
     };
     let command_description = match permission_mode {
         ExecutionPermissionMode::Sandbox => {
-            "Run a local command with the Workspace as working directory. Network access and writes outside the Workspace require user authorization; a blocked result contains needs_user_action. This is terminal execution, not computer UI control."
+            "Run a local command with the Workspace as working directory. Network access and writes outside the Workspace require user authorization; a blocked result contains needs_user_action. Set timeout_seconds explicitly for bounded probes. A timeout is recoverable: change the endpoint, tool, arguments, or time budget and continue the accepted GoalSpec. This is terminal execution, not computer UI control."
         }
         ExecutionPermissionMode::FullAccess => {
-            "Run a local command with the Workspace as working directory. Full access is already authorized for local commands, network access, dependency installation, and paths outside the Workspace. This is terminal execution, not computer UI control."
+            "Run a local command with the Workspace as working directory. Full access is already authorized for local commands, network access, dependency installation, and paths outside the Workspace. Set timeout_seconds explicitly for bounded probes. A timeout is recoverable: change the endpoint, tool, arguments, or time budget and continue the accepted GoalSpec. This is terminal execution, not computer UI control."
         }
     };
     let mut tools = vec![
@@ -2569,12 +2721,26 @@ async fn run_local_command(
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    let output = tokio::time::timeout(Duration::from_secs(timeout_seconds), process.output())
+    process.kill_on_drop(true);
+    let output = match tokio::time::timeout(Duration::from_secs(timeout_seconds), process.output())
         .await
-        .map_err(|_| {
-            EngineError::LocalOperation(format!("command timed out after {timeout_seconds}s"))
-        })?
-        .map_err(|error| EngineError::LocalOperation(error.to_string()))?;
+    {
+        Ok(output) => output.map_err(|error| EngineError::LocalOperation(error.to_string()))?,
+        Err(_) => {
+            return Ok(json!({
+                "ok": false,
+                "recoverable": true,
+                "error_kind": "timeout",
+                "error": format!("command timed out after {timeout_seconds}s"),
+                "permission_mode": permission_mode.as_str(),
+                "network_authorization": if permission_mode == ExecutionPermissionMode::FullAccess {"allowed"} else {"requires_full_access"},
+                "runtime_sandbox_applied": permission_mode == ExecutionPermissionMode::Sandbox,
+                "timeout_seconds": timeout_seconds,
+                "instruction": "The command exceeded its time budget and was terminated. Do not repeat it unchanged or end the task. Continue with a shorter probe, another endpoint or tool, or a larger explicit timeout only when the operation genuinely needs it."
+            })
+            .to_string());
+        }
+    };
     Ok(json!({
         "ok":output.status.success(),
         "permission_mode":permission_mode.as_str(),
@@ -2679,6 +2845,76 @@ fn artifact_record_for_path(path: &Path) -> Result<ArtifactRecord, EngineError> 
 fn should_run_checker(goal: &GoalSpec, task: &Option<TaskRecord>) -> bool {
     matches!(goal.output_mode, OutputMode::Artifact)
         || task.as_ref().is_some_and(|task| !task.artifacts.is_empty())
+}
+
+fn is_recoverable_tool_error(error: &EngineError) -> bool {
+    matches!(
+        error,
+        EngineError::UnsupportedPlatform(_)
+            | EngineError::InvalidModelJson(_)
+            | EngineError::LocalOperation(_)
+            | EngineError::Artifact(_)
+            | EngineError::Plugin(_)
+            | EngineError::Memory(_)
+    )
+}
+
+fn recoverable_tool_error_output(
+    call: &AgentToolCall,
+    error: &EngineError,
+    locale: AppLocale,
+) -> String {
+    json!({
+        "ok": false,
+        "recoverable": true,
+        "tool": call.name,
+        "error": error.to_string(),
+        "instruction": localized(
+            &locale,
+            "纠正工具参数或选择另一条可用路径，然后继续推进已确认的 GoalSpec；不要结束任务。",
+            "Correct the tool arguments or choose another available path, then continue toward the accepted GoalSpec; do not end the task."
+        )
+    })
+    .to_string()
+}
+
+fn repeated_tool_plan_output(call: &AgentToolCall, locale: AppLocale) -> String {
+    json!({
+        "ok": false,
+        "recoverable": true,
+        "tool": call.name,
+        "error": "repeated_tool_plan",
+        "instruction": localized(
+            &locale,
+            "相同工具方案已重复多次且没有形成新证据。不要再次照搬；检查现有结果，改用不同参数、不同工具或不同子任务拆分继续推进。",
+            "The same tool plan repeated without producing new evidence. Do not repeat it again; inspect existing results and continue with different arguments, another tool, or a different subtask decomposition."
+        )
+    })
+    .to_string()
+}
+
+async fn append_recoverable_tool_warning(
+    store: &RuntimeStore,
+    task_id: Uuid,
+    call: &AgentToolCall,
+    error: &EngineError,
+    locale: AppLocale,
+) -> Result<(), EngineError> {
+    store
+        .append_event(
+            task_id,
+            RuntimeEventKind::Warning,
+            RuntimeEventState::Completed,
+            "Runtime",
+            localized(
+                &locale,
+                "工具调用需要纠正，正在续跑",
+                "Tool call needs correction; continuing",
+            ),
+            format!("{}: {}", call.name, error),
+        )
+        .await?;
+    Ok(())
 }
 
 fn tool_signature(calls: &[AgentToolCall]) -> String {
@@ -3330,6 +3566,40 @@ mod tests {
         assert!(output["recovery"].as_str().unwrap().contains("Full Access"));
     }
 
+    #[tokio::test]
+    async fn timed_out_command_is_recoverable_and_does_not_keep_running() {
+        let workspace = tempdir().unwrap();
+        let marker = workspace.path().join("late-marker.txt");
+
+        #[cfg(target_os = "windows")]
+        let command =
+            "Start-Sleep -Seconds 3; Set-Content -NoNewline -Path 'late-marker.txt' -Value 'late'";
+        #[cfg(not(target_os = "windows"))]
+        let command = "sleep 3; printf late > late-marker.txt";
+
+        let output = run_local_command(
+            workspace.path(),
+            command,
+            Some(1),
+            ExecutionPermissionMode::FullAccess,
+        )
+        .await
+        .unwrap();
+        let output: Value = serde_json::from_str(&output).unwrap();
+        assert_eq!(output["ok"], false);
+        assert_eq!(output["recoverable"], true);
+        assert_eq!(output["error_kind"], "timeout");
+        assert_eq!(output["timeout_seconds"], 1);
+        assert_eq!(output["permission_mode"], "full_access");
+        assert_eq!(output["network_authorization"], "allowed");
+
+        tokio::time::sleep(Duration::from_secs(3)).await;
+        assert!(
+            !marker.exists(),
+            "a timed-out shell must be terminated before it can mutate the workspace"
+        );
+    }
+
     #[test]
     fn simple_questions_keep_the_full_agent_contract_without_forcing_tools() {
         let goal = GoalSpec {
@@ -3712,6 +3982,324 @@ mod tests {
             .filter(|event| event.kind == RuntimeEventKind::Model)
             .all(|event| event.state == RuntimeEventState::Completed));
         assert_eq!(requests.lock().unwrap().len(), 2);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn malformed_tool_arguments_are_repaired_without_failing_the_goal() {
+        let (endpoint, requests, server) = mock_provider(5, |request, _| {
+            if request.get("stream") == Some(&Value::Bool(false)) {
+                let request_text = request.to_string();
+                if request_text.contains("independent checker") {
+                    return openai_response(
+                        Some(
+                            json!({
+                                "passed": true,
+                                "summary": "The requested artifact exists and is readable.",
+                                "findings": []
+                            })
+                            .to_string(),
+                        ),
+                        None,
+                        Value::Null,
+                    );
+                }
+                return goal_response("Create a recovery report", "task", "artifact");
+            }
+
+            let messages = request
+                .get("messages")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            if messages.iter().any(|message| {
+                message
+                    .get("content")
+                    .and_then(Value::as_str)
+                    .is_some_and(|content| content.contains("\"artifacts\""))
+            }) {
+                return openai_response(
+                    Some("The recovery report was created and registered.".into()),
+                    Some("Report the verified artifact."),
+                    Value::Null,
+                );
+            }
+            if messages.iter().any(|message| {
+                message
+                    .get("content")
+                    .and_then(Value::as_str)
+                    .is_some_and(|content| content.contains("\"recoverable\":true"))
+            }) {
+                return openai_response(
+                    None,
+                    Some("Correct the malformed arguments and continue."),
+                    json!([{
+                        "id":"create-recovered-report",
+                        "type":"function",
+                        "function":{
+                            "name":"create_artifact",
+                            "arguments":json!({
+                                "title":"Recovery report",
+                                "file_name":"recovery-report.md",
+                                "kind":"markdown",
+                                "content":"# Recovery report\n\nThe agent corrected its tool arguments and completed the accepted goal."
+                            })
+                            .to_string()
+                        }
+                    }]),
+                );
+            }
+            openai_response(
+                None,
+                Some("Attempt the requested artifact."),
+                json!([{
+                    "id":"create-malformed-report",
+                    "type":"function",
+                    "function":{
+                        "name":"create_artifact",
+                        "arguments":json!({
+                            "file_name":"recovery-report.md",
+                            "kind":"markdown",
+                            "content":"missing title"
+                        })
+                        .to_string()
+                    }
+                }]),
+            )
+        });
+        let (_directory, store, kernel) = test_kernel(endpoint).await;
+        let receipt = kernel
+            .submit("Create a recovery report.".into(), Vec::new())
+            .await
+            .unwrap();
+
+        let completed = tokio::time::timeout(
+            Duration::from_secs(5),
+            kernel.run_queue(Some("test-token".into())),
+        )
+        .await
+        .expect("a correctable tool error must continue instead of stalling")
+        .unwrap();
+        assert_eq!(completed, 1);
+        server.join().unwrap();
+
+        let task = store.task(receipt.thread_id).await.unwrap();
+        assert_eq!(task.status, TaskStatus::Completed);
+        assert_eq!(task.artifacts.len(), 1);
+        assert!(task.artifacts[0].path.exists());
+        assert_eq!(
+            task.artifacts[0]
+                .path
+                .file_name()
+                .and_then(|name| name.to_str()),
+            Some("recovery-report.md")
+        );
+        let events = store.events_after(0).await;
+        assert!(events.iter().any(|event| {
+            event.kind == RuntimeEventKind::Warning
+                && event.title == "Tool call needs correction; continuing"
+        }));
+        assert!(events
+            .iter()
+            .filter(|event| event.task_id == receipt.thread_id)
+            .all(|event| event.state != RuntimeEventState::Running));
+        assert_eq!(requests.lock().unwrap().len(), 5);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn command_timeout_becomes_tool_feedback_and_the_goal_continues() {
+        #[cfg(target_os = "windows")]
+        let timeout_command = "Start-Sleep -Seconds 3; Write-Output 'late'".to_string();
+        #[cfg(not(target_os = "windows"))]
+        let timeout_command = "sleep 3; printf late".to_string();
+
+        let command_for_model = timeout_command.clone();
+        let (endpoint, requests, server) = mock_provider(3, move |request, _| {
+            if request.get("stream") == Some(&Value::Bool(false)) {
+                return goal_response(
+                    "Find an available information source",
+                    "question",
+                    "chat_reply",
+                );
+            }
+
+            let messages = request
+                .get("messages")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            if messages.iter().any(|message| {
+                message
+                    .get("content")
+                    .and_then(Value::as_str)
+                    .is_some_and(|content| content.contains("\"error_kind\":\"timeout\""))
+            }) {
+                return openai_response(
+                    Some("The first probe timed out, so I changed approach and completed the response from an available source.".into()),
+                    Some("Use the timeout as evidence, switch paths, and finish the accepted goal."),
+                    Value::Null,
+                );
+            }
+
+            openai_response(
+                None,
+                Some("Run one bounded probe before choosing the source."),
+                json!([{
+                    "id":"bounded-probe",
+                    "type":"function",
+                    "function":{
+                        "name":"run_command",
+                        "arguments":json!({
+                            "command":command_for_model,
+                            "timeout_seconds":1
+                        })
+                        .to_string()
+                    }
+                }]),
+            )
+        });
+        let (_directory, store, kernel) = test_kernel(endpoint).await;
+        let mut settings = store.settings().await;
+        settings.execution_permission_mode = ExecutionPermissionMode::FullAccess;
+        store.update_settings(settings).await.unwrap();
+        let receipt = kernel
+            .submit("Find an available information source.".into(), Vec::new())
+            .await
+            .unwrap();
+
+        let completed = tokio::time::timeout(
+            Duration::from_secs(6),
+            kernel.run_queue(Some("test-token".into())),
+        )
+        .await
+        .expect("a command timeout must return to the model instead of terminating the goal")
+        .unwrap();
+        assert_eq!(completed, 1);
+        server.join().unwrap();
+
+        let task = store.task(receipt.thread_id).await.unwrap();
+        assert_eq!(task.status, TaskStatus::Completed);
+        assert!(task.summary.contains("changed approach"));
+        assert!(task.session_messages.iter().any(|message| {
+            message.role == AgentRole::Tool
+                && message.content.contains("\"recoverable\":true")
+                && message.content.contains("\"error_kind\":\"timeout\"")
+        }));
+        assert!(store.events_after(0).await.iter().any(|event| {
+            event.task_id == receipt.thread_id
+                && event.kind == RuntimeEventKind::Tool
+                && event.state == RuntimeEventState::Failed
+                && event.detail.contains("command timed out after 1s")
+        }));
+        assert_eq!(requests.lock().unwrap().len(), 3);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn checker_rejection_keeps_revising_beyond_two_rounds() {
+        let (endpoint, requests, server) = mock_provider(8, |request, index| match index {
+            0 => goal_response("Create a repeatedly reviewed report", "task", "artifact"),
+            1 => openai_response(
+                None,
+                Some("Create the requested report."),
+                json!([{
+                    "id":"create-reviewed-report",
+                    "type":"function",
+                    "function":{
+                        "name":"create_artifact",
+                        "arguments":json!({
+                            "title":"Reviewed report",
+                            "file_name":"reviewed-report.md",
+                            "kind":"markdown",
+                            "content":"# Reviewed report\n\nInitial evidence."
+                        })
+                        .to_string()
+                    }
+                }]),
+            ),
+            2 => openai_response(
+                Some("Initial delivery.".into()),
+                Some("Submit the initial report."),
+                Value::Null,
+            ),
+            3 => openai_response(
+                Some(
+                    json!({
+                        "passed": false,
+                        "summary": "Revision one is required.",
+                        "findings": ["Add a clearer conclusion."]
+                    })
+                    .to_string(),
+                ),
+                None,
+                Value::Null,
+            ),
+            4 => openai_response(
+                Some("Revision one adds a clearer conclusion.".into()),
+                Some("Apply the first checker correction."),
+                Value::Null,
+            ),
+            5 => openai_response(
+                Some(
+                    json!({
+                        "passed": false,
+                        "summary": "Revision two is required.",
+                        "findings": ["State the verification result explicitly."]
+                    })
+                    .to_string(),
+                ),
+                None,
+                Value::Null,
+            ),
+            6 => openai_response(
+                Some("Revision two states the verification result explicitly.".into()),
+                Some("Apply the second checker correction."),
+                Value::Null,
+            ),
+            7 => openai_response(
+                Some(
+                    json!({
+                        "passed": true,
+                        "summary": "The delivery now satisfies every criterion.",
+                        "findings": []
+                    })
+                    .to_string(),
+                ),
+                None,
+                Value::Null,
+            ),
+            _ => unreachable!("unexpected request: {request}"),
+        });
+        let (_directory, store, kernel) = test_kernel(endpoint).await;
+        let receipt = kernel
+            .submit("Create a repeatedly reviewed report.".into(), Vec::new())
+            .await
+            .unwrap();
+
+        let completed = tokio::time::timeout(
+            Duration::from_secs(5),
+            kernel.run_queue(Some("test-token".into())),
+        )
+        .await
+        .expect("checker rejection must keep revising until acceptance")
+        .unwrap();
+        assert_eq!(completed, 1);
+        server.join().unwrap();
+
+        let task = store.task(receipt.thread_id).await.unwrap();
+        assert_eq!(task.status, TaskStatus::Completed);
+        assert!(task.summary.contains("Revision two"));
+        assert_eq!(
+            store
+                .events_after(0)
+                .await
+                .iter()
+                .filter(|event| {
+                    event.task_id == receipt.thread_id
+                        && event.title == "Verification rejected; continuing revision"
+                })
+                .count(),
+            2
+        );
+        assert_eq!(requests.lock().unwrap().len(), 8);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

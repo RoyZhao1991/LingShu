@@ -34,7 +34,13 @@ extension LingShuState {
             return "(当前无人值守,无法弹确认表单让主人逐项填;请按合理默认推进、或稍后主人在场时再确认。)"
         }
         return await withCheckedContinuation { (cont: CheckedContinuation<String, Never>) in
-            let msg = ChatMessage(speaker: "灵枢", text: form.title, isUser: false, form: form)
+            let msg = ChatMessage(
+                speaker: loc("灵枢", "Nous"),
+                text: form.title,
+                isUser: false,
+                taskRecordID: currentAgentTurnRecordID,
+                form: form
+            )
             chatMessages.append(msg)
             pendingFormResolvers[msg.id] = { answers in cont.resume(returning: form.formatAnswers(answers)) }
         }
@@ -56,7 +62,6 @@ extension LingShuState {
         chatMessages[idx].formAnswers = answers
         logEvent("用户提交确认表单(\(answers.count) 项)")
         if let recordID = chatMessages[idx].awaitingInputForRecordID {
-            chatMessages[idx].awaitingInputForRecordID = nil
             answerDispatchedTask(recordID: recordID, answer: answerText)
             return
         }
@@ -65,10 +70,14 @@ extension LingShuState {
             return
         }
         if let resolver = pendingFormResolvers.removeValue(forKey: messageID) {
+            let recordID = chatMessages[idx].taskRecordID ?? currentAgentTurnRecordID
+            appendInteractionUserMessage(answerText, recordID: recordID)
+            beginActiveMainTurnContinuation(recordID: recordID)
             resolver(answers)
             return
         }
         guard let context = pendingFormContexts.removeValue(forKey: messageID) else { return }
+        appendInteractionUserMessage(answerText, recordID: context.recordID)
         appendTaskRecordMessage(context.recordID, actor: "你", role: "表单答复", kind: .user, text: answerText)
         pendingMainQuestionRecordID = nil
         _ = runMainAgentTurn(

@@ -155,6 +155,16 @@ final class CLIControlTests: XCTestCase {
 
         XCTAssertFalse(response.isError)
         XCTAssertNil(state.pendingHumanInteractionContexts[message.id])
-        XCTAssertNil(state.chatMessages.first(where: { $0.id == message.id })?.humanInteraction)
+        let resolvedMessage = state.chatMessages.first(where: { $0.id == message.id })
+        XCTAssertEqual(resolvedMessage?.humanInteraction?.id, request.id)
+        XCTAssertEqual(resolvedMessage?.resolvedChoice, "Connected")
+        guard let questionIndex = state.chatMessages.firstIndex(where: { $0.id == message.id }) else {
+            return XCTFail("The resolved interaction card should remain in conversation history")
+        }
+        let laterMessages = state.chatMessages[state.chatMessages.index(after: questionIndex)...]
+        guard let answerIndex = laterMessages.firstIndex(where: { $0.isUser && $0.text == "Connected" }) else {
+            return XCTFail("The external answer should be appended as a new user bubble")
+        }
+        XCTAssertTrue(state.chatMessages[state.chatMessages.index(after: answerIndex)...].contains(where: { !$0.isUser }))
     }
 }

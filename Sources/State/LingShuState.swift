@@ -317,8 +317,16 @@ final class LingShuState: ObservableObject {
     let sharedKernelRuntime = LingShuSharedKernelRuntime.shared
     var sharedKernelKnownThreadIDs: Set<String> = []
     var sharedKernelActiveThreadIDs: Set<String> = []
+    /// A submit becomes visible in the Rust snapshot only after its async RPC returns. Keep the
+    /// serial-input gate closed during that gap so rapid follow-up input stays in the local tray.
+    var sharedKernelSubmissionsInFlight = 0
     var sharedKernelBubbleIDs: [String: UUID] = [:]
     var sharedKernelPollingTask: Task<Void, Never>?
+    /// Frontend-only projection state. The Rust runtime remains the canonical task engine;
+    /// these fingerprints let the SwiftUI adapter skip rebuilding unchanged records.
+    var sharedKernelProjectionFingerprints: [String: Int] = [:]
+    var sharedKernelRecordPersistenceTask: Task<Void, Never>?
+    var sharedKernelLastRecordPersistenceAt = Date.distantPast
     var sharedKernelLegacyMemoryImported = false
     @Published var sharedKernelLoopEngines: [LingShuKernelLoopEngineRecord] = []
     @Published var selectedTaskRecordID: String?
@@ -470,6 +478,8 @@ final class LingShuState: ObservableObject {
     var activeAgentTurnTask: Task<Void, Never>?
     /// `activeAgentTurnTask` 对应的气泡 id。取消后旧 worker 可能晚返回;用它防止旧 worker 清掉新 worker。
     var activeAgentTurnBubbleID: UUID?
+    /// 当前主回合仍可接收流式正文的气泡。人机交互后会切到新气泡，而根回合 id 保持不变。
+    var activeAgentVisibleBubbleID: UUID?
     /// 编排器事件 sink 是否已注入(幂等)。
     var agentEventSinkInstalled = false
     /// 网络可达性监控(断网时唤醒模型通道重试);懒启动(首次有 agent 活动时),见 LingShuState+AgentOrchestration。
@@ -506,6 +516,8 @@ final class LingShuState: ObservableObject {
     var memoryCompactionTimer: Timer?
     /// 派发任务看门狗:定时收割「驱动已结束但状态卡活跃态」的孤儿,根治僵死执行中堵死串行队列(2026-06-27)。
     var dispatchWatchdogTimer: Timer?
+    /// 看门狗一次只允许执行一轮。activeDriveIDs 是异步读取，定时器重入会让两轮收割基于不同快照重复改状态。
+    var isDispatchWatchdogReaping = false
 
     /// 能力通道校验状态(channelKey → 校验结果):中枢/视觉/视频/听/语音各通道"是否实测校验通过"。
     /// channelKey 形如 `brain:DeepSeek` / `vision:datanet` / `tts:dataNetSpeakerTTS` / `asr:local`。
@@ -900,7 +912,7 @@ final class LingShuState: ObservableObject {
     }
 
     var hasActiveModelCall: Bool {
-        isModelReplying || isModelExecuting || !sharedKernelActiveThreadIDs.isEmpty
+        isModelReplying || isModelExecuting || sharedKernelSubmissionsInFlight > 0 || !sharedKernelActiveThreadIDs.isEmpty
     }
 
     var shouldShowTaskRuntime: Bool {
@@ -1145,6 +1157,7 @@ final class LingShuState: ObservableObject {
         activeAgentTurnTask?.cancel()
         activeAgentTurnTask = nil
         activeAgentTurnBubbleID = nil
+        activeAgentVisibleBubbleID = nil
         if let currentChatTurnID {
             // 停止语义必须同步释放串行闸门:worker 已被取消,但它的 defer 可能要等远端调用返回才执行。
             // 若这里不立刻清掉 executing/pending 标记,下一条顶层输入会被误判为“前面还有回合在跑”并卡进队列。
@@ -1603,11 +1616,30 @@ final class LingShuState: ObservableObject {
 
         // 记录**按需建**(不再在最顶 eager 建):被续答/在岗/答复等早返回接管的轮次用各自的记录,
         // 否则会在任务列表里留一条空壳记录(实测:答"做什么主题"时多出一条空的"介绍你自己的能力·执行中")。
+        var appendedUserMessageID: UUID?
         if appendUserMessage {
-            chatMessages.append(.init(speaker: "你", text: userFacingPrompt, isUser: true))
+            let userMessage = ChatMessage(
+                speaker: "你",
+                text: userFacingPrompt,
+                isUser: true,
+                attachmentNames: attachmentNames,
+                attachmentPaths: attachmentPaths
+            )
+            chatMessages.append(userMessage)
+            appendedUserMessageID = userMessage.id
             requestChatScrollToLatestForUserSend()
         }
         prompt = ""
+
+        // 人机协作答复只回到原暂停节点。统一输入框已经登记了独立用户气泡，
+        // 恢复执行时必须在其后新建助手气泡，不能再把答复当成新问题分诊。
+        if let recordID = pendingMainQuestionRecordID,
+           consumePendingMainHumanInteraction(recordID: recordID, answer: trimmedPrompt) {
+            return ""
+        }
+        if consumeLatestDispatchedHumanInteraction(answer: trimmedPrompt) {
+            return ""
+        }
 
         // 已有回合在跑时不清在飞轨迹（agent 循环里严格串行接续）；否则重置轨迹。
         if !bypassActiveGate && hasActiveModelCall {
@@ -1656,13 +1688,7 @@ final class LingShuState: ObservableObject {
             return localAnswer
         }
 
-        // 通用人机协作必须拥有最高续接优先级。扫码、登录、实体操作、选文件等完成后的简短答复
-        // 只能回到原节点，不能先被自主/在岗模式理解成一条新命令。
         let isGroundedEvidenceInput = turnInput.hasAttachments || Self.inputMentionsGroundedEvidence(userFacingPrompt)
-        if let recordID = pendingMainQuestionRecordID,
-           consumePendingMainHumanInteraction(recordID: recordID, answer: trimmedPrompt) {
-            return ""
-        }
 
         // 自主运行卡在 ask_user 提问上时，本轮输入即为答案：回填续跑（优先于常规分流）。
         // 这些早返回的续接handler都用各自的记录(自主/在岗/被卡住的派发任务),不需要本轮新建记录。
@@ -1735,10 +1761,15 @@ final class LingShuState: ObservableObject {
                 source: source,
                 visiblePrompt: userFacingPrompt,
                 attachmentNames: attachmentNames,
-                attachmentPaths: attachmentPaths
+                attachmentPaths: attachmentPaths,
+                queuedUserMessageID: appendedUserMessageID
             )
             return ""
         }
+
+        // 上一个任务的子线程完成提示只保留到下一项顶层任务真正开始。排队时不提前清除，
+        // 出队进入这里后再消费，避免旧提示与新任务的运行条同时占据输入框上方。
+        consumeTaskThreadCompletionNoticesForNewTask()
 
         // macOS 与 Windows 的常规主线程、GoalSpec、子线程、checker 和人机恢复统一由
         // Runtime/LingShuCore::RuntimeKernel 驱动。此前的 Swift agent 管线只保留为测试夹具
@@ -1978,7 +2009,8 @@ final class LingShuState: ObservableObject {
                 if Self.shouldQueueDispatch(running: active, capacity: cap) {
                     self.enqueueDispatchTask(prompt: trimmedPrompt, visiblePrompt: userFacingPrompt,
                                              goal: triage.goal, goalSpec: goalSpec, gap: gap,
-                                             requirements: reqs, existingBubbleID: placeholderID)
+                                             requirements: reqs, existingBubbleID: placeholderID,
+                                             attachmentNames: attachmentNames, attachmentPaths: attachmentPaths)
                 } else {
                     // 要占屏实时演示/互动时,由大脑自己调 enter_managed_mode 申请、弹窗征主人同意后才转入托管。
                     self.dispatchIsolatedTask(prompt: trimmedPrompt, taskRecordID: newRecordBoundToGoal(.task, triage.goal), goal: triage.goal, existingBubbleID: placeholderID)

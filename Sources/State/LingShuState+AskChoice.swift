@@ -33,7 +33,13 @@ extension LingShuState {
             let prompt = LingShuRouteChoicePrompt(
                 question: question,
                 options: options.map { LingShuRouteChoiceOption(label: $0.label, detail: $0.detail) })
-            let msg = ChatMessage(speaker: "灵枢", text: question, isUser: false, choices: prompt)
+            let msg = ChatMessage(
+                speaker: loc("灵枢", "Nous"),
+                text: question,
+                isUser: false,
+                taskRecordID: currentAgentTurnRecordID,
+                choices: prompt
+            )
             chatMessages.append(msg)
             pendingChoiceResolvers[msg.id] = { picked in cont.resume(returning: picked) }
         }

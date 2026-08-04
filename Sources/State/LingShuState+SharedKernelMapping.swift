@@ -46,7 +46,9 @@ extension LingShuState {
         case .completed:
             goal?.outputMode == .chatReply && !hasArtifacts ? .answered : .completed
         case .failed: .failed
-        case .cancelled: .failed
+        // A child is cancelled when its parent reaches a terminal state first. Surface that as a
+        // neutral suspended state instead of turning a successfully delivered parent red.
+        case .cancelled: .suspended
         }
     }
 
@@ -129,8 +131,13 @@ extension LingShuState {
         case .reasoning:
             return language == .english ? "Thinking…" : "思考中…"
         case .model:
-            return sharedKernelReadableEventDetail(event.detail)
-                ?? sharedKernelNonEmpty(title)
+            if let detail = sharedKernelReadableEventDetail(event.detail) {
+                return detail
+            }
+            if title.hasPrefix("模型回合 ") || title.hasPrefix("Model turn ") {
+                return language == .english ? "Thinking…" : "思考中…"
+            }
+            return sharedKernelNonEmpty(title)
                 ?? (language == .english ? "Thinking…" : "思考中…")
         case .status, .humanInteraction, .warning, .result:
             guard let detail = sharedKernelReadableEventDetail(event.detail) else {

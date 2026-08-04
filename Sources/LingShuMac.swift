@@ -135,6 +135,7 @@ struct LingShuMacApp: App {
                 guard LingShuRuntimeEnvironment.allowsBackgroundServices else { return }
                 LingShuControlServer.shared.start(state: state)
                 LingShuMainActorWatchdog.shared.start(state: state)
+                await state.prepareSharedKernelOnLaunch()
                 await state.prepareLoopRuntimeOnLaunch()
                 if await state.prepareBrainOnLaunch() {
                     _ = await state.mainAgentSession()

@@ -53,6 +53,7 @@ extension LingShuState {
         activeAgentTurnTask?.cancel()
         activeAgentTurnTask = nil
         activeAgentTurnBubbleID = nil
+        activeAgentVisibleBubbleID = nil
         isModelReplying = false
         appendTrace(kind: .warning, actor: "语音", title: "指令打断", detail: "检测到新语音指令,已中止当前回合。")
         scheduleNextMainTurnIfIdle()
@@ -298,6 +299,7 @@ extension LingShuState {
             }
             guard let turn = pendingMainTurns[nextID] else { continue }
             activeAgentTurnBubbleID = nextID
+            activeAgentVisibleBubbleID = nextID
             activeAgentTurnTask = Task { @MainActor [weak self] in
                 await self?.executeMainTurn(turn)
             }
@@ -364,7 +366,10 @@ extension LingShuState {
         await session.setTextDeltaSink { [weak self] delta in
             await MainActor.run {
                 guard let self, !self.cancelledChatTurnIDs.contains(pendingID) else { return }
-                self.appendStreamingBubbleText(delta, to: pendingID)
+                let visibleBubbleID = self.activeAgentTurnBubbleID == pendingID
+                    ? (self.activeAgentVisibleBubbleID ?? pendingID)
+                    : pendingID
+                self.appendStreamingBubbleText(delta, to: visibleBubbleID)
             }
         }
 
@@ -426,10 +431,13 @@ extension LingShuState {
         )
 
         guard !Task.isCancelled, !cancelledChatTurnIDs.contains(pendingID) else { return }
+        let visibleBubbleID = activeAgentTurnBubbleID == pendingID
+            ? (activeAgentVisibleBubbleID ?? pendingID)
+            : pendingID
         if case .interrupted(let reason) = result {
             if LingShuModelServiceFailure.isNonRecoverableReason(reason) {
                 let message = LingShuModelServiceFailure.userFacingReason(reason)
-                if let index = chatMessages.firstIndex(where: { $0.id == pendingID }) {
+                if let index = chatMessages.firstIndex(where: { $0.id == visibleBubbleID }) {
                     chatMessages[index].text = "⚠️ \(message)"
                     chatMessages[index].isLoading = false
                 }
@@ -441,10 +449,10 @@ extension LingShuState {
                 enterCoreState(.abnormal, resetTimer: false)
                 return
             }
-            suspendedMainTurn = (bubbleID: pendingID, recordID: turn.taskRecordID, prompt: turn.prompt, startedAt: turn.startedAt)
+            suspendedMainTurn = (bubbleID: visibleBubbleID, recordID: turn.taskRecordID, prompt: turn.prompt, startedAt: turn.startedAt)
             suspendedMainReason = reason
             let message = LingShuModelServiceFailure.suspendedSummary(for: reason)
-            if let index = chatMessages.firstIndex(where: { $0.id == pendingID }) {
+            if let index = chatMessages.firstIndex(where: { $0.id == visibleBubbleID }) {
                 chatMessages[index].text = "⏸ \(message)"
                 chatMessages[index].isLoading = false
             }
@@ -466,7 +474,7 @@ extension LingShuState {
         )
         finalizeMainTurn(
             result: userFacingResult,
-            bubbleID: pendingID,
+            bubbleID: visibleBubbleID,
             recordID: turn.taskRecordID,
             prompt: turn.originalPromptForVerification ?? turn.prompt,
             startedAt: turn.startedAt
@@ -480,6 +488,7 @@ extension LingShuState {
         if activeAgentTurnBubbleID == bubbleID {
             activeAgentTurnTask = nil
             activeAgentTurnBubbleID = nil
+            activeAgentVisibleBubbleID = nil
         }
     }
 

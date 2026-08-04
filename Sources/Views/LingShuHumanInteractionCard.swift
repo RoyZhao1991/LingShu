@@ -62,7 +62,8 @@ struct LingShuHumanInteractionCard: View {
                 .background(Color.orange.opacity(0.08), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
             }
 
-            if request.kind == .fileSelection {
+            if request.kind == .fileSelection,
+               state.isHumanInteractionPending(request) {
                 Button(action: chooseFile) {
                     Label(state.loc("选择文件", "Choose File"), systemImage: "folder.badge.plus")
                         .font(.system(size: 12.5, weight: .semibold))

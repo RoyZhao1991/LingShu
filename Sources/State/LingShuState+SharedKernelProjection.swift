@@ -1,24 +1,176 @@
 import Foundation
 
+struct LingShuSharedKernelBubbleProjection: Sendable {
+    var taskID: String
+    var visibleText: String?
+    var isLoading: Bool
+    var status: LingShuKernelTaskStatus
+    var pendingQuestion: String?
+}
+
+struct LingShuSharedKernelTaskProjection: Sendable {
+    var record: LingShuTaskExecutionRecord
+    var bubble: LingShuSharedKernelBubbleProjection?
+}
+
+struct LingShuSharedKernelProjectionBatch: Sendable {
+    var allKernelIDs: Set<String>
+    var activeKernelIDs: Set<String>
+    var fingerprints: [String: Int]
+    var changedTasks: [LingShuSharedKernelTaskProjection]
+    var memory: LingShuKernelMemorySnapshot?
+    var loopEngines: [LingShuKernelLoopEngineRecord]
+}
+
 @MainActor
 extension LingShuState {
-    func sharedKernelTaskRecord(
+    /// Builds an immutable frontend projection off the main actor. The runtime snapshot remains
+    /// canonical; SwiftUI receives only records whose semantic fingerprint changed.
+    nonisolated static func prepareSharedKernelProjection(
+        _ snapshot: LingShuKernelRuntimeSnapshot,
+        existingRecords: [String: LingShuTaskExecutionRecord],
+        previousFingerprints: [String: Int],
+        english: Bool
+    ) -> LingShuSharedKernelProjectionBatch {
+        let eventsByTask = Dictionary(grouping: snapshot.events, by: \.taskId)
+            .mapValues { $0.sorted { $0.sequence < $1.sequence } }
+        let lineageIDs = Dictionary(grouping: snapshot.tasks) { task in
+            task.rootTaskId ?? task.id
+        }.mapValues { tasks in
+            tasks.map { $0.id.uuidString.lowercased() }.sorted()
+        }
+        var messagesByID: [UUID: LingShuKernelChatMessage] = [:]
+        for message in snapshot.messages {
+            messagesByID[message.id] = message
+        }
+
+        var fingerprints: [String: Int] = [:]
+        var changedTasks: [LingShuSharedKernelTaskProjection] = []
+        var allKernelIDs = Set<String>()
+        var activeKernelIDs = Set<String>()
+        for task in snapshot.tasks {
+            let taskID = task.id.uuidString.lowercased()
+            let events = eventsByTask[task.id] ?? []
+            let assistant = messagesByID[task.assistantMessageId]
+            let fingerprint = sharedKernelProjectionFingerprint(
+                task: task,
+                events: events,
+                assistant: assistant,
+                english: english
+            )
+            fingerprints[taskID] = fingerprint
+            allKernelIDs.insert(taskID)
+            if task.status == .queued || task.status == .understanding || task.status == .running {
+                activeKernelIDs.insert(taskID)
+            }
+            guard previousFingerprints[taskID] != fingerprint else { continue }
+
+            let record = makeSharedKernelTaskRecord(
+                task,
+                events: events,
+                lineageIDs: lineageIDs[task.rootTaskId ?? task.id] ?? [],
+                existing: existingRecords[taskID],
+                english: english
+            )
+            let bubble = makeSharedKernelBubbleProjection(
+                task,
+                assistant: assistant,
+                events: events,
+                english: english
+            )
+            changedTasks.append(.init(record: record, bubble: bubble))
+        }
+        return LingShuSharedKernelProjectionBatch(
+            allKernelIDs: allKernelIDs,
+            activeKernelIDs: activeKernelIDs,
+            fingerprints: fingerprints,
+            changedTasks: changedTasks,
+            memory: snapshot.memory,
+            loopEngines: snapshot.loopEngines
+        )
+    }
+
+    /// Lightweight semantic version for a task projection. It intentionally includes streamed
+    /// assistant/event text, because some compatible providers do not advance `updatedAt` for
+    /// every chunk.
+    nonisolated static func sharedKernelProjectionFingerprint(
+        task: LingShuKernelTaskRecord,
+        events: [LingShuKernelRuntimeEvent],
+        assistant: LingShuKernelChatMessage?,
+        english: Bool
+    ) -> Int {
+        var hasher = Hasher()
+        hasher.combine(english)
+        hasher.combine(task.id)
+        hasher.combine(task.status.rawValue)
+        hasher.combine(task.updatedAt)
+        hasher.combine(task.title)
+        hasher.combine(task.summary)
+        hasher.combine(task.error)
+        hasher.combine(task.pendingQuestion)
+        hasher.combine(task.participantName)
+        hasher.combine(task.role.rawValue)
+        hasher.combine(task.parentTaskId)
+        hasher.combine(task.rootTaskId)
+        if let goal = task.goalSpec {
+            hasher.combine(goal.objective)
+            hasher.combine(goal.kind.rawValue)
+            hasher.combine(goal.outputMode.rawValue)
+            hasher.combine(goal.referenceScope.rawValue)
+            hasher.combine(goal.referenceConfidence.rawValue)
+            goal.successCriteria.forEach { hasher.combine($0) }
+            goal.constraints.forEach { hasher.combine($0) }
+            goal.boundaries.forEach { hasher.combine($0) }
+            goal.openQuestions.forEach { hasher.combine($0) }
+        }
+        for step in task.steps {
+            hasher.combine(step.id)
+            hasher.combine(step.status.rawValue)
+            hasher.combine(step.updatedAt)
+            hasher.combine(step.title)
+            hasher.combine(step.detail)
+        }
+        for artifact in task.artifacts {
+            hasher.combine(artifact.id)
+            hasher.combine(artifact.path)
+            hasher.combine(artifact.modifiedAt)
+            hasher.combine(artifact.sizeBytes)
+        }
+        for event in events {
+            hasher.combine(event.id)
+            hasher.combine(event.sequence)
+            hasher.combine(event.state.rawValue)
+            hasher.combine(event.updatedAt)
+            hasher.combine(event.title)
+            hasher.combine(event.detail)
+        }
+        if let assistant {
+            hasher.combine(assistant.id)
+            hasher.combine(assistant.state.rawValue)
+            hasher.combine(assistant.text)
+        }
+        return hasher.finalize()
+    }
+
+    private nonisolated static func makeSharedKernelTaskRecord(
         _ task: LingShuKernelTaskRecord,
         events: [LingShuKernelRuntimeEvent],
         lineageIDs: [String],
-        existing: LingShuTaskExecutionRecord?
+        existing: LingShuTaskExecutionRecord?,
+        english: Bool
     ) -> LingShuTaskExecutionRecord {
+        let language: LingShuVoiceLanguage = english ? .english : .chinese
         let id = task.id.uuidString.lowercased()
         let createdAt = Self.sharedKernelDate(task.createdAt)
         let updatedAt = Self.sharedKernelDate(task.updatedAt)
         let goalSpec = task.goalSpec.map(Self.sharedKernelGoalSpec)
-        var participants = task.role == .main ? [loc("你", "You")] : []
+        var participants = task.role == .main ? [english ? "You" : "你"] : []
         participants.append(task.participantName)
         participants.append(contentsOf: events.map(\.actor))
         participants = participants.reduce(into: []) { result, participant in
             if !participant.isEmpty, !result.contains(participant) { result.append(participant) }
         }
-        let messages = events.sorted { $0.sequence < $1.sequence }.map { event in
+        let messages = events.map { event in
             LingShuTaskExecutionMessage(
                 id: event.id.uuidString.lowercased(),
                 timestamp: Self.sharedKernelDate(event.updatedAt),
@@ -54,13 +206,13 @@ extension LingShuState {
         let semanticRole: String
         switch task.role {
         case .main:
-            roleName = loc("主线程", "Main")
+            roleName = english ? "Main" : "主线程"
             semanticRole = "main"
         case .worker:
-            roleName = loc("执行者", "Worker")
+            roleName = english ? "Worker" : "执行者"
             semanticRole = "maker"
         case .checker:
-            roleName = loc("审查员", "Checker")
+            roleName = english ? "Checker" : "审查员"
             semanticRole = "checker"
         }
         let slot = LingShuTaskRoleSlot(
@@ -75,11 +227,16 @@ extension LingShuState {
         let summary = task.summary.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty
             ?? task.error?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty
             ?? Self.sharedKernelStatusText(task.status, language: language)
-        return LingShuTaskExecutionRecord(
+        let mappedStatus = Self.sharedKernelTaskStatus(
+            task.status,
+            goal: task.goalSpec,
+            hasArtifacts: !task.artifacts.isEmpty
+        )
+        var record = LingShuTaskExecutionRecord(
             id: id,
             title: task.title,
             prompt: task.prompt,
-            status: Self.sharedKernelTaskStatus(task.status, goal: task.goalSpec, hasArtifacts: !task.artifacts.isEmpty),
+            status: mappedStatus,
             summary: summary,
             participants: participants,
             roleSlots: [slot],
@@ -105,19 +262,25 @@ extension LingShuState {
             threadCommit: existing?.threadCommit,
             workflowRuns: existing?.workflowRuns ?? []
         )
+        _ = record.refreshThreadCommit(
+            status: mappedStatus,
+            summary: summary,
+            parentTaskId: task.parentTaskId?.uuidString.lowercased(),
+            now: updatedAt
+        )
+        return record
     }
 
-    func projectSharedKernelBubble(
+    private nonisolated static func makeSharedKernelBubbleProjection(
         _ task: LingShuKernelTaskRecord,
-        messages: [LingShuKernelChatMessage],
-        events: [LingShuKernelRuntimeEvent]
-    ) {
-        guard task.role == .main else { return }
+        assistant: LingShuKernelChatMessage?,
+        events: [LingShuKernelRuntimeEvent],
+        english: Bool
+    ) -> LingShuSharedKernelBubbleProjection? {
+        guard task.role == .main else { return nil }
+        let language: LingShuVoiceLanguage = english ? .english : .chinese
         let taskID = task.id.uuidString.lowercased()
-        guard let bubbleID = sharedKernelBubbleIDs[taskID],
-              let index = chatMessages.firstIndex(where: { $0.id == bubbleID }) else { return }
-        let assistant = messages.last { $0.id == task.assistantMessageId }
-        let latestEvent = events.max { $0.sequence < $1.sequence }
+        let latestEvent = events.last
         let progress = latestEvent.flatMap {
             Self.sharedKernelUserFacingEventText($0, language: language)
         }
@@ -138,29 +301,49 @@ extension LingShuState {
         case .queued, .understanding, .running, .needsUserAction:
             visible = progress ?? assistantVisible ?? summaryVisible
         }
-        if let visible { chatMessages[index].text = visible }
-        chatMessages[index].taskRecordID = taskID
-        chatMessages[index].isLoading = task.status == .queued || task.status == .understanding || task.status == .running
-        chatMessages[index].thinkingPreview = nil
+        return LingShuSharedKernelBubbleProjection(
+            taskID: taskID,
+            visibleText: visible,
+            isLoading: task.status == .queued || task.status == .understanding || task.status == .running,
+            status: task.status,
+            pendingQuestion: task.pendingQuestion
+        )
+    }
 
-        if task.status == .needsUserAction,
-           chatMessages[index].awaitingInputForRecordID != taskID {
-            dispatchedTaskBubbles[taskID] = bubbleID
+    func applySharedKernelBubbleProjection(_ projection: LingShuSharedKernelBubbleProjection?) {
+        guard let projection,
+              let bubbleID = sharedKernelBubbleIDs[projection.taskID],
+              let index = chatMessages.firstIndex(where: { $0.id == bubbleID }) else { return }
+        var updated = chatMessages[index]
+        if let visibleText = projection.visibleText, updated.text != visibleText {
+            updated.text = visibleText
+        }
+        updated.taskRecordID = projection.taskID
+        updated.isLoading = projection.isLoading
+        updated.thinkingPreview = nil
+        if updated != chatMessages[index] {
+            chatMessages[index] = updated
+        }
+
+        if projection.status == .needsUserAction,
+           chatMessages[index].awaitingInputForRecordID != projection.taskID {
+            dispatchedTaskBubbles[projection.taskID] = bubbleID
             markDispatchedBubbleAwaitingInput(
-                recordID: taskID,
-                question: task.pendingQuestion ?? loc("需要你的输入后才能继续。", "Your input is required to continue.")
+                recordID: projection.taskID,
+                question: projection.pendingQuestion ?? loc("需要你的输入后才能继续。", "Your input is required to continue.")
             )
-        } else if task.status.isTerminal {
+        } else if projection.status.isTerminal {
             chatMessages[index].awaitingInputForRecordID = nil
             chatMessages[index].humanInteraction = nil
-            dispatchedTaskBubbles.removeValue(forKey: taskID)
+            dispatchedTaskBubbles.removeValue(forKey: projection.taskID)
         }
     }
 
     func answerSharedKernelTaskIfNeeded(
         recordID: String,
         answer: String,
-        displayAnswer: String?
+        displayAnswer: String?,
+        appendUserMessage: Bool = true
     ) -> Bool {
         guard LingShuRuntimeEnvironment.usesSharedRuntimeKernel,
               sharedKernelKnownThreadIDs.contains(recordID),
@@ -172,14 +355,32 @@ extension LingShuState {
             clearHardHumanInteraction(requestID: request.id)
         }
         let visibleAnswer = (displayAnswer ?? trimmed).trimmingCharacters(in: .whitespacesAndNewlines)
-        if let index = chatMessages.firstIndex(where: { $0.awaitingInputForRecordID == recordID }) {
+        let questionIndex = sharedKernelBubbleIDs[recordID]
+            .flatMap { bubbleID in chatMessages.firstIndex(where: { $0.id == bubbleID }) }
+            ?? chatMessages.lastIndex(where: { $0.awaitingInputForRecordID == recordID })
+        if let index = questionIndex {
             chatMessages[index].awaitingInputForRecordID = nil
             chatMessages[index].resolvedChoice = visibleAnswer
-            chatMessages[index].humanInteraction = nil
-            chatMessages[index].text = loc("继续执行中…", "Resuming…")
-            chatMessages[index].isLoading = true
+            chatMessages[index].isLoading = false
         }
-        chatMessages.append(.init(speaker: loc("你", "You"), text: visibleAnswer, isUser: true, taskRecordID: recordID))
+        if appendUserMessage {
+            chatMessages.append(.init(
+                speaker: loc("你", "You"),
+                text: visibleAnswer,
+                isUser: true,
+                taskRecordID: recordID
+            ))
+        }
+        let continuation = ChatMessage(
+            speaker: loc("灵枢", "Nous"),
+            text: "",
+            isUser: false,
+            isLoading: true,
+            taskRecordID: recordID
+        )
+        chatMessages.append(continuation)
+        sharedKernelBubbleIDs[recordID] = continuation.id
+        dispatchedTaskBubbles[recordID] = continuation.id
         requestChatScrollToLatestForUserSend()
         sharedKernelActiveThreadIDs.insert(recordID)
         activeTaskThreadRecordIDs.insert(recordID)

@@ -63,6 +63,12 @@ extension LingShuState {
         persistUnreadTaskThreadRecordIDs()
     }
 
+    /// A completion notice describes work that finished before the next top-level task.
+    /// Consume it only when that next task actually leaves the serial queue and starts.
+    func consumeTaskThreadCompletionNoticesForNewTask() {
+        markAllTaskThreadsRead()
+    }
+
     func openLatestUnreadTaskThread() {
         guard let record = latestUnreadTaskThreadRecord else { return }
         openTaskRecord(record.id)

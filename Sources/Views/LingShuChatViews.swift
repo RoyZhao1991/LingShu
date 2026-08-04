@@ -148,8 +148,6 @@ struct ChatBubbleView: View {
     @ObservedObject var state: LingShuState
     /// 霓虹侧条的"呼吸"相位——轻微动效,看着更科幻(只动一根 2px 条 + 描边,开销极小)。
     @State private var glow = false
-    /// 气泡内"追加信息"输入(任务等用户输入时)。
-    @State private var taskReplyText = ""
     /// 点击已发送附件 → 重新预览的目标。
     @State private var previewItem: AttachmentPreviewItem?
 
@@ -158,16 +156,9 @@ struct ChatBubbleView: View {
     private var renderedMessageText: String {
         message.isUser ? message.text : LingShuVisibleModelText.clean(message.text)
     }
-    private var hasCopyableText: Bool {
+    private var hasCopyableContent: Bool {
         !renderedMessageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-    }
-
-    /// 气泡内回复直达该任务的隔离会话(不经主输入/分诊)。
-    private func sendTaskReply(_ recordID: String) {
-        let t = taskReplyText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !t.isEmpty else { return }
-        taskReplyText = ""
-        state.answerDispatchedTask(recordID: recordID, answer: t)
+            || message.attachmentPaths?.contains(where: { !$0.isEmpty }) == true
     }
 
     var body: some View {
@@ -310,27 +301,6 @@ struct ChatBubbleView: View {
                     }
                 }
 
-                // **气泡内追加信息**:这条任务在等用户输入 → 从气泡直接回复(选项上方/无选项时单独),
-                // 答复**直达该任务隔离会话**(不经主输入/分诊),不怕被后续聊天淹没。
-                if !message.isUser,
-                   let rid = message.awaitingInputForRecordID,
-                   !(message.humanInteraction.map(LingShuState.requiresHardHumanInteractionPresentation) ?? false) {
-                    HStack(spacing: 6) {
-                        TextField(state.loc("回复这条任务(如 A / B,或补充信息)…", "Reply to this task…"),
-                                  text: $taskReplyText)
-                            .textFieldStyle(.roundedBorder)
-                            .font(.system(size: 13))
-                            .onSubmit { sendTaskReply(rid) }
-                        Button { sendTaskReply(rid) } label: {
-                            Image(systemName: "arrow.up.circle.fill").font(.system(size: 18))
-                                .foregroundStyle(Color.lingHolo)
-                        }
-                        .buttonStyle(.plain)
-                        .disabled(taskReplyText.trimmingCharacters(in: .whitespaces).isEmpty)
-                    }
-                    .padding(.top, 4)
-                }
-
                 if !message.isUser,
                    let taskRecordID = message.taskRecordID,
                    state.canOpenTaskRecord(taskRecordID) {
@@ -352,8 +322,11 @@ struct ChatBubbleView: View {
                     .help(state.loc("打开本轮任务的 Agent 协作执行记录", "Open the agent collaboration record"))
                 }
 
-                if hasCopyableText {
-                    LingShuBubbleCopyBar(markdown: renderedMessageText)
+                if hasCopyableContent {
+                    LingShuBubbleCopyBar(
+                        markdown: renderedMessageText,
+                        attachmentPaths: message.attachmentPaths ?? []
+                    )
                         .padding(.top, 2)
                 }
             }
@@ -404,19 +377,29 @@ struct ChatBubbleView: View {
 
 private struct LingShuBubbleCopyBar: View {
     let markdown: String
+    let attachmentPaths: [String]
     @State private var copiedMode: CopyMode?
+    @State private var copiedAttachmentCount = 0
 
     private enum CopyMode {
         case plain
         case markdown
 
-        var tipText: String {
-            switch self {
-            case .plain:
-                return LingShuLanguagePreferenceStore.localized("已复制文本", "Text Copied")
-            case .markdown:
-                return LingShuLanguagePreferenceStore.localized("已复制 Markdown", "Markdown Copied")
-            }
+    }
+
+    private var copiedTipText: String {
+        switch copiedMode {
+        case .plain where copiedAttachmentCount > 0:
+            return LingShuLanguagePreferenceStore.localized(
+                "已复制文本和 \(copiedAttachmentCount) 个附件",
+                "Text and \(copiedAttachmentCount) attachment(s) copied"
+            )
+        case .plain:
+            return LingShuLanguagePreferenceStore.localized("已复制文本", "Text Copied")
+        case .markdown:
+            return LingShuLanguagePreferenceStore.localized("已复制 Markdown", "Markdown Copied")
+        case nil:
+            return ""
         }
     }
 
@@ -431,7 +414,7 @@ private struct LingShuBubbleCopyBar: View {
             }
             .buttonStyle(.plain)
             .foregroundStyle(copiedMode == .plain ? Color.lingHolo : Color.lingFg.opacity(0.42))
-            .help(LingShuLanguagePreferenceStore.localized("复制纯文本", "Copy Plain Text"))
+            .help(LingShuLanguagePreferenceStore.localized("复制消息（含附件）", "Copy Message with Attachments"))
 
             Button {
                 copyMarkdown()
@@ -444,8 +427,8 @@ private struct LingShuBubbleCopyBar: View {
             .foregroundStyle(copiedMode == .markdown ? Color.lingHolo : Color.lingFg.opacity(0.42))
             .help(LingShuLanguagePreferenceStore.localized("复制 Markdown", "Copy Markdown"))
 
-            if let copiedMode {
-                Text(copiedMode.tipText)
+            if copiedMode != nil {
+                Text(copiedTipText)
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(Color.lingHolo)
                     .lineLimit(1)
@@ -468,7 +451,10 @@ private struct LingShuBubbleCopyBar: View {
     }
 
     private func copyPlain() {
-        LingShuBubbleClipboard.copyPlainText(fromMarkdown: markdown)
+        copiedAttachmentCount = LingShuBubbleClipboard.copyPlainText(
+            fromMarkdown: markdown,
+            attachmentPaths: attachmentPaths
+        )
         flash(.plain)
     }
 
@@ -486,29 +472,68 @@ private struct LingShuBubbleCopyBar: View {
             if copiedMode == mode {
                 withAnimation(.easeOut(duration: 0.16)) {
                     copiedMode = nil
+                    copiedAttachmentCount = 0
                 }
             }
         }
     }
 }
 
-private enum LingShuBubbleClipboard {
-    static func copyPlainText(fromMarkdown markdown: String) {
-        copy(string: plainText(fromMarkdown: markdown), includeMarkdownType: false)
+enum LingShuBubbleClipboard {
+    @discardableResult
+    static func copyPlainText(
+        fromMarkdown markdown: String,
+        attachmentPaths: [String] = [],
+        to pasteboard: NSPasteboard = .general
+    ) -> Int {
+        copy(
+            string: plainText(fromMarkdown: markdown),
+            includeMarkdownType: false,
+            attachmentPaths: attachmentPaths,
+            to: pasteboard
+        )
     }
 
-    static func copyMarkdown(_ markdown: String) {
-        copy(string: markdown, includeMarkdownType: true)
+    static func copyMarkdown(
+        _ markdown: String,
+        to pasteboard: NSPasteboard = .general
+    ) {
+        _ = copy(
+            string: markdown,
+            includeMarkdownType: true,
+            attachmentPaths: [],
+            to: pasteboard
+        )
     }
 
-    private static func copy(string: String, includeMarkdownType: Bool) {
-        let pasteboard = NSPasteboard.general
+    @discardableResult
+    private static func copy(
+        string: String,
+        includeMarkdownType: Bool,
+        attachmentPaths: [String],
+        to pasteboard: NSPasteboard
+    ) -> Int {
+        let attachmentURLs = attachmentPaths.compactMap { path -> URL? in
+            guard !path.isEmpty else { return nil }
+            let url = URL(fileURLWithPath: path).standardizedFileURL
+            guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+            return url
+        }
+
         pasteboard.clearContents()
-        pasteboard.setString(string, forType: .string)
+        var objects: [NSPasteboardWriting] = []
+        if !string.isEmpty {
+            objects.append(string as NSString)
+        }
+        objects.append(contentsOf: attachmentURLs.map { $0 as NSURL })
+        if !objects.isEmpty {
+            pasteboard.writeObjects(objects)
+        }
         if includeMarkdownType {
             pasteboard.setString(string, forType: NSPasteboard.PasteboardType("public.markdown"))
             pasteboard.setString(string, forType: NSPasteboard.PasteboardType("net.daringfireball.markdown"))
         }
+        return attachmentURLs.count
     }
 
     static func plainText(fromMarkdown markdown: String) -> String {

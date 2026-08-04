@@ -57,6 +57,138 @@ impl Default for PersistedState {
     }
 }
 
+fn task_lineage_root(tasks: &[TaskRecord], task_id: Uuid) -> Uuid {
+    tasks
+        .iter()
+        .find(|task| task.id == task_id)
+        .and_then(|task| task.root_task_id)
+        .unwrap_or(task_id)
+}
+
+fn descendant_ids(tasks: &[TaskRecord], ancestor_id: Uuid) -> Vec<Uuid> {
+    let mut family = vec![ancestor_id];
+    let mut cursor = 0;
+    while cursor < family.len() {
+        let parent_id = family[cursor];
+        for task in tasks {
+            if task.parent_task_id == Some(parent_id) && !family.contains(&task.id) {
+                family.push(task.id);
+            }
+        }
+        cursor += 1;
+    }
+    family.into_iter().skip(1).collect()
+}
+
+fn close_nonterminal_task(
+    task: &mut TaskRecord,
+    status: TaskStatus,
+    summary: &str,
+    error: Option<&str>,
+    now: chrono::DateTime<Utc>,
+) {
+    if task.status.is_terminal() {
+        return;
+    }
+    task.status = status.clone();
+    task.updated_at = now;
+    task.summary = summary.into();
+    task.error = error.map(str::to_owned);
+    task.pending_tool_call_id = None;
+    task.pending_question = None;
+    for step in &mut task.steps {
+        if !step.status.is_terminal() {
+            step.status = status.clone();
+            step.detail = summary.into();
+            step.updated_at = now;
+        }
+    }
+}
+
+fn close_nonterminal_descendants(
+    state: &mut PersistedState,
+    ancestor_id: Uuid,
+    status: TaskStatus,
+    summary: &str,
+    error: Option<&str>,
+    now: chrono::DateTime<Utc>,
+) {
+    let descendants = descendant_ids(&state.tasks, ancestor_id);
+    for task in &mut state.tasks {
+        if descendants.contains(&task.id) {
+            close_nonterminal_task(task, status.clone(), summary, error, now);
+        }
+    }
+}
+
+fn recover_interrupted_tasks(state: &mut PersistedState) {
+    let now = Utc::now();
+    let interruption = "The previous process ended before this task completed.";
+
+    if let Some(active_id) = state.active_task_id.take() {
+        let root_id = task_lineage_root(&state.tasks, active_id);
+        for task in &mut state.tasks {
+            if task.id == root_id || task.root_task_id == Some(root_id) {
+                close_nonterminal_task(
+                    task,
+                    TaskStatus::Failed,
+                    interruption,
+                    Some(interruption),
+                    now,
+                );
+            }
+        }
+    }
+
+    let terminal_roots = state
+        .tasks
+        .iter()
+        .filter(|task| task.parent_task_id.is_none() && task.status.is_terminal())
+        .map(|task| task.id)
+        .collect::<Vec<_>>();
+    for task in &mut state.tasks {
+        if task.status.is_terminal() {
+            continue;
+        }
+        let is_passive_root = task.parent_task_id.is_none()
+            && matches!(
+                task.status,
+                TaskStatus::Queued | TaskStatus::NeedsUserAction
+            );
+        let belongs_to_terminal_root = task
+            .root_task_id
+            .is_some_and(|root_id| terminal_roots.contains(&root_id));
+        if !is_passive_root || belongs_to_terminal_root {
+            close_nonterminal_task(
+                task,
+                TaskStatus::Failed,
+                interruption,
+                Some(interruption),
+                now,
+            );
+        }
+    }
+
+    let failed_main_messages = state
+        .tasks
+        .iter()
+        .filter(|task| task.parent_task_id.is_none() && task.status == TaskStatus::Failed)
+        .map(|task| (task.assistant_message_id, task.summary.clone()))
+        .collect::<Vec<_>>();
+    for (assistant_id, summary) in failed_main_messages {
+        if let Some(message) = state
+            .messages
+            .iter_mut()
+            .find(|message| message.id == assistant_id)
+        {
+            if message.state != MessageState::Complete {
+                message.text = summary;
+                message.state = MessageState::Failed;
+            }
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct RuntimeStore {
     state: Arc<RwLock<PersistedState>>,
@@ -82,19 +214,9 @@ impl RuntimeStore {
                 .unwrap_or(0)
                 .saturating_add(1);
         }
-        // A process cannot still own an active task after restart. Preserve the thread and make
-        // the interruption explicit instead of pretending it is still running.
-        if let Some(active) = state.active_task_id.take() {
-            if let Some(task) = state
-                .tasks
-                .iter_mut()
-                .find(|task| task.id == active && !task.status.is_terminal())
-            {
-                task.status = TaskStatus::Failed;
-                task.error = Some("The previous process ended before this task completed.".into());
-                task.updated_at = Utc::now();
-            }
-        }
+        // No task driver survives a process restart. Repair the entire active lineage, including
+        // child agents, so the UI never inherits a terminal parent with phantom running children.
+        recover_interrupted_tasks(&mut state);
         fs::create_dir_all(&state.settings.workspace).map_err(StoreError::CreateDirectory)?;
         Self::write_state(&data_file, &state)?;
         let store = Self {
@@ -180,29 +302,28 @@ impl RuntimeStore {
                 .iter()
                 .any(|task| task.status == TaskStatus::Queued);
         let loop_engine = state.settings.loop_engine;
-        state.messages.push(ChatMessage {
-            id: user_message_id,
-            role: MessageRole::User,
-            text: prompt.clone(),
-            created_at: now,
-            state: MessageState::Complete,
-            thread_id: Some(thread_id),
-            attachment_paths: attachment_paths.clone(),
-        });
-        state.messages.push(ChatMessage {
-            id: assistant_message_id,
-            role: MessageRole::Assistant,
-            text: if queued {
-                localized.queued
-            } else {
-                localized.thinking
-            }
-            .into(),
-            created_at: now,
-            state: MessageState::Thinking,
-            thread_id: Some(thread_id),
-            attachment_paths: Vec::new(),
-        });
+        // Queue management belongs to the queue tray, not the conversation. A queued turn is
+        // projected into chat only when `claim` actually promotes it for execution.
+        if !queued {
+            state.messages.push(ChatMessage {
+                id: user_message_id,
+                role: MessageRole::User,
+                text: prompt.clone(),
+                created_at: now,
+                state: MessageState::Complete,
+                thread_id: Some(thread_id),
+                attachment_paths: attachment_paths.clone(),
+            });
+            state.messages.push(ChatMessage {
+                id: assistant_message_id,
+                role: MessageRole::Assistant,
+                text: localized.thinking.into(),
+                created_at: now,
+                state: MessageState::Thinking,
+                thread_id: Some(thread_id),
+                attachment_paths: Vec::new(),
+            });
+        }
         state.tasks.push(TaskRecord {
             id: thread_id,
             title: prompt.chars().take(48).collect(),
@@ -221,6 +342,7 @@ impl RuntimeStore {
             artifacts: Vec::new(),
             summary: String::new(),
             error: None,
+            user_message_id: Some(user_message_id),
             assistant_message_id,
             attachment_paths,
             parent_task_id: None,
@@ -263,6 +385,48 @@ impl RuntimeStore {
                 step.status = TaskStatus::Understanding;
                 step.detail = localized.generating_goal.into();
                 step.updated_at = Utc::now();
+            }
+        }
+        let promoted_conversation =
+            state
+                .tasks
+                .iter()
+                .find(|task| task.id == thread_id)
+                .map(|task| {
+                    (
+                        task.user_message_id.unwrap_or_else(Uuid::new_v4),
+                        task.assistant_message_id,
+                        task.prompt.clone(),
+                        task.attachment_paths.clone(),
+                    )
+                });
+        if let Some((user_message_id, assistant_message_id, prompt, attachment_paths)) =
+            promoted_conversation
+        {
+            let already_visible = state
+                .messages
+                .iter()
+                .any(|message| message.thread_id == Some(thread_id));
+            if !already_visible {
+                let now = Utc::now();
+                state.messages.push(ChatMessage {
+                    id: user_message_id,
+                    role: MessageRole::User,
+                    text: prompt,
+                    created_at: now,
+                    state: MessageState::Complete,
+                    thread_id: Some(thread_id),
+                    attachment_paths,
+                });
+                state.messages.push(ChatMessage {
+                    id: assistant_message_id,
+                    role: MessageRole::Assistant,
+                    text: localized.thinking.into(),
+                    created_at: now,
+                    state: MessageState::Thinking,
+                    thread_id: Some(thread_id),
+                    attachment_paths: Vec::new(),
+                });
             }
         }
         drop(state);
@@ -587,6 +751,7 @@ impl RuntimeStore {
             artifacts: Vec::new(),
             summary: String::new(),
             error: None,
+            user_message_id: None,
             assistant_message_id: Uuid::new_v4(),
             attachment_paths: Vec::new(),
             parent_task_id: Some(parent_task_id),
@@ -760,15 +925,26 @@ impl RuntimeStore {
             return Ok(());
         }
         let localized = copy(state.settings.locale);
+        let now = Utc::now();
+        close_nonterminal_descendants(
+            &mut state,
+            thread_id,
+            TaskStatus::Cancelled,
+            "Closed when the parent task completed.",
+            None,
+            now,
+        );
         if let Some(task) = state.tasks.iter_mut().find(|task| task.id == thread_id) {
             task.status = TaskStatus::Completed;
-            task.updated_at = Utc::now();
+            task.updated_at = now;
             task.summary = reply.clone();
             task.artifacts = artifacts;
+            task.pending_tool_call_id = None;
+            task.pending_question = None;
             if let Some(step) = task.steps.last_mut() {
                 step.status = TaskStatus::Completed;
                 step.detail = localized.completed.into();
-                step.updated_at = Utc::now();
+                step.updated_at = now;
             }
         }
         if let Some(message) = state.messages.iter_mut().find(|message| {
@@ -800,15 +976,26 @@ impl RuntimeStore {
             return Ok(());
         }
         let localized = copy(state.settings.locale);
+        let now = Utc::now();
+        close_nonterminal_descendants(
+            &mut state,
+            thread_id,
+            TaskStatus::Failed,
+            &user_message,
+            Some(&error),
+            now,
+        );
         if let Some(task) = state.tasks.iter_mut().find(|task| task.id == thread_id) {
             task.status = TaskStatus::Failed;
-            task.updated_at = Utc::now();
+            task.updated_at = now;
             task.summary = user_message.clone();
             task.error = Some(error);
+            task.pending_tool_call_id = None;
+            task.pending_question = None;
             if let Some(step) = task.steps.last_mut() {
                 step.status = TaskStatus::Failed;
                 step.detail = localized.failed.into();
-                step.updated_at = Utc::now();
+                step.updated_at = now;
             }
         }
         if let Some(message) = state.messages.iter_mut().find(|message| {
@@ -827,15 +1014,24 @@ impl RuntimeStore {
     pub async fn cancel(&self, thread_id: Uuid) -> Result<bool, StoreError> {
         let mut state = self.state.write().await;
         let localized = copy(state.settings.locale);
-        let Some(task) = state.tasks.iter_mut().find(|task| task.id == thread_id) else {
+        let Some(task) = state.tasks.iter().find(|task| task.id == thread_id) else {
             return Ok(false);
         };
         if task.status.is_terminal() {
             return Ok(false);
         }
-        task.status = TaskStatus::Cancelled;
-        task.updated_at = Utc::now();
-        task.summary = localized.cancelled.into();
+        let now = Utc::now();
+        close_nonterminal_descendants(
+            &mut state,
+            thread_id,
+            TaskStatus::Cancelled,
+            localized.cancelled,
+            None,
+            now,
+        );
+        if let Some(task) = state.tasks.iter_mut().find(|task| task.id == thread_id) {
+            close_nonterminal_task(task, TaskStatus::Cancelled, localized.cancelled, None, now);
+        }
         if state.active_task_id == Some(thread_id) {
             state.active_task_id = None;
         }
@@ -906,7 +1102,6 @@ fn replace_file(source: &Path, destination: &Path) -> std::io::Result<()> {
 
 struct RuntimeCopy {
     welcome: &'static str,
-    queued: &'static str,
     thinking: &'static str,
     understand: &'static str,
     waiting_kernel: &'static str,
@@ -924,7 +1119,6 @@ fn copy(locale: AppLocale) -> RuntimeCopy {
     match locale {
         AppLocale::ZhCn => RuntimeCopy {
             welcome: "我是灵枢。配置一个主脑后，可以直接对话，也可以让我生成并登记文件产物。",
-            queued: "已加入任务队列。",
             thinking: "理解中…",
             understand: "理解当前要求",
             waiting_kernel: "等待共享运行时内核接管",
@@ -939,7 +1133,6 @@ fn copy(locale: AppLocale) -> RuntimeCopy {
         },
         AppLocale::En => RuntimeCopy {
             welcome: "I am LingShu. Connect a brain channel to chat or create and register file artifacts.",
-            queued: "Added to the main task queue.",
             thinking: "Understanding…",
             understand: "Understand the request",
             waiting_kernel: "Waiting for the shared runtime kernel",
@@ -1005,5 +1198,161 @@ mod tests {
             .unwrap();
 
         assert_eq!(user_message.attachment_paths, vec![attachment]);
+    }
+
+    #[tokio::test]
+    async fn queued_task_enters_chat_only_after_it_is_claimed() {
+        let directory = tempdir().unwrap();
+        let store = RuntimeStore::open(directory.path()).unwrap();
+        let first = store
+            .enqueue("Run the active task".into(), Vec::new())
+            .await
+            .unwrap();
+        assert!(store.claim(first.thread_id).await.unwrap());
+
+        let attachment = PathBuf::from(r"C:\Users\Roy\Documents\queued.pdf");
+        let queued = store
+            .enqueue(
+                "Run this after the active task".into(),
+                vec![attachment.clone()],
+            )
+            .await
+            .unwrap();
+        assert!(queued.queued);
+
+        let queued_snapshot = store
+            .snapshot(
+                "windows",
+                PlatformCapabilities {
+                    computer_control: false,
+                    realtime_perception: false,
+                    internal_preview: true,
+                    external_open: true,
+                },
+                true,
+            )
+            .await;
+        assert!(!queued_snapshot
+            .messages
+            .iter()
+            .any(|message| message.thread_id == Some(queued.thread_id)));
+
+        store
+            .complete(first.thread_id, "Active task completed".into(), Vec::new())
+            .await
+            .unwrap();
+        assert!(store.claim(queued.thread_id).await.unwrap());
+
+        let promoted_snapshot = store
+            .snapshot(
+                "windows",
+                PlatformCapabilities {
+                    computer_control: false,
+                    realtime_perception: false,
+                    internal_preview: true,
+                    external_open: true,
+                },
+                true,
+            )
+            .await;
+        let promoted_messages = promoted_snapshot
+            .messages
+            .iter()
+            .filter(|message| message.thread_id == Some(queued.thread_id))
+            .collect::<Vec<_>>();
+
+        assert_eq!(promoted_messages.len(), 2);
+        assert_eq!(promoted_messages[0].role, MessageRole::User);
+        assert_eq!(promoted_messages[0].attachment_paths, vec![attachment]);
+        assert_eq!(promoted_messages[1].role, MessageRole::Assistant);
+        assert_eq!(promoted_messages[1].state, MessageState::Thinking);
+    }
+
+    #[tokio::test]
+    async fn completing_parent_closes_nonterminal_descendants() {
+        let directory = tempdir().unwrap();
+        let store = RuntimeStore::open(directory.path()).unwrap();
+        let receipt = store
+            .enqueue("Build a report".into(), Vec::new())
+            .await
+            .unwrap();
+        assert!(store.claim(receipt.thread_id).await.unwrap());
+        let child_id = store
+            .create_child_task(
+                receipt.thread_id,
+                "Check the report".into(),
+                TaskRole::Checker,
+                "Checker".into(),
+                TaskOrigin::Verification,
+                LoopEngineKind::Grok,
+            )
+            .await
+            .unwrap();
+
+        store
+            .complete(receipt.thread_id, "Delivered".into(), Vec::new())
+            .await
+            .unwrap();
+
+        assert_eq!(
+            store.task(receipt.thread_id).await.unwrap().status,
+            TaskStatus::Completed
+        );
+        let child = store.task(child_id).await.unwrap();
+        assert_eq!(child.status, TaskStatus::Cancelled);
+        assert!(child.pending_question.is_none());
+        assert!(child.steps.iter().all(|step| step.status.is_terminal()));
+    }
+
+    #[tokio::test]
+    async fn restart_repairs_entire_active_lineage() {
+        let directory = tempdir().unwrap();
+        let root_id;
+        let child_id;
+        {
+            let store = RuntimeStore::open(directory.path()).unwrap();
+            let receipt = store
+                .enqueue("Build a report".into(), Vec::new())
+                .await
+                .unwrap();
+            root_id = receipt.thread_id;
+            assert!(store.claim(root_id).await.unwrap());
+            child_id = store
+                .create_child_task(
+                    root_id,
+                    "Write a section".into(),
+                    TaskRole::Worker,
+                    "Writer".into(),
+                    TaskOrigin::Subtask,
+                    LoopEngineKind::Grok,
+                )
+                .await
+                .unwrap();
+        }
+
+        let reopened = RuntimeStore::open(directory.path()).unwrap();
+        let root = reopened.task(root_id).await.unwrap();
+        let child = reopened.task(child_id).await.unwrap();
+        assert_eq!(root.status, TaskStatus::Failed);
+        assert_eq!(child.status, TaskStatus::Failed);
+        assert!(root.error.as_deref().unwrap().contains("previous process"));
+        assert!(child.error.as_deref().unwrap().contains("previous process"));
+        let snapshot = reopened
+            .snapshot(
+                "macos",
+                PlatformCapabilities {
+                    computer_control: true,
+                    realtime_perception: true,
+                    internal_preview: true,
+                    external_open: true,
+                },
+                true,
+            )
+            .await;
+        assert!(snapshot.active_task_id.is_none());
+        assert!(snapshot
+            .tasks
+            .iter()
+            .all(|task| { task.status.is_terminal() || task.status == TaskStatus::Queued }));
     }
 }

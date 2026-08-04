@@ -50,6 +50,27 @@ final class SharedKernelRuntimeBridgeTests: XCTestCase {
         )
     }
 
+    func testEmptyLegacyModelTurnShowsThinkingInsteadOfTurnNumber() {
+        let event = LingShuKernelRuntimeEvent(
+            id: UUID(),
+            sequence: 1,
+            taskId: UUID(),
+            parentTaskId: nil,
+            kind: .model,
+            state: .running,
+            actor: "deepseek-chat",
+            title: "模型回合 4",
+            detail: "",
+            createdAt: "2026-07-29T00:00:00Z",
+            updatedAt: "2026-07-29T00:00:00Z"
+        )
+
+        XCTAssertEqual(
+            LingShuState.sharedKernelUserFacingEventText(event, language: .chinese),
+            "思考中…"
+        )
+    }
+
     @MainActor
     func testMacShellLoadsAndTalksToCanonicalRuntimeKernel() async throws {
         try Self.ensureRuntimeLibraryBuilt()
