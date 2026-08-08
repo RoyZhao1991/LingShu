@@ -721,6 +721,11 @@ function PreviewBody({ payload, unsupported }: { payload: PreviewPayload; unsupp
   if (payload.kind === "html") return <iframe className="html-preview" sandbox="" srcDoc={payload.content} title={payload.name} />;
   if (payload.kind === "markdown") return <div className="document-preview markdown-body"><MarkdownContent>{payload.content}</MarkdownContent></div>;
   if (payload.kind === "presentation") return <div className="slide-preview">{payload.sections.map((section, index) => { const [title, ...body] = section.split("\n"); return <section key={`${index}-${title}`}><small>{String(index + 1).padStart(2, "0")}</small><h2>{title}</h2><ul>{body.map((line) => <li key={line}>{line}</li>)}</ul></section>; })}</div>;
+  if (payload.kind === "spreadsheet") return <div className="spreadsheet-preview">{payload.sections.map((section, sheetIndex) => {
+    const [title, ...lines] = section.split("\n");
+    const rows = lines.map((line) => line.split("\t"));
+    return <section key={`${sheetIndex}-${title}`}><h2>{title}</h2><div className="spreadsheet-table-wrap"><table><tbody>{rows.map((row, rowIndex) => <tr key={`${sheetIndex}-${rowIndex}`}>{row.map((cell, cellIndex) => rowIndex === 0 ? <th key={cellIndex}>{cell}</th> : <td key={cellIndex}>{cell}</td>)}</tr>)}</tbody></table></div></section>;
+  })}</div>;
   if (payload.kind === "document") return <div className="document-preview">{payload.sections.map((section, index) => index === 0 ? <h1 key={index}>{section}</h1> : <p key={index}>{section}</p>)}</div>;
   if (["text", "code"].includes(payload.kind)) return <pre className="code-preview">{payload.content}</pre>;
   return <EmptyState icon={<FileBox />} text={unsupported} />;

@@ -790,6 +790,8 @@ pub struct ArtifactSpec {
     pub content: String,
     #[serde(default)]
     pub slides: Vec<SlideSpec>,
+    #[serde(default)]
+    pub sheets: Vec<SheetSpec>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -799,6 +801,13 @@ pub struct SlideSpec {
     pub bullets: Vec<String>,
     #[serde(default)]
     pub notes: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SheetSpec {
+    pub name: String,
+    #[serde(default)]
+    pub rows: Vec<Vec<Value>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

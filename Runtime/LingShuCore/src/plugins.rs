@@ -1,6 +1,7 @@
+use crate::artifacts::materialize_artifacts;
 use crate::models::{
-    AppLocale, ExecutionPermissionMode, PluginPermissions, PluginRecord, PluginSource,
-    PluginToolRecord,
+    AppLocale, ArtifactSpec, ExecutionPermissionMode, PluginPermissions, PluginRecord,
+    PluginSource, PluginToolRecord,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -15,6 +16,10 @@ use tokio::io::AsyncWriteExt;
 use uuid::Uuid;
 
 const PLUGIN_SCHEMA_VERSION: u32 = 1;
+const OFFICE_FOUNDATION_ID: &str = "lingshu.office-foundation";
+const OFFICE_WORD_TOOL: &str = "create_word_document";
+const OFFICE_PRESENTATION_TOOL: &str = "create_basic_presentation";
+const OFFICE_SPREADSHEET_TOOL: &str = "create_spreadsheet";
 const DESIGN_KB_ID: &str = "lingshu.design-kb";
 const DESIGN_KB_TOOL: &str = "create_designed_presentation";
 
@@ -105,7 +110,7 @@ impl PluginRegistry {
     }
 
     pub fn list(&self) -> Vec<PluginRecord> {
-        let mut records = Vec::new();
+        let mut records = vec![office_foundation_record()];
         if let Some(root) = self.design_kb_root() {
             records.push(self.design_kb_record(root));
         } else {
@@ -211,6 +216,14 @@ impl PluginRegistry {
         if self.design_kb_root().is_some() {
             lines.push(self.design_kb_prompt(locale));
         }
+        lines.push(match locale {
+            AppLocale::ZhCn => format!(
+                "Office Foundation 是零依赖的基础 Office 能力：Word 使用 {OFFICE_WORD_TOOL}，基础 PowerPoint 使用 {OFFICE_PRESENTATION_TOOL}，Excel 使用 {OFFICE_SPREADSHEET_TOOL}。需要精致演示文稿时仍优先使用 DesignKB。"
+            ),
+            AppLocale::En => format!(
+                "Office Foundation provides dependency-free Office basics: use {OFFICE_WORD_TOOL} for Word, {OFFICE_PRESENTATION_TOOL} for basic PowerPoint, and {OFFICE_SPREADSHEET_TOOL} for Excel. Continue to prefer DesignKB for polished presentations."
+            ),
+        });
         lines.join("\n")
     }
 
@@ -242,10 +255,10 @@ impl PluginRegistry {
     }
 
     pub fn set_enabled(&self, id: &str, enabled: bool) -> Result<PluginRecord, PluginError> {
-        if id == DESIGN_KB_ID {
+        if is_builtin_plugin(id) {
             if !enabled {
                 return Err(PluginError::InvalidManifest(
-                    "the built-in DesignKB plugin cannot be disabled".into(),
+                    "built-in LingShu plugins cannot be disabled".into(),
                 ));
             }
             return self
@@ -265,9 +278,9 @@ impl PluginRegistry {
     }
 
     pub fn remove(&self, id: &str) -> Result<(), PluginError> {
-        if id == DESIGN_KB_ID {
+        if is_builtin_plugin(id) {
             return Err(PluginError::InvalidManifest(
-                "the built-in DesignKB plugin cannot be removed".into(),
+                "built-in LingShu plugins cannot be removed".into(),
             ));
         }
         validate_plugin_id(id)?;
@@ -293,6 +306,12 @@ impl PluginRegistry {
         workspace: &Path,
         permission_mode: ExecutionPermissionMode,
     ) -> Result<PluginExecution, PluginError> {
+        if matches!(
+            exposed_name,
+            OFFICE_WORD_TOOL | OFFICE_PRESENTATION_TOOL | OFFICE_SPREADSHEET_TOOL
+        ) {
+            return execute_office_foundation(exposed_name, arguments, workspace);
+        }
         if exposed_name == DESIGN_KB_TOOL {
             return self
                 .execute_design_kb(arguments, workspace, permission_mode)
@@ -578,6 +597,174 @@ impl PluginRegistry {
         }
         find_command(command)
     }
+}
+
+fn is_builtin_plugin(id: &str) -> bool {
+    matches!(id, OFFICE_FOUNDATION_ID | DESIGN_KB_ID)
+}
+
+fn office_foundation_record() -> PluginRecord {
+    PluginRecord {
+        id: OFFICE_FOUNDATION_ID.into(),
+        name: "Office Foundation".into(),
+        version: "1.0.0".into(),
+        description: "Built-in, dependency-free Word, Excel, and basic PowerPoint creation shared by every LingShu client.".into(),
+        description_zh: "由所有灵枢客户端共享的内置零依赖 Word、Excel 与基础 PowerPoint 生成能力。".into(),
+        source: PluginSource::BuiltIn,
+        enabled: true,
+        available: true,
+        runtime_ready: true,
+        root_path: PathBuf::new(),
+        permissions: office_foundation_permissions(),
+        tools: vec![
+            office_word_tool_record(),
+            office_presentation_tool_record(),
+            office_spreadsheet_tool_record(),
+        ],
+        status_detail: "Ready in the shared LingShu runtime core".into(),
+    }
+}
+
+fn office_foundation_permissions() -> PluginPermissions {
+    PluginPermissions {
+        file_read: true,
+        file_write: true,
+        network: false,
+        shell: false,
+        system_sensitive: false,
+    }
+}
+
+fn office_word_tool_record() -> PluginToolRecord {
+    PluginToolRecord {
+        name: OFFICE_WORD_TOOL.into(),
+        exposed_name: OFFICE_WORD_TOOL.into(),
+        description: "Create and register a dependency-free Word document in the Workspace. Markdown-style headings and lists are converted to document structure.".into(),
+        description_zh: "在工作区创建并登记零依赖 Word 文档，支持将 Markdown 风格标题和列表转换为文档结构。".into(),
+        parameters: json!({
+            "type": "object",
+            "properties": {
+                "title": {"type": "string"},
+                "file_name": {"type": "string", "description": "Workspace-relative .docx file name"},
+                "content": {"type": "string", "description": "Document body; Markdown-style headings and lists are supported"}
+            },
+            "required": ["title", "file_name", "content"]
+        }),
+    }
+}
+
+fn office_presentation_tool_record() -> PluginToolRecord {
+    PluginToolRecord {
+        name: OFFICE_PRESENTATION_TOOL.into(),
+        exposed_name: OFFICE_PRESENTATION_TOOL.into(),
+        description: "Create and register a dependency-free basic PowerPoint. Use DesignKB instead when visual polish or advanced layouts are required.".into(),
+        description_zh: "创建并登记零依赖基础 PowerPoint；需要精致视觉或高级版式时请改用 DesignKB。".into(),
+        parameters: json!({
+            "type": "object",
+            "properties": {
+                "title": {"type": "string"},
+                "file_name": {"type": "string", "description": "Workspace-relative .pptx file name"},
+                "slides": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "title": {"type": "string"},
+                            "bullets": {"type": "array", "items": {"type": "string"}},
+                            "notes": {"type": "string"}
+                        },
+                        "required": ["title"]
+                    }
+                }
+            },
+            "required": ["title", "file_name", "slides"]
+        }),
+    }
+}
+
+fn office_spreadsheet_tool_record() -> PluginToolRecord {
+    PluginToolRecord {
+        name: OFFICE_SPREADSHEET_TOOL.into(),
+        exposed_name: OFFICE_SPREADSHEET_TOOL.into(),
+        description: "Create and register a dependency-free Excel workbook with one or more worksheets. Cells support strings, numbers, booleans, nulls, and formulas beginning with '='.".into(),
+        description_zh: "创建并登记零依赖 Excel 工作簿，支持多个工作表以及字符串、数字、布尔值、空值和以“=”开头的公式。".into(),
+        parameters: json!({
+            "type": "object",
+            "properties": {
+                "title": {"type": "string"},
+                "file_name": {"type": "string", "description": "Workspace-relative .xlsx file name"},
+                "sheets": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "name": {"type": "string"},
+                            "rows": {
+                                "type": "array",
+                                "items": {"type": "array", "items": {}}
+                            }
+                        },
+                        "required": ["name", "rows"]
+                    }
+                }
+            },
+            "required": ["title", "file_name", "sheets"]
+        }),
+    }
+}
+
+fn execute_office_foundation(
+    tool_name: &str,
+    arguments: Value,
+    workspace: &Path,
+) -> Result<PluginExecution, PluginError> {
+    let (kind, extension) = match tool_name {
+        OFFICE_WORD_TOOL => ("docx", "docx"),
+        OFFICE_PRESENTATION_TOOL => ("pptx", "pptx"),
+        OFFICE_SPREADSHEET_TOOL => ("xlsx", "xlsx"),
+        _ => return Err(PluginError::NotFound(tool_name.into())),
+    };
+    let mut payload = arguments
+        .as_object()
+        .cloned()
+        .ok_or_else(|| PluginError::Execution("Office tool arguments must be an object".into()))?;
+    let file_name = payload
+        .get("file_name")
+        .and_then(Value::as_str)
+        .ok_or_else(|| PluginError::Execution("file_name is required".into()))?;
+    if Path::new(file_name)
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(|value| !value.eq_ignore_ascii_case(extension))
+        .unwrap_or(true)
+    {
+        return Err(PluginError::Execution(format!(
+            "file_name must end with .{extension}"
+        )));
+    }
+    payload.insert("kind".into(), Value::String(kind.into()));
+    payload
+        .entry("content")
+        .or_insert(Value::String(String::new()));
+    payload.entry("slides").or_insert(Value::Array(Vec::new()));
+    payload.entry("sheets").or_insert(Value::Array(Vec::new()));
+    let spec: ArtifactSpec = serde_json::from_value(Value::Object(payload))?;
+    let mut records = materialize_artifacts(workspace, &[spec])
+        .map_err(|error| PluginError::Execution(error.to_string()))?;
+    let record = records
+        .pop()
+        .ok_or_else(|| PluginError::Execution("Office artifact was not created".into()))?;
+    Ok(PluginExecution {
+        output: json!({
+            "ok": true,
+            "plugin": "Office Foundation",
+            "kind": record.kind,
+            "path": record.path,
+            "bytes": record.size_bytes
+        })
+        .to_string(),
+        artifact_paths: vec![record.path],
+    })
 }
 
 fn design_kb_permissions() -> PluginPermissions {
@@ -918,6 +1105,7 @@ fn json_ids(path: &Path, collection: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::preview::{preview_file, PreviewKind};
     use tempfile::tempdir;
 
     #[test]
@@ -974,6 +1162,53 @@ mod tests {
         let design_kb = registry.probe(DESIGN_KB_ID).unwrap();
         assert!(design_kb.available);
         assert_eq!(design_kb.tools[0].exposed_name, DESIGN_KB_TOOL);
+    }
+
+    #[test]
+    fn office_foundation_is_always_registered_and_protected() {
+        let data = tempdir().unwrap();
+        let registry = PluginRegistry::new(data.path(), None, std::env::consts::OS).unwrap();
+        let office = registry.probe(OFFICE_FOUNDATION_ID).unwrap();
+        assert!(office.enabled);
+        assert!(office.available);
+        assert!(office.runtime_ready);
+        assert_eq!(office.tools.len(), 3);
+        assert!(office
+            .tools
+            .iter()
+            .any(|tool| tool.exposed_name == OFFICE_SPREADSHEET_TOOL));
+        assert!(registry.set_enabled(OFFICE_FOUNDATION_ID, false).is_err());
+        assert!(registry.remove(OFFICE_FOUNDATION_ID).is_err());
+    }
+
+    #[tokio::test]
+    async fn office_foundation_creates_a_previewable_spreadsheet() {
+        let data = tempdir().unwrap();
+        let workspace = tempdir().unwrap();
+        let registry = PluginRegistry::new(data.path(), None, std::env::consts::OS).unwrap();
+        let result = registry
+            .execute(
+                OFFICE_SPREADSHEET_TOOL,
+                json!({
+                    "title": "Quarterly metrics",
+                    "file_name": "quarterly-metrics.xlsx",
+                    "sheets": [{
+                        "name": "Summary",
+                        "rows": [
+                            ["Metric", "Value", "Verified"],
+                            ["Revenue", 120, true]
+                        ]
+                    }]
+                }),
+                workspace.path(),
+                ExecutionPermissionMode::Sandbox,
+            )
+            .await
+            .unwrap();
+        assert_eq!(result.artifact_paths.len(), 1);
+        let preview = preview_file(&result.artifact_paths[0]).unwrap();
+        assert_eq!(preview.kind, PreviewKind::Spreadsheet);
+        assert!(preview.content.contains("Revenue\t120\tTRUE"));
     }
 
     #[tokio::test]

@@ -198,7 +198,7 @@ export interface ProviderPreset {
 export interface PreviewPayload {
   name: string;
   path: string;
-  kind: "text" | "markdown" | "code" | "html" | "image" | "pdf" | "document" | "presentation" | "unsupported";
+  kind: "text" | "markdown" | "code" | "html" | "image" | "pdf" | "document" | "presentation" | "spreadsheet" | "unsupported";
   mimeType: string;
   content: string;
   sections: string[];

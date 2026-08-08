@@ -19,6 +19,7 @@ pub enum PreviewKind {
     Pdf,
     Document,
     Presentation,
+    Spreadsheet,
     Unsupported,
 }
 
@@ -136,6 +137,13 @@ pub fn preview_file(path: impl AsRef<Path>) -> Result<PreviewPayload, PreviewErr
             payload.sections = presentation_slides(&bytes)?;
             payload.content = payload.sections.join("\n\n");
         }
+        "xlsx" => {
+            payload.kind = PreviewKind::Spreadsheet;
+            payload.mime_type =
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet".into();
+            payload.sections = spreadsheet_sheets(&bytes)?;
+            payload.content = payload.sections.join("\n\n");
+        }
         _ => {}
     }
     Ok(payload)
@@ -182,6 +190,207 @@ fn presentation_slides(bytes: &[u8]) -> Result<Vec<String>, PreviewError> {
 
 fn slide_number(name: &str) -> u32 {
     name.rsplit("slide")
+        .next()
+        .and_then(|part| part.strip_suffix(".xml"))
+        .and_then(|part| part.parse().ok())
+        .unwrap_or(u32::MAX)
+}
+
+fn spreadsheet_sheets(bytes: &[u8]) -> Result<Vec<String>, PreviewError> {
+    let mut archive = ZipArchive::new(Cursor::new(bytes))?;
+    let names = zip_text_if_present(&mut archive, "xl/workbook.xml")
+        .map(|xml| workbook_sheet_names(&xml))
+        .unwrap_or_default();
+    let shared_strings = zip_text_if_present(&mut archive, "xl/sharedStrings.xml")
+        .map(|xml| shared_string_values(&xml))
+        .unwrap_or_default();
+    let mut parts: Vec<String> = (0..archive.len())
+        .filter_map(|index| {
+            archive
+                .by_index(index)
+                .ok()
+                .map(|file| file.name().to_string())
+        })
+        .filter(|name| name.starts_with("xl/worksheets/sheet") && name.ends_with(".xml"))
+        .collect();
+    parts.sort_by_key(|name| worksheet_number(name));
+    let mut sheets = Vec::new();
+    for (index, part) in parts.iter().enumerate() {
+        let mut xml = String::new();
+        archive.by_name(part)?.read_to_string(&mut xml)?;
+        let title = names
+            .get(index)
+            .cloned()
+            .unwrap_or_else(|| format!("Sheet {}", index + 1));
+        let rows = worksheet_rows(&xml, &shared_strings);
+        sheets.push(if rows.is_empty() {
+            title
+        } else {
+            format!("{title}\n{}", rows.join("\n"))
+        });
+    }
+    Ok(sheets)
+}
+
+fn zip_text_if_present(archive: &mut ZipArchive<Cursor<&[u8]>>, part: &str) -> Option<String> {
+    let mut file = archive.by_name(part).ok()?;
+    let mut xml = String::new();
+    file.read_to_string(&mut xml).ok()?;
+    Some(xml)
+}
+
+fn workbook_sheet_names(xml: &str) -> Vec<String> {
+    let mut reader = Reader::from_str(xml);
+    let mut names = Vec::new();
+    loop {
+        match reader.read_event() {
+            Ok(Event::Start(event)) | Ok(Event::Empty(event))
+                if event.name().as_ref() == b"sheet" =>
+            {
+                if let Some(name) = xml_attribute(&event, b"name") {
+                    names.push(name);
+                }
+            }
+            Ok(Event::Eof) => break,
+            Err(_) => break,
+            _ => {}
+        }
+    }
+    names
+}
+
+fn shared_string_values(xml: &str) -> Vec<String> {
+    let mut reader = Reader::from_str(xml);
+    let mut values = Vec::new();
+    let mut current = String::new();
+    let mut in_item = false;
+    loop {
+        match reader.read_event() {
+            Ok(Event::Start(event)) if event.name().as_ref() == b"si" => {
+                current.clear();
+                in_item = true;
+            }
+            Ok(Event::Text(text)) if in_item => {
+                current.push_str(&decoded_xml_text(&text));
+            }
+            Ok(Event::End(event)) if event.name().as_ref() == b"si" => {
+                values.push(current.clone());
+                in_item = false;
+            }
+            Ok(Event::Eof) => break,
+            Err(_) => break,
+            _ => {}
+        }
+    }
+    values
+}
+
+fn worksheet_rows(xml: &str, shared_strings: &[String]) -> Vec<String> {
+    let mut reader = Reader::from_str(xml);
+    let mut rows = Vec::new();
+    let mut cells = Vec::<(usize, String)>::new();
+    let mut cell_column = 0usize;
+    let mut cell_type = String::new();
+    let mut cell_value = String::new();
+    let mut in_cell = false;
+    let mut capture_value = false;
+    loop {
+        match reader.read_event() {
+            Ok(Event::Start(event)) if event.name().as_ref() == b"c" => {
+                in_cell = true;
+                cell_type = xml_attribute(&event, b"t").unwrap_or_default();
+                cell_column = xml_attribute(&event, b"r")
+                    .as_deref()
+                    .map(spreadsheet_column_index)
+                    .unwrap_or(cells.len());
+                cell_value.clear();
+            }
+            Ok(Event::Empty(event)) if event.name().as_ref() == b"c" => {
+                let column = xml_attribute(&event, b"r")
+                    .as_deref()
+                    .map(spreadsheet_column_index)
+                    .unwrap_or(cells.len());
+                cells.push((column, String::new()));
+            }
+            Ok(Event::Start(event)) if in_cell && matches!(event.name().as_ref(), b"v" | b"t") => {
+                capture_value = true;
+            }
+            Ok(Event::Text(text)) if capture_value => {
+                cell_value.push_str(&decoded_xml_text(&text));
+            }
+            Ok(Event::End(event)) if matches!(event.name().as_ref(), b"v" | b"t") => {
+                capture_value = false;
+            }
+            Ok(Event::End(event)) if event.name().as_ref() == b"c" => {
+                let value = match cell_type.as_str() {
+                    "s" => cell_value
+                        .parse::<usize>()
+                        .ok()
+                        .and_then(|index| shared_strings.get(index))
+                        .cloned()
+                        .unwrap_or_default(),
+                    "b" => match cell_value.as_str() {
+                        "1" => "TRUE".into(),
+                        "0" => "FALSE".into(),
+                        _ => cell_value.clone(),
+                    },
+                    _ => cell_value.clone(),
+                };
+                cells.push((cell_column, value));
+                in_cell = false;
+                capture_value = false;
+            }
+            Ok(Event::End(event)) if event.name().as_ref() == b"row" => {
+                if !cells.is_empty() {
+                    let width = cells.iter().map(|(column, _)| *column).max().unwrap_or(0) + 1;
+                    let mut values = vec![String::new(); width];
+                    for (column, value) in cells.drain(..) {
+                        values[column] = value;
+                    }
+                    rows.push(values.join("\t"));
+                }
+            }
+            Ok(Event::Eof) => break,
+            Err(_) => break,
+            _ => {}
+        }
+    }
+    rows
+}
+
+fn xml_attribute(event: &quick_xml::events::BytesStart<'_>, key: &[u8]) -> Option<String> {
+    event
+        .attributes()
+        .flatten()
+        .find(|attribute| attribute.key.as_ref() == key)
+        .and_then(|attribute| attribute.unescape_value().ok())
+        .map(|value| value.into_owned())
+}
+
+fn decoded_xml_text(text: &quick_xml::events::BytesText<'_>) -> String {
+    text.decode()
+        .ok()
+        .and_then(|decoded| {
+            quick_xml::escape::unescape(&decoded)
+                .ok()
+                .map(|value| value.into_owned())
+        })
+        .unwrap_or_default()
+}
+
+fn spreadsheet_column_index(reference: &str) -> usize {
+    let mut value = 0usize;
+    for character in reference
+        .chars()
+        .take_while(|character| character.is_ascii_alphabetic())
+    {
+        value = value * 26 + (character.to_ascii_uppercase() as u8 - b'A' + 1) as usize;
+    }
+    value.saturating_sub(1)
+}
+
+fn worksheet_number(name: &str) -> u32 {
+    name.rsplit("sheet")
         .next()
         .and_then(|part| part.strip_suffix(".xml"))
         .and_then(|part| part.parse().ok())
