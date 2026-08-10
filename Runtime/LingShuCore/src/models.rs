@@ -137,6 +137,7 @@ pub enum MessageRole {
 pub enum MessageState {
     Complete,
     Thinking,
+    NeedsRecovery,
     Failed,
     NeedsUserAction,
 }
@@ -269,6 +270,7 @@ pub enum TaskStatus {
     Queued,
     Understanding,
     Running,
+    NeedsRecovery,
     NeedsUserAction,
     Completed,
     Failed,
@@ -277,7 +279,11 @@ pub enum TaskStatus {
 
 impl TaskStatus {
     pub fn is_terminal(&self) -> bool {
-        matches!(self, Self::Completed | Self::Failed | Self::Cancelled)
+        // `Failed` is kept only so older persisted state can still be decoded. A goal is never
+        // terminal merely because one model/tool attempt failed: the store migrates that legacy
+        // state to a recoverable state on open. Only an accepted completion or an explicit
+        // cancellation closes the objective.
+        matches!(self, Self::Completed | Self::Cancelled)
     }
 }
 

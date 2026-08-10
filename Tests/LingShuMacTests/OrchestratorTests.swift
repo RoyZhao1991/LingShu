@@ -103,10 +103,11 @@ final class OrchestratorTests: XCTestCase {
         )
 
         let ledger = await orch.ledger()
-        XCTAssertEqual(ledger.first?.status, .failed)
+        XCTAssertEqual(ledger.first?.status, .needsRecovery, "Checker 驳回后应保留断点继续推进，不能结束为失败")
         XCTAssertTrue(ledger.first?.summary.contains(LingShuVerificationFailure.prefix) == true)
         let pushes = await orch.pendingPushes()
         XCTAssertFalse(pushes.contains { $0.contains("已完成") })
+        XCTAssertTrue(pushes.contains { $0.contains("尚未达到验收目标") })
     }
 
     // 死锁回归:卡在 ask_user 等用户的任务**不占并发槽**——否则多条"等你补充"占满槽 → 新任务永远派不出去 = 死锁。

@@ -55,9 +55,12 @@ final class CLIControlTests: XCTestCase {
         XCTAssertEqual(legacySuccess?.isTerminal, true)
         XCTAssertEqual(legacySuccess?.isSuccessful, true)
 
-        let legacyFailure = LingShuCLIClient.taskCompletion(from: ["status": "未达标"])
-        XCTAssertEqual(legacyFailure?.isTerminal, true)
-        XCTAssertEqual(legacyFailure?.isSuccessful, false)
+        XCTAssertNil(
+            LingShuCLIClient.taskCompletion(from: ["status": "未达标"]),
+            "旧版未达标状态必须继续恢复,不能被 CLI 当成失败终态"
+        )
+        XCTAssertNil(LingShuCLIClient.taskCompletion(from: ["status": "失败"]))
+        XCTAssertNil(LingShuCLIClient.taskCompletion(from: ["status": "部分完成"]))
 
         XCTAssertNil(LingShuCLIClient.taskCompletion(from: ["status": "执行中"]))
     }

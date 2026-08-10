@@ -6,7 +6,8 @@ enum LingShuLedgerStatus: String, Equatable, Sendable {
     case running = "推进中"
     case blocked = "已卡住"
     case completed = "已完成"
-    case failed = "已失败"
+    /// 本轮尚未达到验收目标，但完整会话与断点仍然保留，可继续推进。
+    case needsRecovery = "待恢复"
     /// 基础设施中断(网络/网关)导致暂停——**非失败**,保留会话上下文,重连后自动续跑。
     case suspended = "已暂停"
 }
@@ -26,7 +27,9 @@ enum LingShuOrchestratorEvent: Sendable {
     case spawned(id: String, objective: String)
     case completed(id: String, objective: String, summary: String)
     case blocked(id: String, objective: String, question: String)
-    case failed(id: String, objective: String, summary: String)
+    case needsRecovery(id: String, objective: String, summary: String)
+    /// 用户主动停止，不等同于执行失败；原目标、上下文和产物仍可恢复。
+    case suspended(id: String, objective: String, summary: String)
     /// 网络/网关中断导致暂停(非失败):上下文保留,重连后自动续跑。
     case interrupted(id: String, objective: String, reason: String)
     /// 重连后自动续跑开始(供 UI 把任务从"已暂停"翻回"执行中")。
@@ -36,7 +39,7 @@ enum LingShuOrchestratorEvent: Sendable {
 /// Agent 编排器(范式骨干的整合层)。
 ///
 /// 主会话派生隔离子会话(各跑各的 `LingShuAgentSession`,由 ③ 有界并发统计),
-/// 子会话在 完成/卡住/失败 时把【摘要事件】回报到统一账本 → 主动推送给用户;
+/// 子会话在完成、等待用户或等待恢复时把【摘要事件】回报到统一账本 → 主动推送给用户;
 /// 用户后续输入凭账本路由回正确的子会话续跑。
 /// 隔离的是「完整上下文」,共享的是「账本薄摘要」——既真并行又不路由模糊。
 actor LingShuAgentOrchestrator {
@@ -86,11 +89,13 @@ actor LingShuAgentOrchestrator {
     func capacity() -> Int { concurrency.maxConcurrent }
     /// 当前是否还能再派生一条子任务(运行数 < 上限)。
     func hasSpawnCapacity() -> Bool { concurrency.hasCapacity }
-    func blockedIDs() -> [String] { ledger().filter { $0.status == .blocked }.map { $0.id } }
+    func blockedIDs() -> [String] {
+        ledger().filter { $0.status == .blocked || $0.status == .needsRecovery }.map { $0.id }
+    }
 
     // MARK: 派生 / 续接
 
-    /// 派生一条隔离子会话并跑到第一个停止点(完成/卡住/失败),把摘要事件落账本 + 推送。
+    /// 派生一条隔离子会话并跑到第一个停止点(完成/等待用户/待恢复),把摘要事件落账本 + 推送。
     /// 真并行 = 并发调用本方法(每条子会话是独立 actor)。
     @discardableResult
     func spawn(id: String, objective: String, session: any LingShuAgentSessioning, imageDataURLs: [String]? = nil) async -> LingShuAgentRunResult {
@@ -103,7 +108,7 @@ actor LingShuAgentOrchestrator {
         return result
     }
 
-    /// 非阻塞派生:子会话在后台跑(真并行),立即返回;完成/失败后自动纳入下一条排队线程。
+    /// 非阻塞派生:子会话在后台跑(真并行),立即返回;到达停止点后自动纳入下一条排队线程。
     /// 主会话用它"派生即走",子会话经账本/推送回报,不阻塞主会话。
     ///
     /// **硬上限(背压):已有 `maxConcurrent`(=3)条在跑时直接拒绝,不入队**——返回 false,由
@@ -123,23 +128,23 @@ actor LingShuAgentOrchestrator {
     }
 
     /// 停止**所有正在跑的隔离子任务**(用户"停止并夺回"用)。取消驱动 Task(循环在边界 `Task.isCancelled` 退出)、
-    /// 释放并发槽、标记账本,并发 `.failed("用户已停止")` 事件让 UI 把记录从"执行中"收尾。返回停了几条。
+    /// 释放并发槽、标记账本,并发 `.suspended("用户已停止")` 事件让 UI 从"执行中"切到"已暂停"。返回停了几条。
     @discardableResult
     func cancelAllRunning() -> Int {
         let ids = Array(driveTasks.keys)
         for (id, task) in driveTasks {
             task.cancel()
             let objective = objectives[id] ?? entries[id]?.objective ?? ""
-            upsert(id: id, objective: objective, status: .failed, summary: "用户已停止")
+            upsert(id: id, objective: objective, status: .suspended, summary: "用户已停止")
             _ = concurrency.complete(threadID: id)
-            Task { await self.onEvent?(.failed(id: id, objective: objective, summary: "用户已停止")) }
+            Task { await self.onEvent?(.suspended(id: id, objective: objective, summary: "用户已停止")) }
         }
         driveTasks.removeAll()
         return ids.count
     }
 
     /// 停止**指定一条**正在跑的隔离子任务(「进行中」长条的"停止"用):取消其驱动 Task、释放并发槽并放行排队任务、
-    /// 标记账本、发 `.failed` 让 UI 收尾。**只动这一条**,不波及其它任务与主会话问答(区别于 cancelAllRunning)。
+    /// 标记账本、发 `.suspended` 让 UI 暂停。**只动这一条**,不波及其它任务与主会话问答(区别于 cancelAllRunning)。
     /// 返回是否真停了一条(该 id 当前确有在跑的驱动 Task)。
     @discardableResult
     func cancel(id: String) -> Bool {
@@ -147,9 +152,9 @@ actor LingShuAgentOrchestrator {
         task.cancel()
         driveTasks[id] = nil
         let objective = objectives[id] ?? entries[id]?.objective ?? ""
-        upsert(id: id, objective: objective, status: .failed, summary: "用户已停止")
-        Task { await self.onEvent?(.failed(id: id, objective: objective, summary: "用户已停止")) }
-        admitNext(after: id)   // 释放槽 + 放行编排器内部排队(状态级队列由 .failed 事件触发晋级)
+        upsert(id: id, objective: objective, status: .suspended, summary: "用户已停止")
+        Task { await self.onEvent?(.suspended(id: id, objective: objective, summary: "用户已停止")) }
+        admitNext(after: id)   // 释放槽 + 放行编排器内部排队
         return true
     }
 
@@ -174,7 +179,8 @@ actor LingShuAgentOrchestrator {
     /// 续接:把用户补充的答案路由给某条卡住的子会话,续跑。
     @discardableResult
     func resume(id: String, answer: String) async -> LingShuAgentRunResult? {
-        guard let session = sessions[id], entries[id]?.status == .blocked else { return nil }
+        guard let session = sessions[id],
+              entries[id]?.status == .blocked || entries[id]?.status == .needsRecovery else { return nil }
         let objective = entries[id]?.objective ?? ""
         guard await acquireInteractiveSlot(id: id, objective: objective) else {
             return .interrupted(reason: "恢复等待期间任务已取消")
@@ -226,9 +232,9 @@ actor LingShuAgentOrchestrator {
                 pushes.append("子任务「\(objective)」已完成:\(digest(lastText))")
                 Task { await self.onEvent?(.completed(id: id, objective: objective, summary: lastText)) }
             } else {
-                upsert(id: id, objective: objective, status: .failed, summary: "达轮次上限未收尾:\(digest(lastText))")
-                pushes.append("子任务「\(objective)」未能自行收尾,已暂停等你介入。")
-                Task { await self.onEvent?(.failed(id: id, objective: objective, summary: digest(lastText))) }
+                upsert(id: id, objective: objective, status: .needsRecovery, summary: "到达安全检查点，目标尚未完成:\(digest(lastText))")
+                pushes.append("子任务「\(objective)」尚未达到验收目标,已保留断点等待继续推进。")
+                Task { await self.onEvent?(.needsRecovery(id: id, objective: objective, summary: digest(lastText))) }
             }
             admitNext(after: id)
         case .interrupted(let reason):

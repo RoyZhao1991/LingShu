@@ -442,7 +442,8 @@ extension LingShuState {
                     chatMessages[index].isLoading = false
                 }
                 appendTaskRecordMessage(turn.taskRecordID, actor: "模型通道", role: "不可自动恢复", kind: .warning, text: message)
-                let status = LingShuModelServiceFailure.decodeReason(reason)?.taskStatus ?? .failed
+                let decodedStatus = LingShuModelServiceFailure.decodeReason(reason)?.taskStatus ?? .waitingForUser
+                let status: LingShuTaskExecutionStatus = decodedStatus == .failed ? .suspended : decodedStatus
                 finishTaskRecord(turn.taskRecordID, status: status, summary: message)
                 missionTitle = status == .waitingForUser ? "等待模型配置" : "模型服务异常"
                 missionStatus = String(message.prefix(120))

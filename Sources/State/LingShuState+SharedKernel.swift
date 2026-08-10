@@ -140,15 +140,15 @@ extension LingShuState {
             } catch {
                 if let index = self.chatMessages.firstIndex(where: { $0.id == placeholderID }) {
                     self.chatMessages[index].text = self.loc(
-                        "共享内核不可用：\(error.localizedDescription)",
-                        "Shared runtime unavailable: \(error.localizedDescription)"
+                        "共享内核暂时不可用，输入和附件已保留：\(error.localizedDescription)",
+                        "The shared runtime is temporarily unavailable. Your input and attachments are preserved: \(error.localizedDescription)"
                     )
                     self.chatMessages[index].isLoading = false
                 }
                 self.appendTrace(
                     kind: .warning,
                     actor: "RuntimeKernel",
-                    title: self.loc("共享内核启动失败", "Shared kernel failed to start"),
+                    title: self.loc("共享内核等待恢复", "Shared kernel waiting to recover"),
                     detail: error.localizedDescription
                 )
             }
@@ -173,11 +173,11 @@ extension LingShuState {
                 } catch {
                     consecutiveErrors += 1
                     if consecutiveErrors >= 3 {
-                        self.failSharedKernelBubbles(error.localizedDescription)
-                        break
+                        self.markSharedKernelBubblesRetrying(error.localizedDescription)
                     }
                 }
-                try? await Task.sleep(nanoseconds: 250_000_000)
+                let retryDelay = min(5.0, 0.25 * pow(2.0, Double(max(0, consecutiveErrors - 1))))
+                try? await Task.sleep(nanoseconds: UInt64(retryDelay * 1_000_000_000))
             }
             self.drainSerialInputsIfIdle()
         }

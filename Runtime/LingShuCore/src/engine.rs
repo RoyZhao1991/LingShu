@@ -12,6 +12,7 @@ use chrono::{DateTime, Utc};
 use futures_util::future::join_all;
 use serde::Deserialize;
 use serde_json::{json, Value};
+use std::collections::HashSet;
 use std::future::Future;
 use std::path::{Component, Path, PathBuf};
 use std::pin::Pin;
@@ -20,12 +21,15 @@ use std::sync::Arc;
 use std::time::Duration;
 use thiserror::Error;
 use tokio::io::AsyncWriteExt;
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::{mpsc, Mutex, Notify};
 use uuid::Uuid;
 
 const CONTEXT_MESSAGE_LIMIT: usize = 80;
 const GOAL_ATTEMPTS: usize = 3;
+const MODEL_TURN_RECOVERY_ATTEMPTS: usize = 3;
+const CHECKER_RECOVERY_ATTEMPTS: usize = 3;
 const AGENT_TURN_CHECKPOINT_INTERVAL: usize = 40;
+const MAX_ROOT_RECOVERY_DELAY_SECONDS: u64 = 30;
 const MAX_CHILD_DEPTH: u8 = 3;
 const STUCK_REPEAT_THRESHOLD: usize = 5;
 const MIN_GOAL_TIMEOUT_SECONDS: u64 = 30;
@@ -83,6 +87,17 @@ impl EngineError {
     pub fn user_message(&self, locale: AppLocale) -> String {
         localized_failure(locale, self)
     }
+
+    fn is_transient_attempt(&self) -> bool {
+        matches!(
+            self.failure_kind(),
+            RuntimeFailureKind::RateLimited
+                | RuntimeFailureKind::Network
+                | RuntimeFailureKind::Timeout
+                | RuntimeFailureKind::InvalidResponse
+                | RuntimeFailureKind::Server
+        )
+    }
 }
 
 #[derive(Clone)]
@@ -95,6 +110,8 @@ pub struct RuntimeKernel {
     memory: MemoryKernel,
     loops: LoopRegistry,
     queue_guard: Arc<Mutex<()>>,
+    supervisor_guard: Arc<Mutex<()>>,
+    queue_wakeup: Arc<Notify>,
 }
 
 #[derive(Debug)]
@@ -213,6 +230,8 @@ impl RuntimeKernel {
             memory,
             loops,
             queue_guard: Arc::new(Mutex::new(())),
+            supervisor_guard: Arc::new(Mutex::new(())),
+            queue_wakeup: Arc::new(Notify::new()),
         })
     }
 
@@ -376,13 +395,57 @@ impl RuntimeKernel {
         prompt: String,
         attachment_paths: Vec<PathBuf>,
     ) -> Result<SubmitReceipt, EngineError> {
-        Ok(self.store.enqueue(prompt, attachment_paths).await?)
+        let receipt = self.store.enqueue(prompt, attachment_paths).await?;
+        self.queue_wakeup.notify_waiters();
+        Ok(receipt)
     }
 
     /// Only the foreground/main queue is serialized. `spawn_task` sessions use independent
     /// persisted contexts and may run concurrently without mutating the main conversation.
     pub async fn run_queue(&self, api_key: Option<String>) -> Result<usize, EngineError> {
-        Ok(self.run_queue_report(api_key).await?.completed)
+        Ok(self.supervise_queue_report(api_key).await?.completed)
+    }
+
+    /// Keeps recoverable objectives alive without monopolizing the foreground queue. Each pass
+    /// advances every runnable root at most once; interrupted roots are persisted as
+    /// `needs_recovery`, the queue lock is released, and the supervisor retries them later from
+    /// the exact Loop transcript. A newly submitted task wakes the supervisor immediately.
+    pub async fn supervise_queue_report(
+        &self,
+        api_key: Option<String>,
+    ) -> Result<QueueRunReport, EngineError> {
+        let _supervisor = self.supervisor_guard.lock().await;
+        let mut aggregate = QueueRunReport::default();
+        let mut recovery_cycle = 0_u32;
+
+        loop {
+            let pass = self.run_queue_report(api_key.clone()).await?;
+            let made_progress = pass.completed > 0;
+            aggregate.completed = aggregate.completed.saturating_add(pass.completed);
+            for failure in pass.failures {
+                if !aggregate.failures.contains(&failure) {
+                    aggregate.failures.push(failure);
+                }
+            }
+
+            if !self.store.has_runnable_tasks().await {
+                break;
+            }
+
+            recovery_cycle = if made_progress {
+                1
+            } else {
+                recovery_cycle.saturating_add(1)
+            };
+            tokio::select! {
+                _ = tokio::time::sleep(root_recovery_delay(recovery_cycle)) => {}
+                _ = self.queue_wakeup.notified() => {
+                    recovery_cycle = 0;
+                }
+            }
+        }
+
+        Ok(aggregate)
     }
 
     /// Runs the serialized foreground queue and reports typed failures to the host. This keeps the
@@ -394,21 +457,71 @@ impl RuntimeKernel {
     ) -> Result<QueueRunReport, EngineError> {
         let _guard = self.queue_guard.lock().await;
         let mut report = QueueRunReport::default();
-        while let Some(thread_id) = self.store.next_queued_id().await {
-            if !self.store.claim(thread_id).await? {
+        let mut visited = HashSet::new();
+        loop {
+            let (thread_id, result) = if let Some(thread_id) =
+                self.store.next_queued_id_excluding(&visited).await
+            {
+                if !self.store.claim(thread_id).await? {
+                    visited.insert(thread_id);
+                    continue;
+                }
+                (thread_id, self.execute(thread_id, api_key.as_deref()).await)
+            } else if let Some(thread_id) = self.store.next_recovery_id_excluding(&visited).await {
+                let Some(task) = self.store.prepare_continue(thread_id).await? else {
+                    visited.insert(thread_id);
+                    continue;
+                };
+                (
+                    thread_id,
+                    self.continue_prepared_task(thread_id, task, None, api_key.clone())
+                        .await,
+                )
+            } else {
                 break;
-            }
-            match self.execute(thread_id, api_key.as_deref()).await {
-                Ok(()) => report.completed += 1,
+            };
+            visited.insert(thread_id);
+            match result {
+                Ok(()) => {
+                    if self
+                        .store
+                        .task(thread_id)
+                        .await
+                        .is_some_and(|task| task.status == TaskStatus::Completed)
+                    {
+                        report.completed += 1;
+                    }
+                }
                 Err(EngineError::Cancelled) => {}
                 Err(error) => {
                     let locale = self.store.settings().await.locale;
                     let message = localized_failure(locale, &error);
                     let kind = error.failure_kind();
-                    self.store
-                        .fail(thread_id, message, error.to_string())
-                        .await?;
                     report.failures.push(QueueFailure { thread_id, kind });
+                    if failure_requires_user_action(&error) {
+                        self.store
+                            .set_needs_user_action(thread_id, None, message)
+                            .await?;
+                        continue;
+                    }
+
+                    self.store
+                        .require_recovery(thread_id, message, error.to_string())
+                        .await?;
+                    self.store
+                        .append_event(
+                            thread_id,
+                            RuntimeEventKind::Status,
+                            RuntimeEventState::Running,
+                            "Runtime",
+                            localized(
+                                &locale,
+                                "本轮推进中断，已保留会话并交由后台恢复",
+                                "This pass was interrupted; the session was preserved for background recovery",
+                            ),
+                            "root_status=needs_recovery; next_pass=scheduled",
+                        )
+                        .await?;
                 }
             }
         }
@@ -421,21 +534,86 @@ impl RuntimeKernel {
         answer: String,
         api_key: Option<String>,
     ) -> Result<bool, EngineError> {
-        let Some(mut task) = self.store.prepare_resume(thread_id, answer.clone()).await? else {
+        let Some(task) = self.store.prepare_resume(thread_id, answer.clone()).await? else {
             return Ok(false);
         };
+        let locale = self.store.settings().await.locale;
+        let result = self
+            .continue_prepared_task(thread_id, task, Some(answer), api_key)
+            .await;
+        match result {
+            Ok(()) => Ok(true),
+            Err(EngineError::Cancelled) => Err(EngineError::Cancelled),
+            Err(error) => {
+                if failure_requires_user_action(&error) {
+                    self.store
+                        .set_needs_user_action(thread_id, None, localized_failure(locale, &error))
+                        .await?;
+                } else {
+                    self.store
+                        .require_recovery(
+                            thread_id,
+                            localized_failure(locale, &error),
+                            error.to_string(),
+                        )
+                        .await?;
+                }
+                Err(error)
+            }
+        }
+    }
+
+    pub async fn continue_recovery(
+        &self,
+        thread_id: Uuid,
+        api_key: Option<String>,
+    ) -> Result<bool, EngineError> {
+        let Some(task) = self.store.prepare_continue(thread_id).await? else {
+            return Ok(false);
+        };
+        let locale = self.store.settings().await.locale;
+        match self
+            .continue_prepared_task(thread_id, task, None, api_key)
+            .await
+        {
+            Ok(()) => Ok(true),
+            Err(EngineError::Cancelled) => Err(EngineError::Cancelled),
+            Err(error) => {
+                if failure_requires_user_action(&error) {
+                    self.store
+                        .set_needs_user_action(thread_id, None, localized_failure(locale, &error))
+                        .await?;
+                } else {
+                    self.store
+                        .require_recovery(
+                            thread_id,
+                            localized_failure(locale, &error),
+                            error.to_string(),
+                        )
+                        .await?;
+                }
+                Err(error)
+            }
+        }
+    }
+
+    async fn continue_prepared_task(
+        &self,
+        thread_id: Uuid,
+        mut task: TaskRecord,
+        human_answer: Option<String>,
+        api_key: Option<String>,
+    ) -> Result<(), EngineError> {
         let settings = self.store.settings().await;
         ensure_key(&settings, api_key.as_deref())?;
         let Some(goal) = task.goal_spec.clone() else {
-            return Err(EngineError::InvalidModelJson(
-                "blocked task has no GoalSpec".into(),
-            ));
+            // Older interrupted records may predate GoalSpec persistence. Recompile the goal
+            // from the preserved conversation instead of terminating the objective.
+            return self.execute(thread_id, api_key.as_deref()).await;
         };
-        self.store
-            .append_event(
-                thread_id,
+        let (kind, actor, title, detail) = if human_answer.is_some() {
+            (
                 RuntimeEventKind::HumanInteraction,
-                RuntimeEventState::Completed,
                 "User",
                 localized(&settings.locale, "继续执行", "Resume"),
                 localized(
@@ -444,13 +622,36 @@ impl RuntimeKernel {
                     "Human input received; resuming the same session.",
                 ),
             )
+        } else {
+            (
+                RuntimeEventKind::Status,
+                "Runtime",
+                localized(&settings.locale, "恢复执行", "Recovering"),
+                localized(
+                    &settings.locale,
+                    "沿用原 GoalSpec、会话上下文和产出物继续推进。",
+                    "Continuing with the original GoalSpec, session context, and artifacts.",
+                ),
+            )
+        };
+        self.store
+            .append_event(
+                thread_id,
+                kind,
+                RuntimeEventState::Completed,
+                actor,
+                title,
+                detail,
+            )
             .await?;
-        let memory_context = self
-            .recalled_memory_context(thread_id, &settings, &answer)
-            .await;
-        if !memory_context.is_empty() {
-            task.session_messages
-                .push(memory_context_message(memory_context));
+        if let Some(answer) = human_answer {
+            let memory_context = self
+                .recalled_memory_context(thread_id, &settings, &answer)
+                .await;
+            if !memory_context.is_empty() {
+                task.session_messages
+                    .push(memory_context_message(memory_context));
+            }
         }
         let plugin_context = self.session_capability_context(&settings);
         let loop_engine = task.loop_engine;
@@ -483,8 +684,7 @@ impl RuntimeKernel {
             }
             other => other,
         };
-        self.finish_session_outcome(thread_id, outcome).await?;
-        Ok(true)
+        self.finish_session_outcome(thread_id, outcome).await
     }
 
     pub async fn cancel(&self, thread_id: Uuid) -> Result<bool, EngineError> {
@@ -552,7 +752,10 @@ impl RuntimeKernel {
             .set_session_messages(thread_id, messages.clone())
             .await?;
         self.store
-            .set_assistant_text(thread_id, String::new(), MessageState::Thinking)
+            .set_assistant_placeholder_if_empty(
+                thread_id,
+                localized(&settings.locale, "思考中…", "Thinking…").into(),
+            )
             .await?;
         let mut task = self
             .store
@@ -861,14 +1064,13 @@ impl RuntimeKernel {
                         .set_session_messages(task.id, messages.clone())
                         .await?;
                     self.store
-                        .set_assistant_text(
+                        .set_assistant_placeholder_if_empty(
                             task.id,
                             localized(&settings.locale, "思考中…", "Thinking…").into(),
-                            MessageState::Thinking,
                         )
                         .await?;
                     let turn = self
-                        .stream_model_turn(
+                        .stream_model_turn_with_recovery(
                             task.id,
                             turn_index,
                             &turn_settings,
@@ -1173,6 +1375,60 @@ impl RuntimeKernel {
         })
     }
 
+    async fn stream_model_turn_with_recovery(
+        &self,
+        task_id: Uuid,
+        turn_index: usize,
+        settings: &RuntimeSettings,
+        api_key: Option<&str>,
+        messages: &[AgentMessage],
+        definitions: &[AgentToolDefinition],
+    ) -> Result<ModelTurn, EngineError> {
+        for attempt in 1..=MODEL_TURN_RECOVERY_ATTEMPTS {
+            match self
+                .stream_model_turn(
+                    task_id,
+                    turn_index,
+                    settings,
+                    api_key,
+                    messages,
+                    definitions,
+                )
+                .await
+            {
+                Ok(turn) => return Ok(turn),
+                Err(error)
+                    if error.is_transient_attempt() && attempt < MODEL_TURN_RECOVERY_ATTEMPTS =>
+                {
+                    let detail = format!("{}/{}: {}", attempt, MODEL_TURN_RECOVERY_ATTEMPTS, error);
+                    self.store
+                        .append_event(
+                            task_id,
+                            RuntimeEventKind::Warning,
+                            RuntimeEventState::Completed,
+                            "Runtime",
+                            localized(
+                                &settings.locale,
+                                "模型回合中断，正在恢复",
+                                "Model turn interrupted; recovering",
+                            ),
+                            detail,
+                        )
+                        .await?;
+                    self.store
+                        .set_assistant_placeholder_if_empty(
+                            task_id,
+                            localized(&settings.locale, "思考中…", "Thinking…").into(),
+                        )
+                        .await?;
+                    tokio::time::sleep(Duration::from_millis(300 * attempt as u64)).await;
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        unreachable!("model turn recovery loop always returns")
+    }
+
     async fn stream_model_turn(
         &self,
         task_id: Uuid,
@@ -1237,10 +1493,11 @@ impl RuntimeKernel {
                     self.store.append_event_detail_live(event_id, &text).await;
                 }
                 ModelDelta::Text(text) => {
+                    if text.is_empty() {
+                        continue;
+                    }
                     if !visible_started {
-                        self.store
-                            .set_assistant_text(task_id, String::new(), MessageState::Thinking)
-                            .await?;
+                        self.store.begin_assistant_visible_turn(task_id).await?;
                         visible_started = true;
                     }
                     self.store
@@ -1295,10 +1552,9 @@ impl RuntimeKernel {
             .await?;
         if !turn.tool_calls.is_empty() {
             self.store
-                .set_assistant_text(
+                .set_assistant_placeholder_if_empty(
                     task_id,
                     localized(&settings.locale, "执行中…", "Working…").into(),
-                    MessageState::Thinking,
                 )
                 .await?;
         }
@@ -1740,12 +1996,12 @@ impl RuntimeKernel {
             Err(error) => {
                 let detail = error.to_string();
                 self.store
-                    .fail(
+                    .cancel_attempt(
                         child_id,
                         localized(
                             &settings.locale,
-                            "子任务未能完成，主线程可根据错误调整方案。",
-                            "The child task could not complete; the main session can adapt to the error.",
+                            "子任务本次尝试中断，主线程将调整方案后继续。",
+                            "This child-task attempt was interrupted; the main session will adapt and continue.",
                         )
                         .into(),
                         detail.clone(),
@@ -1757,11 +2013,22 @@ impl RuntimeKernel {
                         RuntimeEventKind::Result,
                         RuntimeEventState::Failed,
                         participant,
-                        localized(&settings.locale, "子任务失败", "Child task failed"),
+                        localized(
+                            &settings.locale,
+                            "子任务尝试中断",
+                            "Child attempt interrupted",
+                        ),
                         detail.clone(),
                     )
                     .await?;
-                Ok(json!({"ok":false,"child_task_id":child_id,"error":detail}).to_string())
+                Ok(json!({
+                    "ok":false,
+                    "recoverable":true,
+                    "attempt_status":"interrupted",
+                    "child_task_id":child_id,
+                    "error":detail
+                })
+                .to_string())
             }
         }
     }
@@ -1907,55 +2174,79 @@ impl RuntimeKernel {
                 &artifacts
             }
         );
-        let event = self
-            .store
-            .append_event(
-                checker_id,
-                RuntimeEventKind::Model,
-                RuntimeEventState::Running,
-                settings.model.clone(),
-                localized(&settings.locale, "独立验收", "Independent verification"),
-                String::new(),
-            )
-            .await?;
-        let result = match self
-            .client
-            .complete(settings, api_key, &system, &user, 2_000)
-            .await
-            .map_err(EngineError::from)
-            .and_then(|raw| decode_json::<VerificationResult>(&raw))
-        {
-            Ok(result) => result,
-            Err(error) => {
-                self.store
-                    .finish_event(event.id, RuntimeEventState::Failed, Some(error.to_string()))
-                    .await?;
-                self.store
-                    .fail(
-                        checker_id,
-                        localized(
-                            &settings.locale,
-                            "独立验收未能完成。",
-                            "Independent verification could not complete.",
+        let mut attempt = 0;
+        let result = loop {
+            attempt += 1;
+            let event = self
+                .store
+                .append_event(
+                    checker_id,
+                    RuntimeEventKind::Model,
+                    RuntimeEventState::Running,
+                    settings.model.clone(),
+                    localized(&settings.locale, "独立验收", "Independent verification"),
+                    String::new(),
+                )
+                .await?;
+            match self
+                .client
+                .complete(settings, api_key, &system, &user, 2_000)
+                .await
+                .map_err(EngineError::from)
+                .and_then(|raw| decode_json::<VerificationResult>(&raw))
+            {
+                Ok(result) => {
+                    self.store
+                        .finish_event(
+                            event.id,
+                            RuntimeEventState::Completed,
+                            Some(format!(
+                                "{}\n{}",
+                                result.summary,
+                                result.findings.join("\n")
+                            )),
                         )
-                        .into(),
-                        error.to_string(),
-                    )
-                    .await?;
-                return Err(error);
+                        .await?;
+                    break result;
+                }
+                Err(error) => {
+                    self.store
+                        .finish_event(event.id, RuntimeEventState::Failed, Some(error.to_string()))
+                        .await?;
+                    if error.is_transient_attempt() && attempt < CHECKER_RECOVERY_ATTEMPTS {
+                        self.store
+                            .append_event(
+                                checker_id,
+                                RuntimeEventKind::Warning,
+                                RuntimeEventState::Completed,
+                                "Runtime",
+                                localized(
+                                    &settings.locale,
+                                    "验收回合中断，正在恢复",
+                                    "Verification turn interrupted; recovering",
+                                ),
+                                format!("{attempt}/{CHECKER_RECOVERY_ATTEMPTS}: {error}"),
+                            )
+                            .await?;
+                        tokio::time::sleep(Duration::from_millis(300 * attempt as u64)).await;
+                        continue;
+                    }
+                    self.store
+                        .cancel_attempt(
+                            checker_id,
+                            localized(
+                                &settings.locale,
+                                "独立验收本次尝试中断，主目标已保留。",
+                                "This independent verification attempt was interrupted; the parent goal was preserved.",
+                            )
+                            .into(),
+                            error.to_string(),
+                        )
+                        .await?;
+                    return Err(error);
+                }
             }
         };
-        self.store
-            .finish_event(
-                event.id,
-                RuntimeEventState::Completed,
-                Some(format!(
-                    "{}\n{}",
-                    result.summary,
-                    result.findings.join("\n")
-                )),
-            )
-            .await?;
         self.store
             .complete(checker_id, result.summary.clone(), Vec::new())
             .await?;
@@ -3097,31 +3388,54 @@ fn ensure_key(settings: &RuntimeSettings, api_key: Option<&str>) -> Result<(), E
     Ok(())
 }
 
+/// Only failures that cannot make progress without changing user-owned channel configuration
+/// should interrupt the autonomous recovery loop. Quota, rate limits, network failures, server
+/// errors, malformed model replies, and tool failures remain runtime attempts and are retried with
+/// the exact persisted Loop transcript.
+fn failure_requires_user_action(error: &EngineError) -> bool {
+    matches!(
+        error,
+        EngineError::MissingApiKey(_) | EngineError::UnsupportedPlatform(_)
+    ) || matches!(
+        error.failure_kind(),
+        RuntimeFailureKind::Authentication | RuntimeFailureKind::InvalidRequest
+    )
+}
+
+fn root_recovery_delay(attempt: u32) -> Duration {
+    let shift = attempt.saturating_sub(1).min(5);
+    let seconds = 1_u64
+        .checked_shl(shift)
+        .unwrap_or(MAX_ROOT_RECOVERY_DELAY_SECONDS)
+        .min(MAX_ROOT_RECOVERY_DELAY_SECONDS);
+    Duration::from_secs(seconds)
+}
+
 fn localized_failure(locale: AppLocale, error: &EngineError) -> String {
     match (locale, error.failure_kind()) {
         (AppLocale::ZhCn, RuntimeFailureKind::Authentication) => {
-            "模型通道认证失败。请重新填写或更新 API Token；任务和执行记录已保留。".into()
+            "模型通道认证失败。目标、上下文和产出物已保留；请更新 API Token 后从原处继续。".into()
         }
         (AppLocale::En, RuntimeFailureKind::Authentication) => {
-            "Model authentication failed. Re-enter or update the API token; the task and execution trace were preserved.".into()
+            "Model authentication failed. The goal, context, and artifacts were preserved; update the API token to resume from the same point.".into()
         }
         (AppLocale::ZhCn, RuntimeFailureKind::Quota) => {
-            "模型服务额度不可用。请补充额度或切换可用通道；任务和执行记录已保留。".into()
+            "模型服务额度不可用。目标、上下文和产出物已保留；请补充额度或切换通道后继续。".into()
         }
         (AppLocale::En, RuntimeFailureKind::Quota) => {
-            "The model service has no available quota. Add credit or switch to an available channel; the task and execution trace were preserved.".into()
+            "The model service has no available quota. The goal, context, and artifacts were preserved; add credit or switch channels to continue.".into()
         }
         (AppLocale::ZhCn, RuntimeFailureKind::RateLimited) => {
-            "模型服务当前限流，本轮已停止空转。稍后重试即可，执行记录已保留。".into()
+            "模型服务持续限流，自动重试尚未恢复。目标已保留，稍后可从原处继续。".into()
         }
         (AppLocale::En, RuntimeFailureKind::RateLimited) => {
-            "The model service is rate-limited, so this run stopped instead of spinning. Retry later; the execution trace was preserved.".into()
+            "The model service remained rate-limited after automatic retries. The goal was preserved and can resume from the same point later.".into()
         }
         (AppLocale::ZhCn, RuntimeFailureKind::Network | RuntimeFailureKind::Timeout) => {
-            "模型通道网络不可达或响应超时。请检查网络后重试，任务和执行记录已保留。".into()
+            "模型通道在自动重试后仍不可达或超时。目标已保留，请检查网络后继续。".into()
         }
         (AppLocale::En, RuntimeFailureKind::Network | RuntimeFailureKind::Timeout) => {
-            "The model channel is unreachable or timed out. Check the network and retry; the task and execution trace were preserved.".into()
+            "The model channel remained unreachable or timed out after automatic retries. The goal was preserved; check the network and continue.".into()
         }
         (AppLocale::ZhCn, RuntimeFailureKind::InvalidRequest) => {
             "模型服务拒绝了当前请求。请检查接口、模型名或兼容协议；执行记录已保留。".into()
@@ -3130,22 +3444,22 @@ fn localized_failure(locale: AppLocale, error: &EngineError) -> String {
             "The model service rejected the request. Check the endpoint, model name, or compatibility protocol; the execution trace was preserved.".into()
         }
         (AppLocale::ZhCn, RuntimeFailureKind::InvalidResponse) => {
-            "模型返回内容不符合当前执行协议。本轮没有降级猜测，原始执行记录已保留。".into()
+            "模型多次返回了不符合执行协议的内容。目标和原始记录已保留，可更换模型或继续重试。".into()
         }
         (AppLocale::En, RuntimeFailureKind::InvalidResponse) => {
-            "The model response did not match the execution protocol. No guessed fallback was used; the original trace was preserved.".into()
+            "The model repeatedly returned content outside the execution protocol. The goal and original trace were preserved; switch models or retry.".into()
         }
         (AppLocale::ZhCn, RuntimeFailureKind::Server) => {
-            "模型服务端暂时异常。稍后重试即可，任务和执行记录已保留。".into()
+            "模型服务端在自动重试后仍不可用。目标已保留，稍后可继续。".into()
         }
         (AppLocale::En, RuntimeFailureKind::Server) => {
-            "The model service is temporarily unavailable. Retry later; the task and execution trace were preserved.".into()
+            "The model service remained unavailable after automatic retries. The goal was preserved and can continue later.".into()
         }
         (AppLocale::ZhCn, RuntimeFailureKind::Unknown) => {
-            "任务执行遇到未分类异常，已停止并保留完整执行记录供诊断。".into()
+            "执行遇到未分类异常。目标未被判定失败，完整上下文已保留并等待恢复。".into()
         }
         (AppLocale::En, RuntimeFailureKind::Unknown) => {
-            "The task encountered an unclassified runtime failure and stopped with its full execution trace preserved for diagnosis.".into()
+            "Execution encountered an unclassified runtime error. The goal was not marked failed; its full context was preserved for recovery.".into()
         }
     }
 }
@@ -3986,6 +4300,57 @@ mod tests {
             .filter(|event| event.kind == RuntimeEventKind::Model)
             .all(|event| event.state == RuntimeEventState::Completed));
         assert_eq!(requests.lock().unwrap().len(), 2);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn recoverable_root_does_not_fail_or_block_the_next_task() {
+        let (endpoint, requests, server) = mock_provider(5, |_request, index| match index {
+            0..=2 => openai_response(
+                Some("This is not a valid GoalSpec.".into()),
+                None,
+                Value::Null,
+            ),
+            3 => goal_response("Answer the second request", "question", "chat_reply"),
+            _ => openai_response(
+                Some("The second task completed while the first awaits recovery.".into()),
+                Some("Keep runnable roots fair."),
+                Value::Null,
+            ),
+        });
+        let (_directory, store, kernel) = test_kernel(endpoint).await;
+        let interrupted = kernel
+            .submit(
+                "This task receives an invalid model response.".into(),
+                Vec::new(),
+            )
+            .await
+            .unwrap();
+        let completed = kernel
+            .submit("Complete this independent second task.".into(), Vec::new())
+            .await
+            .unwrap();
+
+        let report = tokio::time::timeout(
+            Duration::from_secs(5),
+            kernel.run_queue_report(Some("test-token".into())),
+        )
+        .await
+        .expect("one fair queue pass must return instead of retrying one root forever")
+        .unwrap();
+        server.join().unwrap();
+
+        let interrupted_task = store.task(interrupted.thread_id).await.unwrap();
+        let completed_task = store.task(completed.thread_id).await.unwrap();
+        assert_eq!(interrupted_task.status, TaskStatus::NeedsRecovery);
+        assert!(!interrupted_task.status.is_terminal());
+        assert_eq!(completed_task.status, TaskStatus::Completed);
+        assert_eq!(report.completed, 1);
+        assert_eq!(report.failures.len(), 1);
+        assert_eq!(report.failures[0].thread_id, interrupted.thread_id);
+        assert_eq!(report.failures[0].kind, RuntimeFailureKind::InvalidResponse);
+        assert_ne!(interrupted_task.status, TaskStatus::Failed);
+        assert_ne!(completed_task.status, TaskStatus::Failed);
+        assert_eq!(requests.lock().unwrap().len(), 5);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

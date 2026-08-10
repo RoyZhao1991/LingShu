@@ -134,8 +134,28 @@ async fn process_request(
                 });
                 *api_key.write().await = key;
                 match kernel.store().update_settings(params.settings).await {
-                    Ok(()) => serde_json::to_value(kernel.snapshot(configured).await)
-                        .map_err(|error| error.to_string()),
+                    Ok(()) => {
+                        let snapshot = serde_json::to_value(kernel.snapshot(configured).await)
+                            .map_err(|error| error.to_string());
+                        if configured {
+                            let worker = kernel.clone();
+                            let worker_key = api_key.read().await.clone();
+                            tokio::spawn(async move {
+                                if let Err(error) = worker.run_queue(worker_key).await {
+                                    emit(
+                                        callback,
+                                        context,
+                                        json!({
+                                            "jsonrpc":"2.0",
+                                            "method":"kernel/runtime_error",
+                                            "params":{"message":error.to_string()}
+                                        }),
+                                    );
+                                }
+                            });
+                        }
+                        snapshot
+                    }
                     Err(error) => Err(error.to_string()),
                 }
             }
@@ -185,10 +205,25 @@ async fn process_request(
                 let worker = kernel.clone();
                 let worker_key = api_key.read().await.clone();
                 tokio::spawn(async move {
+                    let recovery_key = worker_key.clone();
                     if let Err(error) = worker
                         .resume(params.thread_id, params.answer, worker_key)
                         .await
                     {
+                        emit(
+                            callback,
+                            context,
+                            json!({
+                                "jsonrpc":"2.0",
+                                "method":"kernel/runtime_error",
+                                "params":{
+                                    "threadId":params.thread_id,
+                                    "message":error.to_string()
+                                }
+                            }),
+                        );
+                    }
+                    if let Err(error) = worker.run_queue(recovery_key).await {
                         emit(
                             callback,
                             context,

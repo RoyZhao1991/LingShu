@@ -127,6 +127,20 @@ async fn save_and_validate_settings(
         .update_settings(settings.clone())
         .await
         .map_err(|error| error.to_string())?;
+    let worker = state.kernel.clone();
+    let worker_key = load_api_key(&settings.provider_id)?;
+    let provider_id = settings.provider_id.clone();
+    tauri::async_runtime::spawn(async move {
+        if let Ok(report) = worker.supervise_queue_report(worker_key).await {
+            if report
+                .failures
+                .iter()
+                .any(|failure| failure.kind == RuntimeFailureKind::Authentication)
+            {
+                let _ = delete_api_key(&provider_id);
+            }
+        }
+    });
     Ok(state
         .kernel
         .snapshot(is_provider_configured(&settings).await)
@@ -174,7 +188,7 @@ async fn submit_message(
     let kernel = state.kernel.clone();
     let provider_id = settings.provider_id;
     tauri::async_runtime::spawn(async move {
-        if let Ok(report) = kernel.run_queue_report(key).await {
+        if let Ok(report) = kernel.supervise_queue_report(key).await {
             if report
                 .failures
                 .iter()
@@ -221,13 +235,20 @@ async fn resume_task(
     let kernel = state.kernel.clone();
     let provider_id = settings.provider_id;
     tauri::async_runtime::spawn(async move {
+        let recovery_key = key.clone();
         if let Err(error) = kernel.resume(id, answer, key).await {
-            let locale = kernel.store().settings().await.locale;
             if error.failure_kind() == RuntimeFailureKind::Authentication {
                 let _ = delete_api_key(&provider_id);
             }
-            let message = error.user_message(locale);
-            let _ = kernel.store().fail(id, message, error.to_string()).await;
+        }
+        if let Ok(report) = kernel.supervise_queue_report(recovery_key).await {
+            if report
+                .failures
+                .iter()
+                .any(|failure| failure.kind == RuntimeFailureKind::Authentication)
+            {
+                let _ = delete_api_key(&provider_id);
+            }
         }
     });
     Ok(true)
@@ -329,6 +350,25 @@ pub fn run() {
             let store = RuntimeStore::open(runtime_data_dir())?;
             let resource_root = app.path().resource_dir().ok();
             let kernel = RuntimeKernel::new_with_resources(store, "windows", resource_root)?;
+            let recovery_kernel = kernel.clone();
+            tauri::async_runtime::spawn(async move {
+                let settings = recovery_kernel.store().settings().await;
+                if !is_provider_configured(&settings).await {
+                    return;
+                }
+                let Ok(key) = load_api_key(&settings.provider_id) else {
+                    return;
+                };
+                if let Ok(report) = recovery_kernel.supervise_queue_report(key).await {
+                    if report
+                        .failures
+                        .iter()
+                        .any(|failure| failure.kind == RuntimeFailureKind::Authentication)
+                    {
+                        let _ = delete_api_key(&settings.provider_id);
+                    }
+                }
+            });
             app.manage(AppState { kernel });
             Ok(())
         })

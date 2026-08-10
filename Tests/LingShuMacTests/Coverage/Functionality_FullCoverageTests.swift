@@ -38,20 +38,23 @@ final class Functionality_FullCoverageTests: XCTestCase {
         for t in dumpFalse { XCTAssertFalse(LingShuState.looksLikeInternalDump(t), "不应判dump: \(t)"); n += 1 }
 
         // —— C. 状态终态/可续语义(续接恢复)(20 case)——
-        let terminal: Set<St> = [.completed, .answered, .verified, .needsRevision, .failed, .partial]
-        let resumable: Set<St> = [.blocked, .partial, .waitingForUser, .suspended, .acquiringCapability]
+        let terminal: Set<St> = [.completed, .answered, .verified]
+        let resumable: Set<St> = [
+            .blocked, .partial, .needsRevision, .waitingForUser, .suspended,
+            .acquiringCapability, .failed
+        ]
         let allStatus: [St] = [.queued, .running, .answered, .dispatched, .completed, .needsRevision,
                                .blocked, .suspended, .analyzing, .acquiringCapability, .waitingForUser,
                                .ready, .partial, .verified, .failed]
         for s in allStatus {
             XCTAssertEqual(s.isTerminal, terminal.contains(s), "isTerminal(\(s.rawValue))"); n += 1
         }
-        for s in [St.blocked, .partial, .waitingForUser, .suspended, .acquiringCapability] {
+        for s in [St.blocked, .partial, .needsRevision, .waitingForUser, .suspended, .acquiringCapability, .failed] {
             XCTAssertTrue(s.isResumableUnfinished, "可续: \(s.rawValue)"); n += 1
         }
         XCTAssertFalse(St.completed.isResumableUnfinished, "已完成不可续"); n += 1
         XCTAssertFalse(St.running.isResumableUnfinished, "执行中不算可续未竟"); n += 1
-        XCTAssertTrue(St.partial.isTerminal && St.partial.isResumableUnfinished, "部分完成既终态又可续"); n += 1
+        XCTAssertTrue(!St.partial.isTerminal && St.partial.isResumableUnfinished, "部分完成是可续检查点,不能终结根目标"); n += 1
         _ = resumable
 
         // —— D. 续接优先恢复目标 pickResumeTarget(8 case)——

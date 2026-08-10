@@ -42,10 +42,12 @@ extension LingShuState {
         case .queued: .queued
         case .understanding: .analyzing
         case .running: .running
+        case .needsRecovery: .suspended
         case .needsUserAction: .waitingForUser
         case .completed:
             goal?.outputMode == .chatReply && !hasArtifacts ? .answered : .completed
-        case .failed: .failed
+        // Legacy persisted value only. A runtime interruption keeps the goal recoverable.
+        case .failed: .suspended
         // A child is cancelled when its parent reaches a terminal state first. Surface that as a
         // neutral suspended state instead of turning a successfully delivered parent red.
         case .cancelled: .suspended
@@ -54,19 +56,17 @@ extension LingShuState {
 
     nonisolated static func sharedKernelPlanStatus(_ status: LingShuKernelTaskStatus) -> LingShuPlanStep.Status {
         switch status {
-        case .queued, .needsUserAction: .pending
-        case .understanding, .running: .inProgress
+        case .queued, .needsUserAction, .failed, .cancelled: .pending
+        case .understanding, .running, .needsRecovery: .inProgress
         case .completed: .completed
-        case .failed, .cancelled: .failed
         }
     }
 
     nonisolated static func sharedKernelRoleStatus(_ status: LingShuKernelTaskStatus) -> LingShuTaskRoleSlotStatus {
         switch status {
-        case .queued, .needsUserAction: .pending
-        case .understanding, .running: .running
+        case .queued, .needsUserAction, .failed, .cancelled: .pending
+        case .understanding, .running, .needsRecovery: .running
         case .completed: .completed
-        case .failed, .cancelled: .failed
         }
     }
 
@@ -110,9 +110,10 @@ extension LingShuState {
         case .queued: english ? "Queued" : "排队中"
         case .understanding: english ? "Understanding" : "理解中"
         case .running: english ? "Running" : "执行中"
+        case .needsRecovery: english ? "Recovering" : "自动恢复中"
         case .needsUserAction: english ? "Waiting for user" : "等待用户"
         case .completed: english ? "Completed" : "已完成"
-        case .failed: english ? "Failed" : "失败"
+        case .failed: english ? "Waiting to resume" : "待恢复"
         case .cancelled: english ? "Cancelled" : "已取消"
         }
     }

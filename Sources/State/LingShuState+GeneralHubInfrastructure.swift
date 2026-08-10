@@ -66,7 +66,7 @@ extension LingShuState {
         case .ready: return .planning
         case .blocked, .waitingForUser, .suspended, .needsRevision, .partial: return .waiting
         case .completed, .answered, .verified: return .completed
-        case .failed: return .failed
+        case .failed: return .waiting
         }
     }
 

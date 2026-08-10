@@ -152,6 +152,7 @@ enum LingShuKernelMessageRole: String, Codable, Sendable {
 enum LingShuKernelMessageState: String, Codable, Sendable {
     case complete
     case thinking
+    case needsRecovery = "needs_recovery"
     case failed
     case needsUserAction = "needs_user_action"
 }
@@ -227,13 +228,14 @@ enum LingShuKernelTaskStatus: String, Codable, Sendable {
     case queued
     case understanding
     case running
+    case needsRecovery = "needs_recovery"
     case needsUserAction = "needs_user_action"
     case completed
     case failed
     case cancelled
 
     var isTerminal: Bool {
-        self == .completed || self == .failed || self == .cancelled
+        self == .completed || self == .cancelled
     }
 }
 

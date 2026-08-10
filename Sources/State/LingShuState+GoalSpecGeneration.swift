@@ -239,7 +239,7 @@ extension LingShuState {
         )
     }
 
-    /// GoalSpec 重试耗尽的统一收口:显式告知、记录失败,但绝不调度任何执行器。
+    /// GoalSpec 重试耗尽的统一恢复点:显式告知并保留原始请求,但绝不以缺损目标调度执行器。
     func markGoalSpecPreflightFailure(
         request: String,
         recordID: String? = nil,
@@ -265,10 +265,11 @@ extension LingShuState {
                 kind: .warning,
                 text: "核心目标重新生成耗尽,执行管线已阻断。原始请求:\(String(request.prefix(240)))"
             )
-            finishTaskRecord(recordID, status: .failed, summary: "GoalSpec 生成失败,未启动任务执行。")
+            finishTaskRecord(recordID, status: .waitingForUser, summary: "GoalSpec 暂未生成完整,原始请求已保留,等待重试。")
+            blockedDispatchedRecordID = recordID
             dispatchedTaskBubbles[recordID] = nil
         }
-        missionStatus = "核心目标生成失败,本轮已停止。"
+        missionStatus = "核心目标暂未生成完整,请求已保留等待重试。"
         appendTrace(
             kind: .system,
             actor: "目标认知",

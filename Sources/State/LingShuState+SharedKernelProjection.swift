@@ -292,20 +292,28 @@ extension LingShuState {
         let summaryVisible = LingShuVisibleModelText.clean(task.summary)
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .nonEmpty
+        let effectiveStatus: LingShuKernelTaskStatus = task.status == .failed ? .needsRecovery : task.status
         let visible: String?
-        switch task.status {
+        switch effectiveStatus {
         case .completed:
             visible = assistantVisible ?? summaryVisible ?? progress
-        case .failed, .cancelled:
+        case .cancelled:
             visible = summaryVisible ?? assistantVisible ?? progress
-        case .queued, .understanding, .running, .needsUserAction:
-            visible = progress ?? assistantVisible ?? summaryVisible
+        case .queued, .understanding, .running, .needsRecovery, .needsUserAction:
+            // The assistant message is the cumulative Loop transcript. Runtime events remain in
+            // the execution record and are only a fallback before any visible model text exists.
+            visible = assistantVisible ?? progress ?? summaryVisible
+        case .failed:
+            visible = summaryVisible ?? assistantVisible ?? progress
         }
         return LingShuSharedKernelBubbleProjection(
             taskID: taskID,
             visibleText: visible,
-            isLoading: task.status == .queued || task.status == .understanding || task.status == .running,
-            status: task.status,
+            isLoading: effectiveStatus == .queued
+                || effectiveStatus == .understanding
+                || effectiveStatus == .running
+                || effectiveStatus == .needsRecovery,
+            status: effectiveStatus,
             pendingQuestion: task.pendingQuestion
         )
     }
@@ -420,10 +428,27 @@ extension LingShuState {
         activeTaskThreadRecordIDs.subtract(sharedKernelKnownThreadIDs)
     }
 
+    /// 宿主到共享内核的快照通道暂时失败时只更新可见进度，不结束根任务、
+    /// 不移除活跃线程。轮询会按退避继续，恢复后仍投影到同一个气泡。
+    func markSharedKernelBubblesRetrying(_ message: String) {
+        for recordID in sharedKernelActiveThreadIDs {
+            guard let bubbleID = sharedKernelBubbleIDs[recordID],
+                  let index = chatMessages.firstIndex(where: { $0.id == bubbleID }) else { continue }
+            chatMessages[index].text = loc(
+                "运行通道暂时中断，正在保留断点重试：\(message)",
+                "The runtime channel was interrupted. Retrying from the saved checkpoint: \(message)"
+            )
+            chatMessages[index].isLoading = true
+        }
+    }
+
     func failSharedKernelBubble(recordID: String, message: String) {
         if let bubbleID = sharedKernelBubbleIDs[recordID],
            let index = chatMessages.firstIndex(where: { $0.id == bubbleID }) {
-            chatMessages[index].text = loc("共享内核中断：\(message)", "Shared runtime stopped: \(message)")
+            chatMessages[index].text = loc(
+                "共享内核需要恢复，目标和上下文已保留：\(message)",
+                "The shared runtime needs recovery. The goal and context are preserved: \(message)"
+            )
             chatMessages[index].isLoading = false
         }
         sharedKernelActiveThreadIDs.remove(recordID)

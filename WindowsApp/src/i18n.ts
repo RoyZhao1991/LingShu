@@ -4,7 +4,7 @@ const copy = {
   zh_cn: {
     appName: "灵枢", runtimeName: "灵枢 Runtime Core", tagline: "NOUS · GENERAL AGENT HUB",
     chat: "对话", threads: "线程", status: "状态", plugins: "插件", settings: "配置",
-    standby: "待机中", running: "执行中", queued: "排队中", failed: "未完成", completed: "已完成", cancelled: "已停止",
+    standby: "待机中", running: "执行中", recovering: "自动恢复中", queued: "排队中", failed: "自动恢复中", completed: "已完成", cancelled: "已停止",
     placeholder: "有什么需要我做的？", send: "发送", attach: "添加附件", stop: "停止",
     dropAttachments: "松开即可添加附件", dropAttachmentHint: "文件会绑定到输入框，不会自动发送",
     noMessages: "配置主脑后即可开始对话或交付文件。", noTasks: "还没有任务线程。",
@@ -37,7 +37,7 @@ const copy = {
   en: {
     appName: "Nous", runtimeName: "Nous Runtime Core", tagline: "NOUS · GENERAL AGENT HUB",
     chat: "Chat", threads: "Threads", status: "Status", plugins: "Plugins", settings: "Settings",
-    standby: "Standby", running: "Running", queued: "Queued", failed: "Failed", completed: "Completed", cancelled: "Cancelled",
+    standby: "Standby", running: "Running", recovering: "Recovering", queued: "Queued", failed: "Recovering", completed: "Completed", cancelled: "Cancelled",
     placeholder: "What can I do for you?", send: "Send", attach: "Add attachments", stop: "Stop",
     dropAttachments: "Drop to attach", dropAttachmentHint: "Files will be added to the composer and will not be sent automatically",
     noMessages: "Connect a brain channel to chat or deliver files.", noTasks: "No task threads yet.",

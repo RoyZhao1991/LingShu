@@ -62,8 +62,31 @@ final class FrontendProjectionPerformanceTests: XCTestCase {
         )
 
         XCTAssertEqual(changed.changedTasks.count, 1)
-        XCTAssertEqual(changed.changedTasks[0].bubble?.visibleText, "读取附件")
+        XCTAssertEqual(
+            changed.changedTasks[0].bubble?.visibleText,
+            "已经完成提纲，正在生成文档。",
+            "已有 Loop 正文时，最新工具事件不得覆盖累计输出"
+        )
         XCTAssertNotEqual(changed.fingerprints, initial.fingerprints)
+    }
+
+    func testRuntimeEventIsFallbackBeforeLoopProducesVisibleText() {
+        let taskID = UUID()
+        let assistantID = UUID()
+        let snapshot = makeSnapshot(
+            taskID: taskID,
+            assistantID: assistantID,
+            assistantText: ""
+        )
+
+        let projection = LingShuState.prepareSharedKernelProjection(
+            snapshot,
+            existingRecords: [:],
+            previousFingerprints: [:],
+            english: false
+        )
+
+        XCTAssertEqual(projection.changedTasks[0].bubble?.visibleText, "读取附件")
     }
 
     func testPathPresentationDetectsAndHidesPathInSinglePass() {

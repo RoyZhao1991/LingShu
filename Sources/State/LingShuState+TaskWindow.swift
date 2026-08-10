@@ -243,7 +243,7 @@ extension LingShuState {
         markTaskRecordManuallyStopped(recordID)
         appendTaskRecordMessage(recordID, actor: "用户", role: "停止", kind: .warning, text: "用户已停止该任务。")
         if blockedDispatchedRecordID == recordID { blockedDispatchedRecordID = nil }
-        finishTaskRecord(recordID, status: .failed, summary: "用户已停止该任务。")
+        finishTaskRecord(recordID, status: .suspended, summary: "用户已停止该任务，断点已保留。")
         manuallyStoppedTaskRecords.remove(recordID)
         promoteQueuedDispatchIfPossible()
     }

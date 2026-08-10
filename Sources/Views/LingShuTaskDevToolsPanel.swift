@@ -215,17 +215,18 @@ struct TaskDevToolsPanel: View {
     // MARK: - 目标
 
     private var goalSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        let status = record.status.rootLifecycleStatus
+        return VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
                 sectionHeader(state.loc("目标", "Goal"), systemImage: "target", tint: .lingHolo)
                 Spacer(minLength: 0)
                 Text(statusIsComplete
                      ? state.loc("已完成", "Completed")
-                     : state.loc(record.status.rawValue, record.status.englishName))
+                     : state.loc(status.rawValue, status.englishName))
                     .font(.system(size: 10, weight: .bold))
-                    .foregroundStyle(statusIsComplete ? .green.opacity(0.92) : record.status.color)
+                    .foregroundStyle(statusIsComplete ? .green.opacity(0.92) : status.color)
                     .padding(.horizontal, 7).padding(.vertical, 2)
-                    .background((statusIsComplete ? Color.green : record.status.color).opacity(0.16), in: Capsule())
+                    .background((statusIsComplete ? Color.green : status.color).opacity(0.16), in: Capsule())
             }
             // 目标正文:优先 GoalSpec 的 objective(模型重述的真实目标),否则 record.goal。**完整显示、可选中**,不再截断到 6 行。
             Text(goalObjectiveText)

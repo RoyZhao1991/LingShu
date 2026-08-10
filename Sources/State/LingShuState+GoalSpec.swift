@@ -357,9 +357,9 @@ extension LingShuState {
         ].joined(separator: "; ")
     }
 
-    /// P1·**记忆消费(结构化经验沉淀)**:目标到终态时,把「目标→成功标准→结果→产出/失败原因」蒸成一条
+    /// P1·**记忆消费(结构化经验沉淀)**:目标真实完成时,把「目标→成功标准→结果→产出」蒸成一条
     /// **可检索经验**入知识图谱(陈述句、过去式,经纪律闸 + 园丁去重)。下次同类目标 `recall_memory`/seed 即接续历史经验。
-    /// 只沉淀终态(完成/直答/未达标),blocked/暂停不沉淀(未定论)。无 GoalSpec(开关关或非新目标)则空跑。
+    /// 只沉淀成功终态(完成/直答/核验通过);待修订、部分完成、恢复中和暂停都不沉淀。
     func rememberGoalExperienceIfNeeded(recordID: String, status: LingShuTaskExecutionStatus) {
         guard let rec = taskExecutionRecords.first(where: { $0.id == recordID }), let spec = rec.goalSpec else { return }
         guard let outcome = Self.experienceOutcome(for: status) else { return }   // 排队/执行/就绪/待用户/补齐中/暂停/阻断:非终态或无定论,不沉淀
@@ -375,7 +375,6 @@ extension LingShuState {
                 body += "(已补齐的能力已入图谱,下次同类目标可直接复用。)"
             }
         }
-        if outcome == "未达标", !rec.summary.isEmpty { body += "未达标小结:\(rec.summary.prefix(120))。" }
         _ = knowledgeGraph.remember(.init(kind: .fact, title: String(spec.objective.prefix(60)),
                                           body: body, source: .inference, confidence: 0.5))
         appendTrace(kind: .result, actor: "经验沉淀", title: "目标经验入图谱", detail: String(body.prefix(80)))
@@ -387,7 +386,7 @@ extension LingShuState {
         if Self.shouldPersistExperienceRule(outcome: outcome) {
             _ = memoryService.rememberExperienceRule(domain: spec.kind.rawValue, rule: lesson, source: recordID)
         }
-        // P6 自动触发:非成功终态落库即挖一次反复弱点(纯,无模型调用),失败成簇即自动提待批改进提案(去重、不自动采纳)。
+        // P6 自动触发保留在独立诊断链路；完成经验库不混入尚待恢复的检查点。
         autoMineSelfImprovementsOnFailure(outcome: outcome)
     }
 }

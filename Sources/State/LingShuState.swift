@@ -1214,7 +1214,7 @@ final class LingShuState: ObservableObject {
             chatMessages.append(.init(speaker: "灵枢", text: response, isUser: false))
         }
         appendTaskRecordMessage(currentRecordID, actor: "用户", role: "停止", kind: .warning, text: response)
-        finishTaskRecord(currentRecordID, status: .failed, summary: "用户已停止本轮调用。")
+        finishTaskRecord(currentRecordID, status: .suspended, summary: "用户已停止本轮调用，断点已保留。")
         if let currentRecordID { manuallyStoppedTaskRecords.remove(currentRecordID) }
 
         logEvent("现在  用户停止了本轮模型调用。")

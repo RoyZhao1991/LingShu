@@ -44,10 +44,8 @@ struct LingShuModelServiceFailure: Equatable, Sendable {
 
     var taskStatus: LingShuTaskExecutionStatus {
         switch kind {
-        case .auth, .quota:
+        case .auth, .quota, .multimodalUnsupported, .requestInvalid, .unknown:
             return .waitingForUser
-        case .multimodalUnsupported, .requestInvalid, .unknown:
-            return .failed
         case .network, .timeout, .rateLimited, .server:
             return .suspended
         }

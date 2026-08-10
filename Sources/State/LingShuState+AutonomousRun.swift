@@ -444,7 +444,8 @@ extension LingShuState {
         case .interrupted(let reason):
             if LingShuModelServiceFailure.isNonRecoverableReason(reason) {
                 let message = LingShuModelServiceFailure.userFacingReason(reason)
-                let status = LingShuModelServiceFailure.decodeReason(reason)?.taskStatus ?? .failed
+                let decodedStatus = LingShuModelServiceFailure.decodeReason(reason)?.taskStatus ?? .waitingForUser
+                let status: LingShuTaskExecutionStatus = decodedStatus == .failed ? .suspended : decodedStatus
                 settleStandingStreamBubble(text: "", recordID: recordID)
                 suspendedAutonomousRecordID = nil
                 updateAutonomousRun(phase: .blocked, statusLine: message)

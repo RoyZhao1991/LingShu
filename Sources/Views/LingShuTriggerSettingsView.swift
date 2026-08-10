@@ -157,12 +157,13 @@ struct LingShuTriggerSettingsView: View {
                     .foregroundStyle(Color.lingFg.opacity(0.32))
             }
             if let latest = records.first {
-                Text(state.loc("最近 \(latest.status.rawValue)", "Latest \(latest.status.englishName)"))
+                let status = latest.status.rootLifecycleStatus
+                Text(state.loc("最近 \(status.rawValue)", "Latest \(status.englishName)"))
                     .font(.system(size: 9.5, weight: .bold))
-                    .foregroundStyle(latest.status.color)
+                    .foregroundStyle(status.color)
                     .padding(.horizontal, 6)
                     .padding(.vertical, 2)
-                    .background(latest.status.color.opacity(0.12), in: Capsule())
+                    .background(status.color.opacity(0.12), in: Capsule())
             }
             Button { expandedTriggerID = expanded ? nil : trigger.id } label: {
                 HStack(spacing: 3) {
@@ -191,12 +192,13 @@ struct LingShuTriggerSettingsView: View {
                         .font(.system(size: 10.5, weight: .medium)).foregroundStyle(Color.lingFg.opacity(0.4))
                 } else {
                     ForEach(records) { rec in
+                        let status = rec.status.rootLifecycleStatus
                         Button { state.openTaskRecord(rec.id) } label: {
                             HStack(spacing: 8) {
-                                Circle().fill(rec.status.color).frame(width: 5, height: 5)
+                                Circle().fill(status.color).frame(width: 5, height: 5)
                                 Text(rec.updatedAt.taskRecordDisplayTime)
                                     .font(.system(size: 10, weight: .medium, design: .monospaced)).foregroundStyle(Color.lingFg.opacity(0.62))
-                                Text(state.language == .english ? rec.status.englishName : rec.status.rawValue).font(.system(size: 10, weight: .bold)).foregroundStyle(rec.status.color)
+                                Text(state.language == .english ? status.englishName : status.rawValue).font(.system(size: 10, weight: .bold)).foregroundStyle(status.color)
                                 Text(state.loc("\(rec.messages.count) 条", "\(rec.messages.count) messages")).font(.system(size: 10)).foregroundStyle(Color.lingFg.opacity(0.4))
                                 Spacer()
                                 Text(state.loc("查看 →", "View →")).font(.system(size: 10, weight: .semibold)).foregroundStyle(Color.lingHolo)

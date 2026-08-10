@@ -105,7 +105,8 @@ struct LingShuTaskPoolView: View {
         isRootTask: Bool,
         childCount: Int
     ) -> some View {
-        Button {
+        let status = record.status.rootLifecycleStatus
+        return Button {
             state.openTaskRecord(record.id)
         } label: {
             HStack(spacing: 12) {
@@ -117,7 +118,7 @@ struct LingShuTaskPoolView: View {
                 }
                 ZStack(alignment: .topTrailing) {
                     Circle()
-                        .fill(statusColor(record.status))
+                        .fill(statusColor(status))
                         .frame(width: 8, height: 8)
                     if state.isTaskThreadUnread(record.id) {
                         Circle()
@@ -146,9 +147,9 @@ struct LingShuTaskPoolView: View {
                         }
                     }
                     HStack(spacing: 9) {
-                        Text(state.language == .english ? record.status.englishName : record.status.rawValue)
+                        Text(state.language == .english ? status.englishName : status.rawValue)
                             .font(.system(size: 10.5, weight: .semibold))
-                            .foregroundStyle(statusColor(record.status))
+                            .foregroundStyle(statusColor(status))
                         Text(record.updatedAt.taskRecordDisplayTime)
                             .font(.system(size: 10.5))
                             .foregroundStyle(Color.lingFg.opacity(0.38))
@@ -193,7 +194,8 @@ struct LingShuTaskPoolView: View {
         case .running, .dispatched, .analyzing, .acquiringCapability, .ready: return Color.lingHoloAlt
         case .queued: return Color.lingFg.opacity(0.4)
         case .needsRevision, .partial: return .orange
-        case .blocked, .failed: return .red
+        case .blocked: return .red
+        case .failed: return .yellow
         case .suspended, .waitingForUser: return .yellow   // 暂停/待用户(可续),区别于红色异常
         }
     }

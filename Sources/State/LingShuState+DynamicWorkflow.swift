@@ -31,7 +31,7 @@ extension LingShuState {
         """
         return LingShuAgentTool(
             name: "update_workflow",
-            description: "当执行中发现原计划缺步骤、依赖顺序不合理或某节点需要重试/跳过时，提交受控的运行图变更。GoalSpec 和总目标不可修改；只能新增节点、替换尚未开始的节点、调整尚未开始节点的依赖、重试失败节点或跳过未运行节点。不要为普通进度更新调用。",
+            description: "当执行中发现原计划缺步骤、依赖顺序不合理或某节点需要恢复/跳过时，提交受控的运行图变更。GoalSpec 和总目标不可修改；只能新增节点、替换尚未开始的节点、调整尚未开始节点的依赖、恢复待恢复节点或跳过未运行节点。不要为普通进度更新调用。",
             parametersJSON: schema
         ) { [weak self] json in
             guard let self else { return "工作流运行时不可用。" }
@@ -73,11 +73,15 @@ extension LingShuState {
             case .retryNode:
                 let id = mutation.nodeID ?? ""
                 guard let node = run.nodes.first(where: { $0.id == id }) else { return "找不到节点「\(id)」。" }
-                guard node.status == .failed || node.status == .skipped else { return "只有失败或已跳过节点可以重试。" }
+                guard node.status == .needsRecovery || node.status == .failed || node.status == .skipped else {
+                    return "只有待恢复或已跳过节点可以重试。"
+                }
             case .skipNode:
                 let id = mutation.nodeID ?? ""
                 guard let node = run.nodes.first(where: { $0.id == id }) else { return "找不到节点「\(id)」。" }
-                guard node.status == .pending || node.status == .failed else { return "运行中、等待用户或已完成节点不能跳过。" }
+                guard node.status == .pending || node.status == .needsRecovery || node.status == .failed else {
+                    return "运行中、等待用户或已完成节点不能跳过。"
+                }
             }
         }
         return nil
@@ -92,6 +96,33 @@ extension LingShuState {
         while !Task.isCancelled {
             if let persisted = workflowRun(id: run.id, recordID: recordID) { run = persisted }
             run.reconcileStatus()
+            if run.status == .needsRecovery {
+                let retryable = run.nodes.filter { node in
+                    node.status == .needsRecovery && node.attempts < 3
+                }
+                guard !retryable.isEmpty else {
+                    persistWorkflowRun(run, recordID: recordID)
+                    return run
+                }
+                for node in retryable {
+                    run.updateNode(node.id, status: .pending)
+                }
+                persistWorkflowRun(run, recordID: recordID)
+                appendTaskRecordMessage(
+                    recordID,
+                    actor: "工作流",
+                    role: "自动恢复",
+                    kind: .router,
+                    text: "已保留原目标与上下文，自动恢复 \(retryable.count) 个节点（最多 3 次后交回主循环重新规划）。"
+                )
+                appendTrace(
+                    kind: .route,
+                    actor: "动态工作流",
+                    title: "节点自动恢复",
+                    detail: "workflow=\(run.id.prefix(18)) nodes=\(retryable.map(\.id).joined(separator: ","))"
+                )
+                continue
+            }
             if run.status != .running { return run }
 
             let capacity = await agentOrchestrator.availableCapacity()
@@ -102,7 +133,7 @@ extension LingShuState {
             let ready = Array(run.readyNodes.prefix(capacity))
             guard !ready.isEmpty else {
                 if run.nodes.isEmpty || !run.nodes.contains(where: { $0.status == .running }) {
-                    run.status = .failed
+                    run.status = .needsRecovery
                     run.updatedAt = Date()
                     persistWorkflowRun(run, recordID: recordID)
                 }
@@ -199,11 +230,20 @@ extension LingShuState {
                 run.updateNode(node.id, status: .completed,
                                output: LingShuStructuredModelOutput.visibleText(from: text), sessionID: execution.sessionID)
             } else {
-                run.updateNode(node.id, status: .failed, failureReason: "节点达到轮次上限仍未完成", sessionID: execution.sessionID)
+                run.updateNode(
+                    node.id,
+                    status: .needsRecovery,
+                    failureReason: "节点达到轮次检查点仍未完成，保留上下文继续恢复",
+                    sessionID: execution.sessionID
+                )
             }
         case .interrupted(let reason):
-            run.updateNode(node.id, status: .failed,
-                           failureReason: LingShuModelServiceFailure.suspendedSummary(for: reason), sessionID: execution.sessionID)
+            run.updateNode(
+                node.id,
+                status: .needsRecovery,
+                failureReason: LingShuModelServiceFailure.suspendedSummary(for: reason),
+                sessionID: execution.sessionID
+            )
         }
     }
 
@@ -282,10 +322,10 @@ extension LingShuState {
             }.joined(separator: "\n\n")
             return "命名角色团队（\(run.nodes.count) 个角色按动态依赖协作完成）：\n\n\(body)"
         }
-        let failed = run.nodes.filter { $0.status == .failed }
-            .map { "\($0.name)：\($0.failureReason ?? "未完成")" }
+        let recovery = run.nodes.filter { $0.status == .needsRecovery || $0.status == .failed }
+            .map { "\($0.name)：\($0.failureReason ?? "等待主循环继续规划")" }
             .joined(separator: "；")
-        return "动态工作流未能完成：\(failed.isEmpty ? "当前没有可运行节点" : failed)"
+        return "动态工作流到达恢复检查点，总目标和既有产出已保留。请主循环继续规划、重试或替换节点，不要结束目标：\(recovery.isEmpty ? "当前没有可运行节点，需要调整运行图" : recovery)"
     }
 }
 

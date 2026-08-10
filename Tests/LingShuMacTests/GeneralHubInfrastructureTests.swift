@@ -121,7 +121,10 @@ final class GeneralHubInfrastructureTests: XCTestCase {
         state.finishTaskRecord(recordID, status: .verified, summary: "集成接线验证完成")
         XCTAssertEqual(state.worldModel.tasks.first(where: { $0.id == recordID })?.phase, .completed)
         XCTAssertTrue(state.worldModel.events.contains {
-            $0.kind == .task && $0.payload["recordID"] == recordID && $0.summary.contains("任务收尾")
+            $0.kind == .task &&
+            $0.payload["recordID"] == recordID &&
+            $0.summary.contains("任务状态:已核验") &&
+            $0.summary.contains("集成接线验证完成")
         })
     }
 

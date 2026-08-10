@@ -2,6 +2,7 @@ use crate::contract::{kernel_contract, PlatformCapabilities, KERNEL_ABI_VERSION}
 use crate::models::*;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -123,68 +124,195 @@ fn close_nonterminal_descendants(
 
 fn recover_interrupted_tasks(state: &mut PersistedState) {
     let now = Utc::now();
-    let interruption = "The previous process ended before this task completed.";
+    let (interruption, recovering, legacy_recovery, child_interrupted) =
+        match state.settings.locale {
+        AppLocale::ZhCn => (
+            "上次进程在目标完成前退出，目标与产出物均已保留。",
+            "检测到上次执行中断，目标已进入恢复队列。",
+            "此记录来自旧版失败终态，目标与执行证据均已保留，正在按原会话自动恢复。",
+            "上次进程退出时，此子任务尝试仍在运行；本次尝试已结束，主目标仍可继续。",
+        ),
+        AppLocale::En => (
+            "The previous process exited before the goal was complete; the goal and artifacts were preserved.",
+            "The previous run was interrupted; the goal is queued for recovery.",
+            "This record used the legacy failed terminal state. The goal and execution evidence were preserved and the same session will recover automatically.",
+            "This child attempt was still running when the previous process exited. The attempt was closed and the parent goal remains recoverable.",
+        ),
+    };
+    let active_root_id = state
+        .active_task_id
+        .take()
+        .map(|active_id| task_lineage_root(&state.tasks, active_id));
 
-    if let Some(active_id) = state.active_task_id.take() {
-        let root_id = task_lineage_root(&state.tasks, active_id);
-        for task in &mut state.tasks {
-            if task.id == root_id || task.root_task_id == Some(root_id) {
-                close_nonterminal_task(
-                    task,
-                    TaskStatus::Failed,
-                    interruption,
+    // `failed` existed as a terminal task state in older builds. Migrate root goals to the
+    // automatic recovery state; failed child/checker records remain closed attempt evidence.
+    for task in &mut state.tasks {
+        if task.status != TaskStatus::Failed {
+            continue;
+        }
+        if task.parent_task_id.is_none() {
+            task.status = TaskStatus::NeedsRecovery;
+            task.pending_question = None;
+            task.summary = legacy_recovery.into();
+            task.pending_tool_call_id = None;
+            for step in &mut task.steps {
+                if step.status == TaskStatus::Failed {
+                    step.status = TaskStatus::NeedsRecovery;
+                    step.detail = legacy_recovery.into();
+                    step.updated_at = now;
+                }
+            }
+        } else {
+            task.status = TaskStatus::Cancelled;
+            task.pending_question = None;
+            task.pending_tool_call_id = None;
+            task.summary = child_interrupted.into();
+            for step in &mut task.steps {
+                if step.status == TaskStatus::Failed {
+                    step.status = TaskStatus::Cancelled;
+                    step.detail = child_interrupted.into();
+                    step.updated_at = now;
+                }
+            }
+        }
+        task.updated_at = now;
+    }
+
+    if let Some(root_id) = active_root_id {
+        if let Some(root) = state.tasks.iter_mut().find(|task| task.id == root_id) {
+            if !root.status.is_terminal() {
+                let recovery_status =
+                    if root.goal_spec.is_some() || !root.session_messages.is_empty() {
+                        TaskStatus::NeedsRecovery
+                    } else {
+                        TaskStatus::Queued
+                    };
+                root.status = recovery_status.clone();
+                root.summary = recovering.into();
+                root.error = Some(interruption.into());
+                root.pending_tool_call_id = None;
+                root.pending_question = None;
+                root.updated_at = now;
+                for step in &mut root.steps {
+                    if !step.status.is_terminal() {
+                        step.status = recovery_status.clone();
+                        step.detail = recovering.into();
+                        step.updated_at = now;
+                    }
+                }
+            }
+        }
+        close_nonterminal_descendants(
+            state,
+            root_id,
+            TaskStatus::Cancelled,
+            child_interrupted,
+            Some(interruption),
+            now,
+        );
+    }
+
+    // A process restart cannot preserve a live child driver. Goals with a persisted GoalSpec or
+    // Loop transcript resume from that exact context; only pre-compilation work returns to queued.
+    // Completed artifacts and completed children remain untouched.
+    let root_ids = state
+        .tasks
+        .iter()
+        .filter(|task| task.parent_task_id.is_none())
+        .map(|task| task.id)
+        .collect::<Vec<_>>();
+    for root_id in root_ids {
+        let root_status = state
+            .tasks
+            .iter()
+            .find(|task| task.id == root_id)
+            .map(|task| task.status.clone());
+        match root_status {
+            Some(TaskStatus::Understanding | TaskStatus::Running) => {
+                if let Some(root) = state.tasks.iter_mut().find(|task| task.id == root_id) {
+                    let recovery_status =
+                        if root.goal_spec.is_some() || !root.session_messages.is_empty() {
+                            TaskStatus::NeedsRecovery
+                        } else {
+                            TaskStatus::Queued
+                        };
+                    root.status = recovery_status.clone();
+                    root.summary = recovering.into();
+                    root.error = Some(interruption.into());
+                    root.updated_at = now;
+                    for step in &mut root.steps {
+                        if !step.status.is_terminal() {
+                            step.status = recovery_status.clone();
+                            step.detail = recovering.into();
+                            step.updated_at = now;
+                        }
+                    }
+                }
+                close_nonterminal_descendants(
+                    state,
+                    root_id,
+                    TaskStatus::Cancelled,
+                    child_interrupted,
                     Some(interruption),
                     now,
                 );
             }
+            Some(TaskStatus::Completed | TaskStatus::Cancelled) => {
+                close_nonterminal_descendants(
+                    state,
+                    root_id,
+                    TaskStatus::Cancelled,
+                    child_interrupted,
+                    None,
+                    now,
+                );
+            }
+            _ => {}
         }
     }
 
-    let terminal_roots = state
+    let main_messages = state
         .tasks
         .iter()
-        .filter(|task| task.parent_task_id.is_none() && task.status.is_terminal())
-        .map(|task| task.id)
+        .filter(|task| task.parent_task_id.is_none())
+        .map(|task| {
+            (
+                task.assistant_message_id,
+                task.status.clone(),
+                task.summary.clone(),
+                task.pending_question.clone(),
+            )
+        })
         .collect::<Vec<_>>();
-    for task in &mut state.tasks {
-        if task.status.is_terminal() {
-            continue;
-        }
-        let is_passive_root = task.parent_task_id.is_none()
-            && matches!(
-                task.status,
-                TaskStatus::Queued | TaskStatus::NeedsUserAction
-            );
-        let belongs_to_terminal_root = task
-            .root_task_id
-            .is_some_and(|root_id| terminal_roots.contains(&root_id));
-        if !is_passive_root || belongs_to_terminal_root {
-            close_nonterminal_task(
-                task,
-                TaskStatus::Failed,
-                interruption,
-                Some(interruption),
-                now,
-            );
-        }
-    }
-
-    let failed_main_messages = state
-        .tasks
-        .iter()
-        .filter(|task| task.parent_task_id.is_none() && task.status == TaskStatus::Failed)
-        .map(|task| (task.assistant_message_id, task.summary.clone()))
-        .collect::<Vec<_>>();
-    for (assistant_id, summary) in failed_main_messages {
-        if let Some(message) = state
+    for (assistant_id, status, summary, pending_question) in main_messages {
+        let Some(message) = state
             .messages
             .iter_mut()
             .find(|message| message.id == assistant_id)
-        {
-            if message.state != MessageState::Complete {
-                message.text = summary;
-                message.state = MessageState::Failed;
+        else {
+            continue;
+        };
+        match status {
+            TaskStatus::Queued => {
+                if is_transient_assistant_text(&message.text) {
+                    message.text = recovering.into();
+                }
+                message.state = MessageState::Thinking;
             }
+            TaskStatus::NeedsUserAction => {
+                message.text =
+                    merge_assistant_reply(&message.text, &pending_question.unwrap_or(summary));
+                message.state = MessageState::NeedsUserAction;
+            }
+            TaskStatus::NeedsRecovery => {
+                message.text = merge_assistant_reply(&message.text, &summary);
+                message.state = MessageState::NeedsRecovery;
+            }
+            _ if message.state == MessageState::Failed => {
+                message.text = merge_assistant_reply(&message.text, &summary);
+                message.state = MessageState::NeedsRecovery;
+            }
+            _ => {}
         }
     }
 }
@@ -601,6 +729,70 @@ impl RuntimeStore {
         self.persist().await
     }
 
+    /// Show a transient status only while the assistant has not produced visible output yet.
+    /// Once a Loop turn has emitted text, later thinking/tool phases must keep that transcript.
+    pub async fn set_assistant_placeholder_if_empty(
+        &self,
+        thread_id: Uuid,
+        placeholder: String,
+    ) -> Result<(), StoreError> {
+        let mut state = self.state.write().await;
+        let assistant_id = state
+            .tasks
+            .iter()
+            .find(|task| task.id == thread_id && task.role == TaskRole::Main)
+            .map(|task| task.assistant_message_id);
+        if let Some(assistant_id) = assistant_id {
+            if let Some(message) = state
+                .messages
+                .iter_mut()
+                .find(|message| message.id == assistant_id)
+            {
+                if message.state != MessageState::Complete {
+                    if message.state == MessageState::NeedsUserAction
+                        || is_transient_assistant_text(&message.text)
+                    {
+                        message.text = placeholder;
+                    }
+                    message.state = MessageState::Thinking;
+                }
+            }
+        }
+        drop(state);
+        self.persist().await
+    }
+
+    /// Start a new visible Loop turn without replacing any text from earlier turns.
+    /// Placeholder-only bubbles are cleared; real output receives a stable paragraph boundary.
+    pub async fn begin_assistant_visible_turn(&self, thread_id: Uuid) -> Result<(), StoreError> {
+        let mut state = self.state.write().await;
+        let assistant_id = state
+            .tasks
+            .iter()
+            .find(|task| task.id == thread_id && task.role == TaskRole::Main)
+            .map(|task| task.assistant_message_id);
+        if let Some(assistant_id) = assistant_id {
+            if let Some(message) = state
+                .messages
+                .iter_mut()
+                .find(|message| message.id == assistant_id)
+            {
+                if message.state != MessageState::Complete {
+                    if is_transient_assistant_text(&message.text) {
+                        message.text.clear();
+                    } else if !message.text.is_empty() {
+                        let trimmed_length = message.text.trim_end_matches(['\r', '\n']).len();
+                        message.text.truncate(trimmed_length);
+                        message.text.push_str("\n\n");
+                    }
+                    message.state = MessageState::Thinking;
+                }
+            }
+        }
+        drop(state);
+        self.persist().await
+    }
+
     pub async fn append_assistant_delta(
         &self,
         thread_id: Uuid,
@@ -777,11 +969,20 @@ impl RuntimeStore {
         question: String,
     ) -> Result<(), StoreError> {
         let mut state = self.state.write().await;
+        let now = Utc::now();
         if let Some(task) = state.tasks.iter_mut().find(|task| task.id == thread_id) {
             task.status = TaskStatus::NeedsUserAction;
             task.pending_tool_call_id = tool_call_id;
             task.pending_question = Some(question.clone());
-            task.updated_at = Utc::now();
+            task.summary = question.clone();
+            task.updated_at = now;
+            if let Some(step) = task.steps.last_mut() {
+                if !step.status.is_terminal() {
+                    step.status = TaskStatus::NeedsUserAction;
+                    step.detail = question.clone();
+                    step.updated_at = now;
+                }
+            }
         }
         let assistant_id = state
             .tasks
@@ -794,9 +995,104 @@ impl RuntimeStore {
                 .iter_mut()
                 .find(|message| message.id == assistant_id)
             {
-                message.text = question;
+                message.text = merge_assistant_reply(&message.text, &question);
                 message.state = MessageState::NeedsUserAction;
             }
+        }
+        if state.active_task_id == Some(thread_id) {
+            state.active_task_id = None;
+        }
+        drop(state);
+        self.persist().await
+    }
+
+    /// Put a root goal into automatic recovery. Technical errors are retained in `error` and the
+    /// event log, but do not masquerade as a request for human input or terminate the objective.
+    pub async fn require_recovery(
+        &self,
+        thread_id: Uuid,
+        user_message: String,
+        error: String,
+    ) -> Result<(), StoreError> {
+        let mut state = self.state.write().await;
+        if state
+            .tasks
+            .iter()
+            .find(|task| task.id == thread_id)
+            .is_some_and(|task| task.status == TaskStatus::Cancelled)
+        {
+            return Ok(());
+        }
+        let now = Utc::now();
+        let child_summary = match state.settings.locale {
+            AppLocale::ZhCn => "父目标等待恢复，此轮子任务尝试已结束。",
+            AppLocale::En => {
+                "The parent goal is waiting to resume; this child-task attempt was closed."
+            }
+        };
+        close_nonterminal_descendants(
+            &mut state,
+            thread_id,
+            TaskStatus::Cancelled,
+            child_summary,
+            Some(&error),
+            now,
+        );
+        let assistant_id =
+            if let Some(task) = state.tasks.iter_mut().find(|task| task.id == thread_id) {
+                task.status = TaskStatus::NeedsRecovery;
+                task.updated_at = now;
+                task.summary = user_message.clone();
+                task.error = Some(error);
+                task.pending_tool_call_id = None;
+                task.pending_question = None;
+                if let Some(step) = task.steps.last_mut() {
+                    if !step.status.is_terminal() {
+                        step.status = TaskStatus::NeedsRecovery;
+                        step.detail = user_message.clone();
+                        step.updated_at = now;
+                    }
+                }
+                Some(task.assistant_message_id)
+            } else {
+                None
+            };
+        if let Some(assistant_id) = assistant_id {
+            if let Some(message) = state
+                .messages
+                .iter_mut()
+                .find(|message| message.id == assistant_id)
+            {
+                message.text = merge_assistant_reply(&message.text, &user_message);
+                message.state = MessageState::NeedsRecovery;
+            }
+        }
+        if state.active_task_id == Some(thread_id) {
+            state.active_task_id = None;
+        }
+        drop(state);
+        self.persist().await
+    }
+
+    /// Close one worker/checker attempt without declaring its parent objective failed.
+    pub async fn cancel_attempt(
+        &self,
+        thread_id: Uuid,
+        summary: String,
+        error: String,
+    ) -> Result<(), StoreError> {
+        let mut state = self.state.write().await;
+        let now = Utc::now();
+        close_nonterminal_descendants(
+            &mut state,
+            thread_id,
+            TaskStatus::Cancelled,
+            &summary,
+            Some(&error),
+            now,
+        );
+        if let Some(task) = state.tasks.iter_mut().find(|task| task.id == thread_id) {
+            close_nonterminal_task(task, TaskStatus::Cancelled, &summary, Some(&error), now);
         }
         if state.active_task_id == Some(thread_id) {
             state.active_task_id = None;
@@ -848,14 +1144,129 @@ impl RuntimeStore {
         Ok(Some(task))
     }
 
+    /// Continue a technical recovery from the exact persisted Loop transcript. Unlike
+    /// `prepare_resume`, this does not manufacture a user reply or resolve a human checkpoint.
+    pub async fn prepare_continue(
+        &self,
+        thread_id: Uuid,
+    ) -> Result<Option<TaskRecord>, StoreError> {
+        let mut state = self.state.write().await;
+        if state.active_task_id.is_some() {
+            return Ok(None);
+        }
+        let locale = state.settings.locale;
+        let Some(task) = state.tasks.iter_mut().find(|task| task.id == thread_id) else {
+            return Ok(None);
+        };
+        if task.status != TaskStatus::NeedsRecovery {
+            return Ok(None);
+        }
+        let detail = task.error.clone().unwrap_or_else(|| match locale {
+            AppLocale::ZhCn => "上一轮运行被中断。".into(),
+            AppLocale::En => "The previous runtime attempt was interrupted.".into(),
+        });
+        let recovery_instruction = match locale {
+            AppLocale::ZhCn => "【运行时恢复】沿用当前 GoalSpec、已有上下文和产出物继续推进；不要重新开始，也不要因本次异常宣告失败。",
+            AppLocale::En => "[Runtime recovery] Continue with the current GoalSpec, existing context, and artifacts. Do not restart or declare failure because of this attempt error.",
+        };
+        task.session_messages.push(AgentMessage {
+            role: AgentRole::System,
+            content: format!("{recovery_instruction}\n{detail}"),
+            tool_calls: Vec::new(),
+            tool_call_id: None,
+        });
+        task.pending_question = None;
+        task.pending_tool_call_id = None;
+        task.status = TaskStatus::Running;
+        task.updated_at = Utc::now();
+        let resumes_main = task.role == TaskRole::Main;
+        let task = task.clone();
+        if resumes_main {
+            state.active_task_id = Some(thread_id);
+        }
+        drop(state);
+        self.persist().await?;
+        Ok(Some(task))
+    }
+
+    pub async fn requeue_for_retry(&self, thread_id: Uuid) -> Result<bool, StoreError> {
+        let mut state = self.state.write().await;
+        let localized = copy(state.settings.locale);
+        let now = Utc::now();
+        let Some(task) = state.tasks.iter_mut().find(|task| task.id == thread_id) else {
+            return Ok(false);
+        };
+        if task.status.is_terminal() {
+            return Ok(false);
+        }
+        task.status = TaskStatus::Queued;
+        task.pending_tool_call_id = None;
+        task.pending_question = None;
+        task.updated_at = now;
+        task.summary = localized.recovering.into();
+        if let Some(step) = task.steps.last_mut() {
+            if !step.status.is_terminal() {
+                step.status = TaskStatus::Queued;
+                step.detail = localized.recovering.into();
+                step.updated_at = now;
+            }
+        }
+        let assistant_id = task.assistant_message_id;
+        if let Some(message) = state
+            .messages
+            .iter_mut()
+            .find(|message| message.id == assistant_id)
+        {
+            if is_transient_assistant_text(&message.text) {
+                message.text = localized.recovering.into();
+            }
+            message.state = MessageState::Thinking;
+        }
+        if state.active_task_id == Some(thread_id) {
+            state.active_task_id = None;
+        }
+        drop(state);
+        self.persist().await?;
+        Ok(true)
+    }
+
     pub async fn next_queued_id(&self) -> Option<Uuid> {
+        self.next_queued_id_excluding(&HashSet::new()).await
+    }
+
+    pub async fn next_queued_id_excluding(&self, excluded: &HashSet<Uuid>) -> Option<Uuid> {
         self.state
             .read()
             .await
             .tasks
             .iter()
-            .find(|task| task.status == TaskStatus::Queued)
+            .find(|task| task.status == TaskStatus::Queued && !excluded.contains(&task.id))
             .map(|task| task.id)
+    }
+
+    pub async fn next_recovery_id(&self) -> Option<Uuid> {
+        self.next_recovery_id_excluding(&HashSet::new()).await
+    }
+
+    pub async fn next_recovery_id_excluding(&self, excluded: &HashSet<Uuid>) -> Option<Uuid> {
+        self.state
+            .read()
+            .await
+            .tasks
+            .iter()
+            .find(|task| {
+                task.parent_task_id.is_none()
+                    && task.status == TaskStatus::NeedsRecovery
+                    && !excluded.contains(&task.id)
+            })
+            .map(|task| task.id)
+    }
+
+    pub async fn has_runnable_tasks(&self) -> bool {
+        self.state.read().await.tasks.iter().any(|task| {
+            task.status == TaskStatus::Queued
+                || (task.parent_task_id.is_none() && task.status == TaskStatus::NeedsRecovery)
+        })
     }
 
     pub async fn conversation_context(
@@ -903,7 +1314,10 @@ impl RuntimeStore {
         if let Some(message) = state.messages.iter_mut().find(|message| {
             message.thread_id == Some(thread_id) && message.role == MessageRole::Assistant
         }) {
-            message.text = localized.running.into();
+            if is_transient_assistant_text(&message.text) {
+                message.text = localized.running.into();
+            }
+            message.state = MessageState::Thinking;
         }
         drop(state);
         self.persist().await
@@ -950,7 +1364,7 @@ impl RuntimeStore {
         if let Some(message) = state.messages.iter_mut().find(|message| {
             message.thread_id == Some(thread_id) && message.role == MessageRole::Assistant
         }) {
-            message.text = reply;
+            message.text = merge_assistant_reply(&message.text, &reply);
             message.state = MessageState::Complete;
         }
         if state.active_task_id == Some(thread_id) {
@@ -966,49 +1380,9 @@ impl RuntimeStore {
         user_message: String,
         error: String,
     ) -> Result<(), StoreError> {
-        let mut state = self.state.write().await;
-        if state
-            .tasks
-            .iter()
-            .find(|task| task.id == thread_id)
-            .is_some_and(|task| task.status == TaskStatus::Cancelled)
-        {
-            return Ok(());
-        }
-        let localized = copy(state.settings.locale);
-        let now = Utc::now();
-        close_nonterminal_descendants(
-            &mut state,
-            thread_id,
-            TaskStatus::Failed,
-            &user_message,
-            Some(&error),
-            now,
-        );
-        if let Some(task) = state.tasks.iter_mut().find(|task| task.id == thread_id) {
-            task.status = TaskStatus::Failed;
-            task.updated_at = now;
-            task.summary = user_message.clone();
-            task.error = Some(error);
-            task.pending_tool_call_id = None;
-            task.pending_question = None;
-            if let Some(step) = task.steps.last_mut() {
-                step.status = TaskStatus::Failed;
-                step.detail = localized.failed.into();
-                step.updated_at = now;
-            }
-        }
-        if let Some(message) = state.messages.iter_mut().find(|message| {
-            message.thread_id == Some(thread_id) && message.role == MessageRole::Assistant
-        }) {
-            message.text = user_message;
-            message.state = MessageState::Failed;
-        }
-        if state.active_task_id == Some(thread_id) {
-            state.active_task_id = None;
-        }
-        drop(state);
-        self.persist().await
+        // Backward-compatible entry point for older hosts. Runtime failures are recoverable and
+        // must never write the legacy terminal `failed` task state.
+        self.require_recovery(thread_id, user_message, error).await
     }
 
     pub async fn cancel(&self, thread_id: Uuid) -> Result<bool, StoreError> {
@@ -1110,9 +1484,40 @@ struct RuntimeCopy {
     produce: &'static str,
     model_working: &'static str,
     running: &'static str,
+    recovering: &'static str,
     completed: &'static str,
-    failed: &'static str,
     cancelled: &'static str,
+}
+
+fn is_transient_assistant_text(text: &str) -> bool {
+    matches!(
+        text.trim(),
+        "" | "理解中…"
+            | "Understanding…"
+            | "思考中…"
+            | "Thinking…"
+            | "执行中…"
+            | "Running…"
+            | "Working…"
+            | "正在恢复目标并重新进入执行队列…"
+            | "Recovering the goal and returning it to the execution queue…"
+    )
+}
+
+fn merge_assistant_reply(existing: &str, reply: &str) -> String {
+    let existing = if is_transient_assistant_text(existing) {
+        ""
+    } else {
+        existing.trim_end()
+    };
+    let reply = reply.trim();
+    if existing.is_empty() {
+        return reply.into();
+    }
+    if reply.is_empty() || existing.ends_with(reply) {
+        return existing.into();
+    }
+    format!("{existing}\n\n{reply}")
 }
 
 fn copy(locale: AppLocale) -> RuntimeCopy {
@@ -1127,8 +1532,8 @@ fn copy(locale: AppLocale) -> RuntimeCopy {
             produce: "生成回复和产出物",
             model_working: "当前配置的模型正在处理",
             running: "执行中…",
+            recovering: "正在恢复目标并重新进入执行队列…",
             completed: "回复和产出物登记已完成",
-            failed: "任务未能完成",
             cancelled: "已停止本轮任务。",
         },
         AppLocale::En => RuntimeCopy {
@@ -1141,8 +1546,8 @@ fn copy(locale: AppLocale) -> RuntimeCopy {
             produce: "Produce the response and artifacts",
             model_working: "The configured model is working",
             running: "Running…",
+            recovering: "Recovering the goal and returning it to the execution queue…",
             completed: "Response and artifact registry completed",
-            failed: "The task stopped before completion",
             cancelled: "This task was cancelled.",
         },
     }
@@ -1198,6 +1603,72 @@ mod tests {
             .unwrap();
 
         assert_eq!(user_message.attachment_paths, vec![attachment]);
+    }
+
+    #[tokio::test]
+    async fn assistant_output_appends_across_loop_turns_and_completion() {
+        let directory = tempdir().unwrap();
+        let store = RuntimeStore::open(directory.path()).unwrap();
+        let receipt = store
+            .enqueue("Build a report".into(), Vec::new())
+            .await
+            .unwrap();
+        assert!(store.claim(receipt.thread_id).await.unwrap());
+
+        store
+            .set_assistant_placeholder_if_empty(receipt.thread_id, "思考中…".into())
+            .await
+            .unwrap();
+        store
+            .begin_assistant_visible_turn(receipt.thread_id)
+            .await
+            .unwrap();
+        store
+            .append_assistant_delta(receipt.thread_id, "第一轮进展")
+            .await
+            .unwrap();
+
+        store
+            .set_assistant_placeholder_if_empty(receipt.thread_id, "执行中…".into())
+            .await
+            .unwrap();
+        store
+            .set_assistant_placeholder_if_empty(receipt.thread_id, "思考中…".into())
+            .await
+            .unwrap();
+        store
+            .begin_assistant_visible_turn(receipt.thread_id)
+            .await
+            .unwrap();
+        store
+            .append_assistant_delta(receipt.thread_id, "最终答复")
+            .await
+            .unwrap();
+        store
+            .complete(receipt.thread_id, "最终答复".into(), Vec::new())
+            .await
+            .unwrap();
+
+        let snapshot = store
+            .snapshot(
+                "macos",
+                PlatformCapabilities {
+                    computer_control: true,
+                    realtime_perception: true,
+                    internal_preview: true,
+                    external_open: true,
+                },
+                true,
+            )
+            .await;
+        let assistant = snapshot
+            .messages
+            .iter()
+            .find(|message| message.id == receipt.assistant_message_id)
+            .unwrap();
+
+        assert_eq!(assistant.text, "第一轮进展\n\n最终答复");
+        assert_eq!(assistant.state, MessageState::Complete);
     }
 
     #[tokio::test]
@@ -1333,10 +1804,10 @@ mod tests {
         let reopened = RuntimeStore::open(directory.path()).unwrap();
         let root = reopened.task(root_id).await.unwrap();
         let child = reopened.task(child_id).await.unwrap();
-        assert_eq!(root.status, TaskStatus::Failed);
-        assert_eq!(child.status, TaskStatus::Failed);
-        assert!(root.error.as_deref().unwrap().contains("previous process"));
-        assert!(child.error.as_deref().unwrap().contains("previous process"));
+        assert_eq!(root.status, TaskStatus::Queued);
+        assert_eq!(child.status, TaskStatus::Cancelled);
+        assert!(root.error.is_some());
+        assert!(child.error.is_some());
         let snapshot = reopened
             .snapshot(
                 "macos",
@@ -1354,5 +1825,117 @@ mod tests {
             .tasks
             .iter()
             .all(|task| { task.status.is_terminal() || task.status == TaskStatus::Queued }));
+    }
+
+    #[tokio::test]
+    async fn restart_preserves_loop_context_and_schedules_recovery() {
+        let directory = tempdir().unwrap();
+        let root_id;
+        let preserved = AgentMessage {
+            role: AgentRole::Assistant,
+            content: "The report draft is halfway complete.".into(),
+            tool_calls: Vec::new(),
+            tool_call_id: None,
+        };
+        {
+            let store = RuntimeStore::open(directory.path()).unwrap();
+            let receipt = store
+                .enqueue("Build a report".into(), Vec::new())
+                .await
+                .unwrap();
+            root_id = receipt.thread_id;
+            assert!(store.claim(root_id).await.unwrap());
+            store
+                .set_session_messages(root_id, vec![preserved.clone()])
+                .await
+                .unwrap();
+        }
+
+        let reopened = RuntimeStore::open(directory.path()).unwrap();
+        let task = reopened.task(root_id).await.unwrap();
+        assert_eq!(task.status, TaskStatus::NeedsRecovery);
+        assert_eq!(task.session_messages, vec![preserved]);
+        assert_eq!(reopened.next_recovery_id().await, Some(root_id));
+        assert!(reopened.next_queued_id().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn runtime_failure_enters_automatic_recovery_without_failing_goal() {
+        let directory = tempdir().unwrap();
+        let store = RuntimeStore::open(directory.path()).unwrap();
+        let receipt = store
+            .enqueue("Build a report".into(), Vec::new())
+            .await
+            .unwrap();
+        assert!(store.claim(receipt.thread_id).await.unwrap());
+
+        store
+            .fail(
+                receipt.thread_id,
+                "Update the model token, then continue.".into(),
+                "authentication failed".into(),
+            )
+            .await
+            .unwrap();
+
+        let task = store.task(receipt.thread_id).await.unwrap();
+        assert_eq!(task.status, TaskStatus::NeedsRecovery);
+        assert!(task.pending_question.is_none());
+        assert_eq!(task.error.as_deref(), Some("authentication failed"));
+        assert!(!task.status.is_terminal());
+        assert!(store
+            .snapshot(
+                "macos",
+                PlatformCapabilities {
+                    computer_control: true,
+                    realtime_perception: true,
+                    internal_preview: true,
+                    external_open: true,
+                },
+                true,
+            )
+            .await
+            .tasks
+            .iter()
+            .all(|task| task.status != TaskStatus::Failed));
+    }
+
+    #[tokio::test]
+    async fn interrupted_child_attempt_does_not_fail_parent_goal() {
+        let directory = tempdir().unwrap();
+        let store = RuntimeStore::open(directory.path()).unwrap();
+        let receipt = store
+            .enqueue("Build a report".into(), Vec::new())
+            .await
+            .unwrap();
+        assert!(store.claim(receipt.thread_id).await.unwrap());
+        let child_id = store
+            .create_child_task(
+                receipt.thread_id,
+                "Write a section".into(),
+                TaskRole::Worker,
+                "Writer".into(),
+                TaskOrigin::Subtask,
+                LoopEngineKind::Grok,
+            )
+            .await
+            .unwrap();
+
+        store
+            .cancel_attempt(
+                child_id,
+                "This attempt was interrupted.".into(),
+                "network timeout".into(),
+            )
+            .await
+            .unwrap();
+
+        let root = store.task(receipt.thread_id).await.unwrap();
+        assert!(!root.status.is_terminal());
+        assert_ne!(root.status, TaskStatus::Failed);
+        assert_eq!(
+            store.task(child_id).await.unwrap().status,
+            TaskStatus::Cancelled
+        );
     }
 }

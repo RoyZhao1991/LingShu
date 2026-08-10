@@ -161,7 +161,7 @@ extension LingShuTaskExecutionStatus {
         case .ready: .cyan
         case .partial: .orange          // 部分完成:橙色提示"没全成"
         case .verified: .green
-        case .failed: .red
+        case .failed: .yellow
         }
     }
 }

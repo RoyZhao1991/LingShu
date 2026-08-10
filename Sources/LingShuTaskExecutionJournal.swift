@@ -18,12 +18,14 @@ enum LingShuTaskExecutionStatus: String, Codable, Equatable, Sendable {
     case ready = "就绪"                   // 能力齐备、可执行
     case partial = "部分完成"             // 复合任务部分成、部分未成
     case verified = "已核验"              // 完成且按成功标准核验通过
-    case failed = "失败"                  // 真尝试后仍无法完成
+    /// 仅为兼容旧持久化数据保留。新的根任务状态不得写入 `.failed`，应进入
+    /// `waitingForUser` 或 `suspended` 并保留断点；工具/子步骤错误继续记录在执行明细中。
+    case failed = "失败"
 
-    /// 终态(不再自动推进):完成/直答/核验/未达标/失败/部分;阻断与待用户是**可续**的中间停。
+    /// 只有目标已经完成才是终态。未达标、部分完成和旧版失败记录都必须可恢复。
     var isTerminal: Bool {
         switch self {
-        case .completed, .answered, .verified, .needsRevision, .failed, .partial: return true
+        case .completed, .answered, .verified: return true
         default: return false
         }
     }
@@ -32,7 +34,7 @@ enum LingShuTaskExecutionStatus: String, Codable, Equatable, Sendable {
     /// **needsRevision(未达标·评审未通过已交还)同样可续**:「需修正后重验」就是要返工再来,理应能被「继续」恢复(与原 .partial 等价)。
     var isResumableUnfinished: Bool {
         switch self {
-        case .blocked, .partial, .needsRevision, .waitingForUser, .suspended, .acquiringCapability: return true
+        case .blocked, .partial, .needsRevision, .waitingForUser, .suspended, .acquiringCapability, .failed: return true
         default: return false
         }
     }
@@ -42,6 +44,12 @@ enum LingShuTaskExecutionStatus: String, Codable, Equatable, Sendable {
         case .completed, .answered, .verified: return true
         default: return false
         }
+    }
+
+    /// Root tasks never expose the legacy terminal-failure state. Keep `.failed` decodable so old
+    /// journals can be opened, but project it as a resumable checkpoint everywhere in the host UI.
+    var rootLifecycleStatus: LingShuTaskExecutionStatus {
+        self == .failed ? .suspended : self
     }
 }
 
@@ -394,11 +402,11 @@ struct LingShuTaskExecutionRecord: Identifiable, Codable, Equatable, Sendable {
         self.capabilityProbeObservations = capabilityProbeObservations
         self.taskOutcome = taskOutcome
         self.effectVerificationReport = effectVerificationReport
-        self.threadCommit = threadCommit
+        self.threadCommit = Self.recoveredThreadCommit(threadCommit)
         self.workflowRuns = workflowRuns
         self.title = title
         self.prompt = prompt
-        self.status = status
+        self.status = status == .failed ? .suspended : status
         self.summary = summary
         self.participants = participants
         self.roleSlots = roleSlots
@@ -418,7 +426,8 @@ struct LingShuTaskExecutionRecord: Identifiable, Codable, Equatable, Sendable {
         id = try container.decode(String.self, forKey: .id)
         title = try container.decode(String.self, forKey: .title)
         prompt = try container.decode(String.self, forKey: .prompt)
-        status = try container.decode(LingShuTaskExecutionStatus.self, forKey: .status)
+        let decodedStatus = try container.decode(LingShuTaskExecutionStatus.self, forKey: .status)
+        status = decodedStatus == .failed ? .suspended : decodedStatus
         summary = try container.decode(String.self, forKey: .summary)
         participants = try container.decode([String].self, forKey: .participants)
         roleSlots = try container.decodeIfPresent([LingShuTaskRoleSlot].self, forKey: .roleSlots) ?? []
@@ -441,8 +450,24 @@ struct LingShuTaskExecutionRecord: Identifiable, Codable, Equatable, Sendable {
         capabilityProbeObservations = try container.decodeIfPresent([LingShuCapabilityProbeObservation].self, forKey: .capabilityProbeObservations)
         taskOutcome = try container.decodeIfPresent(LingShuCompletionStatus.self, forKey: .taskOutcome)
         effectVerificationReport = try container.decodeIfPresent(LingShuEffectVerificationReport.self, forKey: .effectVerificationReport)
-        threadCommit = try container.decodeIfPresent(LingShuTaskThreadCommit.self, forKey: .threadCommit)
+        threadCommit = Self.recoveredThreadCommit(
+            try container.decodeIfPresent(LingShuTaskThreadCommit.self, forKey: .threadCommit)
+        )
         workflowRuns = try container.decodeIfPresent([LingShuWorkflowRun].self, forKey: .workflowRuns) ?? []
+    }
+
+    /// `.failed` is retained only so older task ledgers remain decodable. Once loaded,
+    /// the root task and its thin thread commit both become automatic recovery state.
+    private static func recoveredThreadCommit(
+        _ commit: LingShuTaskThreadCommit?
+    ) -> LingShuTaskThreadCommit? {
+        guard var commit else { return nil }
+        if commit.status == .failed {
+            commit.status = .suspended
+            commit.phase = .executing
+            commit.requiredUserAction = nil
+        }
+        return commit
     }
 
     static func create(prompt: String, now: Date = Date()) -> LingShuTaskExecutionRecord {
@@ -549,7 +574,7 @@ struct LingShuTaskExecutionRecord: Identifiable, Codable, Equatable, Sendable {
     }
 
     mutating func finish(status: LingShuTaskExecutionStatus, summary: String, now: Date = Date()) {
-        self.status = status
+        self.status = status == .failed ? .suspended : status
         self.summary = summary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? self.summary : summary
         updatedAt = now
     }

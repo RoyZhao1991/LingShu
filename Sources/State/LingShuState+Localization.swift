@@ -350,7 +350,7 @@ extension LingShuTaskExecutionStatus {
         case .ready: "Ready"
         case .partial: "Partially Completed"
         case .verified: "Verified"
-        case .failed: "Failed"
+        case .failed: "Waiting to Resume"
         }
     }
 }

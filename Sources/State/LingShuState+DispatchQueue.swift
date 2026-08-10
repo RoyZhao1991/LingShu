@@ -116,7 +116,7 @@ extension LingShuState {
             dispatchedTaskBubbles.removeValue(forKey: recordID)
             if blockedDispatchedRecordID == recordID { blockedDispatchedRecordID = nil }
             appendTaskRecordMessage(recordID, actor: "用户", role: "停止", kind: .warning, text: "用户已停止该任务。")
-            finishTaskRecord(recordID, status: .failed, summary: "用户已停止该任务。")
+            finishTaskRecord(recordID, status: .suspended, summary: "用户已停止该任务，断点已保留。")
             manuallyStoppedTaskRecords.remove(recordID)
             promoteQueuedDispatchIfPossible()
             return
@@ -132,7 +132,7 @@ extension LingShuState {
             if self.blockedDispatchedRecordID == recordID { self.blockedDispatchedRecordID = nil }
             self.markTaskRecordManuallyStopped(recordID)
             self.appendTaskRecordMessage(recordID, actor: "用户", role: "停止", kind: .warning, text: "用户已停止该任务。")
-            self.finishTaskRecord(recordID, status: .failed, summary: "用户已停止该任务。")
+            self.finishTaskRecord(recordID, status: .suspended, summary: "用户已停止该任务，断点已保留。")
             self.manuallyStoppedTaskRecords.remove(recordID)
             self.promoteQueuedDispatchIfPossible()
         }

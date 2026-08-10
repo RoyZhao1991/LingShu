@@ -10,6 +10,7 @@ import {
 import { strings } from "./i18n";
 import { chooseFiles, choosePluginManifest, hasNativeBridge, listenForWindowFileDrops, runtimeInvoke } from "./bridge";
 import { browserDroppedFilePaths, mergeAttachmentPaths } from "./attachments";
+import { projectChatBubble } from "./chatProjection";
 import { normalizeMarkdownTables } from "./markdown";
 import packageMetadata from "../package.json";
 import type {
@@ -19,7 +20,8 @@ import type {
 
 import type { BootstrapPayload } from "./bridge";
 
-const terminalStatuses = new Set<TaskStatus>(["completed", "failed", "cancelled"]);
+const terminalStatuses = new Set<TaskStatus>(["completed", "cancelled"]);
+const recoverableStatus = (status: TaskStatus): TaskStatus => status === "failed" ? "needs_recovery" : status;
 const appVersion = packageMetadata.version;
 const markdownComponents: Components = {
   table: ({ node: _node, ...props }) => <div className="markdown-table-scroll"><table {...props} /></div>,
@@ -51,9 +53,9 @@ export default function App() {
   const locale = settingsDraft?.locale ?? snapshot?.settings.locale ?? "zh_cn";
   const t = strings(locale);
   const activeTask = snapshot?.tasks.find((task) => task.id === snapshot.activeTaskId);
-  const isBusy = Boolean(snapshot?.tasks.some((task) => ["understanding", "running"].includes(task.status))) || Boolean(snapshot?.queuedTaskCount);
+  const isBusy = Boolean(snapshot?.tasks.some((task) => ["understanding", "running", "needs_recovery", "failed"].includes(task.status))) || Boolean(snapshot?.queuedTaskCount);
   const selectedTask = snapshot?.tasks.find((task) => task.id === selectedTaskId) ?? activeTask ?? snapshot?.tasks.filter((task) => !task.parentTaskId).at(-1);
-  const actionTask = snapshot?.tasks.find((task) => task.status === "needs_user_action");
+  const actionTask = snapshot?.tasks.find((task) => recoverableStatus(task.status) === "needs_user_action");
 
   const bindAttachments = useCallback((paths: readonly string[]) => {
     if (!paths.some((path) => path.trim())) return;
@@ -324,14 +326,19 @@ export default function App() {
               {snapshot.messages.length === 0 && <EmptyState icon={<MessageCircle />} text={t.noMessages} />}
               {snapshot.messages.map((message) => {
                 const messageAttachments = attachmentPathsForMessage(snapshot, message);
-                return <article key={message.id} className={`message ${message.role}`}>
+                const bubble = projectChatBubble(
+                  message,
+                  message.threadId ? latestEventForThread(snapshot, message.threadId) : undefined,
+                  locale,
+                );
+                return <article key={bubble.key} className={`message ${message.role}`}>
                   <div className="message-meta">
                     <span>{message.role === "user" ? (locale === "en" ? "You" : "你") : t.appName}</span>
                     <time>{new Date(message.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</time>
                   </div>
                   <div className="markdown-body">
-                    {message.state === "thinking" && <LoaderCircle className="inline-loader spin" />}
-                    <MarkdownContent>{message.text}</MarkdownContent>
+                    {bubble.isRunning && <LoaderCircle className="inline-loader spin" />}
+                    <MarkdownContent>{bubble.text}</MarkdownContent>
                   </div>
                   {messageAttachments.length > 0 && (
                     <div className="message-attachments" aria-label={locale === "en" ? "Message attachments" : "消息附件"}>
@@ -343,9 +350,6 @@ export default function App() {
                         </button>
                       ))}
                     </div>
-                  )}
-                  {message.state === "thinking" && message.threadId && (
-                    <MessageRuntimeStatus event={latestEventForThread(snapshot, message.threadId)} locale={locale} />
                   )}
                   {message.threadId && message.role === "assistant"
                     && shouldShowExecution(snapshot, message.threadId) && (
@@ -644,11 +648,6 @@ function HumanActionDialog({ task, locale, value, busy, error, onChange, onResum
   </div></div>;
 }
 
-function MessageRuntimeStatus({ event, locale }: { event?: RuntimeEvent; locale: Locale }) {
-  if (!event) return null;
-  return <div className="message-runtime-status"><EventIcon kind={event.kind} /><span><strong>{event.title}</strong><small>{event.actor}{event.state === "running" ? (locale === "en" ? " · live" : " · 实时") : ""}</small></span></div>;
-}
-
 function ParticipantTab({ role, active, label, count, onSelect }: { role: TaskRole | "all"; active: boolean; label: string; count: number; onSelect: (role: TaskRole | "all") => void }) {
   return <button className={active ? "active" : ""} onClick={() => onSelect(role)}><RoleIcon role={role} /><span>{label}</span><small>{count}</small></button>;
 }
@@ -735,7 +734,13 @@ function EmptyState({ icon, text }: { icon: React.ReactNode; text: string }) { r
 function MarkdownContent({ children }: { children: string }) {
   return <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>{normalizeMarkdownTables(children)}</ReactMarkdown>;
 }
-function StatusGlyph({ status }: { status: TaskStatus }) { return terminalStatuses.has(status) ? (status === "completed" ? <Check className="status-glyph done" /> : <X className="status-glyph failed" />) : <LoaderCircle className="status-glyph spin active" />; }
+function StatusGlyph({ status }: { status: TaskStatus }) {
+  const visible = recoverableStatus(status);
+  if (visible === "completed") return <Check className="status-glyph done" />;
+  if (visible === "cancelled") return <Square className="status-glyph" />;
+  if (visible === "needs_user_action") return <CircleAlert className="status-glyph active" />;
+  return <LoaderCircle className="status-glyph spin active" />;
+}
 function TagList({ values }: { values: string[] }) { return <ul className="tag-list">{values.map((value) => <li key={value}>{value}</li>)}</ul>; }
 function fileName(path: string) { return path.split(/[\\/]/).at(-1) ?? path; }
 function attachmentPathsForMessage(snapshot: RuntimeSnapshot, message: ChatMessage): string[] {
@@ -744,18 +749,20 @@ function attachmentPathsForMessage(snapshot: RuntimeSnapshot, message: ChatMessa
   return snapshot.tasks.find((task) => task.id === message.threadId)?.attachmentPaths ?? [];
 }
 function formatBytes(value: number) { return value < 1024 ? `${value} B` : value < 1024 * 1024 ? `${(value / 1024).toFixed(1)} KB` : `${(value / 1024 / 1024).toFixed(1)} MB`; }
-function statusLabel(status: TaskStatus, locale: Locale) { const t = strings(locale); if (status === "completed") return t.completed; if (status === "failed") return t.failed; if (status === "cancelled") return t.cancelled; if (status === "queued") return t.queued; if (status === "needs_user_action") return t.blocked; return t.running; }
+function statusLabel(status: TaskStatus, locale: Locale) { const t = strings(locale); const visible = recoverableStatus(status); if (visible === "completed") return t.completed; if (visible === "cancelled") return t.cancelled; if (visible === "queued") return t.queued; if (visible === "needs_user_action") return t.blocked; if (visible === "needs_recovery") return t.recovering; return t.running; }
 function roleLabel(role: TaskRole, locale: Locale) { const t = strings(locale); if (role === "worker") return t.workerRole; if (role === "checker") return t.checkerRole; return t.mainRole; }
 
 function aggregateTaskStatus(root: TaskRecord, tasks: TaskRecord[]): TaskStatus {
   // A terminal main task is authoritative. Descendants are execution detail and must not turn a
   // delivered task back into "running" while their final projection is still arriving.
-  if (terminalStatuses.has(root.status)) return root.status;
+  const rootStatus = recoverableStatus(root.status);
+  if (terminalStatuses.has(rootStatus)) return rootStatus;
   const related = tasks.filter((task) => (task.rootTaskId ?? task.id) === root.id);
-  if (related.some((task) => task.status === "needs_user_action")) return "needs_user_action";
+  if (related.some((task) => recoverableStatus(task.status) === "needs_user_action")) return "needs_user_action";
+  if (related.some((task) => recoverableStatus(task.status) === "needs_recovery")) return "needs_recovery";
   if (related.some((task) => ["understanding", "running"].includes(task.status))) return "running";
   if (related.some((task) => task.status === "queued")) return "queued";
-  return root.status;
+  return rootStatus;
 }
 
 function latestEventForThread(snapshot: RuntimeSnapshot, threadId: string): RuntimeEvent | undefined {
