@@ -421,6 +421,11 @@ impl RuntimeKernel {
         loop {
             let pass = self.run_queue_report(api_key.clone()).await?;
             let made_progress = pass.completed > 0;
+            let had_failures = !pass.failures.is_empty();
+            let has_retryable_failure = pass
+                .failures
+                .iter()
+                .any(|failure| failure_allows_automatic_retry(failure.kind));
             aggregate.completed = aggregate.completed.saturating_add(pass.completed);
             for failure in pass.failures {
                 if !aggregate.failures.contains(&failure) {
@@ -429,6 +434,13 @@ impl RuntimeKernel {
             }
 
             if !self.store.has_runnable_tasks().await {
+                break;
+            }
+
+            // Authentication and request-contract failures require channel configuration to
+            // change. Preserve the Loop transcript as `needs_recovery`, but release the
+            // supervisor instead of repeatedly reopening the same impossible request.
+            if !made_progress && had_failures && !has_retryable_failure {
                 break;
             }
 
@@ -498,13 +510,6 @@ impl RuntimeKernel {
                     let message = localized_failure(locale, &error);
                     let kind = error.failure_kind();
                     report.failures.push(QueueFailure { thread_id, kind });
-                    if failure_requires_user_action(&error) {
-                        self.store
-                            .set_needs_user_action(thread_id, None, message)
-                            .await?;
-                        continue;
-                    }
-
                     self.store
                         .require_recovery(thread_id, message, error.to_string())
                         .await?;
@@ -545,19 +550,13 @@ impl RuntimeKernel {
             Ok(()) => Ok(true),
             Err(EngineError::Cancelled) => Err(EngineError::Cancelled),
             Err(error) => {
-                if failure_requires_user_action(&error) {
-                    self.store
-                        .set_needs_user_action(thread_id, None, localized_failure(locale, &error))
-                        .await?;
-                } else {
-                    self.store
-                        .require_recovery(
-                            thread_id,
-                            localized_failure(locale, &error),
-                            error.to_string(),
-                        )
-                        .await?;
-                }
+                self.store
+                    .require_recovery(
+                        thread_id,
+                        localized_failure(locale, &error),
+                        error.to_string(),
+                    )
+                    .await?;
                 Err(error)
             }
         }
@@ -579,19 +578,13 @@ impl RuntimeKernel {
             Ok(()) => Ok(true),
             Err(EngineError::Cancelled) => Err(EngineError::Cancelled),
             Err(error) => {
-                if failure_requires_user_action(&error) {
-                    self.store
-                        .set_needs_user_action(thread_id, None, localized_failure(locale, &error))
-                        .await?;
-                } else {
-                    self.store
-                        .require_recovery(
-                            thread_id,
-                            localized_failure(locale, &error),
-                            error.to_string(),
-                        )
-                        .await?;
-                }
+                self.store
+                    .require_recovery(
+                        thread_id,
+                        localized_failure(locale, &error),
+                        error.to_string(),
+                    )
+                    .await?;
                 Err(error)
             }
         }
@@ -1203,7 +1196,7 @@ impl RuntimeKernel {
                                 self.store
                                     .set_needs_user_action(
                                         task.id,
-                                        Some(blocking.id.clone()),
+                                        blocking.id.clone(),
                                         args.prompt.clone(),
                                     )
                                     .await?;
@@ -3388,16 +3381,12 @@ fn ensure_key(settings: &RuntimeSettings, api_key: Option<&str>) -> Result<(), E
     Ok(())
 }
 
-/// Only failures that cannot make progress without changing user-owned channel configuration
-/// should interrupt the autonomous recovery loop. Quota, rate limits, network failures, server
-/// errors, malformed model replies, and tool failures remain runtime attempts and are retried with
-/// the exact persisted Loop transcript.
-fn failure_requires_user_action(error: &EngineError) -> bool {
-    matches!(
-        error,
-        EngineError::MissingApiKey(_) | EngineError::UnsupportedPlatform(_)
-    ) || matches!(
-        error.failure_kind(),
+/// Configuration and protocol failures cannot change while a queue pass is running. Preserve the
+/// objective for an explicit retry after settings change; retry service/transient failures in the
+/// autonomous supervisor without manufacturing a human-interaction checkpoint.
+fn failure_allows_automatic_retry(kind: RuntimeFailureKind) -> bool {
+    !matches!(
+        kind,
         RuntimeFailureKind::Authentication | RuntimeFailureKind::InvalidRequest
     )
 }
@@ -3523,6 +3512,27 @@ mod tests {
         assert!(!zh.contains("secret provider body"));
         assert!(!en.contains("secret provider body"));
         assert!(!zh.contains("本轮未能完成"));
+    }
+
+    #[test]
+    fn only_transient_runtime_failures_are_automatically_retried() {
+        assert!(!failure_allows_automatic_retry(
+            RuntimeFailureKind::Authentication
+        ));
+        assert!(!failure_allows_automatic_retry(
+            RuntimeFailureKind::InvalidRequest
+        ));
+        for kind in [
+            RuntimeFailureKind::Quota,
+            RuntimeFailureKind::RateLimited,
+            RuntimeFailureKind::Network,
+            RuntimeFailureKind::Timeout,
+            RuntimeFailureKind::InvalidResponse,
+            RuntimeFailureKind::Server,
+            RuntimeFailureKind::Unknown,
+        ] {
+            assert!(failure_allows_automatic_retry(kind), "{kind:?}");
+        }
     }
 
     fn mock_provider(
@@ -4300,6 +4310,32 @@ mod tests {
             .filter(|event| event.kind == RuntimeEventKind::Model)
             .all(|event| event.state == RuntimeEventState::Completed));
         assert_eq!(requests.lock().unwrap().len(), 2);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn missing_channel_credential_enters_recovery_without_human_gate_or_spin() {
+        let (_directory, store, kernel) = test_kernel("http://127.0.0.1:9".into()).await;
+        let receipt = kernel
+            .submit(
+                "Complete this goal after the channel is configured.".into(),
+                Vec::new(),
+            )
+            .await
+            .unwrap();
+
+        let report =
+            tokio::time::timeout(Duration::from_secs(2), kernel.supervise_queue_report(None))
+                .await
+                .expect("a non-retryable channel failure must release the supervisor")
+                .unwrap();
+
+        let task = store.task(receipt.thread_id).await.unwrap();
+        assert_eq!(task.status, TaskStatus::NeedsRecovery);
+        assert!(task.pending_tool_call_id.is_none());
+        assert!(task.pending_question.is_none());
+        assert_eq!(report.completed, 0);
+        assert_eq!(report.failures.len(), 1);
+        assert_eq!(report.failures[0].kind, RuntimeFailureKind::Authentication);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

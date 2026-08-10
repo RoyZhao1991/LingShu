@@ -11,6 +11,7 @@ import { strings } from "./i18n";
 import { chooseFiles, choosePluginManifest, hasNativeBridge, listenForWindowFileDrops, runtimeInvoke } from "./bridge";
 import { browserDroppedFilePaths, mergeAttachmentPaths } from "./attachments";
 import { projectChatBubble } from "./chatProjection";
+import { findInteractiveActionTask } from "./humanAction";
 import { normalizeMarkdownTables } from "./markdown";
 import packageMetadata from "../package.json";
 import type {
@@ -43,6 +44,7 @@ export default function App() {
   const [permissionUpdating, setPermissionUpdating] = useState(false);
   const [actionAnswer, setActionAnswer] = useState("");
   const [resuming, setResuming] = useState(false);
+  const [dismissedActionTaskId, setDismissedActionTaskId] = useState<string>();
   const [pluginBusy, setPluginBusy] = useState("");
   const [dragActive, setDragActive] = useState(false);
   const messagesEnd = useRef<HTMLDivElement>(null);
@@ -55,7 +57,8 @@ export default function App() {
   const activeTask = snapshot?.tasks.find((task) => task.id === snapshot.activeTaskId);
   const isBusy = Boolean(snapshot?.tasks.some((task) => ["understanding", "running", "needs_recovery", "failed"].includes(task.status))) || Boolean(snapshot?.queuedTaskCount);
   const selectedTask = snapshot?.tasks.find((task) => task.id === selectedTaskId) ?? activeTask ?? snapshot?.tasks.filter((task) => !task.parentTaskId).at(-1);
-  const actionTask = snapshot?.tasks.find((task) => recoverableStatus(task.status) === "needs_user_action");
+  const pendingActionTask = findInteractiveActionTask(snapshot?.tasks);
+  const actionTask = pendingActionTask?.id === dismissedActionTaskId ? undefined : pendingActionTask;
 
   const bindAttachments = useCallback((paths: readonly string[]) => {
     if (!paths.some((path) => path.trim())) return;
@@ -89,6 +92,13 @@ export default function App() {
     const interval = window.setInterval(() => void refresh(), isBusy ? 350 : 1_500);
     return () => window.clearInterval(interval);
   }, [isBusy, refresh, snapshot]);
+
+  useEffect(() => {
+    setActionAnswer("");
+    if (pendingActionTask?.id !== dismissedActionTaskId) {
+      setDismissedActionTaskId(undefined);
+    }
+  }, [pendingActionTask?.id]);
 
   useEffect(() => {
     if (page === "chat" && keepAtBottom.current) {
@@ -231,6 +241,7 @@ export default function App() {
       const accepted = await runtimeInvoke<boolean>("resume_task", { threadId: actionTask.id, answer: actionAnswer.trim() });
       if (!accepted) throw new Error(locale === "en" ? "The task is not ready to resume." : "当前任务暂时无法恢复执行。");
       setActionAnswer("");
+      setDismissedActionTaskId(undefined);
       await refresh();
     } catch (reason) {
       setError(String(reason));
@@ -415,7 +426,8 @@ export default function App() {
       {preview && <PreviewDialog payload={preview} locale={locale} onClose={() => setPreview(undefined)} />}
       {actionTask && (
         <HumanActionDialog task={actionTask} locale={locale} value={actionAnswer} busy={resuming} error={error}
-          onChange={setActionAnswer} onResume={resumeAction} />
+          onChange={setActionAnswer} onResume={resumeAction}
+          onDismiss={() => { setActionAnswer(""); setDismissedActionTaskId(actionTask.id); }} />
       )}
       {dragActive && (
         <div className="window-drop-overlay" role="status" aria-live="polite">
@@ -636,15 +648,26 @@ function SetupDialog(props: SettingsProps & { error: string }) {
   </div></div>;
 }
 
-function HumanActionDialog({ task, locale, value, busy, error, onChange, onResume }: { task: TaskRecord; locale: Locale; value: string; busy: boolean; error: string; onChange: (value: string) => void; onResume: () => void }) {
+function HumanActionDialog({ task, locale, value, busy, error, onChange, onResume, onDismiss }: { task: TaskRecord; locale: Locale; value: string; busy: boolean; error: string; onChange: (value: string) => void; onResume: () => void; onDismiss: () => void }) {
   const t = strings(locale);
+  useEffect(() => {
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && !busy) onDismiss();
+    };
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [busy, onDismiss]);
   return <div className="modal-layer action-layer"><div className="action-dialog" role="dialog" aria-modal="true" aria-labelledby="action-title">
+    <button type="button" className="action-close" aria-label={t.close} title={t.close} disabled={busy} onClick={onDismiss}><X /></button>
     <header><div className="action-mark"><UserRound /></div><div><h1 id="action-title">{t.actionRequired}</h1><p>{t.actionBody}</p></div></header>
     <section><div className="action-actor"><RoleIcon role={task.role} /><span>{task.participantName}</span></div><MarkdownContent>{task.pendingQuestion ?? task.summary}</MarkdownContent></section>
     <textarea autoFocus value={value} onChange={(event) => onChange(event.target.value)} placeholder={t.answerPlaceholder}
       onKeyDown={(event) => { if ((event.ctrlKey || event.metaKey) && event.key === "Enter") onResume(); }} />
     {error && <div className="error-strip"><CircleAlert />{error}</div>}
-    <button className="action-resume" disabled={busy || !value.trim()} onClick={onResume}>{busy ? <LoaderCircle className="spin" /> : <Check />}{t.resume}</button>
+    <div className="action-footer">
+      <button type="button" className="action-dismiss" disabled={busy} onClick={onDismiss}>{t.handleLater}</button>
+      <button type="button" className="action-resume" disabled={busy || !value.trim()} onClick={onResume}>{busy ? <LoaderCircle className="spin" /> : <Check />}{t.resume}</button>
+    </div>
   </div></div>;
 }
 

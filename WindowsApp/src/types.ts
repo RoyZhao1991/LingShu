@@ -91,6 +91,7 @@ export interface TaskRecord {
   participantName: string;
   depth: number;
   loopEngine: LoopEngine;
+  pendingToolCallId?: string;
   pendingQuestion?: string;
 }
 

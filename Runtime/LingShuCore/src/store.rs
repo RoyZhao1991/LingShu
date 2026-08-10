@@ -124,18 +124,20 @@ fn close_nonterminal_descendants(
 
 fn recover_interrupted_tasks(state: &mut PersistedState) {
     let now = Utc::now();
-    let (interruption, recovering, legacy_recovery, child_interrupted) =
+    let (interruption, recovering, legacy_recovery, legacy_technical_gate, child_interrupted) =
         match state.settings.locale {
         AppLocale::ZhCn => (
             "上次进程在目标完成前退出，目标与产出物均已保留。",
             "检测到上次执行中断，目标已进入恢复队列。",
             "此记录来自旧版失败终态，目标与执行证据均已保留，正在按原会话自动恢复。",
+            "旧版曾将技术故障误标为人机交互；目标与执行上下文已保留，现已转入技术恢复队列。",
             "上次进程退出时，此子任务尝试仍在运行；本次尝试已结束，主目标仍可继续。",
         ),
         AppLocale::En => (
             "The previous process exited before the goal was complete; the goal and artifacts were preserved.",
             "The previous run was interrupted; the goal is queued for recovery.",
             "This record used the legacy failed terminal state. The goal and execution evidence were preserved and the same session will recover automatically.",
+            "An older build misclassified a technical failure as human interaction. The goal and execution context were preserved and moved to technical recovery.",
             "This child attempt was still running when the previous process exited. The attempt was closed and the parent goal remains recoverable.",
         ),
     };
@@ -169,6 +171,47 @@ fn recover_interrupted_tasks(state: &mut PersistedState) {
             task.summary = child_interrupted.into();
             for step in &mut task.steps {
                 if step.status == TaskStatus::Failed {
+                    step.status = TaskStatus::Cancelled;
+                    step.detail = child_interrupted.into();
+                    step.updated_at = now;
+                }
+            }
+        }
+        task.updated_at = now;
+    }
+
+    // Older builds also used `needs_user_action` for authentication, endpoint, model-name, and
+    // protocol failures. Genuine `ask_user` checkpoints always carry the originating tool call
+    // id, so an unbound checkpoint can be migrated without guessing or losing task context.
+    for task in &mut state.tasks {
+        if task.status != TaskStatus::NeedsUserAction || task.pending_tool_call_id.is_some() {
+            continue;
+        }
+        let previous_detail = task
+            .pending_question
+            .take()
+            .filter(|question| !question.trim().is_empty())
+            .unwrap_or_else(|| task.summary.clone());
+        task.pending_tool_call_id = None;
+        if task.parent_task_id.is_none() {
+            task.status = TaskStatus::NeedsRecovery;
+            task.summary = legacy_technical_gate.into();
+            if task.error.as_deref().unwrap_or_default().trim().is_empty() {
+                task.error = Some(previous_detail);
+            }
+            for step in &mut task.steps {
+                if step.status == TaskStatus::NeedsUserAction {
+                    step.status = TaskStatus::NeedsRecovery;
+                    step.detail = legacy_technical_gate.into();
+                    step.updated_at = now;
+                }
+            }
+        } else {
+            task.status = TaskStatus::Cancelled;
+            task.summary = child_interrupted.into();
+            task.error = Some(previous_detail);
+            for step in &mut task.steps {
+                if step.status == TaskStatus::NeedsUserAction {
                     step.status = TaskStatus::Cancelled;
                     step.detail = child_interrupted.into();
                     step.updated_at = now;
@@ -965,14 +1008,14 @@ impl RuntimeStore {
     pub async fn set_needs_user_action(
         &self,
         thread_id: Uuid,
-        tool_call_id: Option<String>,
+        tool_call_id: String,
         question: String,
     ) -> Result<(), StoreError> {
         let mut state = self.state.write().await;
         let now = Utc::now();
         if let Some(task) = state.tasks.iter_mut().find(|task| task.id == thread_id) {
             task.status = TaskStatus::NeedsUserAction;
-            task.pending_tool_call_id = tool_call_id;
+            task.pending_tool_call_id = Some(tool_call_id);
             task.pending_question = Some(question.clone());
             task.summary = question.clone();
             task.updated_at = now;
@@ -1116,21 +1159,15 @@ impl RuntimeStore {
         if task.status != TaskStatus::NeedsUserAction {
             return Ok(None);
         }
-        if let Some(call_id) = task.pending_tool_call_id.take() {
-            task.session_messages.push(AgentMessage {
-                role: AgentRole::Tool,
-                content: answer,
-                tool_calls: Vec::new(),
-                tool_call_id: Some(call_id),
-            });
-        } else {
-            task.session_messages.push(AgentMessage {
-                role: AgentRole::User,
-                content: answer,
-                tool_calls: Vec::new(),
-                tool_call_id: None,
-            });
-        }
+        let Some(call_id) = task.pending_tool_call_id.take() else {
+            return Ok(None);
+        };
+        task.session_messages.push(AgentMessage {
+            role: AgentRole::Tool,
+            content: answer,
+            tool_calls: Vec::new(),
+            tool_call_id: Some(call_id),
+        });
         task.pending_question = None;
         task.status = TaskStatus::Running;
         task.updated_at = Utc::now();
@@ -1857,6 +1894,79 @@ mod tests {
         assert_eq!(task.session_messages, vec![preserved]);
         assert_eq!(reopened.next_recovery_id().await, Some(root_id));
         assert!(reopened.next_queued_id().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn restart_migrates_unbound_legacy_human_gate_to_technical_recovery() {
+        let directory = tempdir().unwrap();
+        let root_id;
+        {
+            let store = RuntimeStore::open(directory.path()).unwrap();
+            let receipt = store
+                .enqueue("Continue after the provider is repaired".into(), Vec::new())
+                .await
+                .unwrap();
+            root_id = receipt.thread_id;
+            let mut state = store.state.write().await;
+            let task = state
+                .tasks
+                .iter_mut()
+                .find(|task| task.id == root_id)
+                .unwrap();
+            task.status = TaskStatus::NeedsUserAction;
+            task.pending_tool_call_id = None;
+            task.pending_question = Some("The model service rejected this request.".into());
+            task.steps[0].status = TaskStatus::NeedsUserAction;
+            drop(state);
+            store.persist().await.unwrap();
+        }
+
+        let reopened = RuntimeStore::open(directory.path()).unwrap();
+        let task = reopened.task(root_id).await.unwrap();
+        assert_eq!(task.status, TaskStatus::NeedsRecovery);
+        assert!(task.pending_tool_call_id.is_none());
+        assert!(task.pending_question.is_none());
+        assert_eq!(
+            task.error.as_deref(),
+            Some("The model service rejected this request.")
+        );
+        assert_eq!(task.steps[0].status, TaskStatus::NeedsRecovery);
+        assert_eq!(reopened.next_recovery_id().await, Some(root_id));
+    }
+
+    #[tokio::test]
+    async fn restart_preserves_human_gate_bound_to_ask_user_tool_call() {
+        let directory = tempdir().unwrap();
+        let root_id;
+        {
+            let store = RuntimeStore::open(directory.path()).unwrap();
+            let receipt = store
+                .enqueue("Wait for my confirmation".into(), Vec::new())
+                .await
+                .unwrap();
+            root_id = receipt.thread_id;
+            store
+                .set_needs_user_action(
+                    root_id,
+                    "ask-user-call-1".into(),
+                    "Confirm the prerequisite.".into(),
+                )
+                .await
+                .unwrap();
+        }
+
+        let reopened = RuntimeStore::open(directory.path()).unwrap();
+        let task = reopened.task(root_id).await.unwrap();
+        assert_eq!(task.status, TaskStatus::NeedsUserAction);
+        assert_eq!(
+            task.pending_tool_call_id.as_deref(),
+            Some("ask-user-call-1")
+        );
+        assert_eq!(
+            task.pending_question.as_deref(),
+            Some("Confirm the prerequisite.")
+        );
+        assert!(reopened.next_recovery_id().await.is_none());
     }
 
     #[tokio::test]

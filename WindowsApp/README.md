@@ -15,4 +15,4 @@ The shared local plugin package contract is documented in
 is bundled as a self-contained Windows resource and requires no separate Python
 installation in release builds.
 
-Prebuilt x64 preview installers are published at [windows-v0.1.0-preview.11](https://github.com/RoyZhao1991/LingShu/releases/tag/windows-v0.1.0-preview.11). The stable setup filename is [`Nous-Windows-x64-Setup.exe`](https://github.com/RoyZhao1991/LingShu/releases/download/windows-v0.1.0-preview.11/Nous-Windows-x64-Setup.exe).
+Prebuilt x64 preview installers are published at [windows-v0.1.0-preview.13](https://github.com/RoyZhao1991/LingShu/releases/tag/windows-v0.1.0-preview.13). The stable setup filename is [`Nous-Windows-x64-Setup.exe`](https://github.com/RoyZhao1991/LingShu/releases/download/windows-v0.1.0-preview.13/Nous-Windows-x64-Setup.exe).
