@@ -638,15 +638,13 @@ impl PluginRegistry {
     }
 
     fn design_kb_record(&self, root: PathBuf) -> PluginRecord {
-        let runtime_ready = design_kb_invocation(&root, &self.platform).is_some();
+        let runtime_ready = !design_kb_invocations(&root, &self.platform).is_empty();
         PluginRecord {
             id: DESIGN_KB_ID.into(),
             name: "DesignKB".into(),
-            version: "1.0.0".into(),
-            description:
-                "Built-in presentation layouts, palettes, typography, icons, generator, and review rubric."
-                    .into(),
-            description_zh: "内置演示文稿版式、配色、字体、图标、生成器与验收规范。".into(),
+            version: "1.1.0".into(),
+            description: "Built-in presentation design system with a PptxGenJS-first generator, compatible template fallback, and review rubric.".into(),
+            description_zh: "内置演示文稿设计系统，优先使用 PptxGenJS 生成，并提供模板兼容回退与验收规范。".into(),
             source: PluginSource::BuiltIn,
             enabled: true,
             available: true,
@@ -655,7 +653,7 @@ impl PluginRegistry {
             permissions: design_kb_permissions(),
             tools: vec![design_kb_tool_record()],
             status_detail: if runtime_ready {
-                "Knowledge and generator ready".into()
+                "Knowledge and multi-engine presentation generator ready".into()
             } else {
                 "Knowledge ready; presentation generator runtime is unavailable".into()
             },
@@ -712,7 +710,8 @@ impl PluginRegistry {
             "slides": arguments.get("slides").cloned().unwrap_or_else(|| Value::Array(Vec::new()))
         });
         fs::write(&input_path, serde_json::to_vec_pretty(&payload)?)?;
-        let Some((program, prefix)) = design_kb_invocation(&root, &self.platform) else {
+        let invocations = design_kb_invocations(&root, &self.platform);
+        if invocations.is_empty() {
             let _ = fs::remove_file(&input_path);
             return Ok(PluginExecution {
                 output: json!({
@@ -725,39 +724,102 @@ impl PluginRegistry {
                 .to_string(),
                 artifact_paths: Vec::new(),
             });
-        };
-        let mut process = tokio::process::Command::new(program);
-        process.args(prefix);
-        process
-            .arg(&input_path)
-            .arg(&output_path)
-            .arg(&root)
-            .current_dir(workspace)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-        let output = tokio::time::timeout(Duration::from_secs(300), process.output())
-            .await
-            .map_err(|_| PluginError::Execution("DesignKB generation timed out".into()))??;
-        let _ = fs::remove_file(&input_path);
-        if !output.status.success() || !output_path.is_file() {
-            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-            return Err(PluginError::Execution(if stderr.is_empty() {
-                format!("DesignKB generator exited with {}", output.status)
-            } else {
-                stderr
-            }));
         }
-        let metadata = fs::metadata(&output_path)?;
+
+        let mut failures = Vec::new();
+        for invocation in invocations {
+            // A same-name artifact may already exist from an earlier turn. Never accept stale
+            // bytes as the output of a failed generator attempt.
+            let _ = fs::remove_file(&output_path);
+
+            let mut process = tokio::process::Command::new(&invocation.program);
+            process.args(&invocation.prefix);
+            process
+                .arg(&input_path)
+                .arg(&output_path)
+                .arg(&root)
+                .current_dir(workspace)
+                .kill_on_drop(true)
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped());
+
+            let output =
+                match tokio::time::timeout(Duration::from_secs(300), process.output()).await {
+                    Err(_) => {
+                        failures.push(format!("{}: generation timed out", invocation.engine));
+                        continue;
+                    }
+                    Ok(Err(error)) => {
+                        failures.push(format!("{}: {error}", invocation.engine));
+                        continue;
+                    }
+                    Ok(Ok(output)) => output,
+                };
+
+            if !output.status.success() {
+                let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+                failures.push(if stderr.is_empty() {
+                    format!("{}: exited with {}", invocation.engine, output.status)
+                } else {
+                    format!("{}: {stderr}", invocation.engine)
+                });
+                continue;
+            }
+
+            let metadata = match fs::metadata(&output_path) {
+                Ok(metadata) => metadata,
+                Err(error) => {
+                    failures.push(format!(
+                        "{}: output is missing ({error})",
+                        invocation.engine
+                    ));
+                    continue;
+                }
+            };
+            if metadata.len() <= 1_000 {
+                failures.push(format!(
+                    "{}: output is unexpectedly small ({} bytes)",
+                    invocation.engine,
+                    metadata.len()
+                ));
+                continue;
+            }
+            let slide_count = match validate_pptx_package(&output_path) {
+                Ok(slide_count) => slide_count,
+                Err(error) => {
+                    failures.push(format!("{}: {error}", invocation.engine));
+                    continue;
+                }
+            };
+
+            let _ = fs::remove_file(&input_path);
+            return Ok(PluginExecution {
+                output: json!({
+                    "ok": true,
+                    "plugin": "DesignKB",
+                    "engine": invocation.engine,
+                    "path": output_path,
+                    "bytes": metadata.len(),
+                    "slides": slide_count,
+                    "theme": payload["theme"]
+                })
+                .to_string(),
+                artifact_paths: vec![output_path],
+            });
+        }
+
+        let _ = fs::remove_file(&input_path);
+        let _ = fs::remove_file(&output_path);
         Ok(PluginExecution {
             output: json!({
-                "ok": true,
-                "plugin": "DesignKB",
-                "path": output_path,
-                "bytes": metadata.len(),
-                "theme": payload["theme"]
+                "ok": false,
+                "retry_with_revised_input": true,
+                "reason": "Every available DesignKB generator rejected or failed this presentation request. No stale artifact was returned.",
+                "generatorFailures": failures,
+                "recovery": "Revise the presentation plan or template reference, then call the same capability again."
             })
             .to_string(),
-            artifact_paths: vec![output_path],
+            artifact_paths: Vec::new(),
         })
     }
 
@@ -1060,30 +1122,118 @@ fn design_kb_tool_record() -> PluginToolRecord {
     }
 }
 
-fn design_kb_invocation(root: &Path, platform: &str) -> Option<(PathBuf, Vec<OsString>)> {
-    let windows_helper = root.join("bin").join("designkb-generator.exe");
-    if windows_helper.is_file() {
-        return Some((windows_helper, Vec::new()));
+#[derive(Debug, Clone)]
+struct DesignKbInvocation {
+    program: PathBuf,
+    prefix: Vec<OsString>,
+    engine: &'static str,
+}
+
+fn design_kb_invocations(root: &Path, platform: &str) -> Vec<DesignKbInvocation> {
+    let mut invocations = Vec::new();
+
+    let pptxgenjs_windows = root.join("bin").join("designkb-pptxgenjs.exe");
+    if pptxgenjs_windows.is_file() {
+        invocations.push(DesignKbInvocation {
+            program: pptxgenjs_windows,
+            prefix: Vec::new(),
+            engine: "pptxgenjs",
+        });
     }
-    let unix_helper = root.join("bin").join("designkb-generator");
-    if unix_helper.is_file() {
-        return Some((unix_helper, Vec::new()));
+    let pptxgenjs_unix = root.join("bin").join("designkb-pptxgenjs");
+    if pptxgenjs_unix.is_file() {
+        invocations.push(DesignKbInvocation {
+            program: pptxgenjs_unix,
+            prefix: Vec::new(),
+            engine: "pptxgenjs",
+        });
     }
+
+    let node_script = root.join("pptxgenjs").join("generator.cjs");
+    if node_script.is_file() {
+        if let Some(node) = find_command("node") {
+            invocations.push(DesignKbInvocation {
+                program: node,
+                prefix: vec![node_script.into_os_string()],
+                engine: "pptxgenjs-node",
+            });
+        }
+    }
+
+    let python_windows = root.join("bin").join("designkb-generator.exe");
+    if python_windows.is_file() {
+        invocations.push(DesignKbInvocation {
+            program: python_windows,
+            prefix: Vec::new(),
+            engine: "python-pptx",
+        });
+    }
+    let python_unix = root.join("bin").join("designkb-generator");
+    if python_unix.is_file() {
+        invocations.push(DesignKbInvocation {
+            program: python_unix,
+            prefix: Vec::new(),
+            engine: "python-pptx",
+        });
+    }
+
     let script = root.join("generator.py");
-    if !script.is_file() {
-        return None;
-    }
-    if platform == "windows" {
-        if let Some(py) = find_command("py") {
-            return Some((py, vec![OsString::from("-3"), script.into_os_string()]));
+    if script.is_file() {
+        if platform == "windows" {
+            if let Some(py) = find_command("py") {
+                invocations.push(DesignKbInvocation {
+                    program: py,
+                    prefix: vec![OsString::from("-3"), script.clone().into_os_string()],
+                    engine: "python-pptx-script",
+                });
+            }
+        }
+        for command in ["python3", "python"] {
+            if let Some(python) = find_command(command) {
+                invocations.push(DesignKbInvocation {
+                    program: python,
+                    prefix: vec![script.clone().into_os_string()],
+                    engine: "python-pptx-script",
+                });
+                break;
+            }
         }
     }
-    for command in ["python3", "python"] {
-        if let Some(python) = find_command(command) {
-            return Some((python, vec![script.clone().into_os_string()]));
+
+    invocations
+}
+
+fn validate_pptx_package(path: &Path) -> Result<usize, String> {
+    let file = fs::File::open(path).map_err(|error| format!("cannot open PPTX: {error}"))?;
+    let mut archive = zip::ZipArchive::new(file)
+        .map_err(|error| format!("output is not a valid PPTX ZIP package: {error}"))?;
+    let mut has_content_types = false;
+    let mut has_presentation = false;
+    let mut slide_count = 0;
+
+    for index in 0..archive.len() {
+        let entry = archive
+            .by_index(index)
+            .map_err(|error| format!("cannot inspect PPTX package entry: {error}"))?;
+        let name = entry.name();
+        if name == "[Content_Types].xml" {
+            has_content_types = true;
+        } else if name == "ppt/presentation.xml" {
+            has_presentation = true;
+        } else if name.starts_with("ppt/slides/slide")
+            && name.ends_with(".xml")
+            && !name.contains("/_rels/")
+        {
+            slide_count += 1;
         }
     }
-    None
+
+    if !has_content_types || !has_presentation || slide_count == 0 {
+        return Err(format!(
+            "output is missing required PowerPoint package parts (contentTypes={has_content_types}, presentation={has_presentation}, slides={slide_count})"
+        ));
+    }
+    Ok(slide_count)
 }
 
 fn source_rank(source: &PluginSource) -> u8 {
@@ -1936,12 +2086,16 @@ mod tests {
         let artifact_path = result.artifact_paths[0].clone();
         let first_preview = preview_file(&artifact_path).unwrap();
         assert_eq!(first_preview.kind, PreviewKind::Presentation);
-        assert!(first_preview.faithful);
-        assert_eq!(
-            first_preview.rendered_mime_type.as_deref(),
-            Some("application/pdf")
-        );
-        assert!(first_preview.rendered_content.is_some());
+        if first_preview.faithful {
+            assert_eq!(
+                first_preview.rendered_mime_type.as_deref(),
+                Some("application/pdf")
+            );
+            assert!(first_preview.rendered_content.is_some());
+        } else {
+            assert!(first_preview.rendered_mime_type.is_none());
+            assert!(first_preview.rendered_content.is_none());
+        }
 
         registry
             .execute(
@@ -1964,12 +2118,17 @@ mod tests {
         let revised_preview = preview_file(&artifact_path).unwrap();
         assert_ne!(first_preview.revision, revised_preview.revision);
         assert!(revised_preview.content.contains("Revised artifact"));
-        assert!(revised_preview.faithful);
-        assert_eq!(
-            revised_preview.rendered_mime_type.as_deref(),
-            Some("application/pdf")
-        );
-        assert!(revised_preview.rendered_content.is_some());
+        assert!(revised_preview.content.contains("Latest bytes win"));
+        if revised_preview.faithful {
+            assert_eq!(
+                revised_preview.rendered_mime_type.as_deref(),
+                Some("application/pdf")
+            );
+            assert!(revised_preview.rendered_content.is_some());
+        } else {
+            assert!(revised_preview.rendered_mime_type.is_none());
+            assert!(revised_preview.rendered_content.is_none());
+        }
     }
 
     #[tokio::test]

@@ -1,0 +1,57 @@
+{
+  "title": "DesignKB PptxGenJS smoke test",
+  "theme": "royal",
+  "slides": [
+    {
+      "layout": "cover",
+      "title": "DesignKB PptxGenJS",
+      "subtitle": "Cross-platform presentation generation"
+    },
+    {
+      "layout": "agenda",
+      "title": "Agenda",
+      "bullets": [
+        "Consistent visual system",
+        "Structured layouts",
+        "Native charts and tables"
+      ]
+    },
+    {
+      "layout": "bignumber",
+      "title": "Outcome snapshot",
+      "metrics": [
+        { "value": "12", "label": "supported layouts" },
+        { "value": "2", "label": "compatible engines" },
+        { "value": "1", "label": "shared tool contract" }
+      ]
+    },
+    {
+      "layout": "chart",
+      "title": "Validated progress",
+      "chart": {
+        "type": "bar",
+        "categories": ["Plan", "Build", "Verify"],
+        "series": [
+          { "name": "Completion", "values": [35, 78, 100] }
+        ]
+      }
+    },
+    {
+      "layout": "compare",
+      "title": "Engine strategy",
+      "left": {
+        "title": "PptxGenJS",
+        "bullets": ["Cross-platform", "Native charts", "Self-contained runtime"]
+      },
+      "right": {
+        "title": "Python fallback",
+        "bullets": ["Template ingestion", "Backward compatibility", "Automatic recovery"]
+      }
+    },
+    {
+      "layout": "closing",
+      "title": "One capability, multiple engines",
+      "subtitle": "The current artifact bytes always win"
+    }
+  ]
+}

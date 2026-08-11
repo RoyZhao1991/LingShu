@@ -10,6 +10,7 @@ on:
       - "WindowsApp/**"
       - "Runtime/LingShuCore/**"
       - "Runtime/Grok/crates/codegen/lingshu-grok-runtime/**"
+      - "Resources/DesignKB/**"
       - "Tests/LingShuMacTests/KernelABIContractTests.swift"
       - ".github/workflows/windows.yml"
   pull_request:
@@ -19,6 +20,7 @@ on:
       - "WindowsApp/**"
       - "Runtime/LingShuCore/**"
       - "Runtime/Grok/crates/codegen/lingshu-grok-runtime/**"
+      - "Resources/DesignKB/**"
       - "Tests/LingShuMacTests/KernelABIContractTests.swift"
       - ".github/workflows/windows.yml"
   workflow_dispatch:
@@ -47,7 +49,9 @@ jobs:
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: WindowsApp/package-lock.json
+          cache-dependency-path: |
+            WindowsApp/package-lock.json
+            Resources/DesignKB/pptxgenjs/package-lock.json
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
@@ -63,7 +67,34 @@ jobs:
         working-directory: WindowsApp
         run: npm ci
 
-      - name: Build the self-contained DesignKB generator
+      - name: Build and verify the self-contained PptxGenJS generator
+        working-directory: Resources/DesignKB/pptxgenjs
+        run: |
+          npm ci
+          npm run build:windows
+          $helper = Join-Path $env:GITHUB_WORKSPACE "Resources/DesignKB/bin/designkb-pptxgenjs.exe"
+          $smokeInput = Join-Path $env:GITHUB_WORKSPACE "Resources/DesignKB/pptxgenjs/smoke-input.json"
+          $smokeOutput = Join-Path $env:RUNNER_TEMP "designkb-pptxgenjs-smoke.pptx"
+          if (-not (Test-Path $helper)) {
+            throw "The self-contained PptxGenJS generator was not produced."
+          }
+          & $helper $smokeInput $smokeOutput (Join-Path $env:GITHUB_WORKSPACE "Resources/DesignKB")
+          if ($LASTEXITCODE -ne 0 -or -not (Test-Path $smokeOutput) -or (Get-Item $smokeOutput).Length -lt 10000) {
+            throw "The bundled PptxGenJS generator failed its real PowerPoint smoke test."
+          }
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $archive = [System.IO.Compression.ZipFile]::OpenRead($smokeOutput)
+          try {
+            $slides = @($archive.Entries | Where-Object { $_.FullName -match '^ppt/slides/slide[0-9]+\.xml$' })
+            if ($slides.Count -ne 6) {
+              throw "Expected 6 slides from the PptxGenJS smoke test; found $($slides.Count)."
+            }
+          } finally {
+            $archive.Dispose()
+          }
+          Write-Host "Bundled PptxGenJS generator: $helper"
+
+      - name: Build the compatible Python DesignKB generator
         run: |
           python -m pip install --disable-pip-version-check python-pptx pillow pyinstaller
           $bin = Join-Path $env:GITHUB_WORKSPACE "Resources/DesignKB/bin"
@@ -153,6 +184,6 @@ jobs:
           $version = (Get-Content (Join-Path $env:GITHUB_WORKSPACE "WindowsApp/package.json") -Raw | ConvertFrom-Json).version
           gh release view $tag --repo $env:GITHUB_REPOSITORY *> $null
           if ($LASTEXITCODE -ne 0) {
-            gh release create $tag --repo $env:GITHUB_REPOSITORY --prerelease --title "Nous (LingShu) Windows Technical Preview $version" --notes "Windows x64 technical preview built and tested on GitHub's Windows runner. This build fixes stale and misleading PowerPoint previews by versioning previews from the actual file bytes, rejecting late responses from older preview requests, and rendering PPTX through Microsoft PowerPoint or LibreOffice when available. If faithful rendering is unavailable, Nous now shows an explicit content outline instead of fabricated slide cards. The shared presentation capability contract now exposes rich layouts, tables, timelines, charts, images, quotes, comparisons, and closing pages to every compatible plugin. A provider-neutral quality gate rejects metadata-only or repetitive bullet decks and asks the same selected plugin to revise its plan before fallback. The generic capability-driven routing rule remains unchanged: an enabled, available, runtime-ready plugin must be used unless the user explicitly disables plugins. The release preserves the replaceable Loop Harness, global memory, permissions, task ledger, artifact tracking, worker/checker planning, Office Foundation for DOCX/PPTX/XLSX, document extraction, bundled presentation generation, and independent checking shared by both desktop clients. Direct Windows computer control and realtime audio/video perception are not included in this preview."
+          gh release create $tag --repo $env:GITHUB_REPOSITORY --prerelease --title "Nous (LingShu) Windows Technical Preview $version" --notes "Windows x64 technical preview built and tested on GitHub's Windows runner. The bundled DesignKB presentation capability now uses a self-contained PptxGenJS engine first for professional cross-platform layouts, charts, tables, images, timelines, comparisons, speaker notes, and consistent visual systems, while retaining the existing Python engine for template ingestion and automatic compatibility fallback. Every engine writes through the same plugin contract, validates the actual OOXML package, removes stale same-name artifacts before each attempt, and retries with the compatible engine when needed. PowerPoint previews are versioned from the actual file bytes and reject late responses from older requests, so editing a file in place cannot reopen the first cached version. Microsoft PowerPoint or LibreOffice is used for faithful PDF rendering when available; otherwise Nous shows an explicit current-content outline instead of fabricated slide cards. The release preserves the replaceable Loop Harness, global memory, permissions, task ledger, artifact tracking, worker/checker planning, Office Foundation for DOCX/PPTX/XLSX, document extraction, and independent checking shared by both desktop clients. Direct Windows computer control and realtime audio/video perception are not included in this preview."
           }
           gh release upload $tag dist/windows/* --repo $env:GITHUB_REPOSITORY --clobber

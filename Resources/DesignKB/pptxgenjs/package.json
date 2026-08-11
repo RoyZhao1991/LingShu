@@ -1,0 +1,19 @@
+{
+  "name": "@lingshu/designkb-pptxgenjs",
+  "version": "1.1.0",
+  "private": true,
+  "description": "Self-contained PptxGenJS adapter for the LingShu DesignKB presentation capability.",
+  "main": "generator.cjs",
+  "bin": "generator.cjs",
+  "scripts": {
+    "build:windows": "pkg . --targets node22-win-x64 --output ../bin/designkb-pptxgenjs.exe",
+    "build:mac:arm64": "pkg . --targets node22-macos-arm64 --output ../bin/designkb-pptxgenjs-arm64",
+    "build:mac:x64": "pkg . --targets node22-macos-x64 --output ../bin/designkb-pptxgenjs-x64"
+  },
+  "dependencies": {
+    "pptxgenjs": "4.0.1"
+  },
+  "devDependencies": {
+    "@yao-pkg/pkg": "6.22.0"
+  }
+}

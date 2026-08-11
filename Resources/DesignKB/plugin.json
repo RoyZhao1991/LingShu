@@ -2,9 +2,9 @@
   "schemaVersion": 1,
   "id": "lingshu.design-kb",
   "name": "DesignKB",
-  "version": "1.0.0",
-  "description": "Built-in presentation layouts, palettes, typography, icons, generator, and review rubric.",
-  "descriptionZh": "内置演示文稿版式、配色、字体、图标、生成器与验收规范。",
+  "version": "1.1.0",
+  "description": "Built-in presentation design system with a PptxGenJS-first generator, compatible template fallback, and review rubric.",
+  "descriptionZh": "内置演示文稿设计系统，优先使用 PptxGenJS 生成，并提供模板兼容回退与验收规范。",
   "enabled": true,
   "aliases": [
     "DesignKB",
@@ -19,7 +19,7 @@
     "systemSensitive": false
   },
   "entrypoint": {
-    "command": "bin/designkb-generator.exe",
+    "command": "bin/designkb-pptxgenjs.exe",
     "arguments": [],
     "timeoutSeconds": 300
   },
