@@ -51,6 +51,7 @@ export default function App() {
   const messageScroll = useRef<HTMLDivElement>(null);
   const composerInput = useRef<HTMLTextAreaElement>(null);
   const keepAtBottom = useRef(true);
+  const previewRequest = useRef(0);
 
   const locale = settingsDraft?.locale ?? snapshot?.settings.locale ?? "zh_cn";
   const t = strings(locale);
@@ -190,10 +191,13 @@ export default function App() {
   };
 
   const showPathPreview = async (path: string) => {
+    const request = ++previewRequest.current;
+    setPreview(undefined);
     try {
-      setPreview(await runtimeInvoke<PreviewPayload>("preview_path", { path }));
+      const next = await runtimeInvoke<PreviewPayload>("preview_path", { path });
+      if (previewRequest.current === request) setPreview(next);
     } catch (reason) {
-      setError(String(reason));
+      if (previewRequest.current === request) setError(String(reason));
     }
   };
 
@@ -423,7 +427,7 @@ export default function App() {
           permissionUpdating={permissionUpdating} error={error} onDraft={setSettingsDraft} onApiKey={setApiKey}
           onProvider={selectProvider} onPermission={updateExecutionPermission} onSave={saveSettings} />
       )}
-      {preview && <PreviewDialog payload={preview} locale={locale} onClose={() => setPreview(undefined)} />}
+      {preview && <PreviewDialog key={`${preview.path}:${preview.revision}`} payload={preview} locale={locale} onClose={() => setPreview(undefined)} />}
       {actionTask && (
         <HumanActionDialog task={actionTask} locale={locale} value={actionAnswer} busy={resuming} error={error}
           onChange={setActionAnswer} onResume={resumeAction}
@@ -733,16 +737,19 @@ function PreviewDialog({ payload, locale, onClose }: { payload: PreviewPayload; 
   const t = strings(locale);
   return <div className="modal-layer"><div className="preview-dialog">
     <header><div><FileText /><strong>{payload.name}</strong></div><div className="preview-actions"><button onClick={() => void runtimeInvoke("open_external", { path: payload.path })}><ExternalLink />{t.openExternal}</button><button onClick={() => void runtimeInvoke("reveal_path", { path: payload.path })}><FolderOpen />{t.reveal}</button><button className="icon-button" title={t.close} onClick={onClose}><X /></button></div></header>
-    <div className="preview-content"><PreviewBody payload={payload} unsupported={t.unsupported} /></div>
+    <div className="preview-content"><PreviewBody payload={payload} unsupported={t.unsupported} presentationOutline={t.presentationOutline} /></div>
   </div></div>;
 }
 
-function PreviewBody({ payload, unsupported }: { payload: PreviewPayload; unsupported: string }) {
+function PreviewBody({ payload, unsupported, presentationOutline }: { payload: PreviewPayload; unsupported: string; presentationOutline: string }) {
   if (payload.kind === "image") return <img className="image-preview" src={payload.content} alt={payload.name} />;
-  if (payload.kind === "pdf") return <embed className="pdf-preview" src={payload.content} type="application/pdf" />;
+  if (payload.kind === "pdf") return <embed key={payload.revision} className="pdf-preview" src={payload.content} type="application/pdf" />;
   if (payload.kind === "html") return <iframe className="html-preview" sandbox="" srcDoc={payload.content} title={payload.name} />;
   if (payload.kind === "markdown") return <div className="document-preview markdown-body"><MarkdownContent>{payload.content}</MarkdownContent></div>;
-  if (payload.kind === "presentation") return <div className="slide-preview">{payload.sections.map((section, index) => { const [title, ...body] = section.split("\n"); return <section key={`${index}-${title}`}><small>{String(index + 1).padStart(2, "0")}</small><h2>{title}</h2><ul>{body.map((line) => <li key={line}>{line}</li>)}</ul></section>; })}</div>;
+  if (payload.kind === "presentation" && payload.faithful && payload.renderedContent && payload.renderedMimeType === "application/pdf") {
+    return <embed key={payload.revision} className="pdf-preview" src={payload.renderedContent} type="application/pdf" />;
+  }
+  if (payload.kind === "presentation") return <div className="presentation-outline"><p className="preview-fallback-note">{presentationOutline}</p>{payload.sections.map((section, index) => { const [title, ...body] = section.split("\n"); return <section key={`${index}-${title}`}><small>{String(index + 1).padStart(2, "0")}</small><div><h2>{title || `${index + 1}`}</h2><ul>{body.map((line, lineIndex) => <li key={`${lineIndex}-${line}`}>{line}</li>)}</ul></div></section>; })}</div>;
   if (payload.kind === "spreadsheet") return <div className="spreadsheet-preview">{payload.sections.map((section, sheetIndex) => {
     const [title, ...lines] = section.split("\n");
     const rows = lines.map((line) => line.split("\t"));

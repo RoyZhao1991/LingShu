@@ -230,6 +230,7 @@ async function mockInvoke<T>(command: string, args?: Record<string, unknown>): P
     case "preview_path": return {
       name: "Project-Aurora-Brief.md", path: demoArtifactPath, kind: "markdown", mimeType: "text/markdown", sizeBytes: 1840,
       content: "# Project Aurora\n\n## Objective\nImprove release quality with a visible, repeatable verification loop.\n\n## Delivery plan\n\n1. Define measurable acceptance criteria.\n2. Produce the requested artifact.\n3. Verify the real file before completion.", sections: [],
+      revision: "development-preview", faithful: true,
     } satisfies PreviewPayload as T;
     case "open_external":
     case "reveal_path": return undefined as T;

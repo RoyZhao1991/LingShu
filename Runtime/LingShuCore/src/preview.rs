@@ -2,9 +2,13 @@ use base64::Engine;
 use quick_xml::events::Event;
 use quick_xml::Reader;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::fs;
 use std::io::{Cursor, Read};
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+use std::thread;
+use std::time::{Duration, Instant};
 use thiserror::Error;
 use zip::ZipArchive;
 
@@ -33,6 +37,14 @@ pub struct PreviewPayload {
     pub content: String,
     pub sections: Vec<String>,
     pub size_bytes: u64,
+    #[serde(default)]
+    pub revision: String,
+    #[serde(default)]
+    pub rendered_content: Option<String>,
+    #[serde(default)]
+    pub rendered_mime_type: Option<String>,
+    #[serde(default)]
+    pub faithful: bool,
 }
 
 #[derive(Debug, Error)]
@@ -62,6 +74,7 @@ pub fn preview_file(path: impl AsRef<Path>) -> Result<PreviewPayload, PreviewErr
         .unwrap_or("")
         .to_ascii_lowercase();
     let bytes = fs::read(path)?;
+    let revision = format!("{:x}", Sha256::digest(&bytes));
     let mut payload = PreviewPayload {
         name,
         path: path.display().to_string(),
@@ -70,28 +83,36 @@ pub fn preview_file(path: impl AsRef<Path>) -> Result<PreviewPayload, PreviewErr
         content: String::new(),
         sections: Vec::new(),
         size_bytes: metadata.len(),
+        revision: revision.clone(),
+        rendered_content: None,
+        rendered_mime_type: None,
+        faithful: false,
     };
     match ext.as_str() {
         "md" | "markdown" => {
             payload.kind = PreviewKind::Markdown;
             payload.mime_type = "text/markdown".into();
             payload.content = String::from_utf8_lossy(&bytes).into_owned();
+            payload.faithful = true;
         }
         "txt" | "log" | "csv" | "tsv" => {
             payload.kind = PreviewKind::Text;
             payload.mime_type = "text/plain".into();
             payload.content = String::from_utf8_lossy(&bytes).into_owned();
+            payload.faithful = true;
         }
         "json" | "yaml" | "yml" | "toml" | "xml" | "rs" | "swift" | "js" | "ts" | "tsx" | "jsx"
         | "py" | "sh" | "ps1" | "css" => {
             payload.kind = PreviewKind::Code;
             payload.mime_type = "text/plain".into();
             payload.content = String::from_utf8_lossy(&bytes).into_owned();
+            payload.faithful = true;
         }
         "html" | "htm" => {
             payload.kind = PreviewKind::Html;
             payload.mime_type = "text/html".into();
             payload.content = String::from_utf8_lossy(&bytes).into_owned();
+            payload.faithful = true;
         }
         "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" | "svg" => {
             payload.kind = PreviewKind::Image;
@@ -101,6 +122,7 @@ pub fn preview_file(path: impl AsRef<Path>) -> Result<PreviewPayload, PreviewErr
                 payload.mime_type,
                 base64::engine::general_purpose::STANDARD.encode(bytes)
             );
+            payload.faithful = true;
         }
         "pdf" => {
             payload.kind = PreviewKind::Pdf;
@@ -117,6 +139,7 @@ pub fn preview_file(path: impl AsRef<Path>) -> Result<PreviewPayload, PreviewErr
                 "data:application/pdf;base64,{}",
                 base64::engine::general_purpose::STANDARD.encode(bytes)
             );
+            payload.faithful = true;
         }
         "docx" => {
             payload.kind = PreviewKind::Document;
@@ -136,6 +159,14 @@ pub fn preview_file(path: impl AsRef<Path>) -> Result<PreviewPayload, PreviewErr
                 "application/vnd.openxmlformats-officedocument.presentationml.presentation".into();
             payload.sections = presentation_slides(&bytes)?;
             payload.content = payload.sections.join("\n\n");
+            if let Some(rendered) = render_presentation_pdf(path, &revision) {
+                payload.rendered_content = Some(format!(
+                    "data:application/pdf;base64,{}",
+                    base64::engine::general_purpose::STANDARD.encode(rendered)
+                ));
+                payload.rendered_mime_type = Some("application/pdf".into());
+                payload.faithful = true;
+            }
         }
         "xlsx" => {
             payload.kind = PreviewKind::Spreadsheet;
@@ -147,6 +178,112 @@ pub fn preview_file(path: impl AsRef<Path>) -> Result<PreviewPayload, PreviewErr
         _ => {}
     }
     Ok(payload)
+}
+
+fn render_presentation_pdf(path: &Path, revision: &str) -> Option<Vec<u8>> {
+    let cache_dir = std::env::temp_dir().join("lingshu-preview").join(revision);
+    fs::create_dir_all(&cache_dir).ok()?;
+    let cached_pdf = cache_dir.join("presentation.pdf");
+    if cached_pdf.is_file() {
+        return fs::read(cached_pdf).ok();
+    }
+
+    #[cfg(target_os = "windows")]
+    if render_with_powerpoint(path, &cached_pdf) && cached_pdf.is_file() {
+        return fs::read(cached_pdf).ok();
+    }
+
+    let converted = render_with_libreoffice(path, &cache_dir)?;
+    if converted != cached_pdf {
+        fs::rename(&converted, &cached_pdf)
+            .or_else(|_| fs::copy(&converted, &cached_pdf).map(|_| ()))
+            .ok()?;
+    }
+    fs::read(cached_pdf).ok()
+}
+
+#[cfg(target_os = "windows")]
+fn render_with_powerpoint(source: &Path, destination: &Path) -> bool {
+    let source = powershell_literal(source);
+    let destination = powershell_literal(destination);
+    let script = format!(
+        "$ErrorActionPreference='Stop'; $app=New-Object -ComObject PowerPoint.Application; \
+         $presentation=$app.Presentations.Open('{source}',$true,$true,$false); \
+         $presentation.SaveAs('{destination}',32); $presentation.Close(); $app.Quit();"
+    );
+    ["powershell.exe", "pwsh.exe"].into_iter().any(|program| {
+        let mut command = Command::new(program);
+        command.args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            &script,
+        ]);
+        command_succeeds(command, Duration::from_secs(90))
+    })
+}
+
+#[cfg(target_os = "windows")]
+fn powershell_literal(path: &Path) -> String {
+    path.display().to_string().replace('\'', "''")
+}
+
+fn render_with_libreoffice(source: &Path, output_dir: &Path) -> Option<PathBuf> {
+    #[cfg(target_os = "windows")]
+    let candidates = [
+        PathBuf::from("soffice.exe"),
+        PathBuf::from(r"C:\Program Files\LibreOffice\program\soffice.exe"),
+        PathBuf::from(r"C:\Program Files (x86)\LibreOffice\program\soffice.exe"),
+    ];
+    #[cfg(target_os = "macos")]
+    let candidates = [
+        PathBuf::from("/Applications/LibreOffice.app/Contents/MacOS/soffice"),
+        PathBuf::from("/opt/homebrew/bin/soffice"),
+        PathBuf::from("/usr/local/bin/soffice"),
+        PathBuf::from("soffice"),
+    ];
+    #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
+    let candidates = [PathBuf::from("soffice"), PathBuf::from("libreoffice")];
+
+    let output_name = source
+        .file_stem()
+        .map(|stem| PathBuf::from(stem).with_extension("pdf"))?;
+    let output_path = output_dir.join(output_name);
+    for candidate in candidates {
+        let mut command = Command::new(candidate);
+        command
+            .arg("--headless")
+            .arg("--convert-to")
+            .arg("pdf")
+            .arg("--outdir")
+            .arg(output_dir)
+            .arg(source);
+        if command_succeeds(command, Duration::from_secs(90)) && output_path.is_file() {
+            return Some(output_path);
+        }
+    }
+    None
+}
+
+fn command_succeeds(mut command: Command, timeout: Duration) -> bool {
+    command.stdout(Stdio::null()).stderr(Stdio::null());
+    let Ok(mut child) = command.spawn() else {
+        return false;
+    };
+    let started = Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return status.success(),
+            Ok(None) if started.elapsed() < timeout => thread::sleep(Duration::from_millis(100)),
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return false;
+            }
+        }
+    }
 }
 
 fn image_mime(ext: &str) -> &'static str {
@@ -425,6 +562,7 @@ fn xml_text(xml: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
     use std::path::PathBuf;
 
     #[test]
@@ -437,5 +575,24 @@ mod tests {
         assert!(preview.content.starts_with("data:application/pdf;base64,"));
         assert!(!preview.sections.is_empty());
         assert!(preview.sections.join("\n").contains("Project Aurora"));
+        assert!(preview.faithful);
+        assert!(!preview.revision.is_empty());
+    }
+
+    #[test]
+    fn preview_revision_changes_when_same_path_is_overwritten() {
+        let fixture = std::env::temp_dir().join(format!(
+            "lingshu-preview-revision-{}-{}.txt",
+            std::process::id(),
+            std::thread::current().name().unwrap_or("test")
+        ));
+        fs::write(&fixture, "first version").expect("write first fixture");
+        let first = preview_file(&fixture).expect("preview first fixture");
+        fs::write(&fixture, "second version").expect("overwrite fixture");
+        let second = preview_file(&fixture).expect("preview overwritten fixture");
+        let _ = fs::remove_file(&fixture);
+
+        assert_ne!(first.revision, second.revision);
+        assert_eq!(second.content, "second version");
     }
 }

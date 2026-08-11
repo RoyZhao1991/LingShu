@@ -204,6 +204,10 @@ export interface PreviewPayload {
   content: string;
   sections: string[];
   sizeBytes: number;
+  revision: string;
+  renderedContent?: string;
+  renderedMimeType?: string;
+  faithful: boolean;
 }
 
 export type Page = "chat" | "threads" | "status" | "plugins" | "settings";

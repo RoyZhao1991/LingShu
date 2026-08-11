@@ -406,9 +406,16 @@ impl PluginRegistry {
                     attempts.push(json!({
                         "providerId": route.plugin_id.clone(),
                         "providerTool": route.tool.exposed_name.clone(),
-                        "result": if state.rejected { "rejected" } else { "completed" }
+                        "result": if state.retry_with_revised_input {
+                            "revision_requested"
+                        } else if state.rejected {
+                            "rejected"
+                        } else {
+                            "completed"
+                        }
                     }));
-                    if !state.rejected || state.needs_user_action {
+                    if !state.rejected || state.needs_user_action || state.retry_with_revised_input
+                    {
                         execution.output = annotate_plugin_routing(
                             &execution.output,
                             capability,
@@ -672,6 +679,24 @@ impl PluginRegistry {
             return Err(PluginError::Execution(
                 "file_name must end with .pptx".into(),
             ));
+        }
+        let quality_issues = presentation_plan_quality_issues(&arguments);
+        if !quality_issues.is_empty() {
+            return Ok(PluginExecution {
+                output: json!({
+                    "ok": false,
+                    "retry_with_revised_input": true,
+                    "reason": "The presentation plan is structurally valid but not yet presentation-quality. Revise the arguments and call this same capability again.",
+                    "requirements": quality_issues,
+                    "supported_layouts": [
+                        "cover", "agenda", "section", "bullets", "bignumber",
+                        "image-left", "image-right", "image-full", "twocol",
+                        "timeline", "quote", "chart", "compare", "closing"
+                    ]
+                })
+                .to_string(),
+                artifact_paths: Vec::new(),
+            });
         }
         let output_path = workspace_path(workspace, file_name)?;
         if let Some(parent) = output_path.parent() {
@@ -947,23 +972,80 @@ fn design_kb_tool_record() -> PluginToolRecord {
             "properties": {
                 "title": {"type": "string"},
                 "file_name": {"type": "string", "description": "Workspace-relative .pptx path"},
-                "theme": {"type": "string", "description": "DesignKB palette id"},
+                "theme": {
+                    "type": "string",
+                    "enum": ["midnight", "graphite", "ivory", "sand", "forest", "royal"],
+                    "description": "Choose a palette that fits the subject; do not default blindly."
+                },
                 "template": {"type": "string", "description": "Optional existing .pptx template path"},
                 "slides": {
                     "type": "array",
                     "items": {
                         "type": "object",
                         "properties": {
-                            "layout": {"type": "string"},
+                            "layout": {
+                                "type": "string",
+                                "enum": ["cover", "agenda", "section", "bullets", "bignumber", "image-left", "image-right", "image-full", "twocol", "timeline", "quote", "chart", "compare", "closing"]
+                            },
                             "title": {"type": "string"},
                             "subtitle": {"type": "string"},
+                            "tagline": {"type": "string"},
+                            "kicker": {"type": "string"},
                             "bullets": {"type": "array", "items": {"type": "string"}},
-                            "left": {"type": "object"},
-                            "right": {"type": "object"},
-                            "metrics": {"type": "array"},
-                            "items": {"type": "array"},
+                            "icons": {"type": "array", "items": {"type": "string"}},
+                            "number": {"type": ["string", "number"]},
+                            "label": {"type": "string"},
+                            "desc": {"type": "string"},
+                            "left": {
+                                "type": "object",
+                                "properties": {
+                                    "heading": {"type": "string"},
+                                    "bullets": {"type": "array", "items": {"type": "string"}}
+                                }
+                            },
+                            "right": {
+                                "type": "object",
+                                "properties": {
+                                    "heading": {"type": "string"},
+                                    "bullets": {"type": "array", "items": {"type": "string"}}
+                                }
+                            },
+                            "metrics": {"type": "array", "items": {"type": "object"}},
+                            "items": {"type": "array", "items": {"type": "string"}},
+                            "steps": {
+                                "type": "array",
+                                "items": {
+                                    "type": "object",
+                                    "properties": {
+                                        "label": {"type": "string"},
+                                        "desc": {"type": "string"}
+                                    }
+                                }
+                            },
                             "quote": {"type": "string"},
+                            "attrib": {"type": "string"},
                             "image": {"type": "string"},
+                            "chart": {
+                                "type": "object",
+                                "properties": {
+                                    "type": {"type": "string", "enum": ["bar", "line", "pie"]},
+                                    "categories": {"type": "array", "items": {"type": "string"}},
+                                    "series": {
+                                        "type": "array",
+                                        "items": {
+                                            "type": "object",
+                                            "properties": {
+                                                "name": {"type": "string"},
+                                                "values": {"type": "array", "items": {"type": "number"}}
+                                            }
+                                        }
+                                    }
+                                }
+                            },
+                            "columns": {"type": "array", "items": {"type": "string"}},
+                            "rows": {"type": "array", "items": {"type": "array"}},
+                            "contact": {"type": "string"},
+                            "index": {"type": ["string", "number"]},
                             "notes": {"type": "string"}
                         },
                         "required": ["layout", "title"]
@@ -1275,6 +1357,7 @@ fn collect_artifact_paths(output: &str, workspace: &Path) -> Vec<PathBuf> {
 struct PluginOutputState {
     rejected: bool,
     needs_user_action: bool,
+    retry_with_revised_input: bool,
 }
 
 fn plugin_output_state(output: &str) -> PluginOutputState {
@@ -1288,7 +1371,214 @@ fn plugin_output_state(output: &str) -> PluginOutputState {
             .or_else(|| value.get("needsUserAction"))
             .and_then(Value::as_bool)
             == Some(true),
+        retry_with_revised_input: value
+            .get("retry_with_revised_input")
+            .or_else(|| value.get("retryWithRevisedInput"))
+            .and_then(Value::as_bool)
+            == Some(true),
     }
+}
+
+fn presentation_plan_quality_issues(arguments: &Value) -> Vec<String> {
+    const VALID_LAYOUTS: [&str; 14] = [
+        "cover",
+        "agenda",
+        "section",
+        "bullets",
+        "bignumber",
+        "image-left",
+        "image-right",
+        "image-full",
+        "twocol",
+        "timeline",
+        "quote",
+        "chart",
+        "compare",
+        "closing",
+    ];
+
+    let mut issues = Vec::new();
+    let deck_title = value_text(arguments.get("title"));
+    let file_stem = arguments
+        .get("file_name")
+        .and_then(Value::as_str)
+        .and_then(|value| Path::new(value).file_stem())
+        .and_then(|value| value.to_str())
+        .unwrap_or_default();
+    let Some(slides) = arguments.get("slides").and_then(Value::as_array) else {
+        return vec!["Provide a non-empty slides array with content-driven layouts.".into()];
+    };
+    if slides.is_empty() {
+        return vec!["Provide a non-empty slides array with content-driven layouts.".into()];
+    }
+
+    let mut layouts = BTreeSet::new();
+    let mut bullet_slides = 0usize;
+    for (index, slide) in slides.iter().enumerate() {
+        let position = index + 1;
+        let layout = slide
+            .get("layout")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        if !VALID_LAYOUTS.contains(&layout) {
+            issues.push(format!(
+                "Slide {position}: choose one supported layout instead of '{layout}'."
+            ));
+            continue;
+        }
+        layouts.insert(layout.to_string());
+        bullet_slides += usize::from(layout == "bullets");
+        let title = value_text(slide.get("title"));
+        if title.is_empty() {
+            issues.push(format!("Slide {position}: title is required."));
+        }
+
+        for field in ["bullets", "items"] {
+            if let Some(values) = slide.get(field).and_then(Value::as_array) {
+                for value in values {
+                    let text = value_text(Some(value));
+                    if is_production_metadata(&text, &deck_title, file_stem, &title) {
+                        issues.push(format!(
+                            "Slide {position}: remove production metadata '{text}' from {field}; replace it with audience-facing content."
+                        ));
+                    }
+                }
+            }
+        }
+
+        match layout {
+            "agenda" if !has_non_empty_array(slide, "items") => issues.push(format!(
+                "Slide {position}: agenda requires substantive items."
+            )),
+            "bullets" | "image-left" | "image-right" if !has_non_empty_array(slide, "bullets") => {
+                issues.push(format!(
+                    "Slide {position}: {layout} requires substantive bullets."
+                ))
+            }
+            "bignumber"
+                if value_text(slide.get("number")).is_empty()
+                    || value_text(slide.get("label")).is_empty() =>
+            {
+                issues.push(format!(
+                    "Slide {position}: bignumber requires both number and label."
+                ))
+            }
+            "twocol"
+                if !has_non_empty_object_array(slide, "left", "bullets")
+                    || !has_non_empty_object_array(slide, "right", "bullets") =>
+            {
+                issues.push(format!(
+                    "Slide {position}: twocol requires populated left and right bullet groups."
+                ))
+            }
+            "timeline" if !has_non_empty_array(slide, "steps") => issues.push(format!(
+                "Slide {position}: timeline requires steps with labels and descriptions."
+            )),
+            "quote" if value_text(slide.get("quote")).is_empty() => issues.push(format!(
+                "Slide {position}: quote requires a real quotation or central statement."
+            )),
+            "chart" if !valid_chart(slide.get("chart")) => issues.push(format!(
+                "Slide {position}: chart requires categories and at least one numeric series."
+            )),
+            "compare"
+                if !has_non_empty_array(slide, "columns")
+                    || !has_non_empty_array(slide, "rows") =>
+            {
+                issues.push(format!(
+                    "Slide {position}: compare requires columns and rows."
+                ))
+            }
+            _ => {}
+        }
+    }
+
+    if slides.len() >= 6 && layouts.len() < 3 {
+        issues.push(
+            "Use at least three layout families for a deck of six or more slides; choose layouts from the actual content.".into(),
+        );
+    } else if slides.len() >= 3 && layouts.len() < 2 {
+        issues.push(
+            "Use at least two layout families; do not render the entire deck as one repeated template."
+                .into(),
+        );
+    }
+    if slides.len() >= 6 && bullet_slides * 2 > slides.len() {
+        issues.push(
+            "Bullet-only pages exceed half the deck. Convert suitable content to comparison, timeline, chart, big-number, image, or section layouts.".into(),
+        );
+    }
+    issues
+}
+
+fn value_text(value: Option<&Value>) -> String {
+    match value {
+        Some(Value::String(value)) => value.trim().to_string(),
+        Some(Value::Number(value)) => value.to_string(),
+        _ => String::new(),
+    }
+}
+
+fn has_non_empty_array(value: &Value, key: &str) -> bool {
+    value
+        .get(key)
+        .and_then(Value::as_array)
+        .is_some_and(|items| !items.is_empty())
+}
+
+fn has_non_empty_object_array(value: &Value, object_key: &str, array_key: &str) -> bool {
+    value
+        .get(object_key)
+        .and_then(|object| object.get(array_key))
+        .and_then(Value::as_array)
+        .is_some_and(|items| !items.is_empty())
+}
+
+fn valid_chart(value: Option<&Value>) -> bool {
+    let Some(chart) = value else {
+        return false;
+    };
+    has_non_empty_array(chart, "categories")
+        && chart
+            .get("series")
+            .and_then(Value::as_array)
+            .is_some_and(|series| {
+                series.iter().any(|item| {
+                    item.get("values")
+                        .and_then(Value::as_array)
+                        .is_some_and(|values| {
+                            !values.is_empty() && values.iter().all(Value::is_number)
+                        })
+                })
+            })
+}
+
+fn is_production_metadata(
+    text: &str,
+    deck_title: &str,
+    file_stem: &str,
+    slide_title: &str,
+) -> bool {
+    let normalized = text.trim().to_lowercase();
+    if normalized.is_empty() {
+        return true;
+    }
+    if [deck_title, file_stem, slide_title]
+        .iter()
+        .map(|candidate| candidate.trim().to_lowercase())
+        .any(|candidate| !candidate.is_empty() && candidate == normalized)
+    {
+        return true;
+    }
+    let compact = normalized.replace(' ', "");
+    let mut parts = compact.split('/');
+    matches!(
+        (parts.next(), parts.next(), parts.next()),
+        (Some(left), Some(right), None)
+            if !left.is_empty()
+                && !right.is_empty()
+                && left.chars().all(|ch| ch.is_ascii_digit())
+                && right.chars().all(|ch| ch.is_ascii_digit())
+    )
 }
 
 fn annotate_plugin_routing(
@@ -1328,6 +1618,63 @@ mod tests {
     use super::*;
     use crate::preview::{preview_file, PreviewKind};
     use tempfile::tempdir;
+
+    #[test]
+    fn plugin_output_state_preserves_recoverable_revision_request() {
+        let state = plugin_output_state(
+            r#"{"ok":false,"retry_with_revised_input":true,"requirements":["Use richer layouts"]}"#,
+        );
+
+        assert!(state.rejected);
+        assert!(state.retry_with_revised_input);
+        assert!(!state.needs_user_action);
+    }
+
+    #[test]
+    fn presentation_quality_gate_rejects_metadata_only_deck() {
+        let arguments = json!({
+            "title": "LingShu self introduction",
+            "file_name": "lingshu-self-introduction.pptx",
+            "slides": [
+                {"layout":"bullets","title":"LingShu self introduction","bullets":["LingShu self introduction","01 / 06"]},
+                {"layout":"bullets","title":"Agenda","bullets":["LingShu self introduction","02 / 06"]},
+                {"layout":"bullets","title":"About","bullets":["LingShu self introduction","03 / 06"]},
+                {"layout":"bullets","title":"Features","bullets":["LingShu self introduction","04 / 06"]},
+                {"layout":"bullets","title":"Architecture","bullets":["LingShu self introduction","05 / 06"]},
+                {"layout":"bullets","title":"Closing","bullets":["LingShu self introduction","06 / 06"]}
+            ]
+        });
+
+        let issues = presentation_plan_quality_issues(&arguments);
+
+        assert!(issues
+            .iter()
+            .any(|issue| issue.contains("production metadata")));
+        assert!(issues
+            .iter()
+            .any(|issue| issue.contains("three layout families")));
+        assert!(issues
+            .iter()
+            .any(|issue| issue.contains("Bullet-only pages")));
+    }
+
+    #[test]
+    fn presentation_quality_gate_accepts_content_driven_deck() {
+        let arguments = json!({
+            "title": "LingShu runtime",
+            "file_name": "lingshu-runtime.pptx",
+            "slides": [
+                {"layout":"cover","title":"LingShu runtime","subtitle":"A model-neutral agent runtime"},
+                {"layout":"agenda","title":"Today","items":["Why","How","Results"]},
+                {"layout":"bullets","title":"Why it matters","bullets":["One runtime coordinates tools, memory, and delivery"]},
+                {"layout":"bignumber","title":"Delivery","number":"2","label":"desktop platforms from one shared core"},
+                {"layout":"timeline","title":"How work moves","steps":[{"label":"Plan","desc":"Translate intent into an executable goal"},{"label":"Deliver","desc":"Verify artifacts before handoff"}]},
+                {"layout":"closing","title":"Next step","bullets":["Run the same workflow with your preferred model"]}
+            ]
+        });
+
+        assert!(presentation_plan_quality_issues(&arguments).is_empty());
+    }
 
     #[test]
     fn invalid_plugin_ids_cannot_escape_the_registry() {
@@ -1585,6 +1932,44 @@ mod tests {
         assert_eq!(result.artifact_paths.len(), 1);
         assert!(result.artifact_paths[0].is_file());
         assert!(fs::metadata(&result.artifact_paths[0]).unwrap().len() > 1_000);
+
+        let artifact_path = result.artifact_paths[0].clone();
+        let first_preview = preview_file(&artifact_path).unwrap();
+        assert_eq!(first_preview.kind, PreviewKind::Presentation);
+        assert!(first_preview.faithful);
+        assert_eq!(
+            first_preview.rendered_mime_type.as_deref(),
+            Some("application/pdf")
+        );
+        assert!(first_preview.rendered_content.is_some());
+
+        registry
+            .execute(
+                DESIGN_KB_TOOL,
+                json!({
+                    "title": "DesignKB revised smoke test",
+                    "file_name": "designkb-smoke.pptx",
+                    "theme": "royal",
+                    "slides": [
+                        {"layout":"cover","title":"Revised artifact","subtitle":"Latest bytes win"},
+                        {"layout":"bullets","title":"Current content","bullets":["The same path was overwritten","Preview revision follows file content"]}
+                    ]
+                }),
+                workspace.path(),
+                ExecutionPermissionMode::Sandbox,
+            )
+            .await
+            .unwrap();
+
+        let revised_preview = preview_file(&artifact_path).unwrap();
+        assert_ne!(first_preview.revision, revised_preview.revision);
+        assert!(revised_preview.content.contains("Revised artifact"));
+        assert!(revised_preview.faithful);
+        assert_eq!(
+            revised_preview.rendered_mime_type.as_deref(),
+            Some("application/pdf")
+        );
+        assert!(revised_preview.rendered_content.is_some());
     }
 
     #[tokio::test]

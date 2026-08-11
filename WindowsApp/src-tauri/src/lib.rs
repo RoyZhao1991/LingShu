@@ -255,8 +255,12 @@ async fn resume_task(
 }
 
 #[tauri::command]
-fn preview_path(path: PathBuf) -> Result<PreviewPayload, String> {
-    preview_file(path).map_err(|error| error.to_string())
+async fn preview_path(path: PathBuf) -> Result<PreviewPayload, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        preview_file(path).map_err(|error| error.to_string())
+    })
+    .await
+    .map_err(|error| format!("preview worker failed: {error}"))?
 }
 
 #[tauri::command]

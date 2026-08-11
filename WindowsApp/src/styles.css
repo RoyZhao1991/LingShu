@@ -323,10 +323,13 @@ svg { flex: 0 0 auto; }
 .document-preview .markdown-table-scroll td { color: #17201f; background: #fff; border-color: #d7dfdd; }
 .document-preview .markdown-table-scroll tr:nth-child(even) td { background: #f5f8f7; }
 .document-preview .markdown-table-scroll th { color: #145e57; background: #d9efeb; }
-.slide-preview { padding: 26px; display: grid; grid-template-columns: repeat(auto-fill, minmax(460px, 1fr)); gap: 20px; }
-.slide-preview section { aspect-ratio: 16 / 9; position: relative; padding: 46px 48px; background: #f8fbfb; border-top: 7px solid var(--teal); box-shadow: 0 10px 24px rgba(30,47,45,.14); }
-.slide-preview section small { position: absolute; right: 18px; bottom: 14px; color: #83908e; }
-.slide-preview h2 { font-size: 25px; }
+.presentation-outline { width: min(920px, calc(100% - 48px)); min-height: 100%; margin: 0 auto; padding: 38px 48px 64px; color: #17201f; background: #fff; box-shadow: 0 0 18px rgba(35,55,53,.1); }
+.preview-fallback-note { margin: 0 0 24px; padding: 12px 14px; color: #5d6866; background: #eef3f2; border-left: 3px solid var(--teal); }
+.presentation-outline section { display: grid; grid-template-columns: 44px minmax(0, 1fr); gap: 14px; padding: 22px 0; border-bottom: 1px solid #d7dfdd; }
+.presentation-outline section small { color: var(--teal); font-weight: 750; }
+.presentation-outline h2 { margin: 0 0 10px; font-size: 20px; }
+.presentation-outline ul { margin: 0; padding-left: 20px; }
+.presentation-outline li { margin: 7px 0; line-height: 1.5; }
 .spreadsheet-preview { min-height: 100%; padding: 28px; background: #f4f7f6; }
 .spreadsheet-preview section { margin-bottom: 28px; }
 .spreadsheet-preview h2 { margin: 0 0 12px; font-size: 20px; }
@@ -334,7 +337,6 @@ svg { flex: 0 0 auto; }
 .spreadsheet-preview table { width: 100%; border-collapse: collapse; color: #17201f; }
 .spreadsheet-preview th, .spreadsheet-preview td { min-width: 110px; padding: 9px 12px; border-right: 1px solid #d7dfdd; border-bottom: 1px solid #d7dfdd; text-align: left; white-space: pre-wrap; }
 .spreadsheet-preview th { position: sticky; top: 0; background: #d9efeb; color: #145e57; font-weight: 700; }
-.slide-preview li { margin: 10px 0; line-height: 1.45; }
 .code-preview { min-height: 100%; margin: 0; padding: 28px; color: #dfe9e7; background: #17201f; font: 13px/1.65 "Cascadia Code", Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
 
 @media (max-width: 1060px) {
@@ -390,5 +392,5 @@ svg { flex: 0 0 auto; }
   .page-commands button, .plugin-actions button, .permission-tags span { color: #dbe5e3; background: #222a29; border-color: #3a4644; }
   .plugin-card h3, .plugin-path code { color: #aebbb8; }
   .document-preview { background: #fff; color: #17201f; }
-  .slide-preview section { color: #17201f; }
+  .presentation-outline { color: #17201f; }
 }
