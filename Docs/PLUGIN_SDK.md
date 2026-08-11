@@ -47,6 +47,9 @@ model turn.
       "name": "create_report",
       "description": "Create a report in LingShu's Workspace.",
       "descriptionZh": "在灵枢 Workspace 中生成报告。",
+      "capabilities": ["artifact.report"],
+      "priority": 50,
+      "fallback": false,
       "parameters": {
         "type": "object",
         "properties": {
@@ -63,6 +66,32 @@ model turn.
 Plugin and tool IDs are stable API identifiers. A tool is exposed to the model
 as `plugin__<plugin-id>__<tool-name>`, with non-alphanumeric ID characters
 converted to underscores.
+
+## Capability Routing
+
+`capabilities` declares semantic operations independently from a plugin or tool
+name. When a runtime-ready plugin provides the capability required by a task,
+LingShu must use a plugin unless the user explicitly disables all plugins for
+that request.
+
+Provider selection is deterministic:
+
+1. Enabled, available, runtime-ready providers only.
+2. Non-fallback providers before fallback providers.
+3. Higher `priority` before lower `priority`.
+4. Stable plugin and tool IDs as the final tie-breaker.
+
+The model sees only the preferred provider for each capability. The runtime
+also enforces the same route at execution time, so an old prompt or model call
+that names a lower-priority foundation tool cannot bypass a better plugin.
+Provider errors or structured `{ "ok": false }` rejections advance to the next
+provider. A structured `needs_user_action` result pauses for the user instead
+of silently switching implementation.
+
+Every capability-routed result includes `pluginRouting` metadata with the
+policy, capability, selected provider, original tool request, fallback flag,
+and attempted providers. This makes plugin usage observable without leaking
+raw implementation output into the conversation.
 
 ## Process Contract
 
@@ -85,9 +114,9 @@ Entrypoint argument templates support:
 - `{{input}}`
 - `{{input.field}}`
 
-To register generated files, return a JSON object containing a `path`, `paths`,
-`artifact`, or `artifacts` field. Only existing files contained by the active
-Workspace are accepted into the task artifact ledger.
+To register generated files, return a JSON object containing a `path`,
+`artifactPath`, `artifactPaths`, or `artifacts` field. Only existing files
+contained by the active Workspace are accepted into the task artifact ledger.
 
 ## Permission Behavior
 
@@ -97,18 +126,20 @@ Workspace are accepted into the task artifact ledger.
 The manifest is an execution gate and a user-facing declaration; plugin authors
 must still implement least-privilege behavior inside their runner.
 
-## Built-in DesignKB
+## Built-in Providers
 
-`lingshu.design-kb` is shipped with LingShu and cannot be removed. Its layouts,
-palettes, typography, icon library, generation engine, and review rubric are
-bundled into the Windows installer. The shared kernel exposes
-`create_designed_presentation` to the model and registers the generated
-PowerPoint in the same artifact ledger as every other task output.
+`lingshu.office-foundation` supplies dependency-free DOCX, XLSX, and basic PPTX
+fallback capabilities on every platform. `lingshu.design-kb` is one bundled,
+higher-priority PPTX provider. Both participate in the same generic capability
+router as third-party plugins; neither is selected through a product-specific
+branch in the model prompt.
 
 ## 中文摘要
 
 Windows 版插件不是一个只展示列表的前端模块。插件由共享 Rust 内核读取
 `plugin.json`，作为模型工具参与同一套权限判断、任务执行和产物登记。
 插件通过标准输入接收 JSON，通过标准输出返回结果；需要联网、Shell 或系统
-敏感权限时，在沙箱模式下会返回结构化的人机授权请求。内置 DesignKB 随安装包
-提供完整素材和自包含生成器，不依赖用户另装 Python。
+敏感权限时，在沙箱模式下会返回结构化的人机授权请求。插件通过 `capabilities`
+声明能力；只要存在可用提供者，内核就强制使用插件，并按“非兜底优先、优先级
+从高到低”选择。仅当用户在当前请求中明确要求禁用全部插件时才绕过。内置
+Office Foundation、DesignKB 和第三方插件都遵循同一套路由规则。

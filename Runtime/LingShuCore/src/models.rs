@@ -714,6 +714,12 @@ pub struct PluginToolRecord {
     pub description_zh: String,
     #[serde(default)]
     pub parameters: Value,
+    #[serde(default)]
+    pub capabilities: Vec<String>,
+    #[serde(default)]
+    pub priority: i32,
+    #[serde(default)]
+    pub fallback: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

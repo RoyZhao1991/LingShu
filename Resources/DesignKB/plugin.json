@@ -28,6 +28,11 @@
       "name": "create_designed_presentation",
       "description": "Create a polished PowerPoint using LingShu DesignKB layouts, palettes, typography, icons, and review rules.",
       "descriptionZh": "使用灵枢 DesignKB 的版式、配色、字体、图标和验收规则生成高质量 PowerPoint。",
+      "capabilities": [
+        "artifact.pptx"
+      ],
+      "priority": 100,
+      "fallback": false,
       "parameters": {
         "type": "object",
         "properties": {

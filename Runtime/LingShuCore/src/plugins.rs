@@ -5,6 +5,7 @@ use crate::models::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::collections::BTreeSet;
 use std::ffi::OsString;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
@@ -79,12 +80,42 @@ struct PluginToolManifest {
     description_zh: String,
     #[serde(default = "empty_object_schema")]
     parameters: Value,
+    #[serde(default)]
+    capabilities: Vec<String>,
+    #[serde(default)]
+    priority: i32,
+    #[serde(default)]
+    fallback: bool,
 }
 
 #[derive(Debug)]
 pub struct PluginExecution {
     pub output: String,
     pub artifact_paths: Vec<PathBuf>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PluginUsagePolicy {
+    Required,
+    Disabled,
+}
+
+impl PluginUsagePolicy {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Required => "required",
+            Self::Disabled => "disabled_by_user",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct PluginCapabilityRoute {
+    pub capability: String,
+    pub plugin_id: String,
+    pub plugin_name: String,
+    pub tool: PluginToolRecord,
+    pub fallback: bool,
 }
 
 #[derive(Clone)]
@@ -154,6 +185,9 @@ impl PluginRegistry {
                         description: tool.description.clone(),
                         description_zh: tool.description_zh.clone(),
                         parameters: tool.parameters.clone(),
+                        capabilities: tool.capabilities.clone(),
+                        priority: tool.priority,
+                        fallback: tool.fallback,
                     })
                     .collect(),
                 status_detail: if available {
@@ -174,16 +208,46 @@ impl PluginRegistry {
     pub fn enabled_tools(&self) -> Vec<PluginToolRecord> {
         self.list()
             .into_iter()
-            .filter(|plugin| plugin.enabled && plugin.available)
+            .filter(|plugin| plugin.enabled && plugin.available && plugin.runtime_ready)
             .flat_map(|plugin| plugin.tools)
             .collect()
+    }
+
+    pub fn routed_tools(&self, policy: PluginUsagePolicy) -> Vec<PluginToolRecord> {
+        if policy == PluginUsagePolicy::Disabled {
+            return Vec::new();
+        }
+        let tools = self.enabled_tools();
+        let capabilities = tools
+            .iter()
+            .flat_map(|tool| tool.capabilities.iter().cloned())
+            .collect::<BTreeSet<_>>();
+        let selected = capabilities
+            .iter()
+            .filter_map(|capability| self.resolve_capability(capability, policy))
+            .map(|route| route.tool.exposed_name)
+            .collect::<BTreeSet<_>>();
+        tools
+            .into_iter()
+            .filter(|tool| tool.capabilities.is_empty() || selected.contains(&tool.exposed_name))
+            .collect()
+    }
+
+    pub fn resolve_capability(
+        &self,
+        capability: &str,
+        policy: PluginUsagePolicy,
+    ) -> Option<PluginCapabilityRoute> {
+        self.capability_routes(capability, policy)
+            .into_iter()
+            .next()
     }
 
     pub fn prompt_context(&self, locale: AppLocale) -> String {
         let enabled = self
             .list()
             .into_iter()
-            .filter(|plugin| plugin.enabled && plugin.available)
+            .filter(|plugin| plugin.enabled && plugin.available && plugin.runtime_ready)
             .collect::<Vec<_>>();
         if enabled.is_empty() {
             return match locale {
@@ -205,7 +269,14 @@ impl PluginRegistry {
             let tools = plugin
                 .tools
                 .iter()
-                .map(|tool| tool.exposed_name.as_str())
+                .map(|tool| {
+                    let capabilities = if tool.capabilities.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" [{}]", tool.capabilities.join(", "))
+                    };
+                    format!("{}{}", tool.exposed_name, capabilities)
+                })
                 .collect::<Vec<_>>()
                 .join(", ");
             lines.push(format!(
@@ -213,16 +284,9 @@ impl PluginRegistry {
                 plugin.name, plugin.version, description, tools
             ));
         }
-        if self.design_kb_root().is_some() {
-            lines.push(self.design_kb_prompt(locale));
-        }
         lines.push(match locale {
-            AppLocale::ZhCn => format!(
-                "Office Foundation 是零依赖的基础 Office 能力：Word 使用 {OFFICE_WORD_TOOL}，基础 PowerPoint 使用 {OFFICE_PRESENTATION_TOOL}，Excel 使用 {OFFICE_SPREADSHEET_TOOL}。需要精致演示文稿时仍优先使用 DesignKB。"
-            ),
-            AppLocale::En => format!(
-                "Office Foundation provides dependency-free Office basics: use {OFFICE_WORD_TOOL} for Word, {OFFICE_PRESENTATION_TOOL} for basic PowerPoint, and {OFFICE_SPREADSHEET_TOOL} for Excel. Continue to prefer DesignKB for polished presentations."
-            ),
+            AppLocale::ZhCn => "插件路由硬约束：只要所需能力存在已启用、可用且运行就绪的插件，就必须调用插件；同一能力由运行时选择优先级最高的非兜底插件。基础能力只在没有更高优先级实现或其执行失败时兜底。仅当用户在当前请求中明确要求不使用插件时，才允许绕过插件。".into(),
+            AppLocale::En => "Hard plugin-routing invariant: whenever an enabled, available, runtime-ready plugin provides the required capability, the plugin must be used. The runtime selects the highest-priority non-fallback provider for that capability. Foundation capabilities are fallback-only when no higher-priority implementation is ready or execution fails. Bypass plugins only when the user explicitly requests no plugins in the current request.".into(),
         });
         lines.join("\n")
     }
@@ -300,6 +364,83 @@ impl PluginRegistry {
     }
 
     pub async fn execute(
+        &self,
+        exposed_name: &str,
+        arguments: Value,
+        workspace: &Path,
+        permission_mode: ExecutionPermissionMode,
+    ) -> Result<PluginExecution, PluginError> {
+        self.execute_exact(exposed_name, arguments, workspace, permission_mode)
+            .await
+    }
+
+    pub async fn execute_capability(
+        &self,
+        capability: &str,
+        arguments: Value,
+        workspace: &Path,
+        permission_mode: ExecutionPermissionMode,
+        policy: PluginUsagePolicy,
+        routed_from: &str,
+    ) -> Result<PluginExecution, PluginError> {
+        let routes = self.capability_routes(capability, policy);
+        if routes.is_empty() {
+            return Err(PluginError::NotFound(format!(
+                "no runtime-ready plugin provides capability {capability}"
+            )));
+        }
+        let mut attempts = Vec::new();
+        let mut last_error = None;
+        for route in routes {
+            match self
+                .execute_exact(
+                    &route.tool.exposed_name,
+                    arguments.clone(),
+                    workspace,
+                    permission_mode,
+                )
+                .await
+            {
+                Ok(mut execution) => {
+                    let state = plugin_output_state(&execution.output);
+                    attempts.push(json!({
+                        "providerId": route.plugin_id.clone(),
+                        "providerTool": route.tool.exposed_name.clone(),
+                        "result": if state.rejected { "rejected" } else { "completed" }
+                    }));
+                    if !state.rejected || state.needs_user_action {
+                        execution.output = annotate_plugin_routing(
+                            &execution.output,
+                            capability,
+                            &route,
+                            policy,
+                            routed_from,
+                            attempts,
+                        );
+                        return Ok(execution);
+                    }
+                    last_error = Some(format!(
+                        "{} rejected the request: {}",
+                        route.plugin_name, execution.output
+                    ));
+                }
+                Err(error) => {
+                    attempts.push(json!({
+                        "providerId": route.plugin_id.clone(),
+                        "providerTool": route.tool.exposed_name.clone(),
+                        "result": "failed",
+                        "error": error.to_string()
+                    }));
+                    last_error = Some(error.to_string());
+                }
+            }
+        }
+        Err(PluginError::Execution(last_error.unwrap_or_else(|| {
+            format!("all providers for capability {capability} failed")
+        })))
+    }
+
+    async fn execute_exact(
         &self,
         exposed_name: &str,
         arguments: Value,
@@ -409,6 +550,44 @@ impl PluginRegistry {
         })
     }
 
+    fn capability_routes(
+        &self,
+        capability: &str,
+        policy: PluginUsagePolicy,
+    ) -> Vec<PluginCapabilityRoute> {
+        if policy == PluginUsagePolicy::Disabled {
+            return Vec::new();
+        }
+        let mut routes = self
+            .list()
+            .into_iter()
+            .filter(|plugin| plugin.enabled && plugin.available && plugin.runtime_ready)
+            .flat_map(|plugin| {
+                plugin.tools.into_iter().filter_map(move |tool| {
+                    let matches = tool
+                        .capabilities
+                        .iter()
+                        .any(|candidate| candidate == capability);
+                    matches.then(|| PluginCapabilityRoute {
+                        capability: capability.to_string(),
+                        plugin_id: plugin.id.clone(),
+                        plugin_name: plugin.name.clone(),
+                        fallback: tool.fallback,
+                        tool,
+                    })
+                })
+            })
+            .collect::<Vec<_>>();
+        routes.sort_by(|left, right| {
+            left.fallback
+                .cmp(&right.fallback)
+                .then_with(|| right.tool.priority.cmp(&left.tool.priority))
+                .then_with(|| left.plugin_id.cmp(&right.plugin_id))
+                .then_with(|| left.tool.exposed_name.cmp(&right.tool.exposed_name))
+        });
+        routes
+    }
+
     fn user_manifests(&self) -> Vec<(PathBuf, PluginManifest)> {
         let Ok(entries) = fs::read_dir(self.user_root.as_ref()) else {
             return Vec::new();
@@ -473,35 +652,6 @@ impl PluginRegistry {
             } else {
                 "Knowledge ready; presentation generator runtime is unavailable".into()
             },
-        }
-    }
-
-    fn design_kb_prompt(&self, locale: AppLocale) -> String {
-        let Some(root) = self.design_kb_root() else {
-            return String::new();
-        };
-        let palette_ids = json_ids(&root.join("palettes.json"), "palettes");
-        let layout_ids = json_ids(&root.join("layouts.json"), "layouts");
-        let rubric = fs::read_to_string(root.join("rubric.md"))
-            .unwrap_or_default()
-            .lines()
-            .filter(|line| line.trim_start().starts_with('-'))
-            .take(6)
-            .collect::<Vec<_>>()
-            .join(" ");
-        match locale {
-            AppLocale::ZhCn => format!(
-                "DesignKB 是生成 PowerPoint 的首选能力。需要可交付演示文稿时，优先调用 {DESIGN_KB_TOOL}，逐页选择合适 layout，不要退化成纯文本 create_artifact。可用主题：{}。可用版式：{}。验收要点：{}",
-                palette_ids.join(", "),
-                layout_ids.join(", "),
-                rubric
-            ),
-            AppLocale::En => format!(
-                "DesignKB is the preferred PowerPoint capability. For a deliverable presentation, call {DESIGN_KB_TOOL}, choose an appropriate layout per slide, and do not fall back to a text-only create_artifact deck. Themes: {}. Layouts: {}. Review rubric: {}",
-                palette_ids.join(", "),
-                layout_ids.join(", "),
-                rubric
-            ),
         }
     }
 
@@ -650,6 +800,9 @@ fn office_word_tool_record() -> PluginToolRecord {
             },
             "required": ["title", "file_name", "content"]
         }),
+        capabilities: vec!["artifact.docx".into()],
+        priority: 0,
+        fallback: true,
     }
 }
 
@@ -657,8 +810,8 @@ fn office_presentation_tool_record() -> PluginToolRecord {
     PluginToolRecord {
         name: OFFICE_PRESENTATION_TOOL.into(),
         exposed_name: OFFICE_PRESENTATION_TOOL.into(),
-        description: "Create and register a dependency-free basic PowerPoint. Use DesignKB instead when visual polish or advanced layouts are required.".into(),
-        description_zh: "创建并登记零依赖基础 PowerPoint；需要精致视觉或高级版式时请改用 DesignKB。".into(),
+        description: "Create and register a dependency-free basic PowerPoint. This is a fallback provider when a higher-priority presentation plugin is runtime-ready.".into(),
+        description_zh: "创建并登记零依赖基础 PowerPoint；当更高优先级的演示文稿插件运行就绪时，本工具仅作为兜底实现。".into(),
         parameters: json!({
             "type": "object",
             "properties": {
@@ -679,6 +832,9 @@ fn office_presentation_tool_record() -> PluginToolRecord {
             },
             "required": ["title", "file_name", "slides"]
         }),
+        capabilities: vec!["artifact.pptx".into()],
+        priority: 0,
+        fallback: true,
     }
 }
 
@@ -710,6 +866,9 @@ fn office_spreadsheet_tool_record() -> PluginToolRecord {
             },
             "required": ["title", "file_name", "sheets"]
         }),
+        capabilities: vec!["artifact.xlsx".into()],
+        priority: 0,
+        fallback: true,
     }
 }
 
@@ -813,6 +972,9 @@ fn design_kb_tool_record() -> PluginToolRecord {
             },
             "required": ["title", "file_name", "slides"]
         }),
+        capabilities: vec!["artifact.pptx".into()],
+        priority: 100,
+        fallback: false,
     }
 }
 
@@ -897,6 +1059,9 @@ fn validate_manifest(manifest: &PluginManifest) -> Result<(), PluginError> {
     }
     for tool in &manifest.tools {
         validate_tool_name(&tool.name)?;
+        for capability in &tool.capabilities {
+            validate_capability_name(capability)?;
+        }
         if tool.description.trim().is_empty() {
             return Err(PluginError::InvalidManifest(format!(
                 "tool {} needs a description",
@@ -933,6 +1098,21 @@ fn validate_tool_name(value: &str) -> Result<(), PluginError> {
     } else {
         Err(PluginError::InvalidManifest(format!(
             "invalid tool name: {value}"
+        )))
+    }
+}
+
+fn validate_capability_name(value: &str) -> Result<(), PluginError> {
+    let valid = !value.is_empty()
+        && value.len() <= 96
+        && value
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || ".-_".contains(character));
+    if valid {
+        Ok(())
+    } else {
+        Err(PluginError::InvalidManifest(format!(
+            "invalid capability name: {value}"
         )))
     }
 }
@@ -1091,15 +1271,56 @@ fn collect_artifact_paths(output: &str, workspace: &Path) -> Vec<PathBuf> {
         .collect()
 }
 
-fn json_ids(path: &Path, collection: &str) -> Vec<String> {
-    fs::read(path)
-        .ok()
-        .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
-        .and_then(|value| value.get(collection).and_then(Value::as_array).cloned())
-        .unwrap_or_default()
-        .into_iter()
-        .filter_map(|item| item.get("id").and_then(Value::as_str).map(str::to_string))
-        .collect()
+#[derive(Debug, Default)]
+struct PluginOutputState {
+    rejected: bool,
+    needs_user_action: bool,
+}
+
+fn plugin_output_state(output: &str) -> PluginOutputState {
+    let Ok(value) = serde_json::from_str::<Value>(output) else {
+        return PluginOutputState::default();
+    };
+    PluginOutputState {
+        rejected: value.get("ok").and_then(Value::as_bool) == Some(false),
+        needs_user_action: value
+            .get("needs_user_action")
+            .or_else(|| value.get("needsUserAction"))
+            .and_then(Value::as_bool)
+            == Some(true),
+    }
+}
+
+fn annotate_plugin_routing(
+    output: &str,
+    capability: &str,
+    route: &PluginCapabilityRoute,
+    policy: PluginUsagePolicy,
+    routed_from: &str,
+    attempts: Vec<Value>,
+) -> String {
+    let routing = json!({
+        "policy": policy.as_str(),
+        "capability": capability,
+        "providerId": route.plugin_id,
+        "providerName": route.plugin_name,
+        "providerTool": route.tool.exposed_name,
+        "routedFrom": routed_from,
+        "fallback": route.fallback,
+        "attempts": attempts
+    });
+    match serde_json::from_str::<Value>(output) {
+        Ok(Value::Object(mut object)) => {
+            object.insert("pluginRouting".into(), routing);
+            Value::Object(object).to_string()
+        }
+        _ => json!({
+            "ok": true,
+            "output": output,
+            "pluginRouting": routing
+        })
+        .to_string(),
+    }
 }
 
 #[cfg(test)]
@@ -1179,6 +1400,132 @@ mod tests {
             .any(|tool| tool.exposed_name == OFFICE_SPREADSHEET_TOOL));
         assert!(registry.set_enabled(OFFICE_FOUNDATION_ID, false).is_err());
         assert!(registry.remove(OFFICE_FOUNDATION_ID).is_err());
+    }
+
+    #[test]
+    fn capability_routing_prefers_any_ready_plugin_over_the_foundation_fallback() {
+        let data = tempdir().unwrap();
+        let source = tempdir().unwrap();
+        let manifest = json!({
+            "schemaVersion": 1,
+            "id": "demo.sheet",
+            "name": "Demo Sheet",
+            "version": "1.0.0",
+            "entrypoint": {"command": std::env::current_exe().unwrap()},
+            "tools": [{
+                "name": "create_sheet",
+                "description": "Create a spreadsheet with a custom renderer.",
+                "capabilities": ["artifact.xlsx"],
+                "priority": 50,
+                "fallback": false
+            }]
+        });
+        fs::write(
+            source.path().join("plugin.json"),
+            serde_json::to_vec_pretty(&manifest).unwrap(),
+        )
+        .unwrap();
+        let registry = PluginRegistry::new(data.path(), None, std::env::consts::OS).unwrap();
+        registry.install(source.path().join("plugin.json")).unwrap();
+
+        let route = registry
+            .resolve_capability("artifact.xlsx", PluginUsagePolicy::Required)
+            .expect("a ready provider must be selected");
+        assert_eq!(route.plugin_id, "demo.sheet");
+        assert_eq!(route.tool.exposed_name, "plugin__demo_sheet__create_sheet");
+        assert!(!route.fallback);
+
+        let routed = registry.routed_tools(PluginUsagePolicy::Required);
+        assert!(routed
+            .iter()
+            .any(|tool| tool.exposed_name == "plugin__demo_sheet__create_sheet"));
+        assert!(!routed
+            .iter()
+            .any(|tool| tool.exposed_name == OFFICE_SPREADSHEET_TOOL));
+    }
+
+    #[test]
+    fn explicit_plugin_opt_out_hides_all_plugin_tools_and_routes() {
+        let data = tempdir().unwrap();
+        let registry = PluginRegistry::new(data.path(), None, std::env::consts::OS).unwrap();
+
+        assert!(registry
+            .routed_tools(PluginUsagePolicy::Disabled)
+            .is_empty());
+        assert!(registry
+            .resolve_capability("artifact.docx", PluginUsagePolicy::Disabled)
+            .is_none());
+    }
+
+    #[test]
+    fn foundation_provider_remains_available_when_no_specialized_plugin_exists() {
+        let data = tempdir().unwrap();
+        let registry = PluginRegistry::new(data.path(), None, std::env::consts::OS).unwrap();
+        let route = registry
+            .resolve_capability("artifact.docx", PluginUsagePolicy::Required)
+            .expect("the foundation provider must cover common document artifacts");
+
+        assert_eq!(route.plugin_id, OFFICE_FOUNDATION_ID);
+        assert_eq!(route.tool.exposed_name, OFFICE_WORD_TOOL);
+        assert!(route.fallback);
+    }
+
+    #[test]
+    fn invalid_capability_identifiers_are_rejected_at_install_time() {
+        let data = tempdir().unwrap();
+        let source = tempdir().unwrap();
+        let manifest = json!({
+            "schemaVersion": 1,
+            "id": "demo.invalid-capability",
+            "name": "Invalid Capability",
+            "version": "1.0.0",
+            "entrypoint": {"command": std::env::current_exe().unwrap()},
+            "tools": [{
+                "name": "render",
+                "description": "Invalid capability fixture.",
+                "capabilities": ["../artifact.xlsx"]
+            }]
+        });
+        fs::write(
+            source.path().join("plugin.json"),
+            serde_json::to_vec_pretty(&manifest).unwrap(),
+        )
+        .unwrap();
+        let registry = PluginRegistry::new(data.path(), None, std::env::consts::OS).unwrap();
+
+        assert!(matches!(
+            registry.install(source.path().join("plugin.json")),
+            Err(PluginError::InvalidManifest(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn capability_execution_records_the_selected_provider() {
+        let data = tempdir().unwrap();
+        let workspace = tempdir().unwrap();
+        let registry = PluginRegistry::new(data.path(), None, std::env::consts::OS).unwrap();
+        let result = registry
+            .execute_capability(
+                "artifact.xlsx",
+                json!({
+                    "title": "Routing audit",
+                    "file_name": "routing-audit.xlsx",
+                    "sheets": [{"name": "Summary", "rows": [["Provider", "Verified"], ["Plugin", true]]}]
+                }),
+                workspace.path(),
+                ExecutionPermissionMode::Sandbox,
+                PluginUsagePolicy::Required,
+                "create_artifact",
+            )
+            .await
+            .unwrap();
+        let output: Value = serde_json::from_str(&result.output).unwrap();
+
+        assert_eq!(output["pluginRouting"]["policy"], "required");
+        assert_eq!(output["pluginRouting"]["capability"], "artifact.xlsx");
+        assert_eq!(output["pluginRouting"]["providerId"], OFFICE_FOUNDATION_ID);
+        assert_eq!(output["pluginRouting"]["fallback"], true);
+        assert_eq!(result.artifact_paths.len(), 1);
     }
 
     #[tokio::test]
