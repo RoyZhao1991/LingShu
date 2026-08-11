@@ -581,16 +581,15 @@ mod tests {
 
     #[test]
     fn preview_revision_changes_when_same_path_is_overwritten() {
-        let fixture = std::env::temp_dir().join(format!(
-            "lingshu-preview-revision-{}-{}.txt",
-            std::process::id(),
-            std::thread::current().name().unwrap_or("test")
-        ));
-        fs::write(&fixture, "first version").expect("write first fixture");
-        let first = preview_file(&fixture).expect("preview first fixture");
-        fs::write(&fixture, "second version").expect("overwrite fixture");
-        let second = preview_file(&fixture).expect("preview overwritten fixture");
-        let _ = fs::remove_file(&fixture);
+        let fixture = tempfile::Builder::new()
+            .prefix("lingshu-preview-revision-")
+            .suffix(".txt")
+            .tempfile()
+            .expect("create revision fixture");
+        fs::write(fixture.path(), "first version").expect("write first fixture");
+        let first = preview_file(fixture.path()).expect("preview first fixture");
+        fs::write(fixture.path(), "second version").expect("overwrite fixture");
+        let second = preview_file(fixture.path()).expect("preview overwritten fixture");
 
         assert_ne!(first.revision, second.revision);
         assert_eq!(second.content, "second version");
