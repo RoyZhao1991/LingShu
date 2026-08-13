@@ -1,6 +1,8 @@
-import { FormEvent, type DragEvent as ReactDragEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, type DragEvent as ReactDragEvent, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
+import type { PDFDocumentLoadingTask, PDFDocumentProxy, RenderTask } from "pdfjs-dist";
+import pdfWorkerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import {
   Activity, Bot, BrainCircuit, Check, ChevronRight, CircleAlert, Clock3, ExternalLink,
   FileBox, FileText, FolderOpen, Gauge, GitBranch, ListChecks, LoaderCircle, MessageCircle,
@@ -13,6 +15,7 @@ import { browserDroppedFilePaths, mergeAttachmentPaths } from "./attachments";
 import { projectChatBubble } from "./chatProjection";
 import { findInteractiveActionTask } from "./humanAction";
 import { normalizeMarkdownTables } from "./markdown";
+import { decodePdfDataUri } from "./pdf";
 import packageMetadata from "../package.json";
 import type {
   ArtifactRecord, ChatMessage, ExecutionPermissionMode, Locale, Page, PluginRecord, PreviewPayload, ProviderPreset, RuntimeSettings,
@@ -47,10 +50,10 @@ export default function App() {
   const [dismissedActionTaskId, setDismissedActionTaskId] = useState<string>();
   const [pluginBusy, setPluginBusy] = useState("");
   const [dragActive, setDragActive] = useState(false);
-  const messagesEnd = useRef<HTMLDivElement>(null);
   const messageScroll = useRef<HTMLDivElement>(null);
   const composerInput = useRef<HTMLTextAreaElement>(null);
   const keepAtBottom = useRef(true);
+  const previousPage = useRef<Page>(page);
   const previewRequest = useRef(0);
 
   const locale = settingsDraft?.locale ?? snapshot?.settings.locale ?? "zh_cn";
@@ -101,9 +104,15 @@ export default function App() {
     }
   }, [pendingActionTask?.id]);
 
-  useEffect(() => {
-    if (page === "chat" && keepAtBottom.current) {
-      messagesEnd.current?.scrollIntoView({ behavior: "auto", block: "end" });
+  useLayoutEffect(() => {
+    const enteredChat = page === "chat" && previousPage.current !== "chat";
+    previousPage.current = page;
+    if (page !== "chat") return;
+    if (enteredChat) keepAtBottom.current = true;
+
+    const node = messageScroll.current;
+    if (node && keepAtBottom.current) {
+      node.scrollTop = node.scrollHeight;
     }
   }, [page, snapshot?.messages.length, snapshot?.messages.at(-1)?.text, snapshot?.latestEventSequence]);
 
@@ -374,7 +383,6 @@ export default function App() {
                   )}
                 </article>;
               })}
-              <div ref={messagesEnd} />
             </div>
             <form className="composer" onSubmit={submit}>
               {error && <div className="error-strip"><CircleAlert size={16} />{error}</div>}
@@ -737,19 +745,29 @@ function PreviewDialog({ payload, locale, onClose }: { payload: PreviewPayload; 
   const t = strings(locale);
   return <div className="modal-layer"><div className="preview-dialog">
     <header><div><FileText /><strong>{payload.name}</strong></div><div className="preview-actions"><button onClick={() => void runtimeInvoke("open_external", { path: payload.path })}><ExternalLink />{t.openExternal}</button><button onClick={() => void runtimeInvoke("reveal_path", { path: payload.path })}><FolderOpen />{t.reveal}</button><button className="icon-button" title={t.close} onClick={onClose}><X /></button></div></header>
-    <div className="preview-content"><PreviewBody payload={payload} unsupported={t.unsupported} presentationOutline={t.presentationOutline} /></div>
+    <div className="preview-content"><PreviewBody payload={payload} unsupported={t.unsupported} presentationOutline={t.presentationOutline}
+      previewLoading={t.previewLoading} previewRenderFailed={t.previewRenderFailed} /></div>
   </div></div>;
 }
 
-function PreviewBody({ payload, unsupported, presentationOutline }: { payload: PreviewPayload; unsupported: string; presentationOutline: string }) {
+function PreviewBody({ payload, unsupported, presentationOutline, previewLoading, previewRenderFailed }: {
+  payload: PreviewPayload;
+  unsupported: string;
+  presentationOutline: string;
+  previewLoading: string;
+  previewRenderFailed: string;
+}) {
   if (payload.kind === "image") return <img className="image-preview" src={payload.content} alt={payload.name} />;
-  if (payload.kind === "pdf") return <embed key={payload.revision} className="pdf-preview" src={payload.content} type="application/pdf" />;
+  if (payload.kind === "pdf") return <PdfCanvasPreview source={payload.content} revision={payload.revision} name={payload.name}
+    loadingLabel={previewLoading} errorLabel={previewRenderFailed} />;
   if (payload.kind === "html") return <iframe className="html-preview" sandbox="" srcDoc={payload.content} title={payload.name} />;
   if (payload.kind === "markdown") return <div className="document-preview markdown-body"><MarkdownContent>{payload.content}</MarkdownContent></div>;
   if (payload.kind === "presentation" && payload.faithful && payload.renderedContent && payload.renderedMimeType === "application/pdf") {
-    return <embed key={payload.revision} className="pdf-preview" src={payload.renderedContent} type="application/pdf" />;
+    return <PdfCanvasPreview source={payload.renderedContent} revision={payload.revision} name={payload.name}
+      loadingLabel={previewLoading} errorLabel={previewRenderFailed}
+      fallback={<PresentationOutline payload={payload} note={presentationOutline} />} />;
   }
-  if (payload.kind === "presentation") return <div className="presentation-outline"><p className="preview-fallback-note">{presentationOutline}</p>{payload.sections.map((section, index) => { const [title, ...body] = section.split("\n"); return <section key={`${index}-${title}`}><small>{String(index + 1).padStart(2, "0")}</small><div><h2>{title || `${index + 1}`}</h2><ul>{body.map((line, lineIndex) => <li key={`${lineIndex}-${line}`}>{line}</li>)}</ul></div></section>; })}</div>;
+  if (payload.kind === "presentation") return <PresentationOutline payload={payload} note={presentationOutline} />;
   if (payload.kind === "spreadsheet") return <div className="spreadsheet-preview">{payload.sections.map((section, sheetIndex) => {
     const [title, ...lines] = section.split("\n");
     const rows = lines.map((line) => line.split("\t"));
@@ -758,6 +776,142 @@ function PreviewBody({ payload, unsupported, presentationOutline }: { payload: P
   if (payload.kind === "document") return <div className="document-preview">{payload.sections.map((section, index) => index === 0 ? <h1 key={index}>{section}</h1> : <p key={index}>{section}</p>)}</div>;
   if (["text", "code"].includes(payload.kind)) return <pre className="code-preview">{payload.content}</pre>;
   return <EmptyState icon={<FileBox />} text={unsupported} />;
+}
+
+function PresentationOutline({ payload, note }: { payload: PreviewPayload; note: string }) {
+  return <div className="presentation-outline"><p className="preview-fallback-note">{note}</p>{payload.sections.map((section, index) => {
+    const [title, ...body] = section.split("\n");
+    return <section key={`${index}-${title}`}><small>{String(index + 1).padStart(2, "0")}</small><div><h2>{title || `${index + 1}`}</h2><ul>{body.map((line, lineIndex) => <li key={`${lineIndex}-${line}`}>{line}</li>)}</ul></div></section>;
+  })}</div>;
+}
+
+function PdfCanvasPreview({ source, revision, name, loadingLabel, errorLabel, fallback }: {
+  source: string;
+  revision: string;
+  name: string;
+  loadingLabel: string;
+  errorLabel: string;
+  fallback?: React.ReactNode;
+}) {
+  const [document, setDocument] = useState<PDFDocumentProxy>();
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    let disposed = false;
+    setDocument(undefined);
+    setFailed(false);
+
+    let pdfBytes: Uint8Array;
+    try {
+      pdfBytes = decodePdfDataUri(source);
+    } catch {
+      setFailed(true);
+      return;
+    }
+
+    let loadingTask: PDFDocumentLoadingTask | undefined;
+    void import("pdfjs-dist").then(({ getDocument, GlobalWorkerOptions }) => {
+      if (disposed) return undefined;
+      GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
+      loadingTask = getDocument({ data: pdfBytes });
+      return loadingTask.promise;
+    }).then((pdf) => {
+      if (!pdf) return;
+      if (disposed) {
+        void pdf.destroy();
+        return;
+      }
+      setDocument(pdf);
+    }).catch(() => {
+      if (!disposed) setFailed(true);
+    });
+
+    return () => {
+      disposed = true;
+      void loadingTask?.destroy();
+    };
+  }, [source, revision]);
+
+  if (failed && fallback) return <>{fallback}</>;
+  return <div className="pdf-canvas-shell">
+    {!document && !failed && <div className="preview-render-state" role="status"><LoaderCircle className="spin" />{loadingLabel}</div>}
+    {failed && <div className="preview-render-state error" role="alert"><CircleAlert />{errorLabel}</div>}
+    {document && <div className="pdf-canvas-pages">
+      {Array.from({ length: document.numPages }, (_, index) => (
+        <PdfCanvasPage key={`${revision}:${index + 1}`} document={document} pageNumber={index + 1} name={name} />
+      ))}
+    </div>}
+  </div>;
+}
+
+function PdfCanvasPage({ document, pageNumber, name }: { document: PDFDocumentProxy; pageNumber: number; name: string }) {
+  const host = useRef<HTMLElement>(null);
+  const canvas = useRef<HTMLCanvasElement>(null);
+  const [visible, setVisible] = useState(pageNumber <= 2);
+  const [ratio, setRatio] = useState(16 / 9);
+  const [rendering, setRendering] = useState(pageNumber <= 2);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    if (visible) return;
+    const node = host.current;
+    if (!node || typeof IntersectionObserver === "undefined") {
+      setVisible(true);
+      return;
+    }
+    const observer = new IntersectionObserver(([entry]) => {
+      if (!entry.isIntersecting) return;
+      setVisible(true);
+      observer.disconnect();
+    }, { rootMargin: "900px 0px" });
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [visible]);
+
+  useEffect(() => {
+    if (!visible) return;
+    let disposed = false;
+    let renderTask: RenderTask | undefined;
+    setRendering(true);
+    setFailed(false);
+
+    void document.getPage(pageNumber).then((page) => {
+      if (disposed) return;
+      const baseViewport = page.getViewport({ scale: 1 });
+      setRatio(baseViewport.width / baseViewport.height);
+      const hostWidth = Math.max(1, Math.min(1180, host.current?.clientWidth ?? baseViewport.width));
+      const cssScale = hostWidth / baseViewport.width;
+      const outputScale = Math.min(window.devicePixelRatio || 1, 2);
+      const viewport = page.getViewport({ scale: cssScale * outputScale });
+      const target = canvas.current;
+      if (!target) return;
+      target.width = Math.ceil(viewport.width);
+      target.height = Math.ceil(viewport.height);
+      target.style.width = `${Math.ceil(baseViewport.width * cssScale)}px`;
+      target.style.height = `${Math.ceil(baseViewport.height * cssScale)}px`;
+      renderTask = page.render({ canvas: target, viewport, background: "#ffffff" });
+      return renderTask.promise;
+    }).then(() => {
+      if (!disposed) setRendering(false);
+    }).catch((reason: unknown) => {
+      const cancelled = reason instanceof Error && reason.name === "RenderingCancelledException";
+      if (!disposed && !cancelled) {
+        setRendering(false);
+        setFailed(true);
+      }
+    });
+
+    return () => {
+      disposed = true;
+      renderTask?.cancel();
+    };
+  }, [document, pageNumber, visible]);
+
+  return <article ref={host} className="pdf-canvas-page" style={{ aspectRatio: `${ratio}` }}>
+    <canvas ref={canvas} aria-label={`${name} · ${pageNumber}`} />
+    {rendering && visible && <div className="preview-page-loading"><LoaderCircle className="spin" /></div>}
+    {failed && <div className="preview-page-loading error"><CircleAlert /></div>}
+  </article>;
 }
 
 function EmptyState({ icon, text }: { icon: React.ReactNode; text: string }) { return <div className="empty-state">{icon}<p>{text}</p></div>; }
