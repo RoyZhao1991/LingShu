@@ -93,6 +93,23 @@ policy, capability, selected provider, original tool request, fallback flag,
 and attempted providers. This makes plugin usage observable without leaking
 raw implementation output into the conversation.
 
+## Capability Acquisition
+
+Plugin routing and software installation are separate mechanisms. LingShu
+automatically selects an already registered, enabled, runtime-ready plugin; it
+does not download arbitrary plugins from the Internet because the current
+runtime has no signed remote plugin catalog. A local plugin is installed only
+after its `plugin.json` is selected on the **Plugins** page.
+
+Host applications and command-line dependencies are not plugins. Microsoft
+Word, WPS Office, LibreOffice, PowerPoint, OCR engines, and package managers
+must be probed as host software. In Full Access mode, installing a reputable
+dependency through the host package manager is already authorized. The agent
+should perform that installation and continue without asking again merely for
+installation permission. Login, licensing, payment, administrator/UAC
+interaction, physical actions, and untrusted download sources still require
+the user.
+
 ## Process Contract
 
 The entrypoint is launched directly, never through an implicit shell.
@@ -143,3 +160,10 @@ Windows 版插件不是一个只展示列表的前端模块。插件由共享 Ru
 声明能力；只要存在可用提供者，内核就强制使用插件，并按“非兜底优先、优先级
 从高到低”选择。仅当用户在当前请求中明确要求禁用全部插件时才绕过。内置
 Office Foundation、DesignKB 和第三方插件都遵循同一套路由规则。
+
+插件路由只会自动选择“已登记且运行就绪”的插件；当前没有签名远程插件目录，
+因此不会从互联网静默下载任意插件。本地插件仍需在插件页选择 `plugin.json`。
+Word、WPS、LibreOffice、PowerPoint、OCR 引擎等属于宿主软件或命令行依赖，
+不是灵枢插件。完整权限模式已经授权通过可信包管理器安装依赖，代理应先探测、
+安装并继续执行；只有登录、许可证、付款、管理员/UAC、物理操作或不可信来源
+才需要再次询问用户。

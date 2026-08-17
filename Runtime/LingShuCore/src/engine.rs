@@ -1194,6 +1194,41 @@ impl RuntimeKernel {
                     if let Some(blocking) = tool_calls.iter().find(|call| call.name == "ask_user") {
                         match serde_json::from_str::<AskArguments>(&blocking.arguments_json) {
                             Ok(args) => {
+                                if active_permission == ExecutionPermissionMode::FullAccess
+                                    && requests_already_authorized_permission(&args.prompt)
+                                {
+                                    messages.push(AgentMessage {
+                                        role: AgentRole::Tool,
+                                        content: json!({
+                                            "ok": false,
+                                            "needs_user_action": false,
+                                            "error_kind": "redundant_authorization_request",
+                                            "permission_mode": "full_access",
+                                            "instruction": "Local commands, networking, trusted package-manager dependency installation, and paths outside the Workspace are already authorized. Probe or perform the operation and continue. Ask the user only if a real attempt exposes login, licensing, payment, administrator/UAC interaction, a physical action, an untrusted source, or a materially ambiguous business decision."
+                                        })
+                                        .to_string(),
+                                        tool_calls: Vec::new(),
+                                        tool_call_id: Some(blocking.id.clone()),
+                                    });
+                                    self.store
+                                        .append_event(
+                                            task.id,
+                                            RuntimeEventKind::Warning,
+                                            RuntimeEventState::Completed,
+                                            "Runtime",
+                                            localized(
+                                                &settings.locale,
+                                                "已忽略重复授权请求",
+                                                "Redundant authorization request ignored",
+                                            ),
+                                            args.prompt,
+                                        )
+                                        .await?;
+                                    self.store
+                                        .set_session_messages(task.id, messages.clone())
+                                        .await?;
+                                    continue;
+                                }
                                 self.store
                                     .set_needs_user_action(
                                         task.id,
@@ -1590,11 +1625,12 @@ impl RuntimeKernel {
             Ok::<String, EngineError>(match call.name.as_str() {
             "inspect_runtime" => {
                 let latest = self.store.settings().await;
-                runtime_authority_payload(
+                runtime_inspection_payload(
                     &latest,
                     &self.platform,
                     &self.capabilities,
                     latest.execution_permission_mode,
+                    &self.plugins.list(),
                 )
                 .to_string()
             }
@@ -1677,7 +1713,7 @@ impl RuntimeKernel {
                                     "kind":"pdf",
                                     "error":"The PDF has no extractable embedded text. OCR is required.",
                                     "missing_capability":"document_ocr",
-                                    "recovery":"Inspect available tools and local software first. If OCR installation is required, ask for that exact installation approval and continue after approval; do not stop at 'no plugin'."
+                                    "recovery":missing_capability_recovery(latest_permission, "OCR")
                                 })
                                 .to_string(),
                                 None => json!({
@@ -1686,7 +1722,7 @@ impl RuntimeKernel {
                                     "kind":preview.kind,
                                     "error":"This binary file has no locally extractable text.",
                                     "missing_capability":"binary_document_understanding",
-                                    "recovery":"Inspect available tools and compose a safe fallback. Ask the user only for an unavoidable installation, credential, authorization, or physical action."
+                                    "recovery":missing_capability_recovery(latest_permission, "binary document extraction")
                                 })
                                 .to_string(),
                             }
@@ -1791,7 +1827,15 @@ impl RuntimeKernel {
             }
             "register_artifact" => {
                 let args = parse_arguments::<PathArguments>(&call)?;
-                let path = resolve_workspace_path(&settings.workspace, &args.path)?;
+                let latest_permission = self.store.settings().await.execution_permission_mode;
+                let path = match latest_permission {
+                    ExecutionPermissionMode::Sandbox => {
+                        resolve_workspace_path(&settings.workspace, &args.path)?
+                    }
+                    ExecutionPermissionMode::FullAccess => {
+                        resolve_local_path(&settings.workspace, &args.path)
+                    }
+                };
                 let record = artifact_record_for_path(&path)?;
                 self.store
                     .add_artifacts(task.id, vec![record.clone()])
@@ -2512,6 +2556,81 @@ fn runtime_authority_payload(
     })
 }
 
+fn runtime_inspection_payload(
+    settings: &RuntimeSettings,
+    platform: &str,
+    capabilities: &PlatformCapabilities,
+    permission_mode: ExecutionPermissionMode,
+    plugins: &[PluginRecord],
+) -> Value {
+    let mut payload = runtime_authority_payload(settings, platform, capabilities, permission_mode);
+    let acquisition = json!({
+        "trusted_dependency_installation": if permission_mode == ExecutionPermissionMode::FullAccess {
+            "preauthorized"
+        } else {
+            "requires_full_access"
+        },
+        "automatic_remote_plugin_installation": "unavailable_without_a_signed_catalog",
+        "local_plugin_installation": "available_from_the_plugins_page_after_manifest_selection",
+        "rule": "Probe built-in tools, registered plugins, host software, and the package manager before reporting a capability gap. Do not classify Word, WPS Office, LibreOffice, PowerPoint, or their renderers as LingShu plugins."
+    });
+    if let Some(object) = payload.as_object_mut() {
+        object.insert(
+            "plugins".into(),
+            serde_json::to_value(plugins).unwrap_or_else(|_| json!([])),
+        );
+        object.insert("capability_acquisition".into(), acquisition);
+    }
+    payload
+}
+
+fn capability_acquisition_directive(permission_mode: ExecutionPermissionMode) -> &'static str {
+    match permission_mode {
+        ExecutionPermissionMode::Sandbox => {
+            "Sandbox does not authorize network-backed dependency installation. If the smallest safe recovery genuinely requires it, use ask_user once to request Full Access, then resume from the same checkpoint. Ask separately only for credentials, login, license, payment, administrator/UAC interaction, a physical action, or a materially ambiguous business decision."
+        }
+        ExecutionPermissionMode::FullAccess => {
+            "Full Access already authorizes local commands, networking, trusted package-manager dependency installation, and paths outside the Workspace. Probe first; when a missing capability can be supplied by a built-in tool, an already registered plugin, or a reputable package from the host package manager, acquire it and continue without asking merely for installation permission. Use ask_user only for credentials, login, license, payment, administrator/UAC interaction, a physical action, an untrusted plugin or download source, or a materially ambiguous business decision."
+        }
+    }
+}
+
+fn ask_user_description(permission_mode: ExecutionPermissionMode) -> &'static str {
+    match permission_mode {
+        ExecutionPermissionMode::Sandbox => {
+            "Pause this exact session only when human input, Full Access authorization, login, credentials, licensing, administrator interaction, scanning, a physical action, or a materially ambiguous business decision is required."
+        }
+        ExecutionPermissionMode::FullAccess => {
+            "Pause this exact session only for login, credentials, licensing, payment, administrator/UAC interaction, scanning, a physical action, an untrusted source, or a materially ambiguous business decision. Do not ask merely for local-command, network, dependency-installation, or outside-Workspace permission; those are already authorized."
+        }
+    }
+}
+
+fn register_artifact_description(permission_mode: ExecutionPermissionMode) -> &'static str {
+    match permission_mode {
+        ExecutionPermissionMode::Sandbox => {
+            "Register an existing Workspace file as a task artifact after verifying it exists."
+        }
+        ExecutionPermissionMode::FullAccess => {
+            "Register an existing file at any local path as a task artifact after verifying it exists. Full local filesystem access is already authorized."
+        }
+    }
+}
+
+fn missing_capability_recovery(
+    permission_mode: ExecutionPermissionMode,
+    capability: &str,
+) -> String {
+    match permission_mode {
+        ExecutionPermissionMode::Sandbox => format!(
+            "Inspect registered plugins, built-in tools, and installed host software first. If {capability} requires a network-backed dependency, ask once for Full Access and continue from the same checkpoint; do not stop at 'no plugin'."
+        ),
+        ExecutionPermissionMode::FullAccess => format!(
+            "Inspect registered plugins, built-in tools, installed host software, and the host package manager first. If {capability} is available from a reputable package-manager source, install it under the existing Full Access authorization and continue. Ask only for credentials, licensing, administrator/UAC interaction, a physical action, or an untrusted source; do not stop at 'no plugin'."
+        ),
+    }
+}
+
 fn runtime_authority_message(
     settings: &RuntimeSettings,
     platform: &str,
@@ -2733,6 +2852,72 @@ fn contains_unverified_filesystem_claim(text: &str) -> bool {
     .any(|pattern| lower.contains(pattern))
 }
 
+fn requests_already_authorized_permission(text: &str) -> bool {
+    let lower = text.to_ascii_lowercase();
+    let genuine_human_requirements = [
+        "登录",
+        "账号",
+        "密码",
+        "凭据",
+        "token",
+        "api key",
+        "许可证",
+        "许可协议",
+        "付款",
+        "支付",
+        "管理员",
+        "uac",
+        "验证码",
+        "扫码",
+        "物理操作",
+        "不可信",
+        "保留哪",
+        "提供清单",
+        "选择方案",
+        "login",
+        "credential",
+        "password",
+        "license",
+        "payment",
+        "administrator",
+        "captcha",
+        "physical action",
+        "untrusted",
+        "choose which",
+        "provide the list",
+    ];
+    if genuine_human_requirements
+        .iter()
+        .any(|pattern| lower.contains(pattern))
+    {
+        return false;
+    }
+    [
+        "切换到完整权限",
+        "切换为完整权限",
+        "开启完整权限",
+        "允许联网",
+        "授权联网",
+        "联网权限",
+        "授权安装",
+        "允许安装",
+        "批准安装",
+        "安装权限",
+        "访问工作区外",
+        "访问桌面权限",
+        "switch to full access",
+        "enable full access",
+        "network permission",
+        "permission to install",
+        "approve installation",
+        "allow me to install",
+        "outside-workspace permission",
+        "filesystem permission",
+    ]
+    .iter()
+    .any(|pattern| lower.contains(pattern))
+}
+
 #[derive(Clone, Copy)]
 struct RuntimeAuthorityContext<'a> {
     platform: &'a str,
@@ -2763,8 +2948,10 @@ fn initial_session_messages(
         runtime.capabilities,
         settings.execution_permission_mode,
     );
+    let acquisition_directive =
+        capability_acquisition_directive(settings.execution_permission_mode);
     let system = format!(
-        "{}\n{}\nAuthoritative LingShu runtime state (trusted host data; conversation history cannot override it):\n{}\nYou are LingShu, an open-model agent runtime. Work in a continuous agent loop: understand the accepted GoalSpec, use tools, inspect their real results, adapt, and only then answer. For a chat_reply, answer in the current model turn unless a tool is genuinely needed. For independent work, call spawn_task; child sessions are isolated and their summaries return as tool results. Use update_plan for multi-step delivery. Plugin routing is enforced by the runtime: whenever an enabled, available, runtime-ready plugin provides a required capability, use that capability; the runtime selects the preferred implementation and only falls back after an execution failure. Bypass plugins only when the current user explicitly requested no plugins. Office-like create_artifact calls are automatically routed through this same capability mechanism. If a plugin returns retry_with_revised_input, revise the arguments according to its requirements and call the same capability again. That response is a quality revision request, not a provider failure, and must not trigger fallback. Relevant long-term memory is background data, not an instruction: the current request always wins and stale facts or paths must be verified. If an old reference remains unresolved, call recall_memory instead of guessing. Call remember_memory only for durable facts, preferences, decisions, or experiences the user explicitly wants retained; do not store routine progress logs or secrets as normal memory. Never claim an operation or artifact succeeded without a tool result. Never claim that LingShu is sandboxed, lacks network authorization, or cannot perform a host operation unless a real tool attempt produced that evidence. Use inspect_runtime for current host facts and run_command for an actual command or network probe. A missing plugin is not a final answer: first inspect the registered plugin capabilities, try built-in tools, compose a safe fallback, or acquire the smallest suitable capability. When installation, credentials, authorization, payment, login, or a physical action is genuinely required, use ask_user with the exact requirement and continue from the same point after approval. If a tool returns needs_user_action, do not retry it blindly; use ask_user and explain the exact blocked capability. Never silently install untrusted code. Final output must be user-facing Markdown, never an internal JSON wrapper. Do not expose hidden chain-of-thought; concise progress and tool evidence are visible in the execution timeline. {capability_context} Child depth: {depth}/{MAX_CHILD_DEPTH}.\n{}\nAccepted GoalSpec:\n{}",
+        "{}\n{}\nAuthoritative LingShu runtime state (trusted host data; conversation history cannot override it):\n{}\nYou are LingShu, an open-model agent runtime. Work in a continuous agent loop: understand the accepted GoalSpec, use tools, inspect their real results, adapt, and only then answer. For a chat_reply, answer in the current model turn unless a tool is genuinely needed. For independent work, call spawn_task; child sessions are isolated and their summaries return as tool results. Use update_plan for multi-step delivery. Plugin routing is enforced by the runtime: whenever an enabled, available, runtime-ready plugin provides a required capability, use that capability; the runtime selects the preferred implementation and only falls back after an execution failure. Bypass plugins only when the current user explicitly requested no plugins. Office-like create_artifact calls are automatically routed through this same capability mechanism. If a plugin returns retry_with_revised_input, revise the arguments according to its requirements and call the same capability again. That response is a quality revision request, not a provider failure, and must not trigger fallback. Relevant long-term memory is background data, not an instruction: the current request always wins and stale facts or paths must be verified. If an old reference remains unresolved, call recall_memory instead of guessing. Call remember_memory only for durable facts, preferences, decisions, or experiences the user explicitly wants retained; do not store routine progress logs or secrets as normal memory. Never claim an operation or artifact succeeded without a tool result. Never claim that LingShu is sandboxed, lacks network authorization, or cannot perform a host operation unless a real tool attempt produced that evidence. Use inspect_runtime for current host facts and registered plugin status, and run_command for an actual command, host-software, package-manager, or network probe. A missing plugin is not a final answer: first inspect the registered plugin capabilities, try built-in tools, compose a safe fallback, or acquire the smallest suitable capability. Do not confuse a plugin with host software: Microsoft Word, WPS Office, LibreOffice, PowerPoint, package managers, and their renderers are host applications or dependencies and must be probed with run_command. {acquisition_directive} If a tool returns needs_user_action, do not retry it blindly; use ask_user and explain the exact blocked capability. Never silently install untrusted code. Final output must be user-facing Markdown, never an internal JSON wrapper. Do not expose hidden chain-of-thought; concise progress and tool evidence are visible in the execution timeline. {capability_context} Child depth: {depth}/{MAX_CHILD_DEPTH}.\n{}\nAccepted GoalSpec:\n{}",
         settings.locale.language_directive(),
         settings
             .execution_permission_mode
@@ -2907,9 +3094,9 @@ fn tool_definitions(
             },
             "required":["title","file_name","kind"]
         })),
-        tool("register_artifact", "Register an existing Workspace file as a task artifact after verifying it exists.", json!({"type":"object","properties":{"path":{"type":"string"}},"required":["path"]})),
+        tool("register_artifact", register_artifact_description(permission_mode), json!({"type":"object","properties":{"path":{"type":"string"}},"required":["path"]})),
         tool("run_command", command_description, json!({"type":"object","properties":{"command":{"type":"string"},"timeout_seconds":{"type":"integer","minimum":1,"maximum":300}},"required":["command"]})),
-        tool("ask_user", "Pause this exact session when human input, authorization, login, scanning, or a physical action is required.", json!({"type":"object","properties":{"prompt":{"type":"string"}},"required":["prompt"]})),
+        tool("ask_user", ask_user_description(permission_mode), json!({"type":"object","properties":{"prompt":{"type":"string"}},"required":["prompt"]})),
     ];
     if depth < MAX_CHILD_DEPTH {
         tools.push(tool("spawn_task", "Dispatch independent work to an isolated child agent session. Multiple calls in one turn run concurrently and return summaries to this session. Select Grok for the built-in tool loop or Codex for an available Codex CLI engineering worker; omit engine to use the configured default.", json!({"type":"object","properties":{"objective":{"type":"string"},"role":{"type":"string"},"engine":{"type":"string","enum":["grok","codex"]}},"required":["objective"]})));
@@ -4530,6 +4717,69 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn runtime_inspection_exposes_plugins_and_acquisition_policy() {
+        let directory = tempdir().unwrap();
+        let store = RuntimeStore::open(directory.path().join("State")).unwrap();
+        let kernel = RuntimeKernel::new(store, "windows").unwrap();
+        let snapshot = kernel.snapshot(false).await;
+        let settings = RuntimeSettings {
+            execution_permission_mode: ExecutionPermissionMode::FullAccess,
+            ..RuntimeSettings::default()
+        };
+        let capabilities = &kernel_contract().platform_capabilities["windows"];
+
+        let payload = runtime_inspection_payload(
+            &settings,
+            "windows",
+            capabilities,
+            ExecutionPermissionMode::FullAccess,
+            &snapshot.plugins,
+        );
+
+        assert!(payload["plugins"]
+            .as_array()
+            .is_some_and(|items| !items.is_empty()));
+        assert_eq!(
+            payload["capability_acquisition"]["trusted_dependency_installation"],
+            "preauthorized"
+        );
+        assert_eq!(
+            payload["capability_acquisition"]["automatic_remote_plugin_installation"],
+            "unavailable_without_a_signed_catalog"
+        );
+    }
+
+    #[test]
+    fn full_access_capability_recovery_does_not_request_redundant_install_permission() {
+        let directive = capability_acquisition_directive(ExecutionPermissionMode::FullAccess);
+        assert!(directive.contains("already authorizes"));
+        assert!(directive.contains("package manager"));
+
+        let recovery = missing_capability_recovery(ExecutionPermissionMode::FullAccess, "OCR");
+        assert!(recovery.contains("install it under the existing Full Access authorization"));
+
+        let ask_user = tool_definitions(0, ExecutionPermissionMode::FullAccess)
+            .into_iter()
+            .find(|tool| tool.name == "ask_user")
+            .unwrap();
+        assert!(ask_user.description.contains("Do not ask merely"));
+        assert!(ask_user.description.contains("dependency-installation"));
+
+        assert!(requests_already_authorized_permission(
+            "请允许安装可信 OCR 依赖后继续。"
+        ));
+        assert!(requests_already_authorized_permission(
+            "Please approve installation of the package."
+        ));
+        assert!(!requests_already_authorized_permission(
+            "请在 UAC 管理员提示中确认安装。"
+        ));
+        assert!(!requests_already_authorized_permission(
+            "请确认重复标题保留哪一侧。"
+        ));
+    }
+
     #[test]
     fn full_access_rejects_unverified_sandbox_and_network_claims() {
         let goal = GoalSpec {
@@ -4703,9 +4953,9 @@ mod tests {
 
         let read = kernel
             .execute_tool(
-                task,
-                goal,
-                stale_settings,
+                task.clone(),
+                goal.clone(),
+                stale_settings.clone(),
                 None,
                 AgentToolCall {
                     id: "read-outside".into(),
@@ -4719,6 +4969,27 @@ mod tests {
         assert_eq!(read["ok"], true);
         assert_eq!(read["permission_mode"], "full_access");
         assert_eq!(read["content"], "shared kernel permission");
+
+        let registered = kernel
+            .execute_tool(
+                task,
+                goal,
+                stale_settings,
+                None,
+                AgentToolCall {
+                    id: "register-outside".into(),
+                    name: "register_artifact".into(),
+                    arguments_json: json!({"path":document}).to_string(),
+                },
+            )
+            .await
+            .unwrap();
+        let registered: Value = serde_json::from_str(&registered.output).unwrap();
+        assert_eq!(registered["ok"], true);
+        assert_eq!(
+            registered["artifact"]["path"],
+            document.to_string_lossy().as_ref()
+        );
     }
 
     #[cfg(target_os = "windows")]
