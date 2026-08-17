@@ -1,3 +1,4 @@
+use crate::process::hide_console_window;
 use base64::Engine;
 use quick_xml::events::Event;
 use quick_xml::Reader;
@@ -269,6 +270,7 @@ fn render_with_libreoffice(source: &Path, output_dir: &Path) -> Option<PathBuf> 
 
 fn command_succeeds(mut command: Command, timeout: Duration) -> bool {
     command.stdout(Stdio::null()).stderr(Stdio::null());
+    hide_console_window(&mut command);
     let Ok(mut child) = command.spawn() else {
         return false;
     };

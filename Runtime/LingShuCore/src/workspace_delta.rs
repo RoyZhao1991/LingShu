@@ -1,3 +1,4 @@
+use crate::process::hide_console_window;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::env;
@@ -213,6 +214,7 @@ impl WorkspaceDeltaTracker {
         I: AsRef<OsStr>,
     {
         let mut command = Command::new(&self.git_executable);
+        hide_console_window(&mut command);
         if let Some(git_dir) = git_dir {
             command.arg("--git-dir").arg(git_dir);
         }

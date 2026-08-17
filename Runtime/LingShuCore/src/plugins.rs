@@ -3,6 +3,7 @@ use crate::models::{
     AppLocale, ArtifactSpec, ExecutionPermissionMode, PluginPermissions, PluginRecord,
     PluginSource, PluginToolRecord,
 };
+use crate::process::hide_tokio_console_window;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::BTreeSet;
@@ -525,6 +526,7 @@ impl PluginRegistry {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
+        hide_tokio_console_window(&mut process);
         let mut child = process
             .spawn()
             .map_err(|error| PluginError::Execution(error.to_string()))?;
@@ -742,6 +744,7 @@ impl PluginRegistry {
                 .kill_on_drop(true)
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped());
+            hide_tokio_console_window(&mut process);
 
             let output =
                 match tokio::time::timeout(Duration::from_secs(300), process.output()).await {

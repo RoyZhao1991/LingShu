@@ -10,6 +10,7 @@ pub mod model_client;
 pub mod models;
 pub mod plugins;
 pub mod preview;
+mod process;
 pub mod providers;
 pub mod store;
 mod workspace_delta;

@@ -2,6 +2,7 @@ use crate::loop_gateway::{LoopGatewayError, LoopTransportGateway};
 use crate::models::{
     AppLocale, ExecutionPermissionMode, GoalSpec, LoopEngineKind, LoopEngineRecord, RuntimeSettings,
 };
+use crate::process::hide_tokio_console_window;
 use crate::workspace_delta::{WorkspaceBaseline, WorkspaceDeltaTracker};
 use serde_json::to_string_pretty;
 use std::env;
@@ -390,6 +391,7 @@ impl LoopRegistry {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
+        hide_tokio_console_window(&mut process);
         remove_native_provider_environment(&mut process);
         let output =
             run_harness_process(process, &prompt, adapter.name(), adapter.timeout_seconds()).await;

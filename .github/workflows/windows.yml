@@ -144,6 +144,34 @@ jobs:
         working-directory: WindowsApp
         run: npm run tauri -- build
 
+      - name: Verify release executable uses the Windows GUI subsystem
+        run: |
+          $executable = Join-Path $env:GITHUB_WORKSPACE "WindowsApp/src-tauri/target/release/lingshu-windows.exe"
+          if (-not (Test-Path $executable)) {
+            throw "The release executable was not produced: $executable"
+          }
+          $stream = [System.IO.File]::OpenRead($executable)
+          $reader = [System.IO.BinaryReader]::new($stream)
+          try {
+            $stream.Position = 0x3c
+            $peOffset = $reader.ReadInt32()
+            $optionalHeaderOffset = $peOffset + 24
+            $stream.Position = $optionalHeaderOffset
+            $magic = $reader.ReadUInt16()
+            if ($magic -ne 0x10b -and $magic -ne 0x20b) {
+              throw "Unexpected PE optional-header magic: 0x$($magic.ToString('x'))"
+            }
+            $stream.Position = $optionalHeaderOffset + 68
+            $subsystem = $reader.ReadUInt16()
+            if ($subsystem -ne 2) {
+              throw "Expected WINDOWS_GUI subsystem (2), found $subsystem. The app would open a console window."
+            }
+          } finally {
+            $reader.Dispose()
+            $stream.Dispose()
+          }
+          Write-Host "Verified WINDOWS_GUI subsystem for $executable"
+
       - name: Collect installers and checksums
         run: |
           $bundle = Join-Path $env:GITHUB_WORKSPACE "WindowsApp/src-tauri/target/release/bundle"
@@ -182,14 +210,22 @@ jobs:
         run: |
           $tag = "${{ github.ref_name }}"
           $version = (Get-Content (Join-Path $env:GITHUB_WORKSPACE "WindowsApp/package.json") -Raw | ConvertFrom-Json).version
+          $versionMatch = [regex]::Match($version, '^(\d+\.\d+\.\d+)-(\d+)$')
+          if (-not $versionMatch.Success) {
+            throw "Package version '$version' does not follow the release version format."
+          }
+          $expectedTag = "windows-v$($versionMatch.Groups[1].Value)-preview.$($versionMatch.Groups[2].Value)"
+          if ($tag -ne $expectedTag) {
+            throw "Tag '$tag' does not match package version '$version'; expected '$expectedTag'."
+          }
           gh release view $tag --repo $env:GITHUB_REPOSITORY *> $null
           if ($LASTEXITCODE -ne 0) {
           $notes = @"
           Windows x64 technical preview built and tested on GitHub's Windows runner.
 
-          This preview fixes capability recovery in Full Access sessions. Runtime inspection now exposes registered plugin readiness and the acquisition policy; trusted package-manager dependencies can be installed without requesting redundant permission; Word, WPS Office, LibreOffice, PowerPoint, and OCR engines are classified as host software instead of LingShu plugins; and existing artifacts outside the Workspace, including Desktop files, can be registered when Full Access is active. Redundant requests for command, network, dependency-installation, or outside-Workspace authorization are returned to the agent as recoverable tool feedback instead of blocking the task.
+          This preview removes visible console windows from normal Windows use. Installed release builds now launch Nous as a native GUI application, so opening the main window no longer creates a shell or console window. Background CLI work, including PowerShell commands, managed loop harnesses, plugins, DesignKB generators, presentation converters, and Git inspection, continues to run headlessly with captured output and no visible console window.
 
-          The release retains the bundled PptxGenJS and Python DesignKB engines, PDF.js preview rendering, synchronous latest-message anchoring, replaceable Loop Harness, global memory, task ledger, artifact tracking, Office Foundation for DOCX/PPTX/XLSX, document extraction, and independent checking shared by both desktop clients. Direct Windows computer control and realtime audio/video perception are not included in this preview.
+          Shell and runtime capabilities are unchanged; this is a Windows presentation and process-launch fix. Debug builds may still expose a console for developer diagnostics. The release retains capability recovery in Full Access sessions, the bundled PptxGenJS and Python DesignKB engines, PDF.js preview rendering, synchronous latest-message anchoring, replaceable Loop Harness, global memory, task ledger, artifact tracking, Office Foundation for DOCX/PPTX/XLSX, document extraction, and independent checking shared by both desktop clients. Direct Windows computer control and realtime audio/video perception are not included in this preview.
           "@
           gh release create $tag --repo $env:GITHUB_REPOSITORY --prerelease --title "Nous (LingShu) Windows Technical Preview $version" --notes $notes
           }

@@ -6,6 +6,7 @@ use crate::model_client::{AgentToolDefinition, ModelClient, ModelDelta, ModelErr
 use crate::models::*;
 use crate::plugins::{PluginCapabilityRoute, PluginError, PluginRegistry, PluginUsagePolicy};
 use crate::preview::{preview_file, PreviewKind};
+use crate::process::hide_tokio_console_window;
 use crate::providers::provider_catalog;
 use crate::store::{RuntimeStore, StoreError};
 use chrono::{DateTime, Utc};
@@ -3595,6 +3596,7 @@ async fn run_local_command(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     process.kill_on_drop(true);
+    hide_tokio_console_window(&mut process);
     let output = match tokio::time::timeout(Duration::from_secs(timeout_seconds), process.output())
         .await
     {
