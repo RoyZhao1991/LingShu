@@ -1,4 +1,4 @@
-use crate::process::hide_console_window;
+use crate::process::spawn_process_tree;
 use base64::Engine;
 use quick_xml::events::Event;
 use quick_xml::Reader;
@@ -57,6 +57,8 @@ pub enum PreviewError {
     Read(#[from] std::io::Error),
     #[error("could not read Office package: {0}")]
     Zip(#[from] zip::result::ZipError),
+    #[error("preview rendering was cancelled")]
+    Cancelled,
 }
 
 pub(crate) fn content_revision(bytes: &[u8]) -> String {
@@ -68,8 +70,16 @@ pub(crate) fn file_revision(path: impl AsRef<Path>) -> Result<String, PreviewErr
 }
 
 pub(crate) fn semantic_file_revision(path: impl AsRef<Path>) -> Result<String, PreviewError> {
+    semantic_file_revision_cancellable(path, || false)
+}
+
+pub(crate) fn semantic_file_revision_cancellable(
+    path: impl AsRef<Path>,
+    cancelled: impl Fn() -> bool,
+) -> Result<String, PreviewError> {
     let path = path.as_ref();
-    let preview = preview_file(path)?;
+    let preview = preview_file_cancellable(path, &cancelled)?;
+    ensure_preview_not_cancelled(&cancelled)?;
     let bytes = fs::read(path)?;
     let extension = path
         .extension()
@@ -421,7 +431,15 @@ fn hash_tagged_bytes(hasher: &mut Sha256, tag: &[u8], value: &[u8]) {
 }
 
 pub fn preview_file(path: impl AsRef<Path>) -> Result<PreviewPayload, PreviewError> {
+    preview_file_cancellable(path, || false)
+}
+
+pub(crate) fn preview_file_cancellable(
+    path: impl AsRef<Path>,
+    cancelled: impl Fn() -> bool,
+) -> Result<PreviewPayload, PreviewError> {
     let path = path.as_ref();
+    ensure_preview_not_cancelled(&cancelled)?;
     if !path.is_file() {
         return Err(PreviewError::Missing(path.display().to_string()));
     }
@@ -437,6 +455,7 @@ pub fn preview_file(path: impl AsRef<Path>) -> Result<PreviewPayload, PreviewErr
         .unwrap_or("")
         .to_ascii_lowercase();
     let bytes = fs::read(path)?;
+    ensure_preview_not_cancelled(&cancelled)?;
     let revision = content_revision(&bytes);
     let mut payload = PreviewPayload {
         name,
@@ -522,7 +541,7 @@ pub fn preview_file(path: impl AsRef<Path>) -> Result<PreviewPayload, PreviewErr
                 "application/vnd.openxmlformats-officedocument.presentationml.presentation".into();
             payload.sections = presentation_slides(&bytes)?;
             payload.content = payload.sections.join("\n\n");
-            if let Some(rendered) = render_presentation_pdf(path, &revision) {
+            if let Some(rendered) = render_presentation_pdf(path, &revision, &cancelled) {
                 payload.rendered_content = Some(format!(
                     "data:application/pdf;base64,{}",
                     base64::engine::general_purpose::STANDARD.encode(rendered)
@@ -540,10 +559,26 @@ pub fn preview_file(path: impl AsRef<Path>) -> Result<PreviewPayload, PreviewErr
         }
         _ => {}
     }
+    ensure_preview_not_cancelled(&cancelled)?;
     Ok(payload)
 }
 
-fn render_presentation_pdf(path: &Path, revision: &str) -> Option<Vec<u8>> {
+fn ensure_preview_not_cancelled(cancelled: &dyn Fn() -> bool) -> Result<(), PreviewError> {
+    if cancelled() {
+        Err(PreviewError::Cancelled)
+    } else {
+        Ok(())
+    }
+}
+
+fn render_presentation_pdf(
+    path: &Path,
+    revision: &str,
+    cancelled: &dyn Fn() -> bool,
+) -> Option<Vec<u8>> {
+    if cancelled() {
+        return None;
+    }
     let cache_dir = std::env::temp_dir().join("lingshu-preview").join(revision);
     fs::create_dir_all(&cache_dir).ok()?;
     let cached_pdf = cache_dir.join("presentation.pdf");
@@ -552,11 +587,11 @@ fn render_presentation_pdf(path: &Path, revision: &str) -> Option<Vec<u8>> {
     }
 
     #[cfg(target_os = "windows")]
-    if render_with_powerpoint(path, &cached_pdf) && cached_pdf.is_file() {
+    if render_with_powerpoint(path, &cached_pdf, cancelled) && cached_pdf.is_file() {
         return fs::read(cached_pdf).ok();
     }
 
-    let converted = render_with_libreoffice(path, &cache_dir)?;
+    let converted = render_with_libreoffice(path, &cache_dir, cancelled)?;
     if converted != cached_pdf {
         fs::rename(&converted, &cached_pdf)
             .or_else(|_| fs::copy(&converted, &cached_pdf).map(|_| ()))
@@ -566,7 +601,7 @@ fn render_presentation_pdf(path: &Path, revision: &str) -> Option<Vec<u8>> {
 }
 
 #[cfg(target_os = "windows")]
-fn render_with_powerpoint(source: &Path, destination: &Path) -> bool {
+fn render_with_powerpoint(source: &Path, destination: &Path, cancelled: &dyn Fn() -> bool) -> bool {
     let source = powershell_literal(source);
     let destination = powershell_literal(destination);
     let script = format!(
@@ -574,7 +609,10 @@ fn render_with_powerpoint(source: &Path, destination: &Path) -> bool {
          $presentation=$app.Presentations.Open('{source}',$true,$true,$false); \
          $presentation.SaveAs('{destination}',32); $presentation.Close(); $app.Quit();"
     );
-    ["powershell.exe", "pwsh.exe"].into_iter().any(|program| {
+    for program in ["powershell.exe", "pwsh.exe"] {
+        if cancelled() {
+            return false;
+        }
         let mut command = Command::new(program);
         command.args([
             "-NoProfile",
@@ -584,8 +622,11 @@ fn render_with_powerpoint(source: &Path, destination: &Path) -> bool {
             "-Command",
             &script,
         ]);
-        command_succeeds(command, Duration::from_secs(90))
-    })
+        if command_succeeds(command, Duration::from_secs(90), cancelled) {
+            return true;
+        }
+    }
+    false
 }
 
 #[cfg(target_os = "windows")]
@@ -593,7 +634,11 @@ fn powershell_literal(path: &Path) -> String {
     path.display().to_string().replace('\'', "''")
 }
 
-fn render_with_libreoffice(source: &Path, output_dir: &Path) -> Option<PathBuf> {
+fn render_with_libreoffice(
+    source: &Path,
+    output_dir: &Path,
+    cancelled: &dyn Fn() -> bool,
+) -> Option<PathBuf> {
     #[cfg(target_os = "windows")]
     let candidates = [
         PathBuf::from("soffice.exe"),
@@ -615,6 +660,9 @@ fn render_with_libreoffice(source: &Path, output_dir: &Path) -> Option<PathBuf> 
         .map(|stem| PathBuf::from(stem).with_extension("pdf"))?;
     let output_path = output_dir.join(output_name);
     for candidate in candidates {
+        if cancelled() {
+            return None;
+        }
         let mut command = Command::new(candidate);
         command
             .arg("--headless")
@@ -623,25 +671,27 @@ fn render_with_libreoffice(source: &Path, output_dir: &Path) -> Option<PathBuf> 
             .arg("--outdir")
             .arg(output_dir)
             .arg(source);
-        if command_succeeds(command, Duration::from_secs(90)) && output_path.is_file() {
+        if command_succeeds(command, Duration::from_secs(90), cancelled) && output_path.is_file() {
             return Some(output_path);
         }
     }
     None
 }
 
-fn command_succeeds(mut command: Command, timeout: Duration) -> bool {
+fn command_succeeds(mut command: Command, timeout: Duration, cancelled: &dyn Fn() -> bool) -> bool {
     command.stdout(Stdio::null()).stderr(Stdio::null());
-    hide_console_window(&mut command);
-    let Ok(mut child) = command.spawn() else {
+    let Ok((mut child, process_tree)) = spawn_process_tree(&mut command) else {
         return false;
     };
     let started = Instant::now();
     loop {
         match child.try_wait() {
             Ok(Some(status)) => return status.success(),
-            Ok(None) if started.elapsed() < timeout => thread::sleep(Duration::from_millis(100)),
+            Ok(None) if !cancelled() && started.elapsed() < timeout => {
+                thread::sleep(Duration::from_millis(50))
+            }
             _ => {
+                drop(process_tree);
                 let _ = child.kill();
                 let _ = child.wait();
                 return false;
@@ -930,6 +980,8 @@ mod tests {
     use pdf_extract::{Dictionary, Document, Object, Stream};
     use std::fs;
     use std::path::{Path, PathBuf};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{mpsc, Arc};
 
     fn write_visual_pdf(path: &Path, background_gray: f32, producer: &str) {
         let mut document = Document::with_version("1.5");
@@ -995,6 +1047,56 @@ mod tests {
         document.trailer.set("Info", info_id);
         document.compress();
         document.save(path).expect("save PDF fixture");
+    }
+
+    #[test]
+    #[cfg(any(unix, target_os = "windows"))]
+    fn cancelling_a_renderer_terminates_its_descendant_processes() {
+        let directory = tempfile::tempdir().expect("create renderer cancellation workspace");
+        #[cfg(target_os = "windows")]
+        let mut command = {
+            let script = r#"Set-Content -NoNewline -Path renderer-started.txt -Value started; $payload = "Start-Sleep -Milliseconds 1200; [IO.File]::WriteAllText((Join-Path (Get-Location) 'renderer-descendant-finished.txt'), 'escaped')"; $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($payload)); $child = Start-Process -PassThru -FilePath powershell.exe -ArgumentList @('-NoProfile','-NonInteractive','-EncodedCommand',$encoded); $child.WaitForExit()"#;
+            let mut command = Command::new("powershell.exe");
+            command.args(["-NoProfile", "-NonInteractive", "-Command", script]);
+            command
+        };
+        #[cfg(unix)]
+        let mut command = {
+            let mut command = Command::new("/bin/sh");
+            command.args([
+                "-c",
+                "printf started > renderer-started.txt; (sleep 1.2; printf escaped > renderer-descendant-finished.txt) & wait",
+            ]);
+            command
+        };
+        command.current_dir(directory.path());
+
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let worker_cancelled = cancelled.clone();
+        let (finished_tx, finished_rx) = mpsc::channel();
+        let worker = thread::spawn(move || {
+            let cancellation = || worker_cancelled.load(Ordering::SeqCst);
+            let succeeded = command_succeeds(command, Duration::from_secs(10), &cancellation);
+            let _ = finished_tx.send(succeeded);
+        });
+
+        let started = directory.path().join("renderer-started.txt");
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while !started.exists() && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert!(started.exists(), "the renderer process did not start");
+        cancelled.store(true, Ordering::SeqCst);
+        assert!(!finished_rx
+            .recv_timeout(Duration::from_secs(3))
+            .expect("renderer cancellation did not terminate the blocking worker"));
+        worker.join().unwrap();
+
+        thread::sleep(Duration::from_millis(1_800));
+        assert!(!directory
+            .path()
+            .join("renderer-descendant-finished.txt")
+            .exists());
     }
 
     #[test]

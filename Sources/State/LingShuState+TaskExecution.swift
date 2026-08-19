@@ -177,7 +177,7 @@ extension LingShuState {
         // 未达标状态只结束本次运行段，不终结根目标；后续从原断点恢复。
         let finishesSegment: Set<LingShuTaskExecutionStatus> = [
             .answered, .completed, .verified, .blocked, .partial,
-            .needsRevision, .waitingForUser, .suspended, .failed
+            .needsRevision, .waitingForUser, .suspended, .terminated, .failed
         ]
         if finishesSegment.contains(effectiveStatus) {
             let asSuccess = effectiveStatus == .completed || effectiveStatus == .verified || effectiveStatus == .answered
@@ -197,7 +197,7 @@ extension LingShuState {
     func syncLoadingBubblesToFinishedRecord(_ recordID: String, status: LingShuTaskExecutionStatus, summary: String) {
         let ans = summary.trimmingCharacters(in: .whitespacesAndNewlines)
         let ok = (status == .completed || status == .verified || status == .answered)
-        let icon = ok ? "✅ " : (status == .failed || status == .blocked ? "⏹ " : "")
+        let icon = ok ? "✅ " : (status == .failed || status == .blocked || status == .terminated ? "⏹ " : "")
         var touched = false
         for i in chatMessages.indices
         where chatMessages[i].taskRecordID == recordID && chatMessages[i].isLoading && !chatMessages[i].isUser {

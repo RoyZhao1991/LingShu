@@ -19,6 +19,7 @@ extension LingShuState {
     /// 主会话占位气泡或主线程输入队列。
     func beginTaskThreadRun(recordID: String, summary: String = "子线程正在执行。") {
         guard let index = taskExecutionRecords.firstIndex(where: { $0.id == recordID }) else { return }
+        guard taskExecutionRecords[index].status != .terminated else { return }
         let wasActive = activeTaskThreadRecordIDs.contains(recordID)
         activeTaskThreadRecordIDs.insert(recordID)
         markTaskThreadRead(recordID)

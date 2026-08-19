@@ -19,10 +19,13 @@ struct LingShuTaskPoolView: View {
         LingShuTaskThreadHierarchy.groups(pool)
     }
     private var ongoing: [LingShuTaskThreadHierarchyGroup] {
-        groups.filter { !$0.root.status.isSuccessfulCompletion }
+        groups.filter { !$0.root.status.isTerminal }
     }
     private var done: [LingShuTaskThreadHierarchyGroup] {
         groups.filter { $0.root.status.isSuccessfulCompletion }
+    }
+    private var terminated: [LingShuTaskThreadHierarchyGroup] {
+        groups.filter { $0.root.status == .terminated }
     }
 
     var body: some View {
@@ -34,6 +37,7 @@ struct LingShuTaskPoolView: View {
                         emptyState
                     } else {
                         if !ongoing.isEmpty { section(state.loc("进行中 / 待处理", "In Progress / Needs Attention"), ongoing) }
+                        if !terminated.isEmpty { section(state.loc("已终止", "Terminated"), terminated) }
                         if !done.isEmpty { section(state.loc("已完成", "Completed"), done) }
                     }
                 }
@@ -57,8 +61,8 @@ struct LingShuTaskPoolView: View {
                 .foregroundStyle(Color.lingHolo)
                 .help(state.loc("主线程是全能中枢;每个任务是一条线程,派生的子线程像专项工作室——其上下文对该任务更聚焦、价值更高。", "The main thread is the general hub. Each task has a focused thread, and its child threads act as specialist workspaces."))
             Text(state.loc(
-                "主任务：进行中 \(ongoing.count) · 已完成 \(done.count) · 子任务 \(max(0, pool.count - groups.count))",
-                "Main tasks: in progress \(ongoing.count) · completed \(done.count) · child tasks \(max(0, pool.count - groups.count))"
+                "主任务：进行中 \(ongoing.count) · 已终止 \(terminated.count) · 已完成 \(done.count) · 子任务 \(max(0, pool.count - groups.count))",
+                "Main tasks: in progress \(ongoing.count) · terminated \(terminated.count) · completed \(done.count) · child tasks \(max(0, pool.count - groups.count))"
             ))
                 .font(.system(size: 12))
                 .foregroundStyle(Color.lingFg.opacity(0.5))
@@ -191,6 +195,7 @@ struct LingShuTaskPoolView: View {
     private func statusColor(_ status: LingShuTaskExecutionStatus) -> Color {
         switch status {
         case .completed, .answered, .verified: return Color.lingHolo
+        case .terminated: return Color.lingFg.opacity(0.52)
         case .running, .dispatched, .analyzing, .acquiringCapability, .ready: return Color.lingHoloAlt
         case .queued: return Color.lingFg.opacity(0.4)
         case .needsRevision, .partial: return .orange

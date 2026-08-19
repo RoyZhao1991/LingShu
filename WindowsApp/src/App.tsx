@@ -350,6 +350,9 @@ export default function App() {
               {snapshot.messages.length === 0 && <EmptyState icon={<MessageCircle />} text={t.noMessages} />}
               {snapshot.messages.map((message) => {
                 const messageAttachments = attachmentPathsForMessage(snapshot, message);
+                const messageTask = message.threadId
+                  ? snapshot.tasks.find((task) => task.id === message.threadId)
+                  : undefined;
                 const bubble = projectChatBubble(
                   message,
                   message.threadId ? latestEventForThread(snapshot, message.threadId) : undefined,
@@ -364,6 +367,9 @@ export default function App() {
                     {bubble.isRunning && <LoaderCircle className="inline-loader spin" />}
                     <MarkdownContent>{bubble.text}</MarkdownContent>
                   </div>
+                  {message.role === "assistant" && messageTask?.status === "cancelled" && (
+                    <div className="message-termination"><Square size={13} />{t.cancelled}</div>
+                  )}
                   {messageAttachments.length > 0 && (
                     <div className="message-attachments" aria-label={locale === "en" ? "Message attachments" : "消息附件"}>
                       {messageAttachments.map((path) => (
@@ -720,6 +726,7 @@ function EventStateIcon({ event }: { event: RuntimeEvent }) {
   if (event.state === "running") return <LoaderCircle className="spin" />;
   if (event.state === "completed") return <Check />;
   if (event.state === "blocked") return <UserRound />;
+  if (event.state === "cancelled") return <Square />;
   return <X />;
 }
 

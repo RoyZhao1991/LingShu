@@ -151,6 +151,7 @@ extension LingShuTaskExecutionStatus {
         case .answered: .cyan
         case .dispatched: .orange
         case .completed: .green
+        case .terminated: Color.lingFg.opacity(0.52)
         case .needsRevision: .orange
         case .blocked: .red
         case .suspended: .yellow   // 网络中断暂停:黄色(区别于红色"异常"——它会自动续)

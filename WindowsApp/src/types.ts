@@ -7,7 +7,7 @@ export type TaskStatus = "queued" | "understanding" | "running" | "needs_recover
 export type TaskRole = "main" | "worker" | "checker";
 export type TaskOrigin = "conversation" | "subtask" | "verification";
 export type RuntimeEventKind = "status" | "model" | "reasoning" | "tool" | "plan" | "delegation" | "human_interaction" | "warning" | "result";
-export type RuntimeEventState = "running" | "completed" | "failed" | "blocked";
+export type RuntimeEventState = "running" | "completed" | "failed" | "blocked" | "cancelled";
 
 export interface RuntimeSettings {
   locale: Locale;

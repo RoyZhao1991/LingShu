@@ -326,6 +326,7 @@ enum LingShuKernelEventState: String, Codable, Sendable {
     case completed
     case failed
     case blocked
+    case cancelled
 }
 
 struct LingShuKernelRuntimeEvent: Codable, Sendable {

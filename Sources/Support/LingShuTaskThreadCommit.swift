@@ -40,7 +40,7 @@ struct LingShuTaskThreadCommit: Codable, Equatable, Sendable {
             return true
         case .waitingForUser, .blocked, .partial, .needsRevision:
             return true
-        case .answered, .completed, .verified:
+        case .answered, .completed, .verified, .terminated:
             return false
         case .failed:
             return true
@@ -72,7 +72,7 @@ struct LingShuTaskThreadCommit: Codable, Equatable, Sendable {
             return fallback
         case .waitingForUser, .blocked, .partial, .needsRevision:
             return .waiting
-        case .answered, .completed, .verified:
+        case .answered, .completed, .verified, .terminated:
             return .delivering
         case .failed:
             return .waiting

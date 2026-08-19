@@ -4,13 +4,13 @@ use crate::models::*;
 use crate::preview::{file_revision, semantic_file_revision};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use thiserror::Error;
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::{watch, Mutex, RwLock};
 use uuid::Uuid;
 
 const MAX_APPLIED_EXTERNAL_RUN_IDS: usize = 64;
@@ -126,6 +126,11 @@ struct PersistedState {
     events: Vec<RuntimeEvent>,
     #[serde(default)]
     next_event_sequence: u64,
+    /// Assistant messages that still contain host-owned progress copy rather than model output.
+    /// Tracking provenance avoids treating legitimate model text such as `Thinking…` as a
+    /// placeholder merely because its bytes happen to match localized progress copy.
+    #[serde(default)]
+    assistant_placeholder_message_ids: HashSet<Uuid>,
 }
 
 impl Default for PersistedState {
@@ -147,6 +152,7 @@ impl Default for PersistedState {
             active_task_id: None,
             events: Vec::new(),
             next_event_sequence: 1,
+            assistant_placeholder_message_ids: HashSet::new(),
         }
     }
 }
@@ -211,6 +217,52 @@ fn close_nonterminal_descendants(
     for task in &mut state.tasks {
         if descendants.contains(&task.id) {
             close_nonterminal_task(task, status.clone(), summary, error, now);
+        }
+    }
+}
+
+/// Manual termination is a control-state change, not a replacement result. Keep every piece of
+/// work already recorded on the task and its steps while closing anything that was still active.
+fn terminate_nonterminal_task_preserving_content(
+    task: &mut TaskRecord,
+    now: chrono::DateTime<Utc>,
+) {
+    if task.status.is_terminal() {
+        return;
+    }
+    task.status = TaskStatus::Cancelled;
+    task.updated_at = now;
+    task.pending_tool_call_id = None;
+    task.pending_question = None;
+    for step in &mut task.steps {
+        if !step.status.is_terminal() {
+            step.status = TaskStatus::Cancelled;
+            step.updated_at = now;
+        }
+    }
+}
+
+fn terminate_lineage_preserving_content(
+    state: &mut PersistedState,
+    root_id: Uuid,
+    now: chrono::DateTime<Utc>,
+) {
+    let mut lineage = descendant_ids(&state.tasks, root_id);
+    lineage.push(root_id);
+    for task in &mut state.tasks {
+        if lineage.contains(&task.id) {
+            terminate_nonterminal_task_preserving_content(task, now);
+        }
+    }
+    for event in &mut state.events {
+        if lineage.contains(&event.task_id)
+            && matches!(
+                event.state,
+                RuntimeEventState::Running | RuntimeEventState::Blocked
+            )
+        {
+            event.state = RuntimeEventState::Cancelled;
+            event.updated_at = now;
         }
     }
 }
@@ -421,6 +473,9 @@ fn recover_interrupted_tasks(state: &mut PersistedState) {
         })
         .collect::<Vec<_>>();
     for (assistant_id, status, summary, pending_question) in main_messages {
+        let is_placeholder = state
+            .assistant_placeholder_message_ids
+            .contains(&assistant_id);
         let Some(message) = state
             .messages
             .iter_mut()
@@ -430,22 +485,25 @@ fn recover_interrupted_tasks(state: &mut PersistedState) {
         };
         match status {
             TaskStatus::Queued => {
-                if is_transient_assistant_text(&message.text) {
+                if is_placeholder {
                     message.text = recovering.into();
                 }
                 message.state = MessageState::Thinking;
             }
             TaskStatus::NeedsUserAction => {
-                message.text =
-                    merge_assistant_reply(&message.text, &pending_question.unwrap_or(summary));
+                message.text = merge_assistant_reply(
+                    &message.text,
+                    &pending_question.unwrap_or(summary),
+                    is_placeholder,
+                );
                 message.state = MessageState::NeedsUserAction;
             }
             TaskStatus::NeedsRecovery => {
-                message.text = merge_assistant_reply(&message.text, &summary);
+                message.text = merge_assistant_reply(&message.text, &summary, is_placeholder);
                 message.state = MessageState::NeedsRecovery;
             }
             _ if message.state == MessageState::Failed => {
-                message.text = merge_assistant_reply(&message.text, &summary);
+                message.text = merge_assistant_reply(&message.text, &summary, is_placeholder);
                 message.state = MessageState::NeedsRecovery;
             }
             _ => {}
@@ -477,6 +535,7 @@ pub struct RuntimeStore {
     state: Arc<RwLock<PersistedState>>,
     data_file: Arc<PathBuf>,
     persist_guard: Arc<Mutex<()>>,
+    cancellation_signals: Arc<Mutex<HashMap<Uuid, watch::Sender<bool>>>>,
 }
 
 fn register_task_artifact(
@@ -628,6 +687,7 @@ impl RuntimeStore {
             state: Arc::new(RwLock::new(state)),
             data_file: Arc::new(data_file),
             persist_guard: Arc::new(Mutex::new(())),
+            cancellation_signals: Arc::new(Mutex::new(HashMap::new())),
         };
         Ok(store)
     }
@@ -728,6 +788,9 @@ impl RuntimeStore {
                 thread_id: Some(thread_id),
                 attachment_paths: Vec::new(),
             });
+            state
+                .assistant_placeholder_message_ids
+                .insert(assistant_message_id);
         }
         state.tasks.push(TaskRecord {
             id: thread_id,
@@ -834,6 +897,9 @@ impl RuntimeStore {
                     thread_id: Some(thread_id),
                     attachment_paths: Vec::new(),
                 });
+                state
+                    .assistant_placeholder_message_ids
+                    .insert(assistant_message_id);
             }
         }
         drop(state);
@@ -873,6 +939,46 @@ impl RuntimeStore {
             .unwrap_or(true)
     }
 
+    /// Resolve when manual termination seals this task (or one of its ancestors). The signal is
+    /// process-local and deliberately separate from persisted status: status is the durable source
+    /// of truth, while this wake-up lets an in-flight provider, tool, or external adapter be
+    /// dropped immediately instead of waiting for its ordinary timeout.
+    pub(crate) async fn wait_for_cancellation(&self, thread_id: Uuid) {
+        let mut receiver = self.cancellation_receiver(thread_id).await;
+        if *receiver.borrow() {
+            return;
+        }
+        while receiver.changed().await.is_ok() {
+            if *receiver.borrow() {
+                return;
+            }
+        }
+    }
+
+    /// A synchronous worker can poll this receiver without entering the async runtime. This is
+    /// used by host renderers so manual termination tears down the renderer itself, not merely the
+    /// Tokio task waiting for its result.
+    pub(crate) async fn cancellation_receiver(&self, thread_id: Uuid) -> watch::Receiver<bool> {
+        let mut signals = self.cancellation_signals.lock().await;
+        signals
+            .entry(thread_id)
+            .or_insert_with(|| watch::channel(false).0)
+            .subscribe()
+    }
+
+    pub(crate) async fn clear_cancellation_lineage(&self, thread_id: Uuid) {
+        let lineage = {
+            let state = self.state.read().await;
+            let mut lineage = descendant_ids(&state.tasks, thread_id);
+            lineage.push(thread_id);
+            lineage
+        };
+        self.cancellation_signals
+            .lock()
+            .await
+            .retain(|task_id, _| !lineage.contains(task_id));
+    }
+
     pub async fn events_after(&self, sequence: u64) -> Vec<RuntimeEvent> {
         self.state
             .read()
@@ -900,13 +1006,22 @@ impl RuntimeStore {
             .iter()
             .find(|task| task.id == task_id)
             .and_then(|task| task.parent_task_id);
+        let task_cancelled = state
+            .tasks
+            .iter()
+            .find(|task| task.id == task_id)
+            .is_some_and(|task| task.status == TaskStatus::Cancelled);
         let event = RuntimeEvent {
             id: Uuid::new_v4(),
             sequence: state.next_event_sequence,
             task_id,
             parent_task_id,
             kind,
-            state: state_value,
+            state: if task_cancelled {
+                RuntimeEventState::Cancelled
+            } else {
+                state_value
+            },
             actor: actor.into(),
             title: title.into(),
             detail: detail.into(),
@@ -929,9 +1044,17 @@ impl RuntimeStore {
             return Ok(());
         }
         let mut state = self.state.write().await;
-        if let Some(event) = state.events.iter_mut().find(|event| event.id == event_id) {
-            event.detail.push_str(delta);
-            event.updated_at = Utc::now();
+        let task_cancelled = state
+            .events
+            .iter()
+            .find(|event| event.id == event_id)
+            .and_then(|event| state.tasks.iter().find(|task| task.id == event.task_id))
+            .is_some_and(|task| task.status == TaskStatus::Cancelled);
+        if !task_cancelled {
+            if let Some(event) = state.events.iter_mut().find(|event| event.id == event_id) {
+                event.detail.push_str(delta);
+                event.updated_at = Utc::now();
+            }
         }
         drop(state);
         self.persist().await
@@ -944,9 +1067,17 @@ impl RuntimeStore {
             return;
         }
         let mut state = self.state.write().await;
-        if let Some(event) = state.events.iter_mut().find(|event| event.id == event_id) {
-            event.detail.push_str(delta);
-            event.updated_at = Utc::now();
+        let task_cancelled = state
+            .events
+            .iter()
+            .find(|event| event.id == event_id)
+            .and_then(|event| state.tasks.iter().find(|task| task.id == event.task_id))
+            .is_some_and(|task| task.status == TaskStatus::Cancelled);
+        if !task_cancelled {
+            if let Some(event) = state.events.iter_mut().find(|event| event.id == event_id) {
+                event.detail.push_str(delta);
+                event.updated_at = Utc::now();
+            }
         }
     }
 
@@ -957,12 +1088,20 @@ impl RuntimeStore {
         detail: Option<String>,
     ) -> Result<(), StoreError> {
         let mut state = self.state.write().await;
-        if let Some(event) = state.events.iter_mut().find(|event| event.id == event_id) {
-            event.state = event_state;
-            if let Some(detail) = detail {
-                event.detail = detail;
+        let task_cancelled = state
+            .events
+            .iter()
+            .find(|event| event.id == event_id)
+            .and_then(|event| state.tasks.iter().find(|task| task.id == event.task_id))
+            .is_some_and(|task| task.status == TaskStatus::Cancelled);
+        if !task_cancelled {
+            if let Some(event) = state.events.iter_mut().find(|event| event.id == event_id) {
+                event.state = event_state;
+                if let Some(detail) = detail {
+                    event.detail = detail;
+                }
+                event.updated_at = Utc::now();
             }
-            event.updated_at = Utc::now();
         }
         drop(state);
         self.persist().await
@@ -974,7 +1113,11 @@ impl RuntimeStore {
         messages: Vec<AgentMessage>,
     ) -> Result<(), StoreError> {
         let mut state = self.state.write().await;
-        if let Some(task) = state.tasks.iter_mut().find(|task| task.id == thread_id) {
+        if let Some(task) = state
+            .tasks
+            .iter_mut()
+            .find(|task| task.id == thread_id && task.status != TaskStatus::Cancelled)
+        {
             task.session_messages = messages;
             task.updated_at = Utc::now();
         }
@@ -988,7 +1131,11 @@ impl RuntimeStore {
         messages: Vec<AgentMessage>,
     ) -> Result<(), StoreError> {
         let mut state = self.state.write().await;
-        if let Some(task) = state.tasks.iter_mut().find(|task| task.id == thread_id) {
+        if let Some(task) = state
+            .tasks
+            .iter_mut()
+            .find(|task| task.id == thread_id && task.status != TaskStatus::Cancelled)
+        {
             task.session_messages = messages;
             task.review_progress.pending_external_outcome = None;
             task.updated_at = Utc::now();
@@ -1011,6 +1158,9 @@ impl RuntimeStore {
         let Some(task) = state.tasks.iter_mut().find(|task| task.id == thread_id) else {
             return Ok(None);
         };
+        if task.status == TaskStatus::Cancelled {
+            return Ok(None);
+        }
         task.review_progress.last_reviewed_artifact_revisions = Some(artifact_revisions);
         if !latest_nonempty_tool_evidence.is_empty() {
             task.review_progress.latest_nonempty_tool_evidence = latest_nonempty_tool_evidence;
@@ -1042,9 +1192,14 @@ impl RuntimeStore {
         let assistant_id = state
             .tasks
             .iter()
-            .find(|task| task.id == thread_id)
+            .find(|task| task.id == thread_id && task.status != TaskStatus::Cancelled)
             .map(|task| task.assistant_message_id);
         if let Some(assistant_id) = assistant_id {
+            if !text.is_empty() {
+                state
+                    .assistant_placeholder_message_ids
+                    .remove(&assistant_id);
+            }
             if let Some(message) = state
                 .messages
                 .iter_mut()
@@ -1072,15 +1227,16 @@ impl RuntimeStore {
             .find(|task| task.id == thread_id && task.role == TaskRole::Main)
             .map(|task| task.assistant_message_id);
         if let Some(assistant_id) = assistant_id {
+            let is_placeholder = state
+                .assistant_placeholder_message_ids
+                .contains(&assistant_id);
             if let Some(message) = state
                 .messages
                 .iter_mut()
                 .find(|message| message.id == assistant_id)
             {
                 if message.state != MessageState::Complete {
-                    if message.state == MessageState::NeedsUserAction
-                        || is_transient_assistant_text(&message.text)
-                    {
+                    if is_placeholder {
                         message.text = placeholder;
                     }
                     message.state = MessageState::Thinking;
@@ -1101,13 +1257,16 @@ impl RuntimeStore {
             .find(|task| task.id == thread_id && task.role == TaskRole::Main)
             .map(|task| task.assistant_message_id);
         if let Some(assistant_id) = assistant_id {
+            let was_placeholder = state
+                .assistant_placeholder_message_ids
+                .remove(&assistant_id);
             if let Some(message) = state
                 .messages
                 .iter_mut()
                 .find(|message| message.id == assistant_id)
             {
                 if message.state != MessageState::Complete {
-                    if is_transient_assistant_text(&message.text) {
+                    if was_placeholder {
                         message.text.clear();
                     } else if !message.text.is_empty() {
                         let trimmed_length = message.text.trim_end_matches(['\r', '\n']).len();
@@ -1137,6 +1296,9 @@ impl RuntimeStore {
             .find(|task| task.id == thread_id && task.role == TaskRole::Main)
             .map(|task| task.assistant_message_id);
         if let Some(assistant_id) = assistant_id {
+            state
+                .assistant_placeholder_message_ids
+                .remove(&assistant_id);
             if let Some(message) = state
                 .messages
                 .iter_mut()
@@ -1163,6 +1325,9 @@ impl RuntimeStore {
             .find(|task| task.id == thread_id && task.role == TaskRole::Main)
             .map(|task| task.assistant_message_id);
         if let Some(assistant_id) = assistant_id {
+            state
+                .assistant_placeholder_message_ids
+                .remove(&assistant_id);
             if let Some(message) = state
                 .messages
                 .iter_mut()
@@ -1187,7 +1352,11 @@ impl RuntimeStore {
     ) -> Result<(), StoreError> {
         let now = Utc::now();
         let mut state = self.state.write().await;
-        if let Some(task) = state.tasks.iter_mut().find(|task| task.id == thread_id) {
+        if let Some(task) = state
+            .tasks
+            .iter_mut()
+            .find(|task| task.id == thread_id && task.status != TaskStatus::Cancelled)
+        {
             task.steps = items
                 .into_iter()
                 .map(|(title, detail, status)| TaskStep {
@@ -1281,6 +1450,9 @@ impl RuntimeStore {
                     "task {thread_id} no longer exists"
                 ))
             })?;
+        if task.status == TaskStatus::Cancelled {
+            return Ok(results);
+        }
         if task
             .review_progress
             .applied_external_run_ids
@@ -1459,6 +1631,9 @@ impl RuntimeStore {
         let mut state = self.state.write().await;
         let mut registrations = Vec::new();
         if let Some(task) = state.tasks.iter_mut().find(|task| task.id == thread_id) {
+            if task.status == TaskStatus::Cancelled {
+                return Ok(registrations);
+            }
             for artifact in &mut artifacts {
                 if artifact.logical_key.is_none() {
                     artifact.logical_key = Some(artifact_path_logical_key(&artifact.path));
@@ -1565,24 +1740,40 @@ impl RuntimeStore {
             .map(|task| task.depth.saturating_add(1))
             .unwrap_or(1);
         let localized = copy(state.settings.locale);
+        let child_status = if parent
+            .as_ref()
+            .is_some_and(|task| task.status.is_terminal())
+        {
+            TaskStatus::Cancelled
+        } else {
+            TaskStatus::Understanding
+        };
         state.tasks.push(TaskRecord {
             id: child_id,
             title: prompt.chars().take(64).collect(),
             prompt,
-            status: TaskStatus::Understanding,
+            status: child_status.clone(),
             created_at: now,
             updated_at: now,
             goal_spec: None,
             steps: vec![TaskStep {
                 id: Uuid::new_v4(),
                 title: localized.understand.into(),
-                detail: localized.generating_goal.into(),
-                status: TaskStatus::Understanding,
+                detail: if child_status == TaskStatus::Cancelled {
+                    localized.cancelled.into()
+                } else {
+                    localized.generating_goal.into()
+                },
+                status: child_status.clone(),
                 updated_at: now,
             }],
             artifacts: Vec::new(),
             superseded_artifacts: Vec::new(),
-            summary: String::new(),
+            summary: if child_status == TaskStatus::Cancelled {
+                localized.cancelled.into()
+            } else {
+                String::new()
+            },
             error: None,
             user_message_id: None,
             assistant_message_id: Uuid::new_v4(),
@@ -1612,6 +1803,14 @@ impl RuntimeStore {
     ) -> Result<(), StoreError> {
         let mut state = self.state.write().await;
         let now = Utc::now();
+        if state
+            .tasks
+            .iter()
+            .find(|task| task.id == thread_id)
+            .is_some_and(|task| task.status == TaskStatus::Cancelled)
+        {
+            return Ok(());
+        }
         if let Some(task) = state.tasks.iter_mut().find(|task| task.id == thread_id) {
             task.status = TaskStatus::NeedsUserAction;
             task.pending_tool_call_id = Some(tool_call_id);
@@ -1633,12 +1832,15 @@ impl RuntimeStore {
             .find(|task| task.id == thread_id && task.role == TaskRole::Main)
             .map(|task| task.assistant_message_id);
         if let Some(assistant_id) = assistant_id {
+            let was_placeholder = state
+                .assistant_placeholder_message_ids
+                .remove(&assistant_id);
             if let Some(message) = state
                 .messages
                 .iter_mut()
                 .find(|message| message.id == assistant_id)
             {
-                message.text = merge_assistant_reply(&message.text, &question);
+                message.text = merge_assistant_reply(&message.text, &question, was_placeholder);
                 message.state = MessageState::NeedsUserAction;
             }
         }
@@ -1701,12 +1903,15 @@ impl RuntimeStore {
                 None
             };
         if let Some(assistant_id) = assistant_id {
+            let is_placeholder = state
+                .assistant_placeholder_message_ids
+                .contains(&assistant_id);
             if let Some(message) = state
                 .messages
                 .iter_mut()
                 .find(|message| message.id == assistant_id)
             {
-                message.text = merge_assistant_reply(&message.text, &user_message);
+                message.text = merge_assistant_reply(&message.text, &user_message, is_placeholder);
                 message.state = MessageState::NeedsRecovery;
             }
         }
@@ -1855,12 +2060,15 @@ impl RuntimeStore {
             }
         }
         let assistant_id = task.assistant_message_id;
+        let is_placeholder = state
+            .assistant_placeholder_message_ids
+            .contains(&assistant_id);
         if let Some(message) = state
             .messages
             .iter_mut()
             .find(|message| message.id == assistant_id)
         {
-            if is_transient_assistant_text(&message.text) {
+            if is_placeholder {
                 message.text = localized.recovering.into();
             }
             message.state = MessageState::Thinking;
@@ -1935,6 +2143,14 @@ impl RuntimeStore {
 
     pub async fn set_goal(&self, thread_id: Uuid, goal: GoalSpec) -> Result<(), StoreError> {
         let mut state = self.state.write().await;
+        if state
+            .tasks
+            .iter()
+            .find(|task| task.id == thread_id)
+            .is_some_and(|task| task.status == TaskStatus::Cancelled)
+        {
+            return Ok(());
+        }
         let localized = copy(state.settings.locale);
         if let Some(task) = state.tasks.iter_mut().find(|task| task.id == thread_id) {
             task.title = goal.objective.chars().take(64).collect();
@@ -1955,13 +2171,25 @@ impl RuntimeStore {
                 updated_at: Utc::now(),
             });
         }
-        if let Some(message) = state.messages.iter_mut().find(|message| {
-            message.thread_id == Some(thread_id) && message.role == MessageRole::Assistant
-        }) {
-            if is_transient_assistant_text(&message.text) {
-                message.text = localized.running.into();
+        let assistant_id = state
+            .tasks
+            .iter()
+            .find(|task| task.id == thread_id && task.role == TaskRole::Main)
+            .map(|task| task.assistant_message_id);
+        if let Some(assistant_id) = assistant_id {
+            let is_placeholder = state
+                .assistant_placeholder_message_ids
+                .contains(&assistant_id);
+            if let Some(message) = state
+                .messages
+                .iter_mut()
+                .find(|message| message.id == assistant_id)
+            {
+                if is_placeholder {
+                    message.text = localized.running.into();
+                }
+                message.state = MessageState::Thinking;
             }
-            message.state = MessageState::Thinking;
         }
         drop(state);
         self.persist().await
@@ -2006,11 +2234,23 @@ impl RuntimeStore {
                 step.updated_at = now;
             }
         }
-        if let Some(message) = state.messages.iter_mut().find(|message| {
-            message.thread_id == Some(thread_id) && message.role == MessageRole::Assistant
-        }) {
-            message.text = merge_assistant_reply(&message.text, &reply);
-            message.state = MessageState::Complete;
+        let assistant_id = state
+            .tasks
+            .iter()
+            .find(|task| task.id == thread_id && task.role == TaskRole::Main)
+            .map(|task| task.assistant_message_id);
+        if let Some(assistant_id) = assistant_id {
+            let was_placeholder = state
+                .assistant_placeholder_message_ids
+                .remove(&assistant_id);
+            if let Some(message) = state
+                .messages
+                .iter_mut()
+                .find(|message| message.id == assistant_id)
+            {
+                message.text = merge_assistant_reply(&message.text, &reply, was_placeholder);
+                message.state = MessageState::Complete;
+            }
         }
         if state.active_task_id == Some(thread_id) {
             state.active_task_id = None;
@@ -2033,34 +2273,64 @@ impl RuntimeStore {
     pub async fn cancel(&self, thread_id: Uuid) -> Result<bool, StoreError> {
         let mut state = self.state.write().await;
         let localized = copy(state.settings.locale);
-        let Some(task) = state.tasks.iter().find(|task| task.id == thread_id) else {
+        let Some(requested_task) = state.tasks.iter().find(|task| task.id == thread_id) else {
             return Ok(false);
         };
-        if task.status.is_terminal() {
+        if requested_task.status.is_terminal() {
             return Ok(false);
         }
+        // A checker is synchronously awaited by the foreground root. Stopping it must close the
+        // complete objective; otherwise the root can remain Running forever while still owning
+        // `active_task_id`. An ordinary worker is different: its cancelled result is returned to
+        // the parent tool loop so the main session can adapt and continue.
+        let requested_role = requested_task.role.clone();
+        let root_id = task_lineage_root(&state.tasks, thread_id);
+        let cancellation_root = if requested_role == TaskRole::Checker {
+            root_id
+        } else {
+            thread_id
+        };
+        let assistant_message_id = state
+            .tasks
+            .iter()
+            .find(|task| task.id == cancellation_root)
+            .map(|task| task.assistant_message_id)
+            .unwrap_or(requested_task.assistant_message_id);
+        let mut cancelled_lineage = descendant_ids(&state.tasks, cancellation_root);
+        cancelled_lineage.push(cancellation_root);
         let now = Utc::now();
-        close_nonterminal_descendants(
-            &mut state,
-            thread_id,
-            TaskStatus::Cancelled,
-            localized.cancelled,
-            None,
-            now,
-        );
-        if let Some(task) = state.tasks.iter_mut().find(|task| task.id == thread_id) {
-            close_nonterminal_task(task, TaskStatus::Cancelled, localized.cancelled, None, now);
-        }
-        if state.active_task_id == Some(thread_id) {
+        terminate_lineage_preserving_content(&mut state, cancellation_root, now);
+        let active_belongs_to_lineage = state.active_task_id.is_some_and(|active_id| {
+            active_id == cancellation_root
+                || (requested_role == TaskRole::Checker
+                    && task_lineage_root(&state.tasks, active_id) == cancellation_root)
+        });
+        if active_belongs_to_lineage {
             state.active_task_id = None;
         }
-        if let Some(message) = state.messages.iter_mut().find(|message| {
-            message.thread_id == Some(thread_id) && message.role == MessageRole::Assistant
-        }) {
-            message.text = localized.cancelled.into();
+        let was_placeholder = state
+            .assistant_placeholder_message_ids
+            .remove(&assistant_message_id);
+        if let Some(message) = state
+            .messages
+            .iter_mut()
+            .find(|message| message.id == assistant_message_id)
+        {
+            if was_placeholder || message.text.is_empty() {
+                message.text = localized.cancelled.into();
+            }
             message.state = MessageState::Complete;
         }
         drop(state);
+        {
+            let mut signals = self.cancellation_signals.lock().await;
+            for task_id in cancelled_lineage {
+                signals
+                    .entry(task_id)
+                    .or_insert_with(|| watch::channel(false).0)
+                    .send_replace(true);
+            }
+        }
         self.persist().await?;
         Ok(true)
     }
@@ -2134,23 +2404,8 @@ struct RuntimeCopy {
     cancelled: &'static str,
 }
 
-fn is_transient_assistant_text(text: &str) -> bool {
-    matches!(
-        text.trim(),
-        "" | "理解中…"
-            | "Understanding…"
-            | "思考中…"
-            | "Thinking…"
-            | "执行中…"
-            | "Running…"
-            | "Working…"
-            | "正在恢复目标并重新进入执行队列…"
-            | "Recovering the goal and returning it to the execution queue…"
-    )
-}
-
-fn merge_assistant_reply(existing: &str, reply: &str) -> String {
-    let existing = if is_transient_assistant_text(existing) {
+fn merge_assistant_reply(existing: &str, reply: &str, existing_is_placeholder: bool) -> String {
+    let existing = if existing_is_placeholder {
         ""
     } else {
         existing.trim_end()
@@ -2179,7 +2434,7 @@ fn copy(locale: AppLocale) -> RuntimeCopy {
             running: "执行中…",
             recovering: "正在恢复目标并重新进入执行队列…",
             completed: "回复和产出物登记已完成",
-            cancelled: "已停止本轮任务。",
+            cancelled: "任务已终止，已执行内容已保留。",
         },
         AppLocale::En => RuntimeCopy {
             welcome: "I am LingShu. Connect a brain channel to chat or create and register file artifacts.",
@@ -2193,7 +2448,7 @@ fn copy(locale: AppLocale) -> RuntimeCopy {
             running: "Running…",
             recovering: "Recovering the goal and returning it to the execution queue…",
             completed: "Response and artifact registry completed",
-            cancelled: "This task was cancelled.",
+            cancelled: "Task terminated. Work already performed was preserved.",
         },
     }
 }
@@ -3024,6 +3279,443 @@ mod tests {
             .unwrap();
 
         assert_eq!(assistant.text, "第一轮进展\n\n最终答复");
+        assert_eq!(assistant.state, MessageState::Complete);
+    }
+
+    #[tokio::test]
+    async fn manual_termination_preserves_all_recorded_work_and_cannot_be_overwritten() {
+        let directory = tempdir().unwrap();
+        let state_directory = directory.path().join("State");
+        let workspace = directory.path().join("Workspace");
+        let store = RuntimeStore::open(&state_directory).unwrap();
+        let receipt = store
+            .enqueue("Build a reviewed report".into(), Vec::new())
+            .await
+            .unwrap();
+        assert!(store.claim(receipt.thread_id).await.unwrap());
+
+        let goal = GoalSpec {
+            objective: "Build a reviewed report".into(),
+            kind: GoalKind::Task,
+            output_mode: OutputMode::Artifact,
+            reference_scope: ReferenceScope::CurrentInput,
+            reference_evidence: Vec::new(),
+            reference_explicit: true,
+            reference_confidence: ReferenceConfidence::High,
+            constraints: Vec::new(),
+            boundaries: Vec::new(),
+            risks: Vec::new(),
+            success_criteria: vec!["Keep all work completed before termination".into()],
+            open_questions: Vec::new(),
+        };
+        store
+            .set_goal(receipt.thread_id, goal.clone())
+            .await
+            .unwrap();
+        store
+            .update_plan(
+                receipt.thread_id,
+                vec![
+                    (
+                        "Collect evidence".into(),
+                        "Evidence collected".into(),
+                        TaskStatus::Completed,
+                    ),
+                    (
+                        "Write report".into(),
+                        "Drafted three sections".into(),
+                        TaskStatus::Running,
+                    ),
+                ],
+            )
+            .await
+            .unwrap();
+        store
+            .begin_assistant_visible_turn(receipt.thread_id)
+            .await
+            .unwrap();
+        let visible_work = "已完成资料整理。\n\n报告前三节已经写入工作区。";
+        store
+            .append_assistant_delta(receipt.thread_id, visible_work)
+            .await
+            .unwrap();
+        let preserved_session = vec![AgentMessage {
+            role: AgentRole::Assistant,
+            content: "Preserved model transcript".into(),
+            tool_calls: Vec::new(),
+            tool_call_id: None,
+        }];
+        store
+            .set_session_messages(receipt.thread_id, preserved_session.clone())
+            .await
+            .unwrap();
+
+        let artifact = observed_path_artifact(
+            workspace.join("report.md"),
+            "Report",
+            "markdown",
+            "# Preserved report\n\nThree completed sections.",
+        );
+        store
+            .add_artifacts(receipt.thread_id, vec![artifact])
+            .await
+            .unwrap();
+        let completed_event = store
+            .append_event(
+                receipt.thread_id,
+                RuntimeEventKind::Tool,
+                RuntimeEventState::Completed,
+                "LingShu",
+                "Collected evidence",
+                "Three sources were recorded.",
+            )
+            .await
+            .unwrap();
+        let running_event = store
+            .append_event(
+                receipt.thread_id,
+                RuntimeEventKind::Model,
+                RuntimeEventState::Running,
+                "LingShu",
+                "Writing report",
+                "Drafted three sections.",
+            )
+            .await
+            .unwrap();
+        let child_id = store
+            .create_child_task(
+                receipt.thread_id,
+                "Check citations".into(),
+                TaskRole::Checker,
+                "Checker".into(),
+                TaskOrigin::Verification,
+                LoopEngineKind::Grok,
+            )
+            .await
+            .unwrap();
+        let child_event = store
+            .append_event(
+                child_id,
+                RuntimeEventKind::HumanInteraction,
+                RuntimeEventState::Blocked,
+                "Checker",
+                "Waiting for one citation",
+                "The existing citation analysis must be preserved.",
+            )
+            .await
+            .unwrap();
+        {
+            let mut state = store.state.write().await;
+            let root = state
+                .tasks
+                .iter_mut()
+                .find(|task| task.id == receipt.thread_id)
+                .unwrap();
+            root.summary = "Three report sections are complete.".into();
+            root.error = Some("One citation remains unresolved.".into());
+            root.pending_tool_call_id = Some("pending-before-termination".into());
+            root.pending_question = Some("Provide the final citation".into());
+            let child = state
+                .tasks
+                .iter_mut()
+                .find(|task| task.id == child_id)
+                .unwrap();
+            child.summary = "Citation checker preserved summary".into();
+            child.error = Some("Citation source unavailable".into());
+            child.steps[0].detail = "Checked all available citations".into();
+        }
+        store.flush().await.unwrap();
+
+        let before = store.task(receipt.thread_id).await.unwrap();
+        let child_before = store.task(child_id).await.unwrap();
+        assert!(store.cancel(receipt.thread_id).await.unwrap());
+
+        let terminated = store.task(receipt.thread_id).await.unwrap();
+        let terminated_child = store.task(child_id).await.unwrap();
+        assert_eq!(terminated.status, TaskStatus::Cancelled);
+        assert_eq!(terminated.summary, before.summary);
+        assert_eq!(terminated.error, before.error);
+        assert_eq!(terminated.session_messages, preserved_session);
+        assert_eq!(terminated.artifacts, before.artifacts);
+        assert_eq!(terminated.superseded_artifacts, before.superseded_artifacts);
+        assert_eq!(terminated.steps[0].status, TaskStatus::Completed);
+        assert_eq!(terminated.steps[0].detail, "Evidence collected");
+        assert_eq!(terminated.steps[1].status, TaskStatus::Cancelled);
+        assert_eq!(terminated.steps[1].detail, "Drafted three sections");
+        assert!(terminated.pending_tool_call_id.is_none());
+        assert!(terminated.pending_question.is_none());
+        assert_eq!(terminated_child.status, TaskStatus::Cancelled);
+        assert_eq!(terminated_child.summary, child_before.summary);
+        assert_eq!(terminated_child.error, child_before.error);
+        assert_eq!(
+            terminated_child.steps[0].detail,
+            "Checked all available citations"
+        );
+
+        let snapshot = store
+            .snapshot(
+                "windows",
+                PlatformCapabilities {
+                    computer_control: false,
+                    realtime_perception: false,
+                    internal_preview: true,
+                    external_open: true,
+                },
+                true,
+            )
+            .await;
+        let assistant = snapshot
+            .messages
+            .iter()
+            .find(|message| message.id == receipt.assistant_message_id)
+            .unwrap();
+        assert_eq!(assistant.text, visible_work);
+        assert_eq!(assistant.state, MessageState::Complete);
+        assert!(snapshot.active_task_id.is_none());
+        assert_eq!(
+            snapshot
+                .events
+                .iter()
+                .find(|event| event.id == completed_event.id)
+                .unwrap()
+                .state,
+            RuntimeEventState::Completed
+        );
+        for event_id in [running_event.id, child_event.id] {
+            let event = snapshot
+                .events
+                .iter()
+                .find(|event| event.id == event_id)
+                .unwrap();
+            assert_eq!(event.state, RuntimeEventState::Cancelled);
+        }
+
+        // Results returning after the Stop click must not reopen or rewrite the sealed task.
+        store.set_goal(receipt.thread_id, goal).await.unwrap();
+        store
+            .set_needs_user_action(
+                receipt.thread_id,
+                "late-question".into(),
+                "This must not appear".into(),
+            )
+            .await
+            .unwrap();
+        store
+            .set_assistant_text(
+                receipt.thread_id,
+                "Late model output".into(),
+                MessageState::Thinking,
+            )
+            .await
+            .unwrap();
+        store
+            .update_plan(
+                receipt.thread_id,
+                vec![(
+                    "Late plan".into(),
+                    "Must not replace the preserved plan".into(),
+                    TaskStatus::Running,
+                )],
+            )
+            .await
+            .unwrap();
+        store
+            .set_session_messages(
+                receipt.thread_id,
+                vec![AgentMessage {
+                    role: AgentRole::Assistant,
+                    content: "Late transcript".into(),
+                    tool_calls: Vec::new(),
+                    tool_call_id: None,
+                }],
+            )
+            .await
+            .unwrap();
+        store
+            .append_event_detail(running_event.id, " Late event detail")
+            .await
+            .unwrap();
+        store
+            .finish_event(
+                running_event.id,
+                RuntimeEventState::Completed,
+                Some("Late replacement detail".into()),
+            )
+            .await
+            .unwrap();
+        store
+            .complete(receipt.thread_id, "Late completion".into(), Vec::new())
+            .await
+            .unwrap();
+        let late_artifact = observed_path_artifact(
+            workspace.join("late-report.md"),
+            "Late report",
+            "markdown",
+            "This file may exist, but it must not reopen the terminated task.",
+        );
+        store
+            .add_artifacts(receipt.thread_id, vec![late_artifact])
+            .await
+            .unwrap();
+        let late_external_run_id = Uuid::new_v4();
+        let late_external_artifact = observed_path_artifact(
+            workspace.join("late-external.md"),
+            "Late external report",
+            "markdown",
+            "This external result returned after termination.",
+        );
+        assert!(store
+            .register_external_artifacts(
+                receipt.thread_id,
+                late_external_run_id,
+                "Late external outcome".into(),
+                vec![ExternalArtifactRegistration {
+                    artifact: late_external_artifact,
+                    superseded_artifact_id: None,
+                    expected_superseded_revision: None,
+                }],
+            )
+            .await
+            .unwrap()
+            .is_empty());
+        let late_child_id = store
+            .create_child_task(
+                receipt.thread_id,
+                "Late child".into(),
+                TaskRole::Worker,
+                "Worker".into(),
+                TaskOrigin::Subtask,
+                LoopEngineKind::Grok,
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            store.task(late_child_id).await.unwrap().status,
+            TaskStatus::Cancelled
+        );
+
+        let reopened = RuntimeStore::open(&state_directory).unwrap();
+        let persisted = reopened.task(receipt.thread_id).await.unwrap();
+        assert_eq!(persisted.status, TaskStatus::Cancelled);
+        assert_eq!(persisted.summary, before.summary);
+        assert_eq!(persisted.error, before.error);
+        assert_eq!(persisted.steps, terminated.steps);
+        assert_eq!(persisted.session_messages, preserved_session);
+        assert_eq!(persisted.artifacts, before.artifacts);
+        assert!(persisted.review_progress.pending_external_outcome.is_none());
+        assert!(!persisted
+            .review_progress
+            .applied_external_run_ids
+            .contains(&late_external_run_id));
+        let persisted_snapshot = reopened
+            .snapshot(
+                "windows",
+                PlatformCapabilities {
+                    computer_control: false,
+                    realtime_perception: false,
+                    internal_preview: true,
+                    external_open: true,
+                },
+                true,
+            )
+            .await;
+        let persisted_assistant = persisted_snapshot
+            .messages
+            .iter()
+            .find(|message| message.id == receipt.assistant_message_id)
+            .unwrap();
+        assert_eq!(persisted_assistant.text, visible_work);
+        let persisted_running_event = persisted_snapshot
+            .events
+            .iter()
+            .find(|event| event.id == running_event.id)
+            .unwrap();
+        assert_eq!(persisted_running_event.state, RuntimeEventState::Cancelled);
+        assert_eq!(persisted_running_event.detail, "Drafted three sections.");
+    }
+
+    #[tokio::test]
+    async fn manual_termination_replaces_only_a_transient_placeholder() {
+        let directory = tempdir().unwrap();
+        let store = RuntimeStore::open(directory.path()).unwrap();
+        let receipt = store
+            .enqueue("Stop before visible output".into(), Vec::new())
+            .await
+            .unwrap();
+        assert!(store.claim(receipt.thread_id).await.unwrap());
+        drop(store);
+        let store = RuntimeStore::open(directory.path()).unwrap();
+
+        assert!(store.cancel(receipt.thread_id).await.unwrap());
+        let snapshot = store
+            .snapshot(
+                "windows",
+                PlatformCapabilities {
+                    computer_control: false,
+                    realtime_perception: false,
+                    internal_preview: true,
+                    external_open: true,
+                },
+                true,
+            )
+            .await;
+        let assistant = snapshot
+            .messages
+            .iter()
+            .find(|message| message.id == receipt.assistant_message_id)
+            .unwrap();
+        assert_eq!(assistant.text, "任务已终止，已执行内容已保留。");
+        assert_eq!(assistant.state, MessageState::Complete);
+        assert_eq!(
+            store.task(receipt.thread_id).await.unwrap().status,
+            TaskStatus::Cancelled
+        );
+    }
+
+    #[tokio::test]
+    async fn manual_termination_preserves_model_text_that_matches_placeholder_copy() {
+        let directory = tempdir().unwrap();
+        let store = RuntimeStore::open(directory.path()).unwrap();
+        let receipt = store
+            .enqueue("Return a literal progress word".into(), Vec::new())
+            .await
+            .unwrap();
+        assert!(store.claim(receipt.thread_id).await.unwrap());
+
+        store
+            .begin_assistant_visible_turn(receipt.thread_id)
+            .await
+            .unwrap();
+        store
+            .append_assistant_delta(receipt.thread_id, "Thinking…")
+            .await
+            .unwrap();
+        // Later runtime phases may request another progress placeholder. Provenance, rather than
+        // string equality, must keep the already streamed model text intact.
+        store
+            .set_assistant_placeholder_if_empty(receipt.thread_id, "Running…".into())
+            .await
+            .unwrap();
+
+        assert!(store.cancel(receipt.thread_id).await.unwrap());
+        let snapshot = store
+            .snapshot(
+                "windows",
+                PlatformCapabilities {
+                    computer_control: false,
+                    realtime_perception: false,
+                    internal_preview: true,
+                    external_open: true,
+                },
+                true,
+            )
+            .await;
+        let assistant = snapshot
+            .messages
+            .iter()
+            .find(|message| message.id == receipt.assistant_message_id)
+            .unwrap();
+        assert_eq!(assistant.text, "Thinking…");
         assert_eq!(assistant.state, MessageState::Complete);
     }
 

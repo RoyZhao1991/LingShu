@@ -3,7 +3,7 @@ use crate::models::{
     AppLocale, ExecutionPermissionMode, GoalSpec, LoopEngineKind, LoopEngineRecord, RuntimeSettings,
 };
 use crate::preview::file_revision;
-use crate::process::hide_tokio_console_window;
+use crate::process::spawn_tokio_process_tree;
 use crate::workspace_delta::{WorkspaceBaseline, WorkspaceDeltaTracker};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, to_string_pretty};
@@ -618,9 +618,7 @@ impl LoopRegistry {
             )
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .kill_on_drop(true);
-        hide_tokio_console_window(&mut process);
+            .stderr(Stdio::piped());
         remove_native_provider_environment(&mut process);
         let output =
             run_harness_process(process, &prompt, adapter.name(), adapter.timeout_seconds()).await;
@@ -1672,8 +1670,7 @@ async fn run_harness_process(
     harness_name: &str,
     timeout_seconds: u64,
 ) -> Result<std::process::Output, LoopError> {
-    let mut child = process
-        .spawn()
+    let (mut child, _process_tree) = spawn_tokio_process_tree(&mut process)
         .map_err(|error| LoopError::Execution(error.to_string()))?;
     if let Some(mut stdin) = child.stdin.take() {
         stdin.write_all(prompt.as_bytes()).await?;
@@ -1765,7 +1762,89 @@ fn find_on_path(command: &str) -> Option<PathBuf> {
 mod tests {
     use super::*;
     use crate::models::{GoalKind, OutputMode, ReferenceConfidence, ReferenceScope};
+    use std::process::{Command as StdCommand, Stdio as StdStdio};
     use tempfile::tempdir;
+
+    const PROCESS_TREE_HOME_ENV: &str = "LINGSHU_TEST_LOOP_TREE_HOME";
+    const PROCESS_TREE_GRANDCHILD_ENV: &str = "LINGSHU_TEST_LOOP_TREE_GRANDCHILD";
+    const PROCESS_TREE_STARTED_FILE: &str = "loop-grandchild-started.txt";
+    const PROCESS_TREE_LATE_FILE: &str = "loop-grandchild-late.txt";
+
+    struct ProcessTreeFixtureAdapter {
+        executable: PathBuf,
+    }
+
+    impl ManagedExternalHarnessAdapter for ProcessTreeFixtureAdapter {
+        fn kind(&self) -> LoopEngineKind {
+            LoopEngineKind::Codex
+        }
+
+        fn name(&self) -> &'static str {
+            "ProcessTreeFixture"
+        }
+
+        fn executable(&self) -> Option<&Path> {
+            Some(&self.executable)
+        }
+
+        fn isolated_home_variable(&self) -> &'static str {
+            PROCESS_TREE_HOME_ENV
+        }
+
+        fn timeout_seconds(&self) -> u64 {
+            30
+        }
+
+        fn arguments(&self, _invocation: &ManagedHarnessInvocation<'_>) -> Vec<String> {
+            vec![
+                "--exact".into(),
+                "loops::tests::process_tree_fixture".into(),
+                "--nocapture".into(),
+            ]
+        }
+    }
+
+    /// Executed in a nested copy of this test binary by the managed-harness cancellation test.
+    #[test]
+    fn process_tree_fixture() {
+        if std::env::var_os(PROCESS_TREE_HOME_ENV).is_none() {
+            return;
+        }
+        let workspace = PathBuf::from(
+            std::env::var_os("LINGSHU_WORKSPACE").expect("fixture workspace must be configured"),
+        );
+        if std::env::var_os(PROCESS_TREE_GRANDCHILD_ENV).is_some() {
+            fs::write(workspace.join(PROCESS_TREE_STARTED_FILE), "started").unwrap();
+            std::thread::sleep(Duration::from_millis(800));
+            fs::write(workspace.join(PROCESS_TREE_LATE_FILE), "survived").unwrap();
+            return;
+        }
+
+        let mut grandchild = StdCommand::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "loops::tests::process_tree_fixture",
+                "--nocapture",
+            ])
+            .env(PROCESS_TREE_GRANDCHILD_ENV, "1")
+            .stdin(StdStdio::null())
+            .stdout(StdStdio::null())
+            .stderr(StdStdio::null())
+            .spawn()
+            .unwrap();
+        std::thread::sleep(Duration::from_secs(30));
+        let _ = grandchild.wait();
+    }
+
+    async fn wait_for_fixture_file(path: &Path) {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while !path.is_file() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("fixture grandchild did not start");
+    }
 
     fn goal() -> GoalSpec {
         GoalSpec {
@@ -1942,6 +2021,50 @@ printf 'verified artifact' > "$PWD/codex-artifact.md"
             .acknowledge_receipt(result.receipt_id)
             .await
             .unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn cancelling_managed_harness_kills_its_delayed_grandchild() {
+        let data = tempdir().unwrap();
+        let workspace = tempdir().unwrap();
+        let registry = Arc::new(LoopRegistry::new(data.path(), std::env::consts::OS).unwrap());
+        let workspace_path = workspace.path().to_path_buf();
+        let harness_registry = registry.clone();
+        let harness = tokio::spawn(async move {
+            let adapter = ProcessTreeFixtureAdapter {
+                executable: std::env::current_exe().unwrap(),
+            };
+            let goal = goal();
+            let settings = RuntimeSettings::default();
+            harness_registry
+                .run_managed_external_harness(
+                    &adapter,
+                    LoopExecutionRequest {
+                        task_id: Uuid::new_v4(),
+                        workspace: &workspace_path,
+                        source_prompt: "Wait until cancelled",
+                        attachment_paths: &[],
+                        objective: "Exercise process-tree cancellation",
+                        role: "Fixture",
+                        goal: &goal,
+                        correction: None,
+                        memory_context: "",
+                        plugin_context: "",
+                        locale: AppLocale::En,
+                        permission_mode: ExecutionPermissionMode::Sandbox,
+                        settings: &settings,
+                        api_key: None,
+                    },
+                )
+                .await
+        });
+
+        wait_for_fixture_file(&workspace.path().join(PROCESS_TREE_STARTED_FILE)).await;
+        harness.abort();
+        assert!(harness.await.unwrap_err().is_cancelled());
+        tokio::time::sleep(Duration::from_millis(1_200)).await;
+
+        assert!(!workspace.path().join(PROCESS_TREE_LATE_FILE).exists());
     }
 
     #[tokio::test]

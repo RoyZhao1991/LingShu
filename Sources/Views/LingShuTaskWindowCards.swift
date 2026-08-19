@@ -46,6 +46,7 @@ struct TaskPlanCard: View {
         case .inProgress: return "circle.dotted.circle"
         case .completed: return "checkmark.circle.fill"
         case .failed: return "exclamationmark.circle.fill"
+        case .cancelled: return "stop.circle.fill"
         }
     }
     private func color(_ s: LingShuPlanStep.Status) -> Color {
@@ -54,6 +55,7 @@ struct TaskPlanCard: View {
         case .inProgress: return Color.lingHolo
         case .completed: return .green.opacity(0.85)
         case .failed: return .orange.opacity(0.9)
+        case .cancelled: return Color.lingFg.opacity(0.5)
         }
     }
     private func textColor(_ s: LingShuPlanStep.Status) -> Color {
@@ -62,6 +64,7 @@ struct TaskPlanCard: View {
         case .inProgress: return Color.lingFg.opacity(0.95)
         case .pending: return Color.lingFg.opacity(0.78)
         case .failed: return Color.lingFg.opacity(0.82)
+        case .cancelled: return Color.lingFg.opacity(0.62)
         }
     }
 }

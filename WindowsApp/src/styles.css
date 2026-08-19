@@ -79,6 +79,8 @@ svg { flex: 0 0 auto; }
 .markdown-table-scroll tr:last-child td { border-bottom: 0; }
 .markdown-table-scroll th:last-child, .markdown-table-scroll td:last-child { border-right: 0; }
 .inline-loader { width: 18px; vertical-align: middle; margin-right: 8px; color: var(--teal); }
+.message-termination { width: fit-content; margin-top: 10px; display: flex; align-items: center; gap: 6px; padding: 4px 8px; color: var(--muted); background: rgba(116,129,126,.1); border: 1px solid rgba(116,129,126,.32); border-radius: 5px; font-size: 12px; font-weight: 700; }
+.message-termination + .thread-link { margin-top: 10px; }
 .thread-link { border: 1px solid #a8d5d0; color: var(--teal-dark); background: #e7f3f1; padding: 7px 10px; display: inline-flex; align-items: center; gap: 7px; border-radius: 6px; }
 
 .composer { width: min(1280px, calc(100% - 72px)); justify-self: center; margin: 0 0 22px; background: #fff; border: 1px solid var(--line); box-shadow: var(--shadow); padding: 12px; border-radius: 8px; }
@@ -172,6 +174,7 @@ svg { flex: 0 0 auto; }
 .execution-event.running .event-rail { background: var(--blue); }
 .execution-event.completed .event-rail { background: var(--green); }
 .execution-event.failed .event-rail { background: var(--red); }
+.execution-event.cancelled .event-rail { background: #74817e; }
 .execution-event.blocked .event-rail { background: var(--orange); }
 .event-main { min-width: 0; padding: 11px 13px; border: 1px solid var(--line); background: rgba(255,255,255,.73); border-radius: 6px; }
 .execution-event.running .event-main { border-color: #a9c3f2; box-shadow: inset 3px 0 0 var(--blue); }

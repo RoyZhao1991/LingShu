@@ -1,5 +1,5 @@
 use crate::models::{ArtifactRecord, ArtifactSpec, SheetSpec, SlideSpec};
-use crate::preview::{content_revision, semantic_file_revision};
+use crate::preview::{content_revision, semantic_file_revision_cancellable};
 use chrono::{DateTime, Utc};
 use serde_json::Value;
 use std::fs;
@@ -24,9 +24,23 @@ pub fn materialize_artifacts(
     workspace: &Path,
     specs: &[ArtifactSpec],
 ) -> Result<Vec<ArtifactRecord>, ArtifactError> {
+    materialize_artifacts_cancellable(workspace, specs, &|| false)
+}
+
+pub(crate) fn materialize_artifacts_cancellable(
+    workspace: &Path,
+    specs: &[ArtifactSpec],
+    cancelled: &dyn Fn() -> bool,
+) -> Result<Vec<ArtifactRecord>, ArtifactError> {
     fs::create_dir_all(workspace).map_err(ArtifactError::CreateDirectory)?;
     let mut records = Vec::new();
     for spec in specs {
+        if cancelled() {
+            return Err(ArtifactError::Write(std::io::Error::new(
+                std::io::ErrorKind::Interrupted,
+                "artifact materialization was cancelled",
+            )));
+        }
         let file_name = safe_file_name(&spec.file_name, &spec.kind);
         let path = unique_path(workspace.join(file_name));
         let data = match spec.kind.to_ascii_lowercase().as_str() {
@@ -41,12 +55,13 @@ pub fn materialize_artifacts(
         let revision = content_revision(&data);
         fs::write(&path, &data).map_err(ArtifactError::Write)?;
         let metadata = fs::metadata(&path).map_err(ArtifactError::Write)?;
-        let semantic_revision = semantic_file_revision(&path).map_err(|error| {
-            ArtifactError::Write(match error {
-                crate::preview::PreviewError::Read(error) => error,
-                other => std::io::Error::other(other.to_string()),
-            })
-        })?;
+        let semantic_revision =
+            semantic_file_revision_cancellable(&path, cancelled).map_err(|error| {
+                ArtifactError::Write(match error {
+                    crate::preview::PreviewError::Read(error) => error,
+                    other => std::io::Error::other(other.to_string()),
+                })
+            })?;
         let modified_at = metadata
             .modified()
             .ok()

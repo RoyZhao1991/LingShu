@@ -3,7 +3,7 @@ use crate::models::{
     AppLocale, ArtifactSpec, ExecutionPermissionMode, PluginPermissions, PluginRecord,
     PluginSource, PluginToolRecord,
 };
-use crate::process::hide_tokio_console_window;
+use crate::process::spawn_tokio_process_tree;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::BTreeSet;
@@ -526,9 +526,7 @@ impl PluginRegistry {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
-        hide_tokio_console_window(&mut process);
-        let mut child = process
-            .spawn()
+        let (mut child, _process_tree) = spawn_tokio_process_tree(&mut process)
             .map_err(|error| PluginError::Execution(error.to_string()))?;
         if let Some(mut stdin) = child.stdin.take() {
             stdin.write_all(input.as_bytes()).await?;
@@ -741,23 +739,32 @@ impl PluginRegistry {
                 .arg(&output_path)
                 .arg(&root)
                 .current_dir(workspace)
-                .kill_on_drop(true)
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped());
-            hide_tokio_console_window(&mut process);
+            let (child, _process_tree) = match spawn_tokio_process_tree(&mut process) {
+                Ok(process) => process,
+                Err(error) => {
+                    failures.push(format!("{}: {error}", invocation.engine));
+                    continue;
+                }
+            };
 
-            let output =
-                match tokio::time::timeout(Duration::from_secs(300), process.output()).await {
-                    Err(_) => {
-                        failures.push(format!("{}: generation timed out", invocation.engine));
-                        continue;
-                    }
-                    Ok(Err(error)) => {
-                        failures.push(format!("{}: {error}", invocation.engine));
-                        continue;
-                    }
-                    Ok(Ok(output)) => output,
-                };
+            let output = match tokio::time::timeout(
+                Duration::from_secs(300),
+                child.wait_with_output(),
+            )
+            .await
+            {
+                Err(_) => {
+                    failures.push(format!("{}: generation timed out", invocation.engine));
+                    continue;
+                }
+                Ok(Err(error)) => {
+                    failures.push(format!("{}: {error}", invocation.engine));
+                    continue;
+                }
+                Ok(Ok(output)) => output,
+            };
 
             if !output.status.success() {
                 let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
@@ -1770,7 +1777,56 @@ fn annotate_plugin_routing(
 mod tests {
     use super::*;
     use crate::preview::{preview_file, PreviewKind};
+    use std::process::{Command as StdCommand, Stdio as StdStdio};
     use tempfile::tempdir;
+
+    const PROCESS_TREE_PLUGIN_ID: &str = "demo.process-tree-cancel";
+    const PROCESS_TREE_GRANDCHILD_ENV: &str = "LINGSHU_TEST_PLUGIN_TREE_GRANDCHILD";
+    const PROCESS_TREE_STARTED_FILE: &str = "plugin-grandchild-started.txt";
+    const PROCESS_TREE_LATE_FILE: &str = "plugin-grandchild-late.txt";
+
+    /// Executed in a nested copy of this test binary by the integration test below. The plugin
+    /// process launches one delayed-writing grandchild and then remains alive until cancellation.
+    #[test]
+    fn process_tree_fixture() {
+        if std::env::var("LINGSHU_PLUGIN_ID").ok().as_deref() != Some(PROCESS_TREE_PLUGIN_ID) {
+            return;
+        }
+        let workspace = PathBuf::from(
+            std::env::var_os("LINGSHU_WORKSPACE").expect("fixture workspace must be configured"),
+        );
+        if std::env::var_os(PROCESS_TREE_GRANDCHILD_ENV).is_some() {
+            fs::write(workspace.join(PROCESS_TREE_STARTED_FILE), "started").unwrap();
+            std::thread::sleep(Duration::from_millis(800));
+            fs::write(workspace.join(PROCESS_TREE_LATE_FILE), "survived").unwrap();
+            return;
+        }
+
+        let mut grandchild = StdCommand::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "plugins::tests::process_tree_fixture",
+                "--nocapture",
+            ])
+            .env(PROCESS_TREE_GRANDCHILD_ENV, "1")
+            .stdin(StdStdio::null())
+            .stdout(StdStdio::null())
+            .stderr(StdStdio::null())
+            .spawn()
+            .unwrap();
+        std::thread::sleep(Duration::from_secs(30));
+        let _ = grandchild.wait();
+    }
+
+    async fn wait_for_fixture_file(path: &Path) {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while !path.is_file() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("fixture grandchild did not start");
+    }
 
     #[test]
     fn plugin_output_state_preserves_recoverable_revision_request() {
@@ -2026,6 +2082,55 @@ mod tests {
         assert_eq!(output["pluginRouting"]["providerId"], OFFICE_FOUNDATION_ID);
         assert_eq!(output["pluginRouting"]["fallback"], true);
         assert_eq!(result.artifact_paths.len(), 1);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn cancelling_plugin_execution_kills_its_delayed_grandchild() {
+        let data = tempdir().unwrap();
+        let source = tempdir().unwrap();
+        let workspace = tempdir().unwrap();
+        let manifest = json!({
+            "schemaVersion": 1,
+            "id": PROCESS_TREE_PLUGIN_ID,
+            "name": "Process Tree Cancellation Fixture",
+            "version": "1.0.0",
+            "entrypoint": {
+                "command": std::env::current_exe().unwrap(),
+                "arguments": ["--exact", "plugins::tests::process_tree_fixture", "--nocapture"],
+                "timeoutSeconds": 30
+            },
+            "tools": [{"name": "hold", "description": "Wait for cancellation"}]
+        });
+        fs::write(
+            source.path().join("plugin.json"),
+            serde_json::to_vec_pretty(&manifest).unwrap(),
+        )
+        .unwrap();
+        let registry =
+            Arc::new(PluginRegistry::new(data.path(), None, std::env::consts::OS).unwrap());
+        registry.install(source.path().join("plugin.json")).unwrap();
+        let exposed_name = registry.probe(PROCESS_TREE_PLUGIN_ID).unwrap().tools[0]
+            .exposed_name
+            .clone();
+        let execution_registry = registry.clone();
+        let workspace_path = workspace.path().to_path_buf();
+        let execution = tokio::spawn(async move {
+            execution_registry
+                .execute(
+                    &exposed_name,
+                    json!({}),
+                    &workspace_path,
+                    ExecutionPermissionMode::Sandbox,
+                )
+                .await
+        });
+
+        wait_for_fixture_file(&workspace.path().join(PROCESS_TREE_STARTED_FILE)).await;
+        execution.abort();
+        assert!(execution.await.unwrap_err().is_cancelled());
+        tokio::time::sleep(Duration::from_millis(1_200)).await;
+
+        assert!(!workspace.path().join(PROCESS_TREE_LATE_FILE).exists());
     }
 
     #[tokio::test]

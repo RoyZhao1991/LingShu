@@ -327,6 +327,7 @@ pub enum RuntimeEventState {
     Completed,
     Failed,
     Blocked,
+    Cancelled,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

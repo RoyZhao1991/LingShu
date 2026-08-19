@@ -48,25 +48,27 @@ extension LingShuState {
             goal?.outputMode == .chatReply && !hasArtifacts ? .answered : .completed
         // Legacy persisted value only. A runtime interruption keeps the goal recoverable.
         case .failed: .suspended
-        // A child is cancelled when its parent reaches a terminal state first. Surface that as a
-        // neutral suspended state instead of turning a successfully delivered parent red.
-        case .cancelled: .suspended
+        // Runtime cancellation is sealed. Keep it neutral, but never project it as a resumable
+        // suspension: doing so can re-dispatch a task that the user explicitly terminated.
+        case .cancelled: .terminated
         }
     }
 
     nonisolated static func sharedKernelPlanStatus(_ status: LingShuKernelTaskStatus) -> LingShuPlanStep.Status {
         switch status {
-        case .queued, .needsUserAction, .failed, .cancelled: .pending
+        case .queued, .needsUserAction, .failed: .pending
         case .understanding, .running, .needsRecovery: .inProgress
         case .completed: .completed
+        case .cancelled: .cancelled
         }
     }
 
     nonisolated static func sharedKernelRoleStatus(_ status: LingShuKernelTaskStatus) -> LingShuTaskRoleSlotStatus {
         switch status {
-        case .queued, .needsUserAction, .failed, .cancelled: .pending
+        case .queued, .needsUserAction, .failed: .pending
         case .understanding, .running, .needsRecovery: .running
         case .completed: .completed
+        case .cancelled: .cancelled
         }
     }
 
@@ -114,7 +116,7 @@ extension LingShuState {
         case .needsUserAction: english ? "Waiting for user" : "等待用户"
         case .completed: english ? "Completed" : "已完成"
         case .failed: english ? "Waiting to resume" : "待恢复"
-        case .cancelled: english ? "Cancelled" : "已取消"
+        case .cancelled: english ? "Terminated" : "已终止"
         }
     }
 

@@ -3,6 +3,34 @@ import XCTest
 @testable import LingShuMac
 
 final class SharedKernelRuntimeBridgeTests: XCTestCase {
+    func testTerminatedRuntimeEventWireValueDecodes() throws {
+        let taskID = UUID()
+        let payload = """
+        {
+          "id":"\(UUID().uuidString)",
+          "sequence":7,
+          "taskId":"\(taskID.uuidString)",
+          "parentTaskId":null,
+          "kind":"model",
+          "state":"cancelled",
+          "actor":"LingShu",
+          "title":"Writing report",
+          "detail":"Three sections were preserved.",
+          "createdAt":"2026-08-19T08:00:00Z",
+          "updatedAt":"2026-08-19T08:01:00Z"
+        }
+        """
+
+        let event = try JSONDecoder().decode(
+            LingShuKernelRuntimeEvent.self,
+            from: Data(payload.utf8)
+        )
+
+        XCTAssertEqual(event.taskId, taskID)
+        XCTAssertEqual(event.state, .cancelled)
+        XCTAssertEqual(event.detail, "Three sections were preserved.")
+    }
+
     func testToolEventUsesReadableTitleInMainChatAndKeepsRawDetail() {
         let detail = """
         {"title":"基于自学习的标注能力","file_name":"demo.pptx","theme":"midnight","slides":[{"layout":"cover"}]}

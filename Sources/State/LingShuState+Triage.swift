@@ -40,7 +40,7 @@ extension LingShuState {
         case .queued, .running, .dispatched, .needsRevision, .blocked, .suspended,
              .analyzing, .acquiringCapability, .waitingForUser, .ready, .partial:
             return true
-        case .answered, .completed, .verified, .failed:
+        case .answered, .completed, .verified, .terminated, .failed:
             return false
         }
     }

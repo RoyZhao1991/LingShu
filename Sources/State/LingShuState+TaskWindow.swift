@@ -40,6 +40,7 @@ extension LingShuState {
     }
 
     func submitTaskFollowup(_ text: String, recordID: String, appendUserMessage: Bool = true) {
+        guard taskExecutionRecords.first(where: { $0.id == recordID })?.status != .terminated else { return }
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         let attachmentContext = attachmentContextBlock()
         // 任务窗口是隔离线程入口,不受主问答线 hasActiveModelCall 阻塞。
@@ -114,6 +115,9 @@ extension LingShuState {
     /// ② **没在飞**(循环已结束,如演示交给播放循环、回合已收尾)→ 重新起/续隔离会话 re-engage(产出执行+回复)。
     /// 两条路都落进这条记录的窗口、都不污染主会话、都不破坏线程隔离。
     func continueTaskThread(_ text: String, recordID: String) {
+        // 手动终止是不可恢复的终态。业务入口必须自己封锁，不能只依赖窗口禁用，
+        // 否则测试、快捷操作或迟到的 UI 事件仍可能把同一记录重新提交为 running。
+        guard taskExecutionRecords.first(where: { $0.id == recordID })?.status != .terminated else { return }
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         let attachmentContext = attachmentContextBlock()
         guard !trimmed.isEmpty || !attachmentContext.isEmpty else { return }
@@ -158,6 +162,10 @@ extension LingShuState {
     /// agent 循环在回合边界(工具结果已补齐 / 模型刚出文本)采纳为最高优先级 user 指令,下一步即改方向——
     /// 比"停止后重发"更平滑:不丢已建立的上下文、不打断在飞工具产生半截状态。
     func interjectCorrection(_ text: String, recordID: String?) {
+        if let recordID,
+           taskExecutionRecords.first(where: { $0.id == recordID })?.status == .terminated {
+            return
+        }
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         // 纠正也支持附件:有附件就把附件正文并进纠正指令(随手丢个截图/文件纠偏)。
         let attachmentContext = attachmentContextBlock()

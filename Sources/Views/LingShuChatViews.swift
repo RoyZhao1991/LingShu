@@ -160,6 +160,15 @@ struct ChatBubbleView: View {
         !renderedMessageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             || message.attachmentPaths?.contains(where: { !$0.isEmpty }) == true
     }
+    private var terminationLabel: String? {
+        guard !message.isUser,
+              let recordID = message.taskRecordID,
+              state.sharedKernelBubbleIDs[recordID] == message.id,
+              state.taskExecutionRecordLookup.first(where: { $0.id == recordID })?.status == .terminated else {
+            return nil
+        }
+        return state.loc("已终止", "Terminated")
+    }
 
     var body: some View {
         HStack {
@@ -265,6 +274,16 @@ struct ChatBubbleView: View {
                         previewItem = .init(url: url)
                     }
                         .textSelection(.enabled)
+                }
+
+                if let terminationLabel {
+                    HStack(spacing: 5) {
+                        Image(systemName: "stop.circle.fill")
+                        Text(terminationLabel)
+                    }
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(Color.lingFg.opacity(0.5))
+                    .accessibilityLabel(terminationLabel)
                 }
 
                 if !message.isUser, !message.isLoading, let choices = message.choices {

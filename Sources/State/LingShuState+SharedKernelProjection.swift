@@ -298,7 +298,9 @@ extension LingShuState {
         case .completed:
             visible = assistantVisible ?? summaryVisible ?? progress
         case .cancelled:
-            visible = summaryVisible ?? assistantVisible ?? progress
+            // Manual termination seals the cumulative assistant transcript. A task summary may
+            // describe only its latest phase and must never hide work already shown to the user.
+            visible = assistantVisible ?? summaryVisible ?? progress
         case .queued, .understanding, .running, .needsRecovery, .needsUserAction:
             // The assistant message is the cumulative Loop transcript. Runtime events remain in
             // the execution record and are only a fallback before any visible model text exists.
@@ -343,6 +345,12 @@ extension LingShuState {
         } else if projection.status.isTerminal {
             chatMessages[index].awaitingInputForRecordID = nil
             chatMessages[index].humanInteraction = nil
+            chatMessages[index].choices = nil
+            chatMessages[index].form = nil
+            if let request = pendingDispatchedHumanInteractions.removeValue(forKey: projection.taskID) {
+                humanInteractionProbeTasks.removeValue(forKey: request.id)?.cancel()
+                clearHardHumanInteraction(requestID: request.id)
+            }
             dispatchedTaskBubbles.removeValue(forKey: projection.taskID)
         }
     }
@@ -353,6 +361,25 @@ extension LingShuState {
         displayAnswer: String?,
         appendUserMessage: Bool = true
     ) -> Bool {
+        // A choice/form callback can arrive after the cancellation snapshot. Consume that stale
+        // callback locally so the generic dispatched-task fallback cannot revive the sealed task.
+        if taskExecutionRecords.first(where: { $0.id == recordID })?.status == .terminated {
+            if let request = pendingDispatchedHumanInteractions.removeValue(forKey: recordID) {
+                humanInteractionProbeTasks.removeValue(forKey: request.id)?.cancel()
+                clearHardHumanInteraction(requestID: request.id)
+            }
+            if let index = chatMessages.lastIndex(where: { $0.awaitingInputForRecordID == recordID }) {
+                chatMessages[index].awaitingInputForRecordID = nil
+                chatMessages[index].humanInteraction = nil
+                chatMessages[index].choices = nil
+                chatMessages[index].form = nil
+                chatMessages[index].isLoading = false
+            }
+            dispatchedTaskBubbles.removeValue(forKey: recordID)
+            sharedKernelActiveThreadIDs.remove(recordID)
+            activeTaskThreadRecordIDs.remove(recordID)
+            return true
+        }
         guard LingShuRuntimeEnvironment.usesSharedRuntimeKernel,
               sharedKernelKnownThreadIDs.contains(recordID),
               let threadID = UUID(uuidString: recordID) else { return false }

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { projectChatBubble } from "../src/chatProjection.ts";
+import { strings } from "../src/i18n.ts";
 import type { ChatMessage, RuntimeEvent } from "../src/types.ts";
 
 const assistantMessage = (text: string, state: ChatMessage["state"] = "thinking"): ChatMessage => ({
@@ -36,6 +37,16 @@ test("keeps cumulative Loop output in one stable bubble instead of replacing it 
   assert.equal(projection.key, "message-1");
   assert.equal(projection.text, "第一轮可见进展\n\n第二轮可见进展");
   assert.equal(projection.isRunning, true);
+});
+
+test("keeps cumulative assistant output intact and non-running after termination", () => {
+  const text = "第一轮可见进展\n\n第二轮可见进展";
+  const projection = projectChatBubble(assistantMessage(text, "complete"), event, "zh_cn");
+
+  assert.equal(strings("zh_cn").cancelled, "已终止");
+  assert.equal(strings("en").cancelled, "Terminated");
+  assert.equal(projection.text, text);
+  assert.equal(projection.isRunning, false);
 });
 
 test("uses readable progress only before the Loop has emitted visible text", () => {

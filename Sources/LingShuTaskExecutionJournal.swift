@@ -6,6 +6,8 @@ enum LingShuTaskExecutionStatus: String, Codable, Equatable, Sendable {
     case answered = "已直接回答"
     case dispatched = "已分派"
     case completed = "已完成"
+    /// 用户主动终止后的中性、不可恢复终态。与可自动续跑的 `.suspended` 严格区分。
+    case terminated = "已终止"
     case needsRevision = "未达标"
     case blocked = "异常"
     /// 网络/网关中断导致暂停——**非失败**,会话上下文保留,联网后自动续跑。
@@ -22,10 +24,10 @@ enum LingShuTaskExecutionStatus: String, Codable, Equatable, Sendable {
     /// `waitingForUser` 或 `suspended` 并保留断点；工具/子步骤错误继续记录在执行明细中。
     case failed = "失败"
 
-    /// 只有目标已经完成才是终态。未达标、部分完成和旧版失败记录都必须可恢复。
+    /// 完成交付或用户明确终止均为终态。未达标、部分完成和旧版失败记录都必须可恢复。
     var isTerminal: Bool {
         switch self {
-        case .completed, .answered, .verified: return true
+        case .completed, .answered, .verified, .terminated: return true
         default: return false
         }
     }
@@ -83,6 +85,7 @@ struct LingShuPlanStep: Codable, Equatable, Sendable, Identifiable {
         case inProgress = "进行中"
         case completed = "已完成"
         case failed = "未完成"
+        case cancelled = "已终止"
     }
     var id: String = UUID().uuidString
     var title: String
@@ -107,6 +110,7 @@ enum LingShuTaskRoleSlotStatus: String, Codable, Equatable, Sendable {
     case running = "执行中"
     case completed = "已完成"
     case failed = "未完成"
+    case cancelled = "已终止"
 }
 
 /// 一条任务 Loop 中的一个角色槽位。

@@ -1,5 +1,8 @@
+#[cfg(test)]
+use crate::artifacts::materialize_artifacts;
 use crate::artifacts::{
-    artifact_path_logical_key, create_artifact_logical_key, materialize_artifacts, ArtifactError,
+    artifact_path_logical_key, create_artifact_logical_key, materialize_artifacts_cancellable,
+    ArtifactError,
 };
 use crate::contract::{kernel_contract, PlatformCapabilities};
 use crate::loops::{
@@ -11,9 +14,12 @@ use crate::model_client::{AgentToolDefinition, ModelClient, ModelDelta, ModelErr
 use crate::models::*;
 use crate::plugins::{PluginCapabilityRoute, PluginError, PluginRegistry, PluginUsagePolicy};
 use crate::preview::{
-    content_revision, file_revision, preview_file, semantic_file_revision, PreviewKind,
+    content_revision, file_revision, preview_file_cancellable, semantic_file_revision_cancellable,
+    PreviewError, PreviewKind, PreviewPayload,
 };
-use crate::process::hide_tokio_console_window;
+#[cfg(test)]
+use crate::preview::{preview_file, semantic_file_revision};
+use crate::process::spawn_tokio_process_tree;
 use crate::providers::provider_catalog;
 use crate::store::{
     close_unanswered_tool_calls, close_unanswered_tool_calls_except, ArtifactRegistration,
@@ -56,6 +62,9 @@ const HUMAN_CHECKPOINT_TEXT_LIMIT: usize = 8_000;
 const HUMAN_CHECKPOINT_SIBLING_LIMIT: usize = 2_000;
 const MIN_GOAL_TIMEOUT_SECONDS: u64 = 30;
 const MAX_GOAL_TIMEOUT_SECONDS: [u64; GOAL_ATTEMPTS] = [75, 120, 180];
+
+#[cfg(test)]
+type PreviewHook = Arc<dyn Fn(&Path) -> Result<PreviewPayload, PreviewError> + Send + Sync>;
 
 #[derive(Debug, Error)]
 pub enum EngineError {
@@ -134,6 +143,8 @@ pub struct RuntimeKernel {
     queue_guard: Arc<Mutex<()>>,
     supervisor_guard: Arc<Mutex<()>>,
     queue_wakeup: Arc<Notify>,
+    #[cfg(test)]
+    preview_hook: Option<PreviewHook>,
 }
 
 #[derive(Debug)]
@@ -181,6 +192,17 @@ struct ToolExecution {
     output: String,
     network_command: bool,
     command_succeeded: Option<bool>,
+}
+
+/// Tokio detaches a `JoinHandle` when it is dropped. Model turns must instead abort when their
+/// owning task future is cancelled, otherwise a disconnected provider can keep running after the
+/// foreground queue has already moved on.
+struct AbortTaskOnDrop(tokio::task::AbortHandle);
+
+impl Drop for AbortTaskOnDrop {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -346,6 +368,8 @@ impl RuntimeKernel {
             queue_guard: Arc::new(Mutex::new(())),
             supervisor_guard: Arc::new(Mutex::new(())),
             queue_wakeup: Arc::new(Notify::new()),
+            #[cfg(test)]
+            preview_hook: None,
         })
     }
 
@@ -386,7 +410,18 @@ impl RuntimeKernel {
         settings: &RuntimeSettings,
         query: &str,
     ) -> String {
-        match self.memory.recall(query, 8, settings.locale).await {
+        let recall = match self
+            .await_or_cancel(task_id, self.memory.recall(query, 8, settings.locale))
+            .await
+        {
+            Ok(recall) => recall,
+            Err(EngineError::Cancelled) => return String::new(),
+            Err(_) => unreachable!("the cancellation boundary has only one error variant"),
+        };
+        if self.store.task_is_cancelled(task_id).await {
+            return String::new();
+        }
+        match recall {
             Ok(recall) if !recall.hits.is_empty() => {
                 let detail = format!(
                     "{}\n{}",
@@ -445,8 +480,19 @@ impl RuntimeKernel {
         let Some(task) = self.store.task(task_id).await else {
             return;
         };
+        if task.status != TaskStatus::Completed {
+            return;
+        }
         match self.memory.remember_task(&task, reply).await {
             Ok(snapshot) => {
+                if self
+                    .store
+                    .task(task_id)
+                    .await
+                    .is_none_or(|task| task.status != TaskStatus::Completed)
+                {
+                    return;
+                }
                 let _ = self
                     .store
                     .append_event(
@@ -467,6 +513,14 @@ impl RuntimeKernel {
                     .await;
             }
             Err(error) => {
+                if self
+                    .store
+                    .task(task_id)
+                    .await
+                    .is_none_or(|task| task.status != TaskStatus::Completed)
+                {
+                    return;
+                }
                 let _ = self
                     .store
                     .append_event(
@@ -597,7 +651,11 @@ impl RuntimeKernel {
                     visited.insert(thread_id);
                     continue;
                 }
-                (thread_id, self.execute(thread_id, api_key.as_deref()).await)
+                (
+                    thread_id,
+                    self.run_task_operation(thread_id, self.execute(thread_id, api_key.as_deref()))
+                        .await,
+                )
             } else if let Some(thread_id) = self.store.next_recovery_id_excluding(&visited).await {
                 let Some(task) = self.store.prepare_continue(thread_id).await? else {
                     visited.insert(thread_id);
@@ -605,8 +663,11 @@ impl RuntimeKernel {
                 };
                 (
                     thread_id,
-                    self.continue_prepared_task(thread_id, task, None, api_key.clone())
-                        .await,
+                    self.run_task_operation(
+                        thread_id,
+                        self.continue_prepared_task(thread_id, task, None, api_key.clone()),
+                    )
+                    .await,
                 )
             } else {
                 break;
@@ -625,6 +686,9 @@ impl RuntimeKernel {
                 }
                 Err(EngineError::Cancelled) => {}
                 Err(error) => {
+                    if self.store.task_is_cancelled(thread_id).await {
+                        continue;
+                    }
                     let locale = self.store.settings().await.locale;
                     let message = localized_failure(locale, &error);
                     let kind = error.failure_kind();
@@ -632,6 +696,9 @@ impl RuntimeKernel {
                     self.store
                         .require_recovery(thread_id, message, error.to_string())
                         .await?;
+                    if self.store.task_is_cancelled(thread_id).await {
+                        continue;
+                    }
                     self.store
                         .append_event(
                             thread_id,
@@ -663,12 +730,18 @@ impl RuntimeKernel {
         };
         let locale = self.store.settings().await.locale;
         let result = self
-            .continue_prepared_task(thread_id, task, Some(answer), api_key)
+            .run_task_operation(
+                thread_id,
+                self.continue_prepared_task(thread_id, task, Some(answer), api_key),
+            )
             .await;
         match result {
             Ok(()) => Ok(true),
             Err(EngineError::Cancelled) => Err(EngineError::Cancelled),
             Err(error) => {
+                if self.store.task_is_cancelled(thread_id).await {
+                    return Err(EngineError::Cancelled);
+                }
                 self.store
                     .require_recovery(
                         thread_id,
@@ -691,12 +764,18 @@ impl RuntimeKernel {
         };
         let locale = self.store.settings().await.locale;
         match self
-            .continue_prepared_task(thread_id, task, None, api_key)
+            .run_task_operation(
+                thread_id,
+                self.continue_prepared_task(thread_id, task, None, api_key),
+            )
             .await
         {
             Ok(()) => Ok(true),
             Err(EngineError::Cancelled) => Err(EngineError::Cancelled),
             Err(error) => {
+                if self.store.task_is_cancelled(thread_id).await {
+                    return Err(EngineError::Cancelled);
+                }
                 self.store
                     .require_recovery(
                         thread_id,
@@ -716,6 +795,7 @@ impl RuntimeKernel {
         human_answer: Option<String>,
         api_key: Option<String>,
     ) -> Result<(), EngineError> {
+        self.ensure_not_cancelled(thread_id).await?;
         let settings = self.store.settings().await;
         ensure_key(&settings, api_key.as_deref())?;
         let Some(goal) = task.goal_spec.clone() else {
@@ -760,6 +840,7 @@ impl RuntimeKernel {
             let memory_context = self
                 .recalled_memory_context(thread_id, &settings, &answer)
                 .await;
+            self.ensure_not_cancelled(thread_id).await?;
             if !memory_context.is_empty() {
                 task.session_messages
                     .push(memory_context_message(memory_context));
@@ -774,6 +855,7 @@ impl RuntimeKernel {
                     run_id: pending.run_id,
                 })
                 .await?;
+            self.ensure_not_cancelled(thread_id).await?;
             self.store
                 .append_event(
                     thread_id,
@@ -805,6 +887,7 @@ impl RuntimeKernel {
             )
             .await?
         };
+        self.ensure_not_cancelled(thread_id).await?;
         let outcome = match outcome {
             SessionOutcome::Completed { text, messages }
                 if should_run_checker(&goal, &self.store.task(thread_id).await) =>
@@ -822,11 +905,202 @@ impl RuntimeKernel {
             }
             other => other,
         };
+        self.ensure_not_cancelled(thread_id).await?;
         self.finish_session_outcome(thread_id, outcome).await
     }
 
     pub async fn cancel(&self, thread_id: Uuid) -> Result<bool, EngineError> {
         Ok(self.store.cancel(thread_id).await?)
+    }
+
+    async fn ensure_not_cancelled(&self, thread_id: Uuid) -> Result<(), EngineError> {
+        if self.store.task_is_cancelled(thread_id).await {
+            Err(EngineError::Cancelled)
+        } else {
+            Ok(())
+        }
+    }
+
+    async fn await_or_cancel<T>(
+        &self,
+        thread_id: Uuid,
+        operation: impl Future<Output = T>,
+    ) -> Result<T, EngineError> {
+        tokio::pin!(operation);
+        let cancellation = self.store.wait_for_cancellation(thread_id);
+        tokio::pin!(cancellation);
+        tokio::select! {
+            biased;
+            _ = &mut cancellation => Err(EngineError::Cancelled),
+            output = &mut operation => Ok(output),
+        }
+    }
+
+    async fn blocking_or_cancel<T: Send + 'static>(
+        &self,
+        thread_id: Uuid,
+        operation: impl FnOnce() -> T + Send + 'static,
+    ) -> Result<T, EngineError> {
+        let joined = self
+            .await_or_cancel(thread_id, tokio::task::spawn_blocking(operation))
+            .await?;
+        joined.map_err(|error| EngineError::LocalOperation(error.to_string()))
+    }
+
+    async fn preview_file_for_task(
+        &self,
+        thread_id: Uuid,
+        path: PathBuf,
+    ) -> Result<PreviewPayload, EngineError> {
+        let cancellation = self.store.cancellation_receiver(thread_id).await;
+        #[cfg(test)]
+        let preview_hook = self.preview_hook.clone();
+        self.blocking_or_cancel(thread_id, move || {
+            #[cfg(test)]
+            if let Some(preview_hook) = preview_hook {
+                return preview_hook(&path);
+            }
+            preview_file_cancellable(&path, || *cancellation.borrow())
+        })
+        .await?
+        .map_err(|error| EngineError::LocalOperation(error.to_string()))
+    }
+
+    async fn semantic_file_revision_for_task(
+        &self,
+        thread_id: Uuid,
+        path: PathBuf,
+    ) -> Result<String, EngineError> {
+        let cancellation = self.store.cancellation_receiver(thread_id).await;
+        self.blocking_or_cancel(thread_id, move || {
+            semantic_file_revision_cancellable(path, || *cancellation.borrow())
+        })
+        .await?
+        .map_err(|error| EngineError::LocalOperation(error.to_string()))
+    }
+
+    async fn artifact_record_for_task(
+        &self,
+        thread_id: Uuid,
+        path: PathBuf,
+    ) -> Result<ArtifactRecord, EngineError> {
+        let cancellation = self.store.cancellation_receiver(thread_id).await;
+        self.blocking_or_cancel(thread_id, move || {
+            artifact_record_for_path_cancellable(&path, &|| *cancellation.borrow())
+        })
+        .await?
+    }
+
+    async fn materialize_artifacts_for_task(
+        &self,
+        thread_id: Uuid,
+        workspace: PathBuf,
+        specs: Vec<ArtifactSpec>,
+    ) -> Result<Vec<ArtifactRecord>, EngineError> {
+        let cancellation = self.store.cancellation_receiver(thread_id).await;
+        self.blocking_or_cancel(thread_id, move || {
+            materialize_artifacts_cancellable(&workspace, &specs, &|| *cancellation.borrow())
+                .map_err(EngineError::from)
+        })
+        .await?
+    }
+
+    async fn attachment_context_for_task(
+        &self,
+        thread_id: Uuid,
+        paths: &[PathBuf],
+    ) -> Result<String, EngineError> {
+        if paths.is_empty() {
+            return Ok("(none)".into());
+        }
+        let mut entries = Vec::with_capacity(paths.len());
+        for path in paths {
+            let entry = match self.preview_file_for_task(thread_id, path.clone()).await {
+                Ok(preview) => attachment_preview_context(&preview),
+                Err(EngineError::Cancelled) => return Err(EngineError::Cancelled),
+                Err(error) => format!("FILE: {}\nUNREADABLE: {error}", path.display()),
+            };
+            entries.push(entry);
+        }
+        Ok(entries.join("\n\n"))
+    }
+
+    async fn artifact_revision_map_for_task(
+        &self,
+        thread_id: Uuid,
+        task: &TaskRecord,
+    ) -> Result<BTreeMap<PathBuf, String>, EngineError> {
+        let mut revisions = BTreeMap::new();
+        for artifact in &task.artifacts {
+            let revision = match self
+                .preview_file_for_task(thread_id, artifact.path.clone())
+                .await
+            {
+                Ok(preview) => preview.revision,
+                Err(EngineError::Cancelled) => return Err(EngineError::Cancelled),
+                Err(error) => format!(
+                    "unreadable:{}:{}:{}",
+                    artifact.kind, artifact.size_bytes, error
+                ),
+            };
+            revisions.insert(artifact.path.clone(), revision);
+        }
+        Ok(revisions)
+    }
+
+    async fn artifact_revision_values_for_task(
+        &self,
+        thread_id: Uuid,
+        task: &TaskRecord,
+    ) -> Result<Vec<Value>, EngineError> {
+        Ok(self
+            .artifact_revision_map_for_task(thread_id, task)
+            .await?
+            .into_iter()
+            .map(|(path, revision)| {
+                json!({"path": path.display().to_string(), "revision": revision})
+            })
+            .collect())
+    }
+
+    async fn artifact_semantic_revision_map_for_task(
+        &self,
+        thread_id: Uuid,
+        task: &TaskRecord,
+    ) -> Result<BTreeSet<String>, EngineError> {
+        let mut revisions = BTreeSet::new();
+        for artifact in &task.artifacts {
+            let file_semantics = match self
+                .semantic_file_revision_for_task(thread_id, artifact.path.clone())
+                .await
+            {
+                Ok(revision) => revision,
+                Err(EngineError::Cancelled) => return Err(EngineError::Cancelled),
+                Err(error) => format!("unreadable:{}:{}", artifact.size_bytes, error),
+            };
+            let progress_context = semantic_progress_context(&artifact.semantic_context);
+            revisions.insert(content_revision(
+                format!("{file_semantics}\0{progress_context}").as_bytes(),
+            ));
+        }
+        Ok(revisions)
+    }
+
+    /// The queue-level cancellation boundary drops the complete task future before releasing the
+    /// serialized foreground guard. Nested model requests and process-backed tools therefore lose
+    /// their owning futures immediately instead of keeping the next queued task waiting for a
+    /// provider or command timeout.
+    async fn run_task_operation<T>(
+        &self,
+        thread_id: Uuid,
+        operation: impl Future<Output = Result<T, EngineError>>,
+    ) -> Result<T, EngineError> {
+        let result = self
+            .await_or_cancel(thread_id, operation)
+            .await
+            .and_then(|result| result);
+        self.store.clear_cancellation_lineage(thread_id).await;
+        result
     }
 
     async fn execute(&self, thread_id: Uuid, api_key: Option<&str>) -> Result<(), EngineError> {
@@ -841,10 +1115,13 @@ impl RuntimeKernel {
             .store
             .conversation_context(thread_id, CONTEXT_MESSAGE_LIMIT)
             .await;
-        let attachment_context = attachment_context(&task.attachment_paths);
+        let attachment_context = self
+            .attachment_context_for_task(thread_id, &task.attachment_paths)
+            .await?;
         let memory_context = self
             .recalled_memory_context(thread_id, &settings, &task.prompt)
             .await;
+        self.ensure_not_cancelled(thread_id).await?;
         let goal = self
             .generate_goal(
                 thread_id,
@@ -856,7 +1133,9 @@ impl RuntimeKernel {
                 &memory_context,
             )
             .await?;
+        self.ensure_not_cancelled(thread_id).await?;
         self.store.set_goal(thread_id, goal.clone()).await?;
+        self.ensure_not_cancelled(thread_id).await?;
         self.store
             .append_event(
                 thread_id,
@@ -867,9 +1146,7 @@ impl RuntimeKernel {
                 goal.objective.clone(),
             )
             .await?;
-        if self.store.task_is_cancelled(thread_id).await {
-            return Err(EngineError::Cancelled);
-        }
+        self.ensure_not_cancelled(thread_id).await?;
 
         let plugin_context = self.session_capability_context(&settings);
         let messages = initial_session_messages(
@@ -895,6 +1172,7 @@ impl RuntimeKernel {
                 localized(&settings.locale, "思考中…", "Thinking…").into(),
             )
             .await?;
+        self.ensure_not_cancelled(thread_id).await?;
         let mut task = self
             .store
             .task(thread_id)
@@ -914,6 +1192,7 @@ impl RuntimeKernel {
                 plugin_context,
             )
             .await?;
+        self.ensure_not_cancelled(thread_id).await?;
         let outcome = match outcome {
             SessionOutcome::Completed { text, messages }
                 if should_run_checker(&goal, &self.store.task(thread_id).await) =>
@@ -931,6 +1210,7 @@ impl RuntimeKernel {
             }
             other => other,
         };
+        self.ensure_not_cancelled(thread_id).await?;
         self.finish_session_outcome(thread_id, outcome).await
     }
 
@@ -941,7 +1221,9 @@ impl RuntimeKernel {
     ) -> Result<(), EngineError> {
         match outcome {
             SessionOutcome::Completed { text, messages } => {
+                self.ensure_not_cancelled(thread_id).await?;
                 self.store.set_session_messages(thread_id, messages).await?;
+                self.ensure_not_cancelled(thread_id).await?;
                 let artifacts = self
                     .store
                     .task(thread_id)
@@ -951,6 +1233,9 @@ impl RuntimeKernel {
                 self.store
                     .complete(thread_id, text.clone(), artifacts)
                     .await?;
+                // `complete` is the terminal compare-and-set boundary. If cancel won the race,
+                // it is a no-op and this guard prevents a false Result event or memory write.
+                self.ensure_not_cancelled(thread_id).await?;
                 self.store
                     .append_event(
                         thread_id,
@@ -1012,6 +1297,13 @@ impl RuntimeKernel {
                     .run_grok_loop_session(task, goal, settings, api_key, correction)
                     .await;
                 let changed_paths = self.loops.finish_workspace_delta(baseline).await;
+                if matches!(
+                    &result,
+                    Ok(SessionOutcome::Cancelled) | Err(EngineError::Cancelled)
+                ) {
+                    return result;
+                }
+                self.ensure_not_cancelled(task_id).await?;
                 let registration = self
                     .register_workspace_artifact_paths(
                         task_id,
@@ -1059,7 +1351,7 @@ impl RuntimeKernel {
                 workspace.join(path)
             };
             if path.is_file() {
-                records.push(artifact_record_for_path(&path)?);
+                records.push(self.artifact_record_for_task(task_id, path).await?);
             }
         }
         if !records.is_empty() {
@@ -1124,7 +1416,7 @@ impl RuntimeKernel {
                     path.display()
                 )));
             }
-            records.insert(key, artifact_record_for_path(&path)?);
+            records.insert(key, self.artifact_record_for_task(task.id, path).await?);
         }
 
         let delta_paths = records.keys().cloned().collect::<HashSet<_>>();
@@ -1228,7 +1520,18 @@ impl RuntimeKernel {
         memory_context: String,
         plugin_context: String,
     ) -> Result<SessionOutcome, EngineError> {
-        let continuation_context = external_continuation_context(correction.as_deref(), &task);
+        let context_task = task.clone();
+        let context_correction = correction.clone();
+        let context_cancellation = self.store.cancellation_receiver(task.id).await;
+        let continuation_context = self
+            .blocking_or_cancel(task.id, move || {
+                external_continuation_context_cancellable(
+                    context_correction.as_deref(),
+                    &context_task,
+                    &|| *context_cancellation.borrow(),
+                )
+            })
+            .await?;
         let event = self
             .store
             .append_event(
@@ -1246,30 +1549,39 @@ impl RuntimeKernel {
             .await?;
         let permission_mode = self.store.settings().await.execution_permission_mode;
         let execution = self
-            .loops
-            .run(
-                engine,
-                LoopExecutionRequest {
-                    task_id: task.id,
-                    workspace: &settings.workspace,
-                    source_prompt: &task.prompt,
-                    attachment_paths: &task.attachment_paths,
-                    objective: &goal.objective,
-                    role: &task.participant_name,
-                    goal: &goal,
-                    correction: continuation_context.as_deref(),
-                    memory_context: &memory_context,
-                    plugin_context: &plugin_context,
-                    locale: settings.locale,
-                    permission_mode,
-                    settings: &settings,
-                    api_key: api_key.as_deref(),
-                },
+            .await_or_cancel(
+                task.id,
+                self.loops.run(
+                    engine,
+                    LoopExecutionRequest {
+                        task_id: task.id,
+                        workspace: &settings.workspace,
+                        source_prompt: &task.prompt,
+                        attachment_paths: &task.attachment_paths,
+                        objective: &goal.objective,
+                        role: &task.participant_name,
+                        goal: &goal,
+                        correction: continuation_context.as_deref(),
+                        memory_context: &memory_context,
+                        plugin_context: &plugin_context,
+                        locale: settings.locale,
+                        permission_mode,
+                        settings: &settings,
+                        api_key: api_key.as_deref(),
+                    },
+                ),
             )
-            .await;
+            .await?;
         match execution {
             Ok(execution) => {
                 let receipt_id = execution.receipt_id;
+                if self.store.task_is_cancelled(task.id).await {
+                    // The external process may already have written files. Acknowledge its durable
+                    // receipt so a terminal task cannot replay it, but do not register new task
+                    // state, start a checker, or publish a completed outcome after cancellation.
+                    self.loops.acknowledge_receipt(receipt_id).await?;
+                    return Ok(SessionOutcome::Cancelled);
+                }
                 let registration = self
                     .register_external_workspace_artifacts(
                         &task,
@@ -1317,6 +1629,9 @@ impl RuntimeKernel {
                         .await?;
                     return Err(error.into());
                 }
+                if self.store.task_is_cancelled(task.id).await {
+                    return Ok(SessionOutcome::Cancelled);
+                }
                 self.store
                     .finish_event(
                         event.id,
@@ -1336,6 +1651,9 @@ impl RuntimeKernel {
                 })
             }
             Err(error) => {
+                if self.store.task_is_cancelled(task.id).await {
+                    return Ok(SessionOutcome::Cancelled);
+                }
                 self.store
                     .finish_event(event.id, RuntimeEventState::Failed, Some(error.to_string()))
                     .await?;
@@ -1352,13 +1670,15 @@ impl RuntimeKernel {
         visible_text: Option<String>,
         purpose: HumanActionPurpose,
     ) -> Result<SessionOutcome, EngineError> {
+        self.ensure_not_cancelled(task_id).await?;
         close_unanswered_tool_calls(&mut messages);
-        let artifact_revisions = self
-            .store
-            .task(task_id)
-            .await
-            .map(|task| artifact_revision_values(&task))
-            .unwrap_or_default();
+        let artifact_revisions = match self.store.task(task_id).await {
+            Some(task) => {
+                self.artifact_revision_values_for_task(task_id, &task)
+                    .await?
+            }
+            None => Vec::new(),
+        };
         let call_id = format!("runtime-ask-{}", Uuid::new_v4());
         messages.push(AgentMessage {
             role: AgentRole::Assistant,
@@ -1376,14 +1696,17 @@ impl RuntimeKernel {
             tool_call_id: None,
         });
         self.store.set_session_messages(task_id, messages).await?;
+        self.ensure_not_cancelled(task_id).await?;
         if let Some(text) = visible_text.filter(|text| !text.trim().is_empty()) {
             self.store
                 .set_assistant_text(task_id, text, MessageState::Thinking)
                 .await?;
+            self.ensure_not_cancelled(task_id).await?;
         }
         self.store
             .set_needs_user_action(task_id, call_id, question.clone())
             .await?;
+        self.ensure_not_cancelled(task_id).await?;
         self.store
             .append_event(
                 task_id,
@@ -1543,6 +1866,7 @@ impl RuntimeKernel {
                             publish_mode,
                         )
                         .await?;
+                    self.ensure_not_cancelled(task.id).await?;
                     if turn.tool_calls.is_empty() {
                         if turn.text.trim().is_empty() {
                             empty_model_turns += 1;
@@ -1673,6 +1997,7 @@ impl RuntimeKernel {
                         self.store
                             .set_session_messages(task.id, messages.clone())
                             .await?;
+                        self.ensure_not_cancelled(task.id).await?;
                         return Ok(SessionOutcome::Completed {
                             text: final_text,
                             messages,
@@ -1692,6 +2017,7 @@ impl RuntimeKernel {
                     self.store
                         .set_session_messages(task.id, messages.clone())
                         .await?;
+                    self.ensure_not_cancelled(task.id).await?;
 
                     if let Some(blocking) = tool_calls.iter().find(|call| call.name == "ask_user") {
                         match serde_json::from_str::<AskArguments>(&blocking.arguments_json) {
@@ -1732,12 +2058,16 @@ impl RuntimeKernel {
                                         .await?;
                                     continue;
                                 }
-                                let artifact_revisions = self
-                                    .store
-                                    .task(task.id)
-                                    .await
-                                    .map(|task| artifact_revision_values(&task))
-                                    .unwrap_or_default();
+                                let artifact_revisions = match self.store.task(task.id).await {
+                                    Some(current_task) => {
+                                        self.artifact_revision_values_for_task(
+                                            task.id,
+                                            &current_task,
+                                        )
+                                        .await?
+                                    }
+                                    None => Vec::new(),
+                                };
                                 bind_artifact_revisions_to_ask(
                                     &mut messages,
                                     &blocking.id,
@@ -1757,6 +2087,7 @@ impl RuntimeKernel {
                                         args.prompt.clone(),
                                     )
                                     .await?;
+                                self.ensure_not_cancelled(task.id).await?;
                                 self.store
                                     .append_event(
                                         task.id,
@@ -1805,24 +2136,30 @@ impl RuntimeKernel {
                         }
                     }
 
-                    let executions = join_all(tool_calls.into_iter().map(|call| {
-                        let original_call = call.clone();
-                        async {
-                            (
-                                original_call,
-                                self.execute_tool(
-                                    task.clone(),
-                                    goal.clone(),
-                                    settings.clone(),
-                                    api_key.clone(),
-                                    call,
-                                    reviewing_artifact,
-                                )
-                                .await,
-                            )
-                        }
-                    }))
-                    .await;
+                    self.ensure_not_cancelled(task.id).await?;
+                    let executions = self
+                        .await_or_cancel(
+                            task.id,
+                            join_all(tool_calls.into_iter().map(|call| {
+                                let original_call = call.clone();
+                                async {
+                                    (
+                                        original_call,
+                                        self.execute_tool(
+                                            task.clone(),
+                                            goal.clone(),
+                                            settings.clone(),
+                                            api_key.clone(),
+                                            call,
+                                            reviewing_artifact,
+                                        )
+                                        .await,
+                                    )
+                                }
+                            })),
+                        )
+                        .await?;
+                    self.ensure_not_cancelled(task.id).await?;
                     let mut tool_evidence_outputs = Vec::new();
                     for (call, result) in executions {
                         match result {
@@ -1871,12 +2208,13 @@ impl RuntimeKernel {
                             Err(error) => return Err(error),
                         }
                     }
-                    let artifact_revisions = self
-                        .store
-                        .task(task.id)
-                        .await
-                        .map(|task| artifact_revision_map(&task))
-                        .unwrap_or_default();
+                    let artifact_revisions = match self.store.task(task.id).await {
+                        Some(current_task) => {
+                            self.artifact_revision_map_for_task(task.id, &current_task)
+                                .await?
+                        }
+                        None => BTreeMap::new(),
+                    };
                     let evidence_signature = format!(
                         "plan={plan_signature}\noutputs={}\nartifact_revisions={artifact_revisions:?}",
                         tool_evidence_outputs.join("\n\n")
@@ -1986,6 +2324,7 @@ impl RuntimeKernel {
         definitions: &[AgentToolDefinition],
         publish_mode: ChatPublishMode,
     ) -> Result<ModelTurn, EngineError> {
+        self.ensure_not_cancelled(task_id).await?;
         for attempt in 1..=MODEL_TURN_RECOVERY_ATTEMPTS {
             match self
                 .stream_model_turn(
@@ -2003,6 +2342,7 @@ impl RuntimeKernel {
                 Err(error)
                     if error.is_transient_attempt() && attempt < MODEL_TURN_RECOVERY_ATTEMPTS =>
                 {
+                    self.ensure_not_cancelled(task_id).await?;
                     let detail = format!("{}/{}: {}", attempt, MODEL_TURN_RECOVERY_ATTEMPTS, error);
                     self.store
                         .append_event(
@@ -2025,6 +2365,7 @@ impl RuntimeKernel {
                         )
                         .await?;
                     tokio::time::sleep(Duration::from_millis(300 * attempt as u64)).await;
+                    self.ensure_not_cancelled(task_id).await?;
                 }
                 Err(error) => return Err(error),
             }
@@ -2042,6 +2383,7 @@ impl RuntimeKernel {
         definitions: &[AgentToolDefinition],
         publish_mode: ChatPublishMode,
     ) -> Result<ModelTurn, EngineError> {
+        self.ensure_not_cancelled(task_id).await?;
         let model_event = self
             .store
             .append_event(
@@ -2059,7 +2401,7 @@ impl RuntimeKernel {
         let api_key_owned = api_key.map(str::to_string);
         let messages_owned = messages.to_vec();
         let definitions_owned = definitions.to_vec();
-        let model_handle = tokio::spawn(async move {
+        let mut model_handle = tokio::spawn(async move {
             client
                 .turn(
                     &settings_owned,
@@ -2071,9 +2413,22 @@ impl RuntimeKernel {
                 )
                 .await
         });
+        let _abort_model_on_drop = AbortTaskOnDrop(model_handle.abort_handle());
+        let cancellation = self.store.wait_for_cancellation(task_id);
+        tokio::pin!(cancellation);
         let mut reasoning_event: Option<Uuid> = None;
         let mut visible_started = false;
-        while let Some(delta) = delta_rx.recv().await {
+        loop {
+            let delta = tokio::select! {
+                biased;
+                _ = &mut cancellation => {
+                    return Err(EngineError::Cancelled);
+                }
+                delta = delta_rx.recv() => delta,
+            };
+            let Some(delta) = delta else {
+                break;
+            };
             match delta {
                 ModelDelta::Reasoning(text) => {
                     let event_id = match reasoning_event {
@@ -2113,10 +2468,18 @@ impl RuntimeKernel {
                 }
             }
         }
-        let turn_result = match model_handle.await {
+        let joined = tokio::select! {
+            biased;
+            _ = &mut cancellation => {
+                return Err(EngineError::Cancelled);
+            }
+            joined = &mut model_handle => joined,
+        };
+        let turn_result = match joined {
             Ok(result) => result.map_err(EngineError::from),
             Err(error) => Err(EngineError::LocalOperation(error.to_string())),
         };
+        self.ensure_not_cancelled(task_id).await?;
         let turn = match turn_result {
             Ok(turn) => turn,
             Err(error) => {
@@ -2136,6 +2499,7 @@ impl RuntimeKernel {
             }
         };
         if let Some(event_id) = reasoning_event {
+            self.ensure_not_cancelled(task_id).await?;
             self.store
                 .finish_event(event_id, RuntimeEventState::Completed, None)
                 .await?;
@@ -2153,6 +2517,7 @@ impl RuntimeKernel {
                     .join(", ")
             )
         };
+        self.ensure_not_cancelled(task_id).await?;
         self.store
             .finish_event(model_event.id, RuntimeEventState::Completed, Some(detail))
             .await?;
@@ -2164,6 +2529,7 @@ impl RuntimeKernel {
                 )
                 .await?;
         }
+        self.ensure_not_cancelled(task_id).await?;
         self.store.flush().await?;
         Ok(turn)
     }
@@ -2212,6 +2578,7 @@ impl RuntimeKernel {
         call: AgentToolCall,
         checker_revision: bool,
     ) -> Result<ToolExecution, EngineError> {
+        self.ensure_not_cancelled(task.id).await?;
         let plugin_policy = task_plugin_usage_policy(&task);
         let network_command = call.name == "run_command"
             && serde_json::from_str::<CommandArguments>(&call.arguments_json)
@@ -2234,6 +2601,7 @@ impl RuntimeKernel {
                 truncate(&call.arguments_json, 1_200),
             )
             .await?;
+        self.ensure_not_cancelled(task.id).await?;
         let result = async {
             Ok::<String, EngineError>(match call.name.as_str() {
             "inspect_runtime" => {
@@ -2299,11 +2667,12 @@ impl RuntimeKernel {
                     latest_permission,
                 ) {
                     Err(error) => local_file_tool_failure(error, latest_permission),
-                    Ok(path) => match preview_file(&path) {
-                        Err(error) => local_file_tool_failure(
-                            EngineError::LocalOperation(error.to_string()),
-                            latest_permission,
-                        ),
+                    Ok(path) => match self
+                        .preview_file_for_task(task.id, path.clone())
+                        .await
+                    {
+                        Err(EngineError::Cancelled) => return Err(EngineError::Cancelled),
+                        Err(error) => local_file_tool_failure(error, latest_permission),
                         Ok(preview) => {
                             let extracted_text = if preview.kind == PreviewKind::Unsupported {
                                 tokio::fs::read_to_string(&path).await.ok()
@@ -2430,15 +2799,18 @@ impl RuntimeKernel {
                             "create_artifact",
                         )
                         .await?;
+                    self.ensure_not_cancelled(task.id).await?;
                     let semantic_context = create_artifact_semantic_context(
                         &arguments,
                         serde_json::from_str::<Value>(&execution.output).ok().as_ref(),
                     );
-                    let mut records = execution
-                        .artifact_paths
-                        .iter()
-                        .map(|path| artifact_record_for_path(path))
-                        .collect::<Result<Vec<_>, _>>()?;
+                    let mut records = Vec::with_capacity(execution.artifact_paths.len());
+                    for path in &execution.artifact_paths {
+                        records.push(
+                            self.artifact_record_for_task(task.id, path.clone())
+                                .await?,
+                        );
+                    }
                     if records.len() == 1 {
                         records[0].logical_key = requested_logical_key;
                         records[0].semantic_context = semantic_context;
@@ -2468,7 +2840,14 @@ impl RuntimeKernel {
                             call.name
                         ))
                     })?;
-                    let mut records = materialize_artifacts(&settings.workspace, &[spec])?;
+                    let mut records = self
+                        .materialize_artifacts_for_task(
+                            task.id,
+                            settings.workspace.clone(),
+                            vec![spec],
+                        )
+                        .await?;
+                    self.ensure_not_cancelled(task.id).await?;
                     for record in &mut records {
                         record.semantic_context = requested_semantic_context.clone();
                     }
@@ -2500,7 +2879,8 @@ impl RuntimeKernel {
                         resolve_local_path(&settings.workspace, &args.path)
                     }
                 };
-                let record = artifact_record_for_path(&path)?;
+                let record = self.artifact_record_for_task(task.id, path).await?;
+                self.ensure_not_cancelled(task.id).await?;
                 let mut registrations = if checker_revision {
                     self.store.revise_artifacts(task.id, vec![record]).await?
                 } else {
@@ -2611,9 +2991,10 @@ impl RuntimeKernel {
                             .execute(other, arguments, &settings.workspace, latest_permission)
                             .await?
                     };
+                    self.ensure_not_cancelled(task.id).await?;
                     let mut records = Vec::new();
                     for path in execution.artifact_paths {
-                        records.push(artifact_record_for_path(&path)?);
+                        records.push(self.artifact_record_for_task(task.id, path).await?);
                     }
                     if !records.is_empty() {
                         if checker_revision {
@@ -2629,6 +3010,7 @@ impl RuntimeKernel {
             })
         }
         .await;
+        self.ensure_not_cancelled(task.id).await?;
         let result = match result {
             Ok(result) => result,
             Err(error) => {
@@ -2680,6 +3062,7 @@ impl RuntimeKernel {
         engine: LoopEngineKind,
         checker_revision: bool,
     ) -> Result<String, EngineError> {
+        self.ensure_not_cancelled(parent.id).await?;
         let participant = if requested_role.trim().is_empty() {
             localized(&settings.locale, "能力执行者", "Worker").to_string()
         } else {
@@ -2696,6 +3079,7 @@ impl RuntimeKernel {
                 engine,
             )
             .await?;
+        self.ensure_not_cancelled(parent.id).await?;
         self.store
             .append_event(
                 parent.id,
@@ -2722,6 +3106,7 @@ impl RuntimeKernel {
             let memory_context = self
                 .recalled_memory_context(child_id, settings, &objective)
                 .await;
+            self.ensure_not_cancelled(child_id).await?;
             let goal = self
                 .generate_goal(
                     child_id,
@@ -2733,7 +3118,9 @@ impl RuntimeKernel {
                     &memory_context,
                 )
                 .await?;
+            self.ensure_not_cancelled(child_id).await?;
             self.store.set_goal(child_id, goal.clone()).await?;
+            self.ensure_not_cancelled(child_id).await?;
             let child = self
                 .store
                 .task(child_id)
@@ -2771,6 +3158,7 @@ impl RuntimeKernel {
                     plugin_context,
                 )
                 .await?;
+            self.ensure_not_cancelled(child_id).await?;
             match outcome {
                 SessionOutcome::Completed { text, messages } => {
                     self.store.set_session_messages(child_id, messages).await?;
@@ -2783,8 +3171,10 @@ impl RuntimeKernel {
                     self.store
                         .complete(child_id, text.clone(), artifacts.clone())
                         .await?;
+                    self.ensure_not_cancelled(child_id).await?;
+                    self.ensure_not_cancelled(parent.id).await?;
                     if !artifacts.is_empty() {
-                    self.store
+                        self.store
                             .register_child_artifacts(
                                 parent.id,
                                 child_id,
@@ -2824,6 +3214,12 @@ impl RuntimeKernel {
         .await;
         match result {
             Ok(output) => Ok(output),
+            Err(EngineError::Cancelled) => Ok(json!({
+                "ok": false,
+                "child_task_id": child_id,
+                "cancelled": true
+            })
+            .to_string()),
             Err(error) => {
                 let detail = error.to_string();
                 self.store
@@ -2884,7 +3280,9 @@ impl RuntimeKernel {
                 .task(thread_id)
                 .await
                 .ok_or(EngineError::MissingTask(thread_id))?;
-            let artifact_revisions = artifact_revision_map(&task);
+            let artifact_revisions = self
+                .artifact_revision_map_for_task(thread_id, &task)
+                .await?;
             let changed_artifact_paths = changed_artifact_paths(
                 &task,
                 task.review_progress
@@ -2907,6 +3305,7 @@ impl RuntimeKernel {
                         && changed_artifact_paths.is_empty(),
                 )
                 .await?;
+            self.ensure_not_cancelled(thread_id).await?;
             let disposition = verification.disposition()?;
             let current_tool_evidence = current_semantic_tool_evidence(&task);
             let latest_nonempty_tool_evidence = if current_tool_evidence.is_empty() {
@@ -2914,14 +3313,17 @@ impl RuntimeKernel {
             } else {
                 current_tool_evidence
             };
-            let rejection_signature =
-                (disposition == VerificationDisposition::NeedsRevision).then(|| {
-                    checker_rejection_evidence_signature(
-                        &verification,
-                        &task,
-                        &latest_nonempty_tool_evidence,
-                    )
-                });
+            let rejection_signature = if disposition == VerificationDisposition::NeedsRevision {
+                let delivery = self
+                    .artifact_semantic_revision_map_for_task(thread_id, &task)
+                    .await?;
+                Some(format!(
+                    "finding={}\ndelivery={delivery:?}\ntool_evidence={latest_nonempty_tool_evidence}",
+                    checker_finding_signature(&verification),
+                ))
+            } else {
+                None
+            };
             let rejection_evidence_digest = rejection_signature
                 .as_deref()
                 .map(|signature| content_revision(signature.as_bytes()));
@@ -3098,6 +3500,7 @@ impl RuntimeKernel {
             // input. Persist it before either the in-process or external Loop can fail.
             self.persist_session_before_adapter(&mut task, messages)
                 .await?;
+            self.ensure_not_cancelled(thread_id).await?;
             let plugin_context = self.session_capability_context(&settings);
             match self
                 .run_loop_session(
@@ -3136,6 +3539,7 @@ impl RuntimeKernel {
         changed_artifact_paths: &BTreeSet<PathBuf>,
         no_artifact_change: bool,
     ) -> Result<VerificationResult, EngineError> {
+        self.ensure_not_cancelled(parent_id).await?;
         let checker_id = self
             .store
             .create_child_task(
@@ -3147,16 +3551,21 @@ impl RuntimeKernel {
                 settings.loop_engine,
             )
             .await?;
+        self.ensure_not_cancelled(parent_id).await?;
+        self.ensure_not_cancelled(checker_id).await?;
         self.store.set_goal(checker_id, goal.clone()).await?;
+        self.ensure_not_cancelled(checker_id).await?;
         let task = self
             .store
             .task(parent_id)
             .await
             .ok_or(EngineError::MissingTask(parent_id))?;
-        let artifacts = task
-            .artifacts
-            .iter()
-            .map(|artifact| match preview_file(&artifact.path) {
+        let mut artifact_evidence = Vec::with_capacity(task.artifacts.len());
+        for artifact in &task.artifacts {
+            let evidence = match self
+                .preview_file_for_task(parent_id, artifact.path.clone())
+                .await
+            {
                 Ok(preview) => {
                     let readable_content = readable_preview_text(&preview)
                         .unwrap_or_else(|| "(no model-readable text; use human confirmation for visual or binary qualities)".into());
@@ -3174,14 +3583,16 @@ impl RuntimeKernel {
                         truncate(&readable_content, 30_000)
                     )
                 }
+                Err(EngineError::Cancelled) => return Err(EngineError::Cancelled),
                 Err(error) => format!(
                     "REGISTERED DELIVERY ARTIFACT {}\nchanged_this_round={}\nunreadable: {error}",
                     artifact.path.display(),
                     changed_artifact_paths.contains(&artifact.path)
                 ),
-            })
-            .collect::<Vec<_>>()
-            .join("\n\n");
+            };
+            artifact_evidence.push(evidence);
+        }
+        let artifacts = artifact_evidence.join("\n\n");
         let tool_names = task
             .session_messages
             .iter()
@@ -3279,6 +3690,8 @@ impl RuntimeKernel {
                     Ok(result)
                 }) {
                 Ok(result) => {
+                    self.ensure_not_cancelled(parent_id).await?;
+                    self.ensure_not_cancelled(checker_id).await?;
                     self.store
                         .finish_event(
                             event.id,
@@ -3293,6 +3706,8 @@ impl RuntimeKernel {
                     break result;
                 }
                 Err(error) => {
+                    self.ensure_not_cancelled(parent_id).await?;
+                    self.ensure_not_cancelled(checker_id).await?;
                     self.store
                         .finish_event(event.id, RuntimeEventState::Failed, Some(error.to_string()))
                         .await?;
@@ -3330,9 +3745,12 @@ impl RuntimeKernel {
                 }
             }
         };
+        self.ensure_not_cancelled(parent_id).await?;
+        self.ensure_not_cancelled(checker_id).await?;
         self.store
             .complete(checker_id, result.summary.clone(), Vec::new())
             .await?;
+        self.ensure_not_cancelled(checker_id).await?;
         Ok(result)
     }
 
@@ -3346,6 +3764,7 @@ impl RuntimeKernel {
         attachment_context: &str,
         memory_context: &str,
     ) -> Result<GoalSpec, EngineError> {
+        self.ensure_not_cancelled(task_id).await?;
         let event = self
             .store
             .append_event(
@@ -3389,16 +3808,21 @@ impl RuntimeKernel {
                     "The previous GoalSpec was invalid. Repair it; do not restart or change the user's intent.\nValidation issue: {previous_issue}\nPrevious output:\n{previous_raw}\n\nOriginal request:\n{base_user}"
                 )
             };
-            let generation = tokio::time::timeout(
-                Duration::from_secs(timeout_seconds),
-                self.client
-                    .complete(settings, api_key, &system, &user, 1_600),
-            )
-            .await
-            .map_err(|_| EngineError::ModelTimeout {
-                phase: format!("GoalSpec generation attempt {attempt}"),
-                seconds: timeout_seconds,
-            });
+            let generation = self
+                .await_or_cancel(
+                    task_id,
+                    tokio::time::timeout(
+                        Duration::from_secs(timeout_seconds),
+                        self.client
+                            .complete(settings, api_key, &system, &user, 1_600),
+                    ),
+                )
+                .await?
+                .map_err(|_| EngineError::ModelTimeout {
+                    phase: format!("GoalSpec generation attempt {attempt}"),
+                    seconds: timeout_seconds,
+                });
+            self.ensure_not_cancelled(task_id).await?;
             match generation {
                 Ok(result) => match result {
                     Ok(raw) => match decode_json::<GoalSpec>(&raw) {
@@ -3410,6 +3834,7 @@ impl RuntimeKernel {
                                 previous_issue = issue.into();
                                 previous_raw = raw;
                             } else {
+                                self.ensure_not_cancelled(task_id).await?;
                                 self.store
                                     .finish_event(
                                         event.id,
@@ -3442,6 +3867,7 @@ impl RuntimeKernel {
                     previous_raw.clear();
                 }
             }
+            self.ensure_not_cancelled(task_id).await?;
             self.store
                 .append_event(
                     task_id,
@@ -3453,6 +3879,7 @@ impl RuntimeKernel {
                 )
                 .await?;
         }
+        self.ensure_not_cancelled(task_id).await?;
         self.store
             .finish_event(
                 event.id,
@@ -4533,13 +4960,17 @@ async fn run_local_command(
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    process.kill_on_drop(true);
-    hide_tokio_console_window(&mut process);
-    let output = match tokio::time::timeout(Duration::from_secs(timeout_seconds), process.output())
-        .await
-    {
-        Ok(output) => output.map_err(|error| EngineError::LocalOperation(error.to_string()))?,
-        Err(_) => {
+    let (child, _process_tree) = spawn_tokio_process_tree(&mut process)
+        .map_err(|error| EngineError::LocalOperation(error.to_string()))?;
+    let output = child.wait_with_output();
+    tokio::pin!(output);
+    let timeout = tokio::time::sleep(Duration::from_secs(timeout_seconds));
+    tokio::pin!(timeout);
+    let output = tokio::select! {
+        output = &mut output => {
+            output.map_err(|error| EngineError::LocalOperation(error.to_string()))?
+        }
+        _ = &mut timeout => {
             return Ok(json!({
                 "ok": false,
                 "recoverable": true,
@@ -4623,7 +5054,18 @@ fn command_uses_network(command: &str) -> bool {
     .any(|marker| lower.contains(marker))
 }
 
+#[cfg(test)]
 fn artifact_record_for_path(path: &Path) -> Result<ArtifactRecord, EngineError> {
+    artifact_record_for_path_cancellable(path, &|| false)
+}
+
+fn artifact_record_for_path_cancellable(
+    path: &Path,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<ArtifactRecord, EngineError> {
+    if cancelled() {
+        return Err(EngineError::Cancelled);
+    }
     if !path.is_file() {
         return Err(EngineError::LocalOperation(format!(
             "artifact does not exist: {}",
@@ -4639,8 +5081,11 @@ fn artifact_record_for_path(path: &Path) -> Result<ArtifactRecord, EngineError> 
         .unwrap_or_else(Utc::now);
     let revision =
         file_revision(path).map_err(|error| EngineError::LocalOperation(error.to_string()))?;
-    let semantic_revision = semantic_file_revision(path)
-        .map_err(|error| EngineError::LocalOperation(error.to_string()))?;
+    let semantic_revision =
+        semantic_file_revision_cancellable(path, cancelled).map_err(|error| match error {
+            PreviewError::Cancelled => EngineError::Cancelled,
+            other => EngineError::LocalOperation(other.to_string()),
+        })?;
     Ok(ArtifactRecord {
         id: Uuid::new_v4(),
         title: path
@@ -4766,6 +5211,7 @@ fn stable_create_artifact_output(
     .to_string()
 }
 
+#[cfg(test)]
 fn artifact_revision_map(task: &TaskRecord) -> BTreeMap<PathBuf, String> {
     task.artifacts
         .iter()
@@ -4786,6 +5232,7 @@ fn artifact_revision_map(task: &TaskRecord) -> BTreeMap<PathBuf, String> {
 /// Semantic delivery identity intentionally ignores paths and logical keys. Re-saving identical
 /// bytes under ever-changing names is not progress; distinct content, format, or semantic creation
 /// context still produces a new fingerprint and may continue revising without a round limit.
+#[cfg(test)]
 fn artifact_semantic_revision_map(task: &TaskRecord) -> BTreeSet<String> {
     task.artifacts
         .iter()
@@ -4863,6 +5310,7 @@ fn checker_finding_signature(verification: &VerificationResult) -> String {
     findings.join(" | ")
 }
 
+#[cfg(test)]
 fn checker_rejection_evidence_signature(
     verification: &VerificationResult,
     task: &TaskRecord,
@@ -4873,13 +5321,6 @@ fn checker_rejection_evidence_signature(
         checker_finding_signature(verification),
         artifact_semantic_revision_map(task),
     )
-}
-
-fn artifact_revision_values(task: &TaskRecord) -> Vec<Value> {
-    artifact_revision_map(task)
-        .into_iter()
-        .map(|(path, revision)| json!({"path": path.display().to_string(), "revision": revision}))
-        .collect()
 }
 
 fn checker_correction_message(locale: &AppLocale, correction: &str) -> AgentMessage {
@@ -4945,10 +5386,22 @@ fn external_replacement_target<'a>(
 /// External CLI adapters start a fresh process for every attempt, so they cannot infer a
 /// continuation from the in-process message transcript. Rebuild bounded human checkpoints and
 /// authoritative current/superseded artifact identity from persisted host state.
+#[cfg(test)]
 fn external_continuation_context(
     explicit_correction: Option<&str>,
     task: &TaskRecord,
 ) -> Option<String> {
+    external_continuation_context_cancellable(explicit_correction, task, &|| false)
+}
+
+fn external_continuation_context_cancellable(
+    explicit_correction: Option<&str>,
+    task: &TaskRecord,
+    cancelled: &dyn Fn() -> bool,
+) -> Option<String> {
+    if cancelled() {
+        return None;
+    }
     let checker_correction = explicit_correction
         .map(str::trim)
         .filter(|correction| !correction.is_empty())
@@ -4957,7 +5410,7 @@ fn external_continuation_context(
     let answered_asks = bounded_real_answered_ask_checkpoints(&task.session_messages);
 
     let mut sections = Vec::new();
-    if let Some(manifest) = external_artifact_manifest(task) {
+    if let Some(manifest) = external_artifact_manifest(task, cancelled) {
         sections.push(manifest);
     }
     if let Some(correction) = checker_correction {
@@ -4993,7 +5446,7 @@ fn external_continuation_context(
     (!sections.is_empty()).then(|| sections.join("\n\n"))
 }
 
-fn external_artifact_manifest(task: &TaskRecord) -> Option<String> {
+fn external_artifact_manifest(task: &TaskRecord, cancelled: &dyn Fn() -> bool) -> Option<String> {
     if task.artifacts.is_empty() && task.superseded_artifacts.is_empty() {
         return None;
     }
@@ -5003,7 +5456,7 @@ fn external_artifact_manifest(task: &TaskRecord) -> Option<String> {
         .map(|artifact| {
             let raw_revision =
                 file_revision(&artifact.path).unwrap_or_else(|_| artifact.revision.clone());
-            let semantic_revision = semantic_file_revision(&artifact.path)
+            let semantic_revision = semantic_file_revision_cancellable(&artifact.path, cancelled)
                 .unwrap_or_else(|_| artifact.semantic_revision.clone());
             json!({
                 "id": artifact.id,
@@ -5674,6 +6127,30 @@ fn format_history(messages: &[ChatMessage]) -> String {
         .join("\n\n")
 }
 
+fn attachment_preview_context(preview: &PreviewPayload) -> String {
+    let body = match preview.kind {
+        PreviewKind::Image => {
+            "Binary image is available for in-app preview; no local text was extracted.".into()
+        }
+        PreviewKind::Pdf => readable_preview_text(preview)
+            .map(|text| truncate(&text, 24_000))
+            .unwrap_or_else(|| {
+                "The PDF is previewable but has no embedded text; OCR capability is required."
+                    .into()
+            }),
+        _ => readable_preview_text(preview)
+            .map(|text| truncate(&text, 24_000))
+            .unwrap_or_else(|| {
+                "Binary media is available for in-app preview; no local text was extracted.".into()
+            }),
+    };
+    format!(
+        "FILE: {}\nPATH: {}\nTYPE: {:?}\nCONTENT:\n{}",
+        preview.name, preview.path, preview.kind, body
+    )
+}
+
+#[cfg(test)]
 fn attachment_context(paths: &[PathBuf]) -> String {
     if paths.is_empty() {
         return "(none)".into();
@@ -5681,30 +6158,7 @@ fn attachment_context(paths: &[PathBuf]) -> String {
     paths
         .iter()
         .map(|path| match preview_file(path) {
-            Ok(preview) => {
-                let body = match preview.kind {
-                    PreviewKind::Image => {
-                        "Binary image is available for in-app preview; no local text was extracted."
-                            .into()
-                    }
-                    PreviewKind::Pdf => readable_preview_text(&preview)
-                        .map(|text| truncate(&text, 24_000))
-                        .unwrap_or_else(|| {
-                            "The PDF is previewable but has no embedded text; OCR capability is required."
-                                .into()
-                        }),
-                    _ => readable_preview_text(&preview)
-                        .map(|text| truncate(&text, 24_000))
-                        .unwrap_or_else(|| {
-                            "Binary media is available for in-app preview; no local text was extracted."
-                                .into()
-                        }),
-                };
-                format!(
-                    "FILE: {}\nPATH: {}\nTYPE: {:?}\nCONTENT:\n{}",
-                    preview.name, preview.path, preview.kind, body
-                )
-            }
+            Ok(preview) => attachment_preview_context(&preview),
             Err(error) => format!("FILE: {}\nUNREADABLE: {error}", path.display()),
         })
         .collect::<Vec<_>>()
@@ -5908,7 +6362,8 @@ mod tests {
     use serde_json::Map;
     use std::io::{Read, Write};
     use std::net::{TcpListener, TcpStream};
-    use std::sync::{Arc as StdArc, Mutex as StdMutex};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Arc as StdArc, Condvar as StdCondvar, Mutex as StdMutex};
     use std::thread::{self, JoinHandle};
     use std::time::Instant;
     use tempfile::tempdir;
@@ -5985,9 +6440,13 @@ mod tests {
                                 "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
                                 body.len()
                             );
-                            stream.write_all(headers.as_bytes()).unwrap();
-                            stream.write_all(&body).unwrap();
-                            stream.flush().unwrap();
+                            // Cancellation intentionally disconnects a provider request before a
+                            // delayed response is released. Treat that as a successful mock
+                            // interaction rather than panicking in the server thread.
+                            if stream.write_all(headers.as_bytes()).is_ok() {
+                                let _ = stream.write_all(&body);
+                                let _ = stream.flush();
+                            }
                         }));
                     }
                     Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
@@ -6116,8 +6575,39 @@ mod tests {
         Duration::from_secs(if cfg!(target_os = "windows") { 90 } else { 30 })
     }
 
+    async fn wait_for_mock_requests(requests: &StdArc<StdMutex<Vec<Value>>>, expected: usize) {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if requests.lock().unwrap().len() >= expected {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("the mock provider did not receive the expected request");
+    }
+
+    fn release_mock_response(gate: &StdArc<(StdMutex<bool>, StdCondvar)>) {
+        let (released, wake) = &**gate;
+        *released.lock().unwrap() = true;
+        wake.notify_all();
+    }
+
+    fn wait_for_mock_release(gate: &StdArc<(StdMutex<bool>, StdCondvar)>) {
+        let (released, wake) = &**gate;
+        let mut released = released.lock().unwrap();
+        while !*released {
+            released = wake.wait(released).unwrap();
+        }
+    }
+
     fn agent_loop_test_timeout() -> Duration {
         Duration::from_secs(if cfg!(target_os = "windows") { 90 } else { 30 })
+    }
+
+    fn cancellation_test_timeout() -> Duration {
+        Duration::from_secs(5)
     }
 
     #[test]
@@ -8217,6 +8707,514 @@ mod tests {
             .filter(|event| event.kind == RuntimeEventKind::Model)
             .all(|event| event.state == RuntimeEventState::Completed));
         assert_eq!(requests.lock().unwrap().len(), 2);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn cancellation_during_goal_generation_prevents_goal_writeback() {
+        let gate = StdArc::new((StdMutex::new(false), StdCondvar::new()));
+        let provider_gate = gate.clone();
+        let (endpoint, requests, server) = mock_provider(1, move |_request, _| {
+            wait_for_mock_release(&provider_gate);
+            goal_response("Late goal must not be committed", "question", "chat_reply")
+        });
+        let (_directory, store, kernel) = test_kernel(endpoint).await;
+        let receipt = kernel
+            .submit("Wait while compiling this goal.".into(), Vec::new())
+            .await
+            .unwrap();
+        let runner_kernel = kernel.clone();
+        let runner = tokio::spawn(async move {
+            runner_kernel
+                .run_queue_report(Some("test-token".into()))
+                .await
+        });
+
+        wait_for_mock_requests(&requests, 1).await;
+        assert!(kernel.cancel(receipt.thread_id).await.unwrap());
+
+        let report = tokio::time::timeout(cancellation_test_timeout(), runner)
+            .await
+            .expect("cancelled goal generation must return before the provider responds")
+            .unwrap()
+            .unwrap();
+        release_mock_response(&gate);
+        server.join().unwrap();
+
+        assert_eq!(report.completed, 0);
+        assert!(report.failures.is_empty());
+        let task = store.task(receipt.thread_id).await.unwrap();
+        assert_eq!(task.status, TaskStatus::Cancelled);
+        assert!(task.goal_spec.is_none());
+        let events = store.events_after(0).await;
+        assert!(!events.iter().any(|event| {
+            event.task_id == receipt.thread_id
+                && matches!(
+                    event.kind,
+                    RuntimeEventKind::Plan | RuntimeEventKind::Result
+                )
+        }));
+        assert!(!events.iter().any(|event| {
+            event.task_id == receipt.thread_id
+                && event.state == RuntimeEventState::Completed
+                && event.detail.contains("Late goal must not be committed")
+        }));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn cancellation_during_model_turn_prevents_late_output_tool_and_completion() {
+        let gate = StdArc::new((StdMutex::new(false), StdCondvar::new()));
+        let provider_gate = gate.clone();
+        let (endpoint, requests, server) = mock_provider(4, move |_request, index| match index {
+            0 => goal_response(
+                "Answer only after the delayed model turn",
+                "question",
+                "chat_reply",
+            ),
+            1 => {
+                wait_for_mock_release(&provider_gate);
+                openai_response(
+                    Some("Late answer must not be published.".into()),
+                    Some("This reasoning arrived after cancellation."),
+                    json!([{
+                        "id":"late-write",
+                        "type":"function",
+                        "function":{
+                            "name":"write_file",
+                            "arguments":json!({
+                                "path":"late-write.txt",
+                                "content":"This tool must never run after cancellation."
+                            }).to_string()
+                        }
+                    }]),
+                )
+            }
+            2 => goal_response("Complete the queued task", "question", "chat_reply"),
+            _ => openai_response(
+                Some("The queued task completed without waiting.".into()),
+                None,
+                Value::Null,
+            ),
+        });
+        let (directory, store, kernel) = test_kernel(endpoint).await;
+        let receipt = kernel
+            .submit("Delay the final answer.".into(), Vec::new())
+            .await
+            .unwrap();
+        let runner_kernel = kernel.clone();
+        let runner = tokio::spawn(async move {
+            runner_kernel
+                .run_queue_report(Some("test-token".into()))
+                .await
+        });
+
+        wait_for_mock_requests(&requests, 2).await;
+        let next_receipt = kernel
+            .submit("Complete this queued task next.".into(), Vec::new())
+            .await
+            .unwrap();
+        assert!(kernel.cancel(receipt.thread_id).await.unwrap());
+
+        let report = tokio::time::timeout(cancellation_test_timeout(), runner)
+            .await
+            .expect("cancelled model turn must release the queue before the provider responds")
+            .unwrap()
+            .unwrap();
+        release_mock_response(&gate);
+        server.join().unwrap();
+
+        assert_eq!(report.completed, 1);
+        assert!(report.failures.is_empty());
+        let task = store.task(receipt.thread_id).await.unwrap();
+        assert_eq!(task.status, TaskStatus::Cancelled);
+        assert!(task.goal_spec.is_some());
+        assert!(!task.session_messages.iter().any(|message| {
+            message
+                .content
+                .contains("Late answer must not be published")
+                || message
+                    .content
+                    .contains("This reasoning arrived after cancellation")
+        }));
+        let events = store.events_after(0).await;
+        assert!(!events.iter().any(|event| {
+            event.task_id == receipt.thread_id && event.kind == RuntimeEventKind::Result
+        }));
+        assert!(!events.iter().any(|event| {
+            event.task_id == receipt.thread_id && event.kind == RuntimeEventKind::Tool
+        }));
+        assert!(!events.iter().any(|event| {
+            event.task_id == receipt.thread_id
+                && event.state == RuntimeEventState::Completed
+                && (event.detail.contains("Late answer must not be published")
+                    || event
+                        .detail
+                        .contains("This reasoning arrived after cancellation"))
+        }));
+        assert!(!directory.path().join("Workspace/late-write.txt").exists());
+        let next_task = store.task(next_receipt.thread_id).await.unwrap();
+        assert_eq!(next_task.status, TaskStatus::Completed);
+        assert_eq!(
+            next_task.summary,
+            "The queued task completed without waiting."
+        );
+        assert_eq!(kernel.memory().snapshot().await.total_count, 1);
+        assert_eq!(requests.lock().unwrap().len(), 4);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn cancelling_a_running_checker_by_child_id_terminates_the_root_and_releases_the_queue() {
+        let gate = StdArc::new((StdMutex::new(false), StdCondvar::new()));
+        let checker_gate = gate.clone();
+        let (endpoint, requests, server) = mock_provider(6, move |_request, index| match index {
+            0 => goal_response("Produce a checker-reviewed draft", "task", "artifact"),
+            1 => openai_response(
+                None,
+                Some("Create the draft artifact before verification."),
+                json!([{
+                    "id":"create-checker-draft",
+                    "type":"function",
+                    "function":{
+                        "name":"create_artifact",
+                        "arguments":json!({
+                            "title":"Checker draft",
+                            "file_name":"checker-draft.md",
+                            "kind":"markdown",
+                            "content":"# Checker draft\n\nReady for independent verification."
+                        }).to_string()
+                    }
+                }]),
+            ),
+            2 => openai_response(
+                Some("The draft is ready for independent verification.".into()),
+                Some("Submit the registered draft to the checker."),
+                Value::Null,
+            ),
+            3 => {
+                wait_for_mock_release(&checker_gate);
+                openai_response(
+                    Some(
+                        json!({
+                            "disposition":"passed",
+                            "summary":"This late checker result must be discarded.",
+                            "findings":[]
+                        })
+                        .to_string(),
+                    ),
+                    None,
+                    Value::Null,
+                )
+            }
+            4 => goal_response(
+                "Complete the task queued behind the checker",
+                "question",
+                "chat_reply",
+            ),
+            _ => openai_response(
+                Some("The queued task completed after checker cancellation.".into()),
+                None,
+                Value::Null,
+            ),
+        });
+        let (_directory, store, kernel) = test_kernel(endpoint).await;
+        let root_receipt = kernel
+            .submit("Produce a draft and verify it.".into(), Vec::new())
+            .await
+            .unwrap();
+        let runner_kernel = kernel.clone();
+        let runner = tokio::spawn(async move {
+            runner_kernel
+                .run_queue_report(Some("test-token".into()))
+                .await
+        });
+
+        wait_for_mock_requests(&requests, 4).await;
+        let checker = store
+            .children(root_receipt.thread_id)
+            .await
+            .into_iter()
+            .find(|task| task.role == TaskRole::Checker && !task.status.is_terminal())
+            .expect("the independent checker must be running");
+        let next_receipt = kernel
+            .submit(
+                "Complete the queued task after cancellation.".into(),
+                Vec::new(),
+            )
+            .await
+            .unwrap();
+
+        assert!(kernel.cancel(checker.id).await.unwrap());
+        let report = tokio::time::timeout(cancellation_test_timeout(), runner)
+            .await
+            .expect("cancelling the checker child must release the root queue before it responds")
+            .unwrap()
+            .unwrap();
+        release_mock_response(&gate);
+        server.join().unwrap();
+
+        assert_eq!(report.completed, 1);
+        assert!(report.failures.is_empty());
+        assert_eq!(
+            store.task(root_receipt.thread_id).await.unwrap().status,
+            TaskStatus::Cancelled
+        );
+        assert_eq!(
+            store.task(checker.id).await.unwrap().status,
+            TaskStatus::Cancelled
+        );
+        assert!(kernel.snapshot(true).await.active_task_id.is_none());
+        let next_task = store.task(next_receipt.thread_id).await.unwrap();
+        assert_eq!(next_task.status, TaskStatus::Completed);
+        assert_eq!(
+            next_task.summary,
+            "The queued task completed after checker cancellation."
+        );
+        assert!(!store.events_after(0).await.iter().any(|event| {
+            event.task_id == root_receipt.thread_id
+                && event.kind == RuntimeEventKind::Result
+                && event.state == RuntimeEventState::Completed
+        }));
+        assert_eq!(requests.lock().unwrap().len(), 6);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn cancelling_a_running_worker_returns_to_the_root_session_without_terminating_it() {
+        let gate = StdArc::new((StdMutex::new(false), StdCondvar::new()));
+        let worker_gate = gate.clone();
+        let (endpoint, requests, server) = mock_provider(5, move |_request, index| match index {
+            0 => goal_response("Coordinate one cancellable worker", "task", "chat_reply"),
+            1 => openai_response(
+                None,
+                Some("Delegate the isolated analysis."),
+                json!([{
+                    "id":"spawn-cancellable-worker",
+                    "type":"function",
+                    "function":{
+                        "name":"spawn_task",
+                        "arguments":json!({
+                            "objective":"Perform an analysis that may be stopped",
+                            "role":"Analyst"
+                        }).to_string()
+                    }
+                }]),
+            ),
+            2 => goal_response("Perform the delegated analysis", "task", "chat_reply"),
+            3 => {
+                wait_for_mock_release(&worker_gate);
+                openai_response(
+                    Some("This late worker answer must be discarded.".into()),
+                    None,
+                    Value::Null,
+                )
+            }
+            _ => openai_response(
+                Some("The root adapted after its worker was stopped.".into()),
+                Some("Use the cancelled child result and finish the main answer."),
+                Value::Null,
+            ),
+        });
+        let (_directory, store, kernel) = test_kernel(endpoint).await;
+        let receipt = kernel
+            .submit(
+                "Delegate an analysis, then adapt if I stop it.".into(),
+                Vec::new(),
+            )
+            .await
+            .unwrap();
+        let runner_kernel = kernel.clone();
+        let runner = tokio::spawn(async move {
+            runner_kernel
+                .run_queue_report(Some("test-token".into()))
+                .await
+        });
+
+        wait_for_mock_requests(&requests, 4).await;
+        let worker = store
+            .children(receipt.thread_id)
+            .await
+            .into_iter()
+            .find(|task| task.role == TaskRole::Worker && !task.status.is_terminal())
+            .expect("the delegated worker must be running");
+        assert!(kernel.cancel(worker.id).await.unwrap());
+
+        let report = tokio::time::timeout(cancellation_test_timeout(), runner)
+            .await
+            .expect(
+                "a cancelled worker must return control to its root before the provider responds",
+            )
+            .unwrap()
+            .unwrap();
+        release_mock_response(&gate);
+        server.join().unwrap();
+
+        assert_eq!(report.completed, 1);
+        assert!(report.failures.is_empty());
+        let root = store.task(receipt.thread_id).await.unwrap();
+        assert_eq!(root.status, TaskStatus::Completed);
+        assert_eq!(
+            root.summary,
+            "The root adapted after its worker was stopped."
+        );
+        assert_eq!(
+            store.task(worker.id).await.unwrap().status,
+            TaskStatus::Cancelled
+        );
+        assert!(root.session_messages.iter().any(|message| {
+            message.role == AgentRole::Tool
+                && message.content.contains("\"cancelled\":true")
+                && message.content.contains(&worker.id.to_string())
+        }));
+        assert!(kernel.snapshot(true).await.active_task_id.is_none());
+        assert_eq!(requests.lock().unwrap().len(), 5);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn cancellation_releases_the_queue_while_attachment_preview_is_still_blocked() {
+        let (endpoint, requests, server) = mock_provider(2, |_request, index| {
+            if index == 0 {
+                goal_response("Answer the queued request", "question", "chat_reply")
+            } else {
+                openai_response(
+                    Some("The queued request completed while preview stayed blocked.".into()),
+                    None,
+                    Value::Null,
+                )
+            }
+        });
+        let (directory, store, mut kernel) = test_kernel(endpoint).await;
+        let attachment = directory.path().join("slow-preview.md");
+        std::fs::write(&attachment, "# Slow preview fixture").unwrap();
+        let preview_started = StdArc::new(AtomicBool::new(false));
+        let hook_started = preview_started.clone();
+        let gate = StdArc::new((StdMutex::new(false), StdCondvar::new()));
+        let preview_gate = gate.clone();
+        kernel.preview_hook = Some(StdArc::new(move |path| {
+            hook_started.store(true, Ordering::SeqCst);
+            wait_for_mock_release(&preview_gate);
+            preview_file(path)
+        }));
+        let blocked_receipt = kernel
+            .submit(
+                "Read the attached file before answering.".into(),
+                vec![attachment],
+            )
+            .await
+            .unwrap();
+        let runner_kernel = kernel.clone();
+        let runner = tokio::spawn(async move {
+            runner_kernel
+                .run_queue_report(Some("test-token".into()))
+                .await
+        });
+        tokio::time::timeout(cancellation_test_timeout(), async {
+            while !preview_started.load(Ordering::SeqCst) {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("the preview job did not enter its blocking worker");
+        let next_receipt = kernel
+            .submit(
+                "Answer this request after stopping preview.".into(),
+                Vec::new(),
+            )
+            .await
+            .unwrap();
+
+        assert!(kernel.cancel(blocked_receipt.thread_id).await.unwrap());
+        let report = tokio::time::timeout(cancellation_test_timeout(), runner)
+            .await
+            .expect("a blocked preview must not retain the foreground queue after cancellation")
+            .unwrap()
+            .unwrap();
+        release_mock_response(&gate);
+        server.join().unwrap();
+
+        assert_eq!(report.completed, 1);
+        assert!(report.failures.is_empty());
+        assert_eq!(
+            store.task(blocked_receipt.thread_id).await.unwrap().status,
+            TaskStatus::Cancelled
+        );
+        let next_task = store.task(next_receipt.thread_id).await.unwrap();
+        assert_eq!(next_task.status, TaskStatus::Completed);
+        assert_eq!(
+            next_task.summary,
+            "The queued request completed while preview stayed blocked."
+        );
+        assert_eq!(requests.lock().unwrap().len(), 2);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn cancellation_drops_a_running_command_without_waiting_for_its_timeout() {
+        #[cfg(target_os = "windows")]
+        let command = r#"Set-Content -NoNewline -Path cancel-command-started.txt -Value started; $payload = "Start-Sleep -Milliseconds 1200; [IO.File]::WriteAllText((Join-Path (Get-Location) 'cancel-command-descendant-finished.txt'), 'escaped')"; $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($payload)); $child = Start-Process -PassThru -FilePath powershell.exe -ArgumentList @('-NoProfile','-NonInteractive','-EncodedCommand',$encoded); $child.WaitForExit()"#;
+        #[cfg(not(target_os = "windows"))]
+        let command = "printf started > cancel-command-started.txt; (sleep 1.2; printf escaped > cancel-command-descendant-finished.txt) & wait";
+        let command_arguments = json!({"command":command,"timeout_seconds":30}).to_string();
+        let (endpoint, _requests, server) = mock_provider(2, move |_request, index| {
+            if index == 0 {
+                goal_response("Run one cancellable command", "task", "chat_reply")
+            } else {
+                openai_response(
+                    Some("Starting the requested command.".into()),
+                    None,
+                    json!([{
+                        "id":"cancellable-command",
+                        "type":"function",
+                        "function":{
+                            "name":"run_command",
+                            "arguments":command_arguments.clone()
+                        }
+                    }]),
+                )
+            }
+        });
+        let (directory, store, kernel) = test_kernel(endpoint).await;
+        let receipt = kernel
+            .submit("Run a command that I will stop.".into(), Vec::new())
+            .await
+            .unwrap();
+        let runner_kernel = kernel.clone();
+        let runner = tokio::spawn(async move {
+            runner_kernel
+                .run_queue_report(Some("test-token".into()))
+                .await
+        });
+        let started = directory
+            .path()
+            .join("Workspace/cancel-command-started.txt");
+        tokio::time::timeout(cancellation_test_timeout(), async {
+            while !started.exists() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("the cancellable command did not start");
+
+        assert!(kernel.cancel(receipt.thread_id).await.unwrap());
+        let report = tokio::time::timeout(cancellation_test_timeout(), runner)
+            .await
+            .expect("cancelling a running command must not wait for its command timeout")
+            .unwrap()
+            .unwrap();
+        server.join().unwrap();
+
+        assert_eq!(report.completed, 0);
+        assert!(report.failures.is_empty());
+        assert_eq!(
+            store.task(receipt.thread_id).await.unwrap().status,
+            TaskStatus::Cancelled
+        );
+        tokio::time::sleep(Duration::from_millis(1_800)).await;
+        assert!(!directory
+            .path()
+            .join("Workspace/cancel-command-descendant-finished.txt")
+            .exists());
+        assert!(store.events_after(0).await.iter().any(|event| {
+            event.task_id == receipt.thread_id
+                && event.kind == RuntimeEventKind::Tool
+                && event.state == RuntimeEventState::Cancelled
+        }));
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

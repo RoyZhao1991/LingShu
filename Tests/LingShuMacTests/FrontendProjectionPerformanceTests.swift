@@ -89,6 +89,35 @@ final class FrontendProjectionPerformanceTests: XCTestCase {
         XCTAssertEqual(projection.changedTasks[0].bubble?.visibleText, "读取附件")
     }
 
+    func testTerminatedProjectionKeepsCumulativeAssistantTextAheadOfSummary() {
+        let taskID = UUID()
+        let assistantID = UUID()
+        let visibleWork = "已完成资料整理。\n\n报告前三节已经写入工作区。"
+        let snapshot = makeSnapshot(
+            taskID: taskID,
+            assistantID: assistantID,
+            assistantText: visibleWork,
+            taskStatus: .cancelled,
+            summary: "正在写第四节"
+        )
+
+        let projection = LingShuState.prepareSharedKernelProjection(
+            snapshot,
+            existingRecords: [:],
+            previousFingerprints: [:],
+            english: false
+        )
+
+        XCTAssertEqual(projection.changedTasks[0].bubble?.visibleText, visibleWork)
+        XCTAssertEqual(projection.changedTasks[0].bubble?.status, .cancelled)
+        XCTAssertFalse(projection.changedTasks[0].bubble?.isLoading ?? true)
+        XCTAssertEqual(projection.changedTasks[0].record.status, .terminated)
+        XCTAssertTrue(projection.changedTasks[0].record.status.isTerminal)
+        XCTAssertFalse(projection.changedTasks[0].record.status.isResumableUnfinished)
+        XCTAssertEqual(LingShuState.sharedKernelPlanStatus(.cancelled), .cancelled)
+        XCTAssertEqual(LingShuState.sharedKernelRoleStatus(.cancelled), .cancelled)
+    }
+
     func testPathPresentationDetectsAndHidesPathInSinglePass() {
         let path = "/tmp/LingShu Frontend/report.docx"
         let text = "Word 文档：`\(path)` — 已生成"
@@ -107,20 +136,22 @@ final class FrontendProjectionPerformanceTests: XCTestCase {
     private func makeSnapshot(
         taskID: UUID,
         assistantID: UUID,
-        assistantText: String
+        assistantText: String,
+        taskStatus: LingShuKernelTaskStatus = .running,
+        summary: String = ""
     ) -> LingShuKernelRuntimeSnapshot {
         let timestamp = "2026-08-03T10:00:00Z"
         let task = LingShuKernelTaskRecord(
             id: taskID,
             title: "生成文档",
             prompt: "整理材料并生成文档",
-            status: .running,
+            status: taskStatus,
             createdAt: timestamp,
             updatedAt: timestamp,
             goalSpec: nil,
             steps: [],
             artifacts: [],
-            summary: "",
+            summary: summary,
             error: nil,
             assistantMessageId: assistantID,
             attachmentPaths: [],
