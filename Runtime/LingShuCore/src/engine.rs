@@ -6457,7 +6457,9 @@ mod tests {
         assert_eq!(selected_answered_ask_group_indices(&compacted).len(), 6);
         assert!(tool_protocol_is_complete(&compacted));
         assert!(rendered.contains("Produce a checker-approved current report"));
-        assert!(rendered.contains(&artifact_path.display().to_string()));
+        let serialized_artifact_path =
+            serde_json::to_string(&artifact_path.display().to_string()).unwrap();
+        assert!(rendered.contains(&serialized_artifact_path));
         assert!(rendered.contains("current-revision"));
         assert!(rendered.contains("LATEST MAKER FINAL TEXT"));
         assert!(rendered.contains("CURRENT CHECKER CORRECTION"));
