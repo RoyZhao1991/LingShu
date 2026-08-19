@@ -61,10 +61,8 @@ jobs:
       - name: Verify Windows release version consistency
         run: |
           $package = Get-Content WindowsApp/package.json -Raw | ConvertFrom-Json
-          $packageLock = Get-Content WindowsApp/package-lock.json -Raw | ConvertFrom-Json
-          $lockRoot = $packageLock.packages.PSObject.Properties |
-            Where-Object Name -eq "" |
-            Select-Object -First 1 -ExpandProperty Value
+          $packageLock = Get-Content WindowsApp/package-lock.json -Raw | ConvertFrom-Json -AsHashtable
+          $lockRoot = $packageLock["packages"][""]
           $tauri = Get-Content WindowsApp/src-tauri/tauri.conf.json -Raw | ConvertFrom-Json
           $cargoToml = Get-Content WindowsApp/src-tauri/Cargo.toml -Raw
           $cargoLock = Get-Content WindowsApp/src-tauri/Cargo.lock -Raw
@@ -78,8 +76,8 @@ jobs:
           }
           $expected = $package.version
           $versions = [ordered]@{
-            "package-lock root" = $packageLock.version
-            "package-lock application" = $lockRoot.version
+            "package-lock root" = $packageLock["version"]
+            "package-lock application" = $lockRoot["version"]
             "Cargo.toml" = $cargoTomlMatch.Groups[1].Value
             "Cargo.lock" = $cargoLockMatch.Groups[1].Value
             "tauri.conf.json" = $tauri.version
