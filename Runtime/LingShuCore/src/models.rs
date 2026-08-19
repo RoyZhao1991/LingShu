@@ -2,6 +2,7 @@ use crate::contract::PlatformCapabilities;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use uuid::Uuid;
 
@@ -363,6 +364,63 @@ pub struct ArtifactRecord {
     pub kind: String,
     pub size_bytes: u64,
     pub modified_at: DateTime<Utc>,
+    /// Stable semantic delivery slot. Physical paths may change because artifact materialization
+    /// preserves earlier files with a numeric suffix.
+    #[serde(default)]
+    pub logical_key: Option<String>,
+    /// Content SHA-256 captured when this record was registered.
+    #[serde(default)]
+    pub revision: String,
+    /// Stable content/structure fingerprint that excludes container timestamps and other
+    /// packaging noise.
+    #[serde(default)]
+    pub semantic_revision: String,
+    /// Canonical creation evidence not always recoverable from a file alone (for example a
+    /// DesignKB engine or requested theme).
+    #[serde(default)]
+    pub semantic_context: String,
+    #[serde(default)]
+    pub supersedes: Option<Uuid>,
+    #[serde(default)]
+    pub superseded_by: Option<Uuid>,
+}
+
+/// Durable host evidence for an artifact review cycle. This is deliberately independent from
+/// the model transcript: adapter failures and process restarts may compact or repair that
+/// transcript, but they must not make an already-reviewed delivery look new or forget a repeated
+/// rejection.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct PendingExternalOutcome {
+    pub run_id: Uuid,
+    pub text: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ReviewProgress {
+    /// `None` means no checker has reviewed this goal yet. `Some(empty)` means a checker reviewed
+    /// a delivery with no registered files, so the two states must remain distinguishable.
+    #[serde(default)]
+    pub last_reviewed_artifact_revisions: Option<BTreeMap<PathBuf, String>>,
+    /// Counts are keyed by a fixed-size digest of canonical checker finding, semantic delivery,
+    /// and canonical create/register evidence. Each evidence state accumulates independently.
+    #[serde(default)]
+    pub rejection_evidence_occurrences: BTreeMap<String, u32>,
+    /// Review compaction can discard completed tool protocol groups. Preserve their canonical
+    /// artifact evidence so the same delivery has the same signature after recovery.
+    #[serde(default)]
+    pub latest_nonempty_tool_evidence: String,
+    /// Recently committed managed external-run receipts. The Store records a receipt in the same
+    /// transaction as its artifact mutations so a crash before filesystem acknowledgement can be
+    /// replayed exactly once.
+    #[serde(default)]
+    pub applied_external_run_ids: Vec<Uuid>,
+    /// External artifacts, their run id, and this final text were committed atomically. Until a
+    /// checker correction, human gate, or completion is durably persisted, recovery must consume
+    /// this outcome instead of launching the maker again.
+    #[serde(default)]
+    pub pending_external_outcome: Option<PendingExternalOutcome>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -376,7 +434,11 @@ pub struct TaskRecord {
     pub updated_at: DateTime<Utc>,
     pub goal_spec: Option<GoalSpec>,
     pub steps: Vec<TaskStep>,
+    /// The current delivery only. Superseded or duplicate attempts live in
+    /// `superseded_artifacts`, keeping existing clients and checkers on the active version.
     pub artifacts: Vec<ArtifactRecord>,
+    #[serde(default)]
+    pub superseded_artifacts: Vec<ArtifactRecord>,
     pub summary: String,
     pub error: Option<String>,
     #[serde(default)]
@@ -404,6 +466,8 @@ pub struct TaskRecord {
     pub pending_tool_call_id: Option<String>,
     #[serde(default)]
     pub pending_question: Option<String>,
+    #[serde(default)]
+    pub review_progress: ReviewProgress,
 }
 
 fn default_participant_name() -> String {
@@ -850,6 +914,51 @@ mod tests {
 
         assert_eq!(snake_case.file_name, "report.docx");
         assert_eq!(camel_case.file_name, "report.docx");
+    }
+
+    #[test]
+    fn legacy_artifact_record_defaults_new_provenance_fields() {
+        let record: ArtifactRecord = serde_json::from_value(serde_json::json!({
+            "id": "00000000-0000-0000-0000-000000000001",
+            "title": "Legacy report",
+            "path": "/tmp/legacy-report.md",
+            "kind": "markdown",
+            "sizeBytes": 10,
+            "modifiedAt": "2025-01-01T00:00:00Z"
+        }))
+        .unwrap();
+
+        assert!(record.logical_key.is_none());
+        assert!(record.revision.is_empty());
+        assert!(record.semantic_revision.is_empty());
+        assert!(record.semantic_context.is_empty());
+        assert!(record.supersedes.is_none());
+        assert!(record.superseded_by.is_none());
+    }
+
+    #[test]
+    fn legacy_task_record_defaults_durable_review_progress() {
+        let task: TaskRecord = serde_json::from_value(serde_json::json!({
+            "id": "00000000-0000-0000-0000-000000000010",
+            "title": "Legacy task",
+            "prompt": "Create a report",
+            "status": "running",
+            "createdAt": "2025-01-01T00:00:00Z",
+            "updatedAt": "2025-01-01T00:00:00Z",
+            "goalSpec": null,
+            "steps": [],
+            "artifacts": [],
+            "summary": "",
+            "error": null,
+            "assistantMessageId": "00000000-0000-0000-0000-000000000011"
+        }))
+        .expect("schema-v1 task records without reviewProgress must remain readable");
+
+        assert_eq!(task.review_progress, ReviewProgress::default());
+        assert!(task
+            .review_progress
+            .last_reviewed_artifact_revisions
+            .is_none());
     }
 
     #[test]

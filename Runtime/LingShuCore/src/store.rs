@@ -1,8 +1,10 @@
+use crate::artifacts::artifact_path_logical_key;
 use crate::contract::{kernel_contract, PlatformCapabilities, KERNEL_ABI_VERSION};
 use crate::models::*;
+use crate::preview::{file_revision, semantic_file_revision};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -10,6 +12,8 @@ use std::sync::Arc;
 use thiserror::Error;
 use tokio::sync::{Mutex, RwLock};
 use uuid::Uuid;
+
+const MAX_APPLIED_EXTERNAL_RUN_IDS: usize = 64;
 
 #[derive(Debug, Error)]
 pub enum StoreError {
@@ -19,6 +23,95 @@ pub enum StoreError {
     Encode(#[from] serde_json::Error),
     #[error("could not persist LingShu state: {0}")]
     Persist(#[source] std::io::Error),
+    #[error("artifact supersession target is not a current delivery: {0}")]
+    MissingArtifactSupersessionTarget(Uuid),
+    #[error("invalid external artifact registration: {0}")]
+    InvalidExternalArtifactRegistration(String),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ArtifactRegistrationMode {
+    Additive,
+    CheckerRevision,
+    ExplicitSupersession,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct ArtifactRegistration {
+    pub current: ArtifactRecord,
+    pub changed: bool,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct ArtifactSupersession {
+    pub superseded_artifact_id: Uuid,
+    pub replacement: ArtifactRecord,
+}
+
+/// One item in an external harness commit. Undeclared changed files have no target and remain
+/// additive companions. A declared save-as replacement carries the exact pre-run raw revision so
+/// the Store can reject stale or ambiguous claims before mutating any artifact state.
+#[derive(Debug, Clone)]
+pub(crate) struct ExternalArtifactRegistration {
+    pub artifact: ArtifactRecord,
+    pub superseded_artifact_id: Option<Uuid>,
+    pub expected_superseded_revision: Option<String>,
+}
+
+/// Keep persisted model transcripts valid when an execution attempt stops after the assistant
+/// emitted tool calls but before every result was recorded. Recovery and synthetic human gates
+/// may append new messages only after each earlier call has a matching Tool message.
+pub(crate) fn close_unanswered_tool_calls(messages: &mut Vec<AgentMessage>) {
+    close_unanswered_tool_calls_except(messages, None);
+}
+
+pub(crate) fn close_unanswered_tool_calls_except(
+    messages: &mut Vec<AgentMessage>,
+    pending_call_id: Option<&str>,
+) {
+    let answered = messages
+        .iter()
+        .filter(|message| message.role == AgentRole::Tool)
+        .filter_map(|message| message.tool_call_id.clone())
+        .collect::<HashSet<_>>();
+    let mut insertions = Vec::new();
+    for (index, message) in messages.iter().enumerate() {
+        if message.role != AgentRole::Assistant || message.tool_calls.is_empty() {
+            continue;
+        }
+        let missing = message
+            .tool_calls
+            .iter()
+            .filter(|call| {
+                !answered.contains(&call.id) && pending_call_id != Some(call.id.as_str())
+            })
+            .map(|call| AgentMessage {
+                role: AgentRole::Tool,
+                content: serde_json::json!({
+                    "ok": false,
+                    "recoverable": true,
+                    "attempt_status": "interrupted",
+                    "tool": call.name,
+                    "instruction": "The runtime stopped this tool call before a result was recorded. Continue from the preserved session state."
+                })
+                .to_string(),
+                tool_calls: Vec::new(),
+                tool_call_id: Some(call.id.clone()),
+            })
+            .collect::<Vec<_>>();
+        if missing.is_empty() {
+            continue;
+        }
+        let mut insertion_index = index + 1;
+        while insertion_index < messages.len() && messages[insertion_index].role == AgentRole::Tool
+        {
+            insertion_index += 1;
+        }
+        insertions.push((insertion_index, missing));
+    }
+    for (index, missing) in insertions.into_iter().rev() {
+        messages.splice(index..index, missing);
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -360,11 +453,148 @@ fn recover_interrupted_tasks(state: &mut PersistedState) {
     }
 }
 
+fn hydrate_artifact_provenance(state: &mut PersistedState) {
+    for artifact in state.tasks.iter_mut().flat_map(|task| {
+        task.artifacts
+            .iter_mut()
+            .chain(task.superseded_artifacts.iter_mut())
+    }) {
+        if artifact.logical_key.is_none() {
+            artifact.logical_key = Some(artifact_path_logical_key(&artifact.path));
+        }
+        if artifact.revision.is_empty() {
+            artifact.revision = file_revision(&artifact.path).unwrap_or_default();
+        }
+        if artifact.semantic_revision.is_empty() {
+            artifact.semantic_revision = semantic_file_revision(&artifact.path)
+                .unwrap_or_else(|_| artifact.revision.clone());
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct RuntimeStore {
     state: Arc<RwLock<PersistedState>>,
     data_file: Arc<PathBuf>,
     persist_guard: Arc<Mutex<()>>,
+}
+
+fn register_task_artifact(
+    task: &mut TaskRecord,
+    mut artifact: ArtifactRecord,
+    explicit_supersession: Option<Uuid>,
+) -> ArtifactRegistration {
+    // A workspace observer may see a superseded file again because historical physical files are
+    // intentionally retained. Even if those bytes were modified, an ordinary registration must
+    // never reactivate that rejected path. Refresh the history record in place (preserving its
+    // identity and provenance links) and keep returning the current delivery.
+    if let Some(history_index) = (explicit_supersession.is_none()
+        && !task
+            .artifacts
+            .iter()
+            .any(|current| current.path == artifact.path))
+    .then(|| {
+        task.superseded_artifacts
+            .iter()
+            .position(|history| history.path == artifact.path)
+    })
+    .flatten()
+    {
+        let history = task.superseded_artifacts[history_index].clone();
+        let current = task
+            .artifacts
+            .iter()
+            .find(|current| {
+                current.logical_key == history.logical_key
+                    || history.superseded_by == Some(current.id)
+            })
+            .cloned();
+        artifact.id = history.id;
+        artifact.logical_key = history.logical_key.clone();
+        artifact.semantic_context = history.semantic_context.clone();
+        artifact.supersedes = history.supersedes;
+        artifact.superseded_by = current
+            .as_ref()
+            .map(|current| current.id)
+            .or(history.superseded_by);
+        task.superseded_artifacts[history_index] = artifact.clone();
+        return ArtifactRegistration {
+            current: current.unwrap_or(artifact),
+            changed: false,
+        };
+    }
+
+    let explicit_index = explicit_supersession.and_then(|target_id| {
+        task.artifacts
+            .iter()
+            .position(|current| current.id == target_id)
+    });
+    let exact_path_index = task
+        .artifacts
+        .iter()
+        .position(|current| current.path == artifact.path);
+    let current_index = explicit_index.or(exact_path_index).or_else(|| {
+        artifact.logical_key.as_ref().and_then(|key| {
+            task.artifacts
+                .iter()
+                .position(|current| current.logical_key.as_ref() == Some(key))
+        })
+    });
+
+    let Some(index) = current_index else {
+        task.artifacts.push(artifact.clone());
+        return ArtifactRegistration {
+            current: artifact,
+            changed: true,
+        };
+    };
+
+    let current = task.artifacts[index].clone();
+    // Exact paths retain their established semantic slot even when an automatic workspace delta
+    // observes the file again using path-derived provenance.
+    artifact.logical_key = current
+        .logical_key
+        .clone()
+        .or_else(|| artifact.logical_key.clone());
+    if exact_path_index.is_some() && explicit_supersession.is_none() {
+        artifact.semantic_context = current.semantic_context.clone();
+    }
+    if explicit_supersession.is_none()
+        && artifact.semantic_revision == current.semantic_revision
+        && artifact.semantic_context == current.semantic_context
+    {
+        if artifact.path != current.path
+            && !task.superseded_artifacts.iter().any(|history| {
+                history.path == artifact.path && history.revision == artifact.revision
+            })
+        {
+            artifact.supersedes = None;
+            artifact.superseded_by = Some(current.id);
+            task.superseded_artifacts.push(artifact);
+        }
+        return ArtifactRegistration {
+            current,
+            changed: false,
+        };
+    }
+
+    artifact.supersedes = Some(current.id);
+    artifact.superseded_by = None;
+    let mut superseded = std::mem::replace(&mut task.artifacts[index], artifact.clone());
+    superseded.superseded_by = Some(artifact.id);
+    task.superseded_artifacts.push(superseded);
+    ArtifactRegistration {
+        current: artifact,
+        changed: true,
+    }
+}
+
+fn store_artifact_path_identity(path: &Path) -> String {
+    let mut value = path.to_string_lossy().replace('\\', "/");
+    if cfg!(windows) {
+        value.make_ascii_lowercase();
+    }
+    value
 }
 
 impl RuntimeStore {
@@ -385,6 +615,10 @@ impl RuntimeStore {
                 .unwrap_or(0)
                 .saturating_add(1);
         }
+        // Added provenance fields are serde-defaulted, so schema-v1 state remains readable.
+        // Hydrate only exact path identity; never guess that legacy `name-2.ext` was a revision,
+        // because it may be a genuine companion artifact.
+        hydrate_artifact_provenance(&mut state);
         // No task driver survives a process restart. Repair the entire active lineage, including
         // child agents, so the UI never inherits a terminal parent with phantom running children.
         recover_interrupted_tasks(&mut state);
@@ -511,6 +745,7 @@ impl RuntimeStore {
                 updated_at: now,
             }],
             artifacts: Vec::new(),
+            superseded_artifacts: Vec::new(),
             summary: String::new(),
             error: None,
             user_message_id: Some(user_message_id),
@@ -526,6 +761,7 @@ impl RuntimeStore {
             session_messages: Vec::new(),
             pending_tool_call_id: None,
             pending_question: None,
+            review_progress: ReviewProgress::default(),
         });
         drop(state);
         self.persist().await?;
@@ -746,6 +982,56 @@ impl RuntimeStore {
         self.persist().await
     }
 
+    pub async fn set_session_messages_for_next_attempt(
+        &self,
+        thread_id: Uuid,
+        messages: Vec<AgentMessage>,
+    ) -> Result<(), StoreError> {
+        let mut state = self.state.write().await;
+        if let Some(task) = state.tasks.iter_mut().find(|task| task.id == thread_id) {
+            task.session_messages = messages;
+            task.review_progress.pending_external_outcome = None;
+            task.updated_at = Utc::now();
+        }
+        drop(state);
+        self.persist().await
+    }
+
+    /// Persist one checker observation before any revision adapter, human handoff, or completion
+    /// branch can interrupt the process. A repeated signature is counted independently of other
+    /// signatures, so alternating A/B failures cannot evade no-progress detection.
+    pub async fn record_review_observation(
+        &self,
+        thread_id: Uuid,
+        artifact_revisions: BTreeMap<PathBuf, String>,
+        latest_nonempty_tool_evidence: String,
+        rejection_evidence_digest: Option<String>,
+    ) -> Result<Option<u32>, StoreError> {
+        let mut state = self.state.write().await;
+        let Some(task) = state.tasks.iter_mut().find(|task| task.id == thread_id) else {
+            return Ok(None);
+        };
+        task.review_progress.last_reviewed_artifact_revisions = Some(artifact_revisions);
+        if !latest_nonempty_tool_evidence.is_empty() {
+            task.review_progress.latest_nonempty_tool_evidence = latest_nonempty_tool_evidence;
+        }
+        let occurrences = if let Some(digest) = rejection_evidence_digest {
+            let count = task
+                .review_progress
+                .rejection_evidence_occurrences
+                .entry(digest)
+                .or_default();
+            *count = count.saturating_add(1);
+            *count
+        } else {
+            0
+        };
+        task.updated_at = Utc::now();
+        drop(state);
+        self.persist().await?;
+        Ok(Some(occurrences))
+    }
+
     pub async fn set_assistant_text(
         &self,
         thread_id: Uuid,
@@ -923,23 +1209,334 @@ impl RuntimeStore {
         thread_id: Uuid,
         artifacts: Vec<ArtifactRecord>,
     ) -> Result<(), StoreError> {
+        self.add_artifacts_with_results(thread_id, artifacts)
+            .await
+            .map(|_| ())
+    }
+
+    pub(crate) async fn add_artifacts_with_results(
+        &self,
+        thread_id: Uuid,
+        artifacts: Vec<ArtifactRecord>,
+    ) -> Result<Vec<ArtifactRegistration>, StoreError> {
+        self.register_artifacts(thread_id, artifacts, ArtifactRegistrationMode::Additive)
+            .await
+    }
+
+    pub(crate) async fn revise_artifacts(
+        &self,
+        thread_id: Uuid,
+        artifacts: Vec<ArtifactRecord>,
+    ) -> Result<Vec<ArtifactRegistration>, StoreError> {
+        self.register_artifacts(
+            thread_id,
+            artifacts,
+            ArtifactRegistrationMode::CheckerRevision,
+        )
+        .await
+    }
+
+    /// Replace explicitly selected current delivery records. This is the only safe way for a
+    /// create-artifact revision with a deliberately different file name/logical key to replace an
+    /// earlier delivery: checker mode alone cannot distinguish that rename from a new companion.
+    pub(crate) async fn supersede_artifacts(
+        &self,
+        thread_id: Uuid,
+        supersessions: Vec<ArtifactSupersession>,
+    ) -> Result<Vec<ArtifactRegistration>, StoreError> {
+        let artifacts = supersessions
+            .into_iter()
+            .map(|supersession| {
+                let mut replacement = supersession.replacement;
+                replacement.supersedes = Some(supersession.superseded_artifact_id);
+                replacement
+            })
+            .collect();
+        self.register_artifacts(
+            thread_id,
+            artifacts,
+            ArtifactRegistrationMode::ExplicitSupersession,
+        )
+        .await
+    }
+
+    /// Atomically register every file changed by one external harness run. All explicit
+    /// supersession claims are validated against current artifact identity and live raw bytes
+    /// before the first mutation, so an invalid claim cannot partially replace the delivery.
+    pub(crate) async fn register_external_artifacts(
+        &self,
+        thread_id: Uuid,
+        run_id: Uuid,
+        outcome_text: String,
+        mut registrations: Vec<ExternalArtifactRegistration>,
+    ) -> Result<Vec<ArtifactRegistration>, StoreError> {
         let mut state = self.state.write().await;
-        if let Some(task) = state.tasks.iter_mut().find(|task| task.id == thread_id) {
-            for artifact in artifacts {
-                if let Some(existing) = task
-                    .artifacts
-                    .iter_mut()
-                    .find(|item| item.path == artifact.path)
-                {
-                    *existing = artifact;
-                } else {
-                    task.artifacts.push(artifact);
+        let mut results = Vec::new();
+        let task = state
+            .tasks
+            .iter_mut()
+            .find(|task| task.id == thread_id)
+            .ok_or_else(|| {
+                StoreError::InvalidExternalArtifactRegistration(format!(
+                    "task {thread_id} no longer exists"
+                ))
+            })?;
+        if task
+            .review_progress
+            .applied_external_run_ids
+            .contains(&run_id)
+        {
+            return Ok(results);
+        }
+        {
+            for registration in &mut registrations {
+                let artifact = &mut registration.artifact;
+                if artifact.logical_key.is_none() {
+                    artifact.logical_key = Some(artifact_path_logical_key(&artifact.path));
                 }
+                if artifact.revision.is_empty() {
+                    artifact.revision = file_revision(&artifact.path).unwrap_or_default();
+                }
+                if artifact.semantic_revision.is_empty() {
+                    artifact.semantic_revision = semantic_file_revision(&artifact.path)
+                        .unwrap_or_else(|_| artifact.revision.clone());
+                }
+            }
+
+            let mut incoming_paths = HashSet::new();
+            let mut claimed_targets = HashSet::new();
+            for registration in &registrations {
+                if !incoming_paths.insert(registration.artifact.path.clone()) {
+                    return Err(StoreError::InvalidExternalArtifactRegistration(format!(
+                        "duplicate changed path: {}",
+                        registration.artifact.path.display()
+                    )));
+                }
+                let Some(target_id) = registration.superseded_artifact_id else {
+                    if registration.expected_superseded_revision.is_some() {
+                        return Err(StoreError::InvalidExternalArtifactRegistration(format!(
+                            "an expected target revision was supplied without a target for {}",
+                            registration.artifact.path.display()
+                        )));
+                    }
+                    continue;
+                };
+                if !claimed_targets.insert(target_id) {
+                    return Err(StoreError::InvalidExternalArtifactRegistration(format!(
+                        "current artifact {target_id} was claimed more than once"
+                    )));
+                }
+                let expected = registration
+                    .expected_superseded_revision
+                    .as_deref()
+                    .filter(|revision| !revision.trim().is_empty())
+                    .ok_or_else(|| {
+                        StoreError::InvalidExternalArtifactRegistration(format!(
+                            "replacement for current artifact {target_id} omitted expectedRawRevision"
+                        ))
+                    })?;
+                let target = task
+                    .artifacts
+                    .iter()
+                    .find(|artifact| artifact.id == target_id)
+                    .ok_or(StoreError::MissingArtifactSupersessionTarget(target_id))?;
+                let replacement_path = store_artifact_path_identity(&registration.artifact.path);
+                if task.artifacts.iter().any(|artifact| {
+                    store_artifact_path_identity(&artifact.path) == replacement_path
+                }) {
+                    return Err(StoreError::InvalidExternalArtifactRegistration(format!(
+                        "save-as replacement path already belongs to a current artifact: {}",
+                        registration.artifact.path.display()
+                    )));
+                }
+                if task.superseded_artifacts.iter().any(|artifact| {
+                    store_artifact_path_identity(&artifact.path) == replacement_path
+                }) {
+                    return Err(StoreError::InvalidExternalArtifactRegistration(format!(
+                        "save-as replacement path belongs to superseded history: {}",
+                        registration.artifact.path.display()
+                    )));
+                }
+                let live_revision = file_revision(&target.path).unwrap_or_default();
+                if live_revision != expected {
+                    return Err(StoreError::InvalidExternalArtifactRegistration(format!(
+                        "current artifact {target_id} changed after the harness manifest (expected {expected}, found {live_revision})"
+                    )));
+                }
+            }
+            for registration in &registrations {
+                if let Some(target_id) = registration.superseded_artifact_id {
+                    let target_path = task
+                        .artifacts
+                        .iter()
+                        .find(|artifact| artifact.id == target_id)
+                        .map(|artifact| artifact.path.clone())
+                        .ok_or(StoreError::MissingArtifactSupersessionTarget(target_id))?;
+                    if incoming_paths.contains(&target_path) {
+                        return Err(StoreError::InvalidExternalArtifactRegistration(format!(
+                            "replacement target {} was also modified in place",
+                            target_path.display()
+                        )));
+                    }
+                }
+            }
+
+            for mut registration in registrations {
+                if let Some(target_id) = registration.superseded_artifact_id {
+                    let target = task
+                        .artifacts
+                        .iter()
+                        .find(|artifact| artifact.id == target_id)
+                        .ok_or(StoreError::MissingArtifactSupersessionTarget(target_id))?;
+                    registration.artifact.logical_key = target.logical_key.clone();
+                }
+                results.push(register_task_artifact(
+                    task,
+                    registration.artifact,
+                    registration.superseded_artifact_id,
+                ));
+            }
+            task.session_messages.push(AgentMessage {
+                role: AgentRole::Assistant,
+                content: outcome_text.clone(),
+                tool_calls: Vec::new(),
+                tool_call_id: None,
+            });
+            task.review_progress.pending_external_outcome = Some(PendingExternalOutcome {
+                run_id,
+                text: outcome_text,
+            });
+            task.review_progress.applied_external_run_ids.push(run_id);
+            let excess = task
+                .review_progress
+                .applied_external_run_ids
+                .len()
+                .saturating_sub(MAX_APPLIED_EXTERNAL_RUN_IDS);
+            if excess > 0 {
+                task.review_progress
+                    .applied_external_run_ids
+                    .drain(..excess);
             }
             task.updated_at = Utc::now();
         }
         drop(state);
-        self.persist().await
+        self.persist().await?;
+        Ok(results)
+    }
+
+    pub(crate) async fn register_child_artifacts(
+        &self,
+        thread_id: Uuid,
+        child_id: Uuid,
+        mut artifacts: Vec<ArtifactRecord>,
+        checker_revision: bool,
+    ) -> Result<Vec<ArtifactRegistration>, StoreError> {
+        for artifact in &mut artifacts {
+            let key = artifact
+                .logical_key
+                .clone()
+                .unwrap_or_else(|| artifact_path_logical_key(&artifact.path));
+            artifact.logical_key = Some(format!("child:{child_id}:{key}"));
+        }
+        self.register_artifacts(
+            thread_id,
+            artifacts,
+            if checker_revision {
+                ArtifactRegistrationMode::CheckerRevision
+            } else {
+                ArtifactRegistrationMode::Additive
+            },
+        )
+        .await
+    }
+
+    async fn register_artifacts(
+        &self,
+        thread_id: Uuid,
+        mut artifacts: Vec<ArtifactRecord>,
+        mode: ArtifactRegistrationMode,
+    ) -> Result<Vec<ArtifactRegistration>, StoreError> {
+        let mut state = self.state.write().await;
+        let mut registrations = Vec::new();
+        if let Some(task) = state.tasks.iter_mut().find(|task| task.id == thread_id) {
+            for artifact in &mut artifacts {
+                if artifact.logical_key.is_none() {
+                    artifact.logical_key = Some(artifact_path_logical_key(&artifact.path));
+                }
+                if artifact.revision.is_empty() {
+                    artifact.revision = file_revision(&artifact.path).unwrap_or_default();
+                }
+                if artifact.semantic_revision.is_empty() {
+                    artifact.semantic_revision = semantic_file_revision(&artifact.path)
+                        .unwrap_or_else(|_| artifact.revision.clone());
+                }
+            }
+
+            if mode == ArtifactRegistrationMode::ExplicitSupersession {
+                let mut replacement_paths = HashSet::new();
+                let mut target_ids = HashSet::new();
+                for artifact in &mut artifacts {
+                    let target_id = artifact
+                        .supersedes
+                        .ok_or(StoreError::MissingArtifactSupersessionTarget(Uuid::nil()))?;
+                    if !target_ids.insert(target_id) {
+                        return Err(StoreError::InvalidExternalArtifactRegistration(format!(
+                            "current artifact {target_id} was claimed more than once"
+                        )));
+                    }
+                    let Some(target) = task
+                        .artifacts
+                        .iter()
+                        .find(|current| current.id == target_id)
+                    else {
+                        return Err(StoreError::MissingArtifactSupersessionTarget(target_id));
+                    };
+                    let replacement_path = store_artifact_path_identity(&artifact.path);
+                    if !replacement_paths.insert(replacement_path.clone()) {
+                        return Err(StoreError::InvalidExternalArtifactRegistration(format!(
+                            "duplicate replacement path: {}",
+                            artifact.path.display()
+                        )));
+                    }
+                    if task.artifacts.iter().any(|current| {
+                        store_artifact_path_identity(&current.path) == replacement_path
+                    }) {
+                        return Err(StoreError::InvalidExternalArtifactRegistration(format!(
+                            "save-as replacement path already belongs to a current artifact: {}",
+                            artifact.path.display()
+                        )));
+                    }
+                    if task.superseded_artifacts.iter().any(|history| {
+                        store_artifact_path_identity(&history.path) == replacement_path
+                    }) {
+                        return Err(StoreError::InvalidExternalArtifactRegistration(format!(
+                            "save-as replacement path belongs to superseded history: {}",
+                            artifact.path.display()
+                        )));
+                    }
+                    artifact.logical_key = target.logical_key.clone();
+                }
+            }
+
+            // Checker review does not make a new physical path a revision by itself. Unknown
+            // paths are additive companions; replacement requires an exact current path/logical
+            // slot or the explicit supersession API above.
+            for artifact in artifacts {
+                let explicit_supersession = (mode
+                    == ArtifactRegistrationMode::ExplicitSupersession)
+                    .then_some(artifact.supersedes)
+                    .flatten();
+                registrations.push(register_task_artifact(
+                    task,
+                    artifact,
+                    explicit_supersession,
+                ));
+            }
+            task.updated_at = Utc::now();
+        }
+        drop(state);
+        self.persist().await?;
+        Ok(registrations)
     }
 
     pub async fn create_child_task(
@@ -984,6 +1581,7 @@ impl RuntimeStore {
                 updated_at: now,
             }],
             artifacts: Vec::new(),
+            superseded_artifacts: Vec::new(),
             summary: String::new(),
             error: None,
             user_message_id: None,
@@ -999,6 +1597,7 @@ impl RuntimeStore {
             session_messages: Vec::new(),
             pending_tool_call_id: None,
             pending_question: None,
+            review_progress: ReviewProgress::default(),
         });
         drop(state);
         self.persist().await?;
@@ -1018,6 +1617,7 @@ impl RuntimeStore {
             task.pending_tool_call_id = Some(tool_call_id);
             task.pending_question = Some(question.clone());
             task.summary = question.clone();
+            task.review_progress.pending_external_outcome = None;
             task.updated_at = now;
             if let Some(step) = task.steps.last_mut() {
                 if !step.status.is_terminal() {
@@ -1206,6 +1806,12 @@ impl RuntimeStore {
             AppLocale::ZhCn => "【运行时恢复】沿用当前 GoalSpec、已有上下文和产出物继续推进；不要重新开始，也不要因本次异常宣告失败。",
             AppLocale::En => "[Runtime recovery] Continue with the current GoalSpec, existing context, and artifacts. Do not restart or declare failure because of this attempt error.",
         };
+        close_unanswered_tool_calls(&mut task.session_messages);
+        task.session_messages.retain(|message| {
+            !(message.role == AgentRole::System
+                && (message.content.starts_with("【运行时恢复】")
+                    || message.content.starts_with("[Runtime recovery]")))
+        });
         task.session_messages.push(AgentMessage {
             role: AgentRole::System,
             content: format!("{recovery_instruction}\n{detail}"),
@@ -1333,6 +1939,7 @@ impl RuntimeStore {
         if let Some(task) = state.tasks.iter_mut().find(|task| task.id == thread_id) {
             task.title = goal.objective.chars().take(64).collect();
             task.goal_spec = Some(goal);
+            task.review_progress = ReviewProgress::default();
             task.status = TaskStatus::Running;
             task.updated_at = Utc::now();
             if let Some(step) = task.steps.first_mut() {
@@ -1390,6 +1997,7 @@ impl RuntimeStore {
             task.updated_at = now;
             task.summary = reply.clone();
             task.artifacts = artifacts;
+            task.review_progress = ReviewProgress::default();
             task.pending_tool_call_id = None;
             task.pending_question = None;
             if let Some(step) = task.steps.last_mut() {
@@ -1593,7 +2201,32 @@ fn copy(locale: AppLocale) -> RuntimeCopy {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::artifacts::materialize_artifacts;
     use tempfile::tempdir;
+
+    fn observed_path_artifact(
+        path: PathBuf,
+        title: &str,
+        kind: &str,
+        content: &str,
+    ) -> ArtifactRecord {
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, content).unwrap();
+        ArtifactRecord {
+            id: Uuid::new_v4(),
+            title: title.into(),
+            path,
+            kind: kind.into(),
+            size_bytes: content.len() as u64,
+            modified_at: Utc::now(),
+            logical_key: None,
+            revision: String::new(),
+            semantic_revision: String::new(),
+            semantic_context: String::new(),
+            supersedes: None,
+            superseded_by: None,
+        }
+    }
 
     #[tokio::test]
     async fn state_file_can_be_replaced_repeatedly() {
@@ -1607,6 +2240,692 @@ mod tests {
 
         let reopened = RuntimeStore::open(directory.path()).unwrap();
         assert_eq!(reopened.settings().await.locale, AppLocale::En);
+    }
+
+    #[tokio::test]
+    async fn distinct_initial_file_names_remain_current_companions() {
+        let directory = tempdir().unwrap();
+        let store = RuntimeStore::open(directory.path().join("State")).unwrap();
+        let receipt = store
+            .enqueue("Create two companion files".into(), Vec::new())
+            .await
+            .unwrap();
+        let records = materialize_artifacts(
+            &directory.path().join("Workspace"),
+            &[
+                ArtifactSpec {
+                    title: "Main report".into(),
+                    file_name: "report.md".into(),
+                    kind: "markdown".into(),
+                    content: "Main report".into(),
+                    slides: Vec::new(),
+                    sheets: Vec::new(),
+                },
+                ArtifactSpec {
+                    title: "Appendix".into(),
+                    file_name: "appendix.md".into(),
+                    kind: "markdown".into(),
+                    content: "Appendix".into(),
+                    slides: Vec::new(),
+                    sheets: Vec::new(),
+                },
+            ],
+        )
+        .unwrap();
+        store
+            .add_artifacts(receipt.thread_id, records)
+            .await
+            .unwrap();
+
+        let task = store.task(receipt.thread_id).await.unwrap();
+        assert_eq!(task.artifacts.len(), 2);
+        assert!(task.superseded_artifacts.is_empty());
+    }
+
+    #[tokio::test]
+    async fn checker_revision_keeps_different_explicit_create_slot_as_companion() {
+        let directory = tempdir().unwrap();
+        let workspace = directory.path().join("Workspace");
+        let state_directory = directory.path().join("State");
+        let store = RuntimeStore::open(&state_directory).unwrap();
+        let receipt = store
+            .enqueue("Create a report, then add its appendix".into(), Vec::new())
+            .await
+            .unwrap();
+        let report = materialize_artifacts(
+            &workspace,
+            &[ArtifactSpec {
+                title: "Report".into(),
+                file_name: "report.md".into(),
+                kind: "markdown".into(),
+                content: "Report body".into(),
+                slides: Vec::new(),
+                sheets: Vec::new(),
+            }],
+        )
+        .unwrap();
+        store
+            .add_artifacts(receipt.thread_id, report)
+            .await
+            .unwrap();
+
+        let appendix = materialize_artifacts(
+            &workspace,
+            &[ArtifactSpec {
+                title: "Appendix".into(),
+                file_name: "appendix.md".into(),
+                kind: "markdown".into(),
+                content: "Appendix body".into(),
+                slides: Vec::new(),
+                sheets: Vec::new(),
+            }],
+        )
+        .unwrap();
+        store
+            .revise_artifacts(receipt.thread_id, appendix)
+            .await
+            .unwrap();
+
+        let task = store.task(receipt.thread_id).await.unwrap();
+        assert_eq!(task.artifacts.len(), 2);
+        assert!(task
+            .artifacts
+            .iter()
+            .any(|artifact| artifact.logical_key.as_deref() == Some("create:report.md")));
+        assert!(task
+            .artifacts
+            .iter()
+            .any(|artifact| artifact.logical_key.as_deref() == Some("create:appendix.md")));
+        assert!(task.superseded_artifacts.is_empty());
+    }
+
+    #[tokio::test]
+    async fn checker_revision_keeps_new_path_derived_pdf_as_companion() {
+        let directory = tempdir().unwrap();
+        let workspace = directory.path().join("Workspace");
+        let store = RuntimeStore::open(directory.path().join("State")).unwrap();
+        let receipt = store
+            .enqueue("Keep the report and add its source file".into(), Vec::new())
+            .await
+            .unwrap();
+        let report = observed_path_artifact(
+            workspace.join("report.pdf"),
+            "Report",
+            "pdf",
+            "report payload",
+        );
+        store
+            .add_artifacts(receipt.thread_id, vec![report])
+            .await
+            .unwrap();
+
+        let sources = observed_path_artifact(
+            workspace.join("sources.pdf"),
+            "Sources",
+            "pdf",
+            "sources payload",
+        );
+        store
+            .revise_artifacts(receipt.thread_id, vec![sources])
+            .await
+            .unwrap();
+
+        let task = store.task(receipt.thread_id).await.unwrap();
+        assert_eq!(task.artifacts.len(), 2);
+        assert!(task
+            .artifacts
+            .iter()
+            .any(|artifact| artifact.path.ends_with("report.pdf")));
+        assert!(task
+            .artifacts
+            .iter()
+            .any(|artifact| artifact.path.ends_with("sources.pdf")));
+        assert!(task.superseded_artifacts.is_empty());
+    }
+
+    #[tokio::test]
+    async fn explicit_supersession_replaces_a_renamed_create_delivery() {
+        let directory = tempdir().unwrap();
+        let workspace = directory.path().join("Workspace");
+        let store = RuntimeStore::open(directory.path().join("State")).unwrap();
+        let receipt = store
+            .enqueue("Revise the delivery under a new name".into(), Vec::new())
+            .await
+            .unwrap();
+        let initial = materialize_artifacts(
+            &workspace,
+            &[ArtifactSpec {
+                title: "Ivory".into(),
+                file_name: "ivory.md".into(),
+                kind: "markdown".into(),
+                content: "Same body".into(),
+                slides: Vec::new(),
+                sheets: Vec::new(),
+            }],
+        )
+        .unwrap();
+        store
+            .add_artifacts(receipt.thread_id, initial)
+            .await
+            .unwrap();
+        let original = store.task(receipt.thread_id).await.unwrap().artifacts[0].clone();
+        let replacement = materialize_artifacts(
+            &workspace,
+            &[ArtifactSpec {
+                title: "Sand".into(),
+                file_name: "sand.md".into(),
+                kind: "markdown".into(),
+                content: "Same body".into(),
+                slides: Vec::new(),
+                sheets: Vec::new(),
+            }],
+        )
+        .unwrap()
+        .remove(0);
+
+        let registrations = store
+            .supersede_artifacts(
+                receipt.thread_id,
+                vec![ArtifactSupersession {
+                    superseded_artifact_id: original.id,
+                    replacement,
+                }],
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(registrations.len(), 1);
+        assert!(registrations[0].changed);
+        let task = store.task(receipt.thread_id).await.unwrap();
+        assert_eq!(task.artifacts.len(), 1);
+        assert_eq!(task.superseded_artifacts.len(), 1);
+        let current = &task.artifacts[0];
+        assert!(current.path.ends_with("sand.md"));
+        assert_eq!(current.logical_key, original.logical_key);
+        assert_eq!(current.supersedes, Some(original.id));
+        assert_eq!(task.superseded_artifacts[0].superseded_by, Some(current.id));
+    }
+
+    #[tokio::test]
+    async fn explicit_supersession_cannot_overwrite_another_current_path() {
+        let directory = tempdir().unwrap();
+        let workspace = directory.path().join("Workspace");
+        let store = RuntimeStore::open(directory.path().join("State")).unwrap();
+        let receipt = store
+            .enqueue("Keep both current files".into(), Vec::new())
+            .await
+            .unwrap();
+        let first =
+            observed_path_artifact(workspace.join("first.md"), "First", "markdown", "first");
+        let second =
+            observed_path_artifact(workspace.join("second.md"), "Second", "markdown", "second");
+        store
+            .add_artifacts(receipt.thread_id, vec![first, second])
+            .await
+            .unwrap();
+        let before = store.task(receipt.thread_id).await.unwrap();
+        let collision = observed_path_artifact(
+            workspace.join("second.md"),
+            "Collision",
+            "markdown",
+            "attempted collision",
+        );
+
+        let error = store
+            .supersede_artifacts(
+                receipt.thread_id,
+                vec![ArtifactSupersession {
+                    superseded_artifact_id: before.artifacts[0].id,
+                    replacement: collision,
+                }],
+            )
+            .await
+            .unwrap_err();
+
+        assert!(error
+            .to_string()
+            .contains("already belongs to a current artifact"));
+        let after = store.task(receipt.thread_id).await.unwrap();
+        assert_eq!(after.artifacts, before.artifacts);
+        assert_eq!(after.superseded_artifacts, before.superseded_artifacts);
+    }
+
+    #[tokio::test]
+    async fn explicit_supersession_cannot_reactivate_a_history_path() {
+        let directory = tempdir().unwrap();
+        let workspace = directory.path().join("Workspace");
+        let store = RuntimeStore::open(directory.path().join("State")).unwrap();
+        let receipt = store
+            .enqueue("Keep history rejected".into(), Vec::new())
+            .await
+            .unwrap();
+        let old = observed_path_artifact(workspace.join("old.md"), "Old", "markdown", "old");
+        store
+            .add_artifacts(receipt.thread_id, vec![old])
+            .await
+            .unwrap();
+        let old_id = store.task(receipt.thread_id).await.unwrap().artifacts[0].id;
+        let current = observed_path_artifact(
+            workspace.join("current.md"),
+            "Current",
+            "markdown",
+            "current",
+        );
+        store
+            .supersede_artifacts(
+                receipt.thread_id,
+                vec![ArtifactSupersession {
+                    superseded_artifact_id: old_id,
+                    replacement: current,
+                }],
+            )
+            .await
+            .unwrap();
+        let before = store.task(receipt.thread_id).await.unwrap();
+        let revival = observed_path_artifact(
+            workspace.join("old.md"),
+            "Revival",
+            "markdown",
+            "attempted revival",
+        );
+
+        let error = store
+            .supersede_artifacts(
+                receipt.thread_id,
+                vec![ArtifactSupersession {
+                    superseded_artifact_id: before.artifacts[0].id,
+                    replacement: revival,
+                }],
+            )
+            .await
+            .unwrap_err();
+
+        assert!(error.to_string().contains("superseded history"));
+        let after = store.task(receipt.thread_id).await.unwrap();
+        assert_eq!(after.artifacts, before.artifacts);
+        assert_eq!(after.superseded_artifacts, before.superseded_artifacts);
+    }
+
+    #[tokio::test]
+    async fn external_commit_atomically_replaces_a_renamed_delivery_and_keeps_companions() {
+        let directory = tempdir().unwrap();
+        let workspace = directory.path().join("Workspace");
+        let state_directory = directory.path().join("State");
+        let store = RuntimeStore::open(&state_directory).unwrap();
+        let receipt = store
+            .enqueue("Revise the deck and add sources".into(), Vec::new())
+            .await
+            .unwrap();
+        let initial = observed_path_artifact(
+            workspace.join("deck.pptx"),
+            "Deck",
+            "pptx",
+            "initial deck bytes",
+        );
+        store
+            .add_artifacts(receipt.thread_id, vec![initial])
+            .await
+            .unwrap();
+        let original = store.task(receipt.thread_id).await.unwrap().artifacts[0].clone();
+        let replacement = observed_path_artifact(
+            workspace.join("deck-ivory.pptx"),
+            "Ivory deck",
+            "pptx",
+            "revised ivory deck bytes",
+        );
+        let companion = observed_path_artifact(
+            workspace.join("sources.pptx"),
+            "Sources",
+            "pptx",
+            "source appendix bytes",
+        );
+        let run_id = Uuid::new_v4();
+        let commit = vec![
+            ExternalArtifactRegistration {
+                artifact: replacement,
+                superseded_artifact_id: Some(original.id),
+                expected_superseded_revision: Some(original.revision.clone()),
+            },
+            ExternalArtifactRegistration {
+                artifact: companion,
+                superseded_artifact_id: None,
+                expected_superseded_revision: None,
+            },
+        ];
+
+        store
+            .register_external_artifacts(
+                receipt.thread_id,
+                run_id,
+                "External result".into(),
+                commit.clone(),
+            )
+            .await
+            .unwrap();
+
+        let task = store.task(receipt.thread_id).await.unwrap();
+        assert_eq!(task.artifacts.len(), 2);
+        assert_eq!(task.superseded_artifacts.len(), 1);
+        assert!(task
+            .artifacts
+            .iter()
+            .any(|artifact| artifact.path.ends_with("deck-ivory.pptx")));
+        assert!(task
+            .artifacts
+            .iter()
+            .any(|artifact| artifact.path.ends_with("sources.pptx")));
+        assert!(!task
+            .artifacts
+            .iter()
+            .any(|artifact| artifact.path.ends_with("deck.pptx")));
+        assert_eq!(task.superseded_artifacts[0].id, original.id);
+        assert!(task
+            .review_progress
+            .applied_external_run_ids
+            .contains(&run_id));
+
+        let replay = store
+            .register_external_artifacts(
+                receipt.thread_id,
+                run_id,
+                "External result".into(),
+                commit.clone(),
+            )
+            .await
+            .unwrap();
+        assert!(replay.is_empty());
+        assert_eq!(store.task(receipt.thread_id).await.unwrap(), task);
+
+        drop(store);
+        let reopened = RuntimeStore::open(&state_directory).unwrap();
+        let replay_after_restart = reopened
+            .register_external_artifacts(
+                receipt.thread_id,
+                run_id,
+                "External result".into(),
+                commit,
+            )
+            .await
+            .unwrap();
+        assert!(replay_after_restart.is_empty());
+        assert_eq!(reopened.task(receipt.thread_id).await.unwrap(), task);
+    }
+
+    #[tokio::test]
+    async fn invalid_external_replacement_claim_leaves_the_entire_registry_unchanged() {
+        let directory = tempdir().unwrap();
+        let workspace = directory.path().join("Workspace");
+        let store = RuntimeStore::open(directory.path().join("State")).unwrap();
+        let receipt = store
+            .enqueue(
+                "Reject a stale external replacement batch".into(),
+                Vec::new(),
+            )
+            .await
+            .unwrap();
+        let initial = observed_path_artifact(
+            workspace.join("report.md"),
+            "Report",
+            "markdown",
+            "current report",
+        );
+        store
+            .add_artifacts(receipt.thread_id, vec![initial])
+            .await
+            .unwrap();
+        let before = store.task(receipt.thread_id).await.unwrap();
+        let stale_replacement = observed_path_artifact(
+            workspace.join("report-revised.md"),
+            "Revised report",
+            "markdown",
+            "revised report",
+        );
+        let otherwise_valid_companion = observed_path_artifact(
+            workspace.join("appendix.md"),
+            "Appendix",
+            "markdown",
+            "appendix",
+        );
+
+        let error = store
+            .register_external_artifacts(
+                receipt.thread_id,
+                Uuid::new_v4(),
+                "Invalid external result".into(),
+                vec![
+                    ExternalArtifactRegistration {
+                        artifact: stale_replacement,
+                        superseded_artifact_id: Some(before.artifacts[0].id),
+                        expected_superseded_revision: Some("stale-raw-revision".into()),
+                    },
+                    ExternalArtifactRegistration {
+                        artifact: otherwise_valid_companion,
+                        superseded_artifact_id: None,
+                        expected_superseded_revision: None,
+                    },
+                ],
+            )
+            .await
+            .unwrap_err();
+
+        assert!(error
+            .to_string()
+            .contains("changed after the harness manifest"));
+        let after = store.task(receipt.thread_id).await.unwrap();
+        assert_eq!(after.artifacts, before.artifacts);
+        assert_eq!(after.superseded_artifacts, before.superseded_artifacts);
+    }
+
+    #[tokio::test]
+    async fn external_replacement_cannot_claim_another_current_artifact_path() {
+        let directory = tempdir().unwrap();
+        let workspace = directory.path().join("Workspace");
+        let store = RuntimeStore::open(directory.path().join("State")).unwrap();
+        let receipt = store
+            .enqueue("Keep both current files".into(), Vec::new())
+            .await
+            .unwrap();
+        let first =
+            observed_path_artifact(workspace.join("first.md"), "First", "markdown", "first");
+        let second =
+            observed_path_artifact(workspace.join("second.md"), "Second", "markdown", "second");
+        store
+            .add_artifacts(receipt.thread_id, vec![first, second])
+            .await
+            .unwrap();
+        let before = store.task(receipt.thread_id).await.unwrap();
+        let replacement = observed_path_artifact(
+            workspace.join("second.md"),
+            "Collision",
+            "markdown",
+            "attempted collision",
+        );
+
+        let error = store
+            .register_external_artifacts(
+                receipt.thread_id,
+                Uuid::new_v4(),
+                "Invalid external result".into(),
+                vec![ExternalArtifactRegistration {
+                    artifact: replacement,
+                    superseded_artifact_id: Some(before.artifacts[0].id),
+                    expected_superseded_revision: Some(before.artifacts[0].revision.clone()),
+                }],
+            )
+            .await
+            .unwrap_err();
+
+        assert!(error
+            .to_string()
+            .contains("already belongs to a current artifact"));
+        let after = store.task(receipt.thread_id).await.unwrap();
+        assert_eq!(after.artifacts, before.artifacts);
+        assert_eq!(after.superseded_artifacts, before.superseded_artifacts);
+    }
+
+    #[tokio::test]
+    async fn external_replacement_cannot_reactivate_a_superseded_path() {
+        let directory = tempdir().unwrap();
+        let workspace = directory.path().join("Workspace");
+        let store = RuntimeStore::open(directory.path().join("State")).unwrap();
+        let receipt = store
+            .enqueue("Keep rejected history superseded".into(), Vec::new())
+            .await
+            .unwrap();
+        let initial = observed_path_artifact(workspace.join("old.md"), "Old", "markdown", "old");
+        store
+            .add_artifacts(receipt.thread_id, vec![initial])
+            .await
+            .unwrap();
+        let original = store.task(receipt.thread_id).await.unwrap().artifacts[0].clone();
+        let current = observed_path_artifact(
+            workspace.join("current.md"),
+            "Current",
+            "markdown",
+            "current",
+        );
+        store
+            .supersede_artifacts(
+                receipt.thread_id,
+                vec![ArtifactSupersession {
+                    superseded_artifact_id: original.id,
+                    replacement: current,
+                }],
+            )
+            .await
+            .unwrap();
+        let before = store.task(receipt.thread_id).await.unwrap();
+        let revived = observed_path_artifact(
+            workspace.join("old.md"),
+            "Revived old",
+            "markdown",
+            "attempted revival",
+        );
+
+        let error = store
+            .register_external_artifacts(
+                receipt.thread_id,
+                Uuid::new_v4(),
+                "Invalid external result".into(),
+                vec![ExternalArtifactRegistration {
+                    artifact: revived,
+                    superseded_artifact_id: Some(before.artifacts[0].id),
+                    expected_superseded_revision: Some(before.artifacts[0].revision.clone()),
+                }],
+            )
+            .await
+            .unwrap_err();
+
+        assert!(error.to_string().contains("superseded history"));
+        let after = store.task(receipt.thread_id).await.unwrap();
+        assert_eq!(after.artifacts, before.artifacts);
+        assert_eq!(after.superseded_artifacts, before.superseded_artifacts);
+    }
+
+    #[tokio::test]
+    async fn observing_modified_superseded_path_never_reactivates_it() {
+        let directory = tempdir().unwrap();
+        let workspace = directory.path().join("Workspace");
+        let store = RuntimeStore::open(directory.path().join("State")).unwrap();
+        let receipt = store
+            .enqueue(
+                "Revise a report while retaining its history".into(),
+                Vec::new(),
+            )
+            .await
+            .unwrap();
+        let initial = materialize_artifacts(
+            &workspace,
+            &[ArtifactSpec {
+                title: "Report v1".into(),
+                file_name: "report-v1.md".into(),
+                kind: "markdown".into(),
+                content: "Version one".into(),
+                slides: Vec::new(),
+                sheets: Vec::new(),
+            }],
+        )
+        .unwrap();
+        store
+            .add_artifacts(receipt.thread_id, initial)
+            .await
+            .unwrap();
+        let original = store.task(receipt.thread_id).await.unwrap().artifacts[0].clone();
+        let replacement = materialize_artifacts(
+            &workspace,
+            &[ArtifactSpec {
+                title: "Report v2".into(),
+                file_name: "report-v2.md".into(),
+                kind: "markdown".into(),
+                content: "Version two".into(),
+                slides: Vec::new(),
+                sheets: Vec::new(),
+            }],
+        )
+        .unwrap()
+        .remove(0);
+        store
+            .supersede_artifacts(
+                receipt.thread_id,
+                vec![ArtifactSupersession {
+                    superseded_artifact_id: original.id,
+                    replacement,
+                }],
+            )
+            .await
+            .unwrap();
+        let accepted = store.task(receipt.thread_id).await.unwrap().artifacts[0].clone();
+
+        fs::write(&original.path, "Version one path was modified later").unwrap();
+        let mut observed_history = original.clone();
+        observed_history.id = Uuid::new_v4();
+        observed_history.logical_key = None;
+        observed_history.revision.clear();
+        observed_history.semantic_revision.clear();
+        observed_history.semantic_context.clear();
+        observed_history.supersedes = None;
+        observed_history.superseded_by = None;
+        let registrations = store
+            .add_artifacts_with_results(receipt.thread_id, vec![observed_history])
+            .await
+            .unwrap();
+
+        assert_eq!(registrations.len(), 1);
+        assert!(!registrations[0].changed);
+        assert_eq!(registrations[0].current.id, accepted.id);
+        let task = store.task(receipt.thread_id).await.unwrap();
+        assert_eq!(task.artifacts, vec![accepted.clone()]);
+        assert_eq!(task.superseded_artifacts.len(), 1);
+        let refreshed_history = &task.superseded_artifacts[0];
+        assert_eq!(refreshed_history.id, original.id);
+        assert_eq!(refreshed_history.path, original.path);
+        assert_eq!(
+            refreshed_history.revision,
+            file_revision(&original.path).unwrap()
+        );
+        assert_eq!(refreshed_history.superseded_by, Some(accepted.id));
+
+        fs::write(&original.path, "Checker observed another later mutation").unwrap();
+        let mut checker_observation = original.clone();
+        checker_observation.id = Uuid::new_v4();
+        checker_observation.logical_key = None;
+        checker_observation.revision.clear();
+        checker_observation.semantic_revision.clear();
+        checker_observation.supersedes = None;
+        checker_observation.superseded_by = None;
+        let checker_registrations = store
+            .revise_artifacts(receipt.thread_id, vec![checker_observation])
+            .await
+            .unwrap();
+        assert!(!checker_registrations[0].changed);
+        assert_eq!(checker_registrations[0].current.id, accepted.id);
+        let task = store.task(receipt.thread_id).await.unwrap();
+        assert_eq!(task.artifacts, vec![accepted]);
+        assert_eq!(task.superseded_artifacts.len(), 1);
+        assert_eq!(
+            task.superseded_artifacts[0].revision,
+            file_revision(&original.path).unwrap()
+        );
     }
 
     #[tokio::test]
@@ -2008,6 +3327,225 @@ mod tests {
             .tasks
             .iter()
             .all(|task| task.status != TaskStatus::Failed));
+    }
+
+    #[tokio::test]
+    async fn repeated_technical_recovery_keeps_only_the_latest_runtime_marker() {
+        let directory = tempdir().unwrap();
+        let store = RuntimeStore::open(directory.path()).unwrap();
+        let receipt = store
+            .enqueue("Build a report".into(), Vec::new())
+            .await
+            .unwrap();
+        assert!(store.claim(receipt.thread_id).await.unwrap());
+        store
+            .set_session_messages(
+                receipt.thread_id,
+                vec![AgentMessage {
+                    role: AgentRole::Assistant,
+                    content: "Preserved work".into(),
+                    tool_calls: vec![AgentToolCall {
+                        id: "interrupted-before-recovery".into(),
+                        name: "run_command".into(),
+                        arguments_json: "{\"command\":\"probe\"}".into(),
+                    }],
+                    tool_call_id: None,
+                }],
+            )
+            .await
+            .unwrap();
+
+        store
+            .require_recovery(
+                receipt.thread_id,
+                "First recovery".into(),
+                "first error".into(),
+            )
+            .await
+            .unwrap();
+        let first = store
+            .prepare_continue(receipt.thread_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            first
+                .session_messages
+                .iter()
+                .filter(|message| {
+                    message.content.starts_with("[Runtime recovery]")
+                        || message.content.starts_with("【运行时恢复】")
+                })
+                .count(),
+            1
+        );
+        let interrupted_result_index = first
+            .session_messages
+            .iter()
+            .position(|message| {
+                message.role == AgentRole::Tool
+                    && message.tool_call_id.as_deref() == Some("interrupted-before-recovery")
+            })
+            .unwrap();
+        let recovery_marker_index = first
+            .session_messages
+            .iter()
+            .position(|message| {
+                message.content.starts_with("[Runtime recovery]")
+                    || message.content.starts_with("【运行时恢复】")
+            })
+            .unwrap();
+        assert!(interrupted_result_index < recovery_marker_index);
+
+        store
+            .require_recovery(
+                receipt.thread_id,
+                "Second recovery".into(),
+                "second error".into(),
+            )
+            .await
+            .unwrap();
+        let second = store
+            .prepare_continue(receipt.thread_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            second
+                .session_messages
+                .iter()
+                .filter(|message| {
+                    message.content.starts_with("[Runtime recovery]")
+                        || message.content.starts_with("【运行时恢复】")
+                })
+                .count(),
+            1
+        );
+        assert!(second
+            .session_messages
+            .iter()
+            .any(|message| message.content == "Preserved work"));
+        assert!(second
+            .session_messages
+            .iter()
+            .any(|message| message.content.contains("second error")));
+    }
+
+    #[tokio::test]
+    async fn review_progress_survives_recovery_and_restart_then_clears_at_goal_boundaries() {
+        let directory = tempdir().unwrap();
+        let state_directory = directory.path().join("State");
+        let thread_id;
+        let baseline = BTreeMap::from([(
+            directory.path().join("Workspace/report.md"),
+            "raw-revision-1".to_string(),
+        )]);
+        let goal = GoalSpec {
+            objective: "Create a reviewed report".into(),
+            kind: GoalKind::Task,
+            output_mode: OutputMode::Artifact,
+            reference_scope: ReferenceScope::CurrentInput,
+            reference_evidence: Vec::new(),
+            reference_explicit: true,
+            reference_confidence: ReferenceConfidence::High,
+            constraints: Vec::new(),
+            boundaries: Vec::new(),
+            risks: Vec::new(),
+            success_criteria: vec!["The report passes review".into()],
+            open_questions: Vec::new(),
+        };
+
+        {
+            let store = RuntimeStore::open(&state_directory).unwrap();
+            let receipt = store
+                .enqueue("Create a reviewed report".into(), Vec::new())
+                .await
+                .unwrap();
+            thread_id = receipt.thread_id;
+            assert!(store.claim(thread_id).await.unwrap());
+            store.set_goal(thread_id, goal.clone()).await.unwrap();
+            assert_eq!(
+                store
+                    .record_review_observation(
+                        thread_id,
+                        baseline.clone(),
+                        "canonical-create-evidence".into(),
+                        Some("evidence-digest-a".into()),
+                    )
+                    .await
+                    .unwrap(),
+                Some(1)
+            );
+            store
+                .require_recovery(
+                    thread_id,
+                    "Recover the same review".into(),
+                    "adapter interrupted".into(),
+                )
+                .await
+                .unwrap();
+            let task = store.task(thread_id).await.unwrap();
+            assert_eq!(
+                task.review_progress.last_reviewed_artifact_revisions,
+                Some(baseline.clone())
+            );
+        }
+
+        let reopened = RuntimeStore::open(&state_directory).unwrap();
+        let recovered = reopened.task(thread_id).await.unwrap();
+        assert_eq!(recovered.status, TaskStatus::NeedsRecovery);
+        assert_eq!(
+            recovered.review_progress.last_reviewed_artifact_revisions,
+            Some(baseline.clone())
+        );
+        assert_eq!(
+            recovered
+                .review_progress
+                .rejection_evidence_occurrences
+                .get("evidence-digest-a"),
+            Some(&1)
+        );
+        assert_eq!(
+            recovered.review_progress.latest_nonempty_tool_evidence,
+            "canonical-create-evidence"
+        );
+        let continued = reopened.prepare_continue(thread_id).await.unwrap().unwrap();
+        assert_eq!(continued.review_progress, recovered.review_progress);
+        assert_eq!(
+            reopened
+                .record_review_observation(
+                    thread_id,
+                    baseline,
+                    String::new(),
+                    Some("evidence-digest-a".into()),
+                )
+                .await
+                .unwrap(),
+            Some(2)
+        );
+
+        reopened.set_goal(thread_id, goal.clone()).await.unwrap();
+        assert_eq!(
+            reopened.task(thread_id).await.unwrap().review_progress,
+            ReviewProgress::default()
+        );
+        reopened
+            .record_review_observation(
+                thread_id,
+                BTreeMap::new(),
+                "new-goal-evidence".into(),
+                Some("new-goal-digest".into()),
+            )
+            .await
+            .unwrap();
+        reopened
+            .complete(thread_id, "Accepted".into(), Vec::new())
+            .await
+            .unwrap();
+        assert_eq!(
+            reopened.task(thread_id).await.unwrap().review_progress,
+            ReviewProgress::default()
+        );
     }
 
     #[tokio::test]

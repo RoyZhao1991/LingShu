@@ -1,9 +1,10 @@
 use crate::models::{ArtifactRecord, ArtifactSpec, SheetSpec, SlideSpec};
+use crate::preview::{content_revision, semantic_file_revision};
 use chrono::{DateTime, Utc};
 use serde_json::Value;
 use std::fs;
 use std::io::{Cursor, Write};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use thiserror::Error;
 use uuid::Uuid;
 use zip::write::SimpleFileOptions;
@@ -37,8 +38,15 @@ pub fn materialize_artifacts(
             "html" => html_document(&spec.title, &spec.content).into_bytes(),
             _ => spec.content.as_bytes().to_vec(),
         };
-        fs::write(&path, data).map_err(ArtifactError::Write)?;
+        let revision = content_revision(&data);
+        fs::write(&path, &data).map_err(ArtifactError::Write)?;
         let metadata = fs::metadata(&path).map_err(ArtifactError::Write)?;
+        let semantic_revision = semantic_file_revision(&path).map_err(|error| {
+            ArtifactError::Write(match error {
+                crate::preview::PreviewError::Read(error) => error,
+                other => std::io::Error::other(other.to_string()),
+            })
+        })?;
         let modified_at = metadata
             .modified()
             .ok()
@@ -51,12 +59,18 @@ pub fn materialize_artifacts(
             kind: spec.kind.clone(),
             size_bytes: metadata.len(),
             modified_at,
+            logical_key: Some(create_artifact_logical_key(&spec.file_name, &spec.kind)),
+            revision,
+            semantic_revision,
+            semantic_context: String::new(),
+            supersedes: None,
+            superseded_by: None,
         });
     }
     Ok(records)
 }
 
-fn safe_file_name(raw: &str, kind: &str) -> String {
+pub(crate) fn safe_file_name(raw: &str, kind: &str) -> String {
     let extension = match kind.to_ascii_lowercase().as_str() {
         "docx" | "word" => "docx",
         "pptx" | "powerpoint" | "presentation" => "pptx",
@@ -92,6 +106,24 @@ fn safe_file_name(raw: &str, kind: &str) -> String {
     name
 }
 
+pub(crate) fn create_artifact_logical_key(file_name: &str, kind: &str) -> String {
+    format!("create:{}", safe_file_name(file_name, kind))
+}
+
+pub(crate) fn artifact_path_logical_key(path: &Path) -> String {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                normalized.pop();
+            }
+            other => normalized.push(other.as_os_str()),
+        }
+    }
+    format!("path:{}", normalized.display())
+}
+
 fn unique_path(path: PathBuf) -> PathBuf {
     if !path.exists() {
         return path;
@@ -105,7 +137,7 @@ fn unique_path(path: PathBuf) -> PathBuf {
         .extension()
         .and_then(|value| value.to_str())
         .unwrap_or("");
-    for index in 2..1000 {
+    for index in 2_u64.. {
         let suffix = if extension.is_empty() {
             format!("{stem}-{index}")
         } else {
@@ -116,7 +148,7 @@ fn unique_path(path: PathBuf) -> PathBuf {
             return candidate;
         }
     }
-    path
+    unreachable!("an unbounded numeric suffix always has another candidate")
 }
 
 fn options() -> SimpleFileOptions {
@@ -578,5 +610,36 @@ mod tests {
         assert_eq!(spreadsheet.kind, PreviewKind::Spreadsheet);
         assert!(spreadsheet.content.contains("Summary"));
         assert!(spreadsheet.content.contains("Revenue\t120\tTRUE"));
+    }
+
+    #[test]
+    fn office_semantic_revision_ignores_container_and_core_timestamp_noise() {
+        let dir = tempdir().unwrap();
+        let spec = ArtifactSpec {
+            title: "Stable report".into(),
+            file_name: "stable-report.docx".into(),
+            kind: "docx".into(),
+            content: "Same audience-facing content.".into(),
+            slides: vec![],
+            sheets: vec![],
+        };
+        let first = materialize_artifacts(dir.path(), std::slice::from_ref(&spec))
+            .unwrap()
+            .remove(0);
+        std::thread::sleep(std::time::Duration::from_millis(1_100));
+        let second = materialize_artifacts(dir.path(), std::slice::from_ref(&spec))
+            .unwrap()
+            .remove(0);
+
+        assert_ne!(first.path, second.path);
+        assert_ne!(first.revision, second.revision);
+        assert_eq!(first.semantic_revision, second.semantic_revision);
+
+        let mut changed = spec;
+        changed.content = "Materially changed audience-facing content.".into();
+        let changed = materialize_artifacts(dir.path(), &[changed])
+            .unwrap()
+            .remove(0);
+        assert_ne!(first.semantic_revision, changed.semantic_revision);
     }
 }

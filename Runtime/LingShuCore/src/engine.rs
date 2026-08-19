@@ -1,19 +1,29 @@
-use crate::artifacts::{materialize_artifacts, ArtifactError};
+use crate::artifacts::{
+    artifact_path_logical_key, create_artifact_logical_key, materialize_artifacts, ArtifactError,
+};
 use crate::contract::{kernel_contract, PlatformCapabilities};
-use crate::loops::{LoopAdapterMode, LoopError, LoopExecutionRequest, LoopRegistry};
+use crate::loops::{
+    LoopAdapterMode, LoopArtifactReplacement, LoopArtifactSelector, LoopArtifactSelectorKind,
+    LoopError, LoopExecutionRequest, LoopReceiptId, LoopRegistry,
+};
 use crate::memory::{MemoryError, MemoryKernel};
 use crate::model_client::{AgentToolDefinition, ModelClient, ModelDelta, ModelError, ModelTurn};
 use crate::models::*;
 use crate::plugins::{PluginCapabilityRoute, PluginError, PluginRegistry, PluginUsagePolicy};
-use crate::preview::{preview_file, PreviewKind};
+use crate::preview::{
+    content_revision, file_revision, preview_file, semantic_file_revision, PreviewKind,
+};
 use crate::process::hide_tokio_console_window;
 use crate::providers::provider_catalog;
-use crate::store::{RuntimeStore, StoreError};
+use crate::store::{
+    close_unanswered_tool_calls, close_unanswered_tool_calls_except, ArtifactRegistration,
+    ArtifactSupersession, ExternalArtifactRegistration, RuntimeStore, StoreError,
+};
 use chrono::{DateTime, Utc};
 use futures_util::future::join_all;
 use serde::Deserialize;
 use serde_json::{json, Value};
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::future::Future;
 use std::path::{Component, Path, PathBuf};
 use std::pin::Pin;
@@ -30,9 +40,20 @@ const GOAL_ATTEMPTS: usize = 3;
 const MODEL_TURN_RECOVERY_ATTEMPTS: usize = 3;
 const CHECKER_RECOVERY_ATTEMPTS: usize = 3;
 const AGENT_TURN_CHECKPOINT_INTERVAL: usize = 40;
+const MAX_EMPTY_MODEL_TURNS: usize = 2;
+const MAX_RUNTIME_CONTRACT_CORRECTIONS: usize = 3;
+const MAX_REPEATED_PLAN_RECOVERIES: usize = 2;
+const CHECKER_NO_PROGRESS_REROUTE_OCCURRENCE: u32 = 2;
+const CHECKER_NO_PROGRESS_HANDOFF_OCCURRENCE: u32 = 3;
+const MAX_AUTOMATIC_RECOVERY_CYCLES: u32 = 3;
 const MAX_ROOT_RECOVERY_DELAY_SECONDS: u64 = 30;
 const MAX_CHILD_DEPTH: u8 = 3;
 const STUCK_REPEAT_THRESHOLD: usize = 5;
+const RECENT_HUMAN_CHECKPOINT_GROUPS: usize = 4;
+const MAX_RETAINED_HUMAN_CHECKPOINT_GROUPS: usize = 6;
+const RECENT_SUPERSEDED_EXTERNAL_PATHS: usize = 4;
+const HUMAN_CHECKPOINT_TEXT_LIMIT: usize = 8_000;
+const HUMAN_CHECKPOINT_SIBLING_LIMIT: usize = 2_000;
 const MIN_GOAL_TIMEOUT_SECONDS: u64 = 30;
 const MAX_GOAL_TIMEOUT_SECONDS: [u64; GOAL_ATTEMPTS] = [75, 120, 180];
 
@@ -125,6 +146,35 @@ enum SessionOutcome {
     Cancelled,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ChatPublishMode {
+    Live,
+    BufferedUntilAccepted,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HumanActionPurpose {
+    ArtifactAcceptance,
+    RuntimeGuidance,
+    TechnicalRecovery,
+}
+
+impl HumanActionPurpose {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::ArtifactAcceptance => "artifact_acceptance",
+            Self::RuntimeGuidance => "runtime_guidance",
+            Self::TechnicalRecovery => "technical_recovery",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AutomaticRecoveryDecision {
+    Retry { streak: u32 },
+    Handoff,
+}
+
 #[derive(Debug)]
 struct ToolExecution {
     call: AgentToolCall,
@@ -188,6 +238,36 @@ struct AskArguments {
     prompt: String,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+struct RuntimeAskEvidence {
+    #[serde(default)]
+    prompt: String,
+    #[serde(default)]
+    purpose: String,
+    #[serde(default)]
+    artifact_revisions: Vec<ArtifactRevisionEvidence>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct ArtifactRevisionEvidence {
+    path: String,
+    revision: String,
+}
+
+#[derive(Debug)]
+struct HumanCheckpointEvidence {
+    artifact_revisions: BTreeMap<PathBuf, String>,
+    question: String,
+    answer: String,
+}
+
+#[derive(Debug, Clone)]
+struct AnsweredAskCheckpoint {
+    assistant_index: usize,
+    evidence: RuntimeAskEvidence,
+    answer: String,
+}
+
 #[derive(Debug, Deserialize)]
 struct RecallMemoryArguments {
     query: String,
@@ -195,12 +275,45 @@ struct RecallMemoryArguments {
     limit: Option<usize>,
 }
 
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum VerificationDisposition {
+    Passed,
+    NeedsRevision,
+    NeedsUserAction,
+}
+
 #[derive(Debug, Deserialize)]
 struct VerificationResult {
-    passed: bool,
+    #[serde(default)]
+    disposition: Option<VerificationDisposition>,
+    #[serde(default)]
+    passed: Option<bool>,
     summary: String,
     #[serde(default)]
     findings: Vec<String>,
+    #[serde(default)]
+    user_prompt: Option<String>,
+}
+
+impl VerificationResult {
+    fn disposition(&self) -> Result<VerificationDisposition, EngineError> {
+        match (self.disposition, self.passed) {
+            (Some(disposition), Some(passed))
+                if passed != (disposition == VerificationDisposition::Passed) =>
+            {
+                Err(EngineError::InvalidModelJson(
+                    "checker disposition conflicts with legacy passed field".into(),
+                ))
+            }
+            (Some(disposition), _) => Ok(disposition),
+            (None, Some(true)) => Ok(VerificationDisposition::Passed),
+            (None, Some(false)) => Ok(VerificationDisposition::NeedsRevision),
+            (None, None) => Err(EngineError::InvalidModelJson(
+                "checker response omitted disposition".into(),
+            )),
+        }
+    }
 }
 
 impl RuntimeKernel {
@@ -417,44 +530,49 @@ impl RuntimeKernel {
     ) -> Result<QueueRunReport, EngineError> {
         let _supervisor = self.supervisor_guard.lock().await;
         let mut aggregate = QueueRunReport::default();
-        let mut recovery_cycle = 0_u32;
+        let mut recovery_streaks: HashMap<Uuid, u32> = HashMap::new();
 
         loop {
             let pass = self.run_queue_report(api_key.clone()).await?;
-            let made_progress = pass.completed > 0;
-            let had_failures = !pass.failures.is_empty();
-            let has_retryable_failure = pass
+            aggregate.completed = aggregate.completed.saturating_add(pass.completed);
+            for failure in &pass.failures {
+                if !aggregate.failures.contains(failure) {
+                    aggregate.failures.push(failure.clone());
+                }
+            }
+
+            let failed_this_pass = pass
                 .failures
                 .iter()
-                .any(|failure| failure_allows_automatic_retry(failure.kind));
-            aggregate.completed = aggregate.completed.saturating_add(pass.completed);
-            for failure in pass.failures {
-                if !aggregate.failures.contains(&failure) {
-                    aggregate.failures.push(failure);
+                .map(|failure| failure.thread_id)
+                .collect::<HashSet<_>>();
+            recovery_streaks.retain(|thread_id, _| failed_this_pass.contains(thread_id));
+            let mut retry_delay_cycle = 0_u32;
+            for failure in &pass.failures {
+                let previous_streak = recovery_streaks
+                    .get(&failure.thread_id)
+                    .copied()
+                    .unwrap_or_default();
+                if let AutomaticRecoveryDecision::Retry { streak } =
+                    automatic_recovery_decision(failure.kind, previous_streak)
+                {
+                    recovery_streaks.insert(failure.thread_id, streak);
+                    retry_delay_cycle = retry_delay_cycle.max(streak);
+                    continue;
                 }
+                recovery_streaks.remove(&failure.thread_id);
+                self.pause_recovery_failure(failure).await?;
             }
 
             if !self.store.has_runnable_tasks().await {
                 break;
             }
-
-            // Authentication and request-contract failures require channel configuration to
-            // change. Preserve the Loop transcript as `needs_recovery`, but release the
-            // supervisor instead of repeatedly reopening the same impossible request.
-            if !made_progress && had_failures && !has_retryable_failure {
-                break;
+            if retry_delay_cycle == 0 {
+                retry_delay_cycle = 1;
             }
-
-            recovery_cycle = if made_progress {
-                1
-            } else {
-                recovery_cycle.saturating_add(1)
-            };
             tokio::select! {
-                _ = tokio::time::sleep(root_recovery_delay(recovery_cycle)) => {}
-                _ = self.queue_wakeup.notified() => {
-                    recovery_cycle = 0;
-                }
+                _ = tokio::time::sleep(root_recovery_delay(retry_delay_cycle)) => {}
+                _ = self.queue_wakeup.notified() => {}
             }
         }
 
@@ -649,8 +767,33 @@ impl RuntimeKernel {
         }
         let plugin_context = self.session_capability_context(&settings);
         let loop_engine = task.loop_engine;
-        let outcome = self
-            .run_loop_session(
+        let outcome = if let Some(pending) = task.review_progress.pending_external_outcome.clone() {
+            self.loops
+                .acknowledge_receipt(LoopReceiptId {
+                    task_id: thread_id,
+                    run_id: pending.run_id,
+                })
+                .await?;
+            self.store
+                .append_event(
+                    thread_id,
+                    RuntimeEventKind::Status,
+                    RuntimeEventState::Completed,
+                    "Runtime",
+                    localized(
+                        &settings.locale,
+                        "恢复已登记的外部执行结果",
+                        "Recovered committed external execution outcome",
+                    ),
+                    format!("run_id={}; next=checker_or_completion", pending.run_id),
+                )
+                .await?;
+            SessionOutcome::Completed {
+                text: pending.text,
+                messages: task.session_messages.clone(),
+            }
+        } else {
+            self.run_loop_session(
                 loop_engine,
                 task,
                 goal.clone(),
@@ -660,7 +803,8 @@ impl RuntimeKernel {
                 String::new(),
                 plugin_context,
             )
-            .await?;
+            .await?
+        };
         let outcome = match outcome {
             SessionOutcome::Completed { text, messages }
                 if should_run_checker(&goal, &self.store.task(thread_id).await) =>
@@ -833,6 +977,20 @@ impl RuntimeKernel {
         )
     }
 
+    async fn persist_session_before_adapter(
+        &self,
+        task: &mut TaskRecord,
+        messages: Vec<AgentMessage>,
+    ) -> Result<(), EngineError> {
+        debug_assert!(tool_protocol_is_complete(&messages));
+        task.session_messages = messages;
+        self.store
+            .set_session_messages_for_next_attempt(task.id, task.session_messages.clone())
+            .await?;
+        task.review_progress.pending_external_outcome = None;
+        Ok(())
+    }
+
     fn run_loop_session<'a>(
         &'a self,
         engine: LoopEngineKind,
@@ -848,13 +1006,19 @@ impl RuntimeKernel {
             LoopAdapterMode::InProcess => Box::pin(async move {
                 let task_id = task.id;
                 let workspace = settings.workspace.clone();
+                let checker_revision = task_is_checker_revision(&task, correction.as_deref());
                 let baseline = self.loops.begin_workspace_delta(&workspace).await;
                 let result = self
                     .run_grok_loop_session(task, goal, settings, api_key, correction)
                     .await;
                 let changed_paths = self.loops.finish_workspace_delta(baseline).await;
                 let registration = self
-                    .register_workspace_artifact_paths(task_id, &workspace, changed_paths)
+                    .register_workspace_artifact_paths(
+                        task_id,
+                        &workspace,
+                        changed_paths,
+                        checker_revision,
+                    )
                     .await;
                 match result {
                     Err(error) => Err(error),
@@ -885,6 +1049,7 @@ impl RuntimeKernel {
         task_id: Uuid,
         workspace: &Path,
         paths: Vec<PathBuf>,
+        checker_revision: bool,
     ) -> Result<(), EngineError> {
         let mut records = Vec::new();
         for path in paths {
@@ -898,8 +1063,157 @@ impl RuntimeKernel {
             }
         }
         if !records.is_empty() {
-            self.store.add_artifacts(task_id, records).await?;
+            if checker_revision {
+                self.store.revise_artifacts(task_id, records).await?;
+            } else {
+                self.store.add_artifacts(task_id, records).await?;
+            }
         }
+        Ok(())
+    }
+
+    /// Validate every save-as replacement claim against the pre-run current manifest and the
+    /// actual workspace delta, then commit replacements and companions in one Store transaction.
+    /// New paths without a valid explicit claim remain companions; malformed or stale claims
+    /// reject the whole batch before artifact state changes.
+    async fn register_external_workspace_artifacts(
+        &self,
+        task: &TaskRecord,
+        run_id: Uuid,
+        outcome_text: &str,
+        workspace: &Path,
+        paths: Vec<PathBuf>,
+        replacements: Vec<LoopArtifactReplacement>,
+    ) -> Result<(), EngineError> {
+        if task
+            .review_progress
+            .applied_external_run_ids
+            .contains(&run_id)
+        {
+            return Ok(());
+        }
+        let mut records = BTreeMap::<String, ArtifactRecord>::new();
+        for path in paths {
+            let path = if path.is_absolute() {
+                normalize_path(&path)
+            } else {
+                normalize_path(&workspace.join(path))
+            };
+            if !path.starts_with(&normalize_path(workspace)) {
+                return Err(external_result_protocol_error(format!(
+                    "workspace delta escaped the Workspace: {}",
+                    path.display()
+                )));
+            }
+            let metadata = std::fs::symlink_metadata(&path).map_err(|error| {
+                external_result_protocol_error(format!(
+                    "changed artifact {} could not be inspected: {error}",
+                    path.display()
+                ))
+            })?;
+            if !metadata.file_type().is_file() || metadata.file_type().is_symlink() {
+                return Err(external_result_protocol_error(format!(
+                    "changed artifact must be a regular non-symlink file: {}",
+                    path.display()
+                )));
+            }
+            let key = external_path_identity(&path);
+            if records.contains_key(&key) {
+                return Err(external_result_protocol_error(format!(
+                    "workspace delta contains the same path more than once: {}",
+                    path.display()
+                )));
+            }
+            records.insert(key, artifact_record_for_path(&path)?);
+        }
+
+        let delta_paths = records.keys().cloned().collect::<HashSet<_>>();
+        let mut claims = HashMap::<String, (Uuid, String)>::new();
+        let mut claimed_targets = HashSet::new();
+        for replacement in replacements {
+            let replacement_path =
+                resolve_workspace_path(workspace, replacement.new_path.to_string_lossy().as_ref())?;
+            let replacement_key = external_path_identity(&replacement_path);
+            if !delta_paths.contains(&replacement_key) {
+                return Err(external_result_protocol_error(format!(
+                    "declared replacement was not changed by this harness run: {}",
+                    replacement.new_path.display()
+                )));
+            }
+            if task
+                .artifacts
+                .iter()
+                .any(|artifact| external_path_identity(&artifact.path) == replacement_key)
+            {
+                return Err(external_result_protocol_error(format!(
+                    "save-as replacement path already belongs to a current artifact: {}",
+                    replacement.new_path.display()
+                )));
+            }
+            if task
+                .superseded_artifacts
+                .iter()
+                .any(|artifact| external_path_identity(&artifact.path) == replacement_key)
+            {
+                return Err(external_result_protocol_error(format!(
+                    "save-as replacement path belongs to superseded history and cannot be reactivated: {}",
+                    replacement.new_path.display()
+                )));
+            }
+            let target = external_replacement_target(task, &replacement.replaces)?;
+            if !claimed_targets.insert(target.id) {
+                return Err(external_result_protocol_error(format!(
+                    "current artifact {} was claimed more than once",
+                    target.id
+                )));
+            }
+            if delta_paths.contains(&external_path_identity(&target.path)) {
+                return Err(external_result_protocol_error(format!(
+                    "replacement target {} was also modified in place",
+                    target.path.display()
+                )));
+            }
+            let live_revision = file_revision(&target.path).map_err(|error| {
+                external_result_protocol_error(format!(
+                    "current replacement target {} could not be fingerprinted: {error}",
+                    target.path.display()
+                ))
+            })?;
+            if live_revision != replacement.replaces.expected_raw_revision {
+                return Err(external_result_protocol_error(format!(
+                    "stale replacement target {}: expected raw revision {}, found {}",
+                    target.path.display(),
+                    replacement.replaces.expected_raw_revision,
+                    live_revision
+                )));
+            }
+            if claims
+                .insert(
+                    replacement_key,
+                    (target.id, replacement.replaces.expected_raw_revision),
+                )
+                .is_some()
+            {
+                return Err(external_result_protocol_error(
+                    "the same changed path was declared as a replacement more than once",
+                ));
+            }
+        }
+
+        let registrations = records
+            .into_iter()
+            .map(|(path_key, artifact)| {
+                let claim = claims.remove(&path_key);
+                ExternalArtifactRegistration {
+                    artifact,
+                    superseded_artifact_id: claim.as_ref().map(|(target, _)| *target),
+                    expected_superseded_revision: claim.map(|(_, revision)| revision),
+                }
+            })
+            .collect::<Vec<_>>();
+        self.store
+            .register_external_artifacts(task.id, run_id, outcome_text.to_string(), registrations)
+            .await?;
         Ok(())
     }
 
@@ -914,6 +1228,7 @@ impl RuntimeKernel {
         memory_context: String,
         plugin_context: String,
     ) -> Result<SessionOutcome, EngineError> {
+        let continuation_context = external_continuation_context(correction.as_deref(), &task);
         let event = self
             .store
             .append_event(
@@ -935,13 +1250,14 @@ impl RuntimeKernel {
             .run(
                 engine,
                 LoopExecutionRequest {
+                    task_id: task.id,
                     workspace: &settings.workspace,
                     source_prompt: &task.prompt,
                     attachment_paths: &task.attachment_paths,
                     objective: &goal.objective,
                     role: &task.participant_name,
                     goal: &goal,
-                    correction: correction.as_deref(),
+                    correction: continuation_context.as_deref(),
                     memory_context: &memory_context,
                     plugin_context: &plugin_context,
                     locale: settings.locale,
@@ -953,12 +1269,54 @@ impl RuntimeKernel {
             .await;
         match execution {
             Ok(execution) => {
-                self.register_workspace_artifact_paths(
-                    task.id,
-                    &settings.workspace,
-                    execution.artifact_paths,
-                )
-                .await?;
+                let receipt_id = execution.receipt_id;
+                let registration = self
+                    .register_external_workspace_artifacts(
+                        &task,
+                        execution.receipt_id.run_id,
+                        &execution.text,
+                        &settings.workspace,
+                        execution.artifact_paths,
+                        execution.artifact_replacements,
+                    )
+                    .await;
+                if let Err(error) = registration {
+                    if let Err(receipt_error) = self
+                        .loops
+                        .reject_receipt(receipt_id, error.to_string())
+                        .await
+                    {
+                        let combined = format!(
+                            "{error}; additionally failed to retain the managed run receipt for correction: {receipt_error}"
+                        );
+                        self.store
+                            .finish_event(
+                                event.id,
+                                RuntimeEventState::Failed,
+                                Some(truncate(&combined, 2_400)),
+                            )
+                            .await?;
+                        return Err(receipt_error.into());
+                    }
+                    self.store
+                        .finish_event(
+                            event.id,
+                            RuntimeEventState::Failed,
+                            Some(truncate(&error.to_string(), 2_400)),
+                        )
+                        .await?;
+                    return Err(error);
+                }
+                if let Err(error) = self.loops.acknowledge_receipt(receipt_id).await {
+                    self.store
+                        .finish_event(
+                            event.id,
+                            RuntimeEventState::Failed,
+                            Some(truncate(&error.to_string(), 2_400)),
+                        )
+                        .await?;
+                    return Err(error.into());
+                }
                 self.store
                     .finish_event(
                         event.id,
@@ -966,13 +1324,12 @@ impl RuntimeKernel {
                         Some(truncate(&execution.text, 2_400)),
                     )
                     .await?;
-                let mut messages = task.session_messages;
-                messages.push(AgentMessage {
-                    role: AgentRole::Assistant,
-                    content: execution.text.clone(),
-                    tool_calls: Vec::new(),
-                    tool_call_id: None,
-                });
+                let messages = self
+                    .store
+                    .task(task.id)
+                    .await
+                    .ok_or(EngineError::MissingTask(task.id))?
+                    .session_messages;
                 Ok(SessionOutcome::Completed {
                     text: execution.text,
                     messages,
@@ -985,6 +1342,106 @@ impl RuntimeKernel {
                 Err(error.into())
             }
         }
+    }
+
+    async fn pause_for_user_action(
+        &self,
+        task_id: Uuid,
+        mut messages: Vec<AgentMessage>,
+        question: String,
+        visible_text: Option<String>,
+        purpose: HumanActionPurpose,
+    ) -> Result<SessionOutcome, EngineError> {
+        close_unanswered_tool_calls(&mut messages);
+        let artifact_revisions = self
+            .store
+            .task(task_id)
+            .await
+            .map(|task| artifact_revision_values(&task))
+            .unwrap_or_default();
+        let call_id = format!("runtime-ask-{}", Uuid::new_v4());
+        messages.push(AgentMessage {
+            role: AgentRole::Assistant,
+            content: String::new(),
+            tool_calls: vec![AgentToolCall {
+                id: call_id.clone(),
+                name: "ask_user".into(),
+                arguments_json: json!({
+                    "prompt": question.clone(),
+                    "purpose": purpose.as_str(),
+                    "artifact_revisions": artifact_revisions
+                })
+                .to_string(),
+            }],
+            tool_call_id: None,
+        });
+        self.store.set_session_messages(task_id, messages).await?;
+        if let Some(text) = visible_text.filter(|text| !text.trim().is_empty()) {
+            self.store
+                .set_assistant_text(task_id, text, MessageState::Thinking)
+                .await?;
+        }
+        self.store
+            .set_needs_user_action(task_id, call_id, question.clone())
+            .await?;
+        self.store
+            .append_event(
+                task_id,
+                RuntimeEventKind::HumanInteraction,
+                RuntimeEventState::Blocked,
+                "Runtime",
+                localized(
+                    &self.store.settings().await.locale,
+                    "安全暂停，等待你的决定",
+                    "Safety pause awaiting your decision",
+                ),
+                question,
+            )
+            .await?;
+        Ok(SessionOutcome::Blocked)
+    }
+
+    async fn pause_recovery_failure(&self, failure: &QueueFailure) -> Result<(), EngineError> {
+        let Some(task) = self.store.task(failure.thread_id).await else {
+            return Ok(());
+        };
+        if task.status != TaskStatus::NeedsRecovery {
+            return Ok(());
+        }
+        let locale = self.store.settings().await.locale;
+        let question = format!(
+            "{}\n\n{}",
+            localized(
+                &locale,
+                "自动恢复仍无法继续，任务已停止后台自旋；原 GoalSpec、会话和产物均已保留。请检查模型/API/网络设置后回复“继续”，或给出新的处理指示。",
+                "Automatic recovery still could not continue, so background retries were stopped. The original GoalSpec, session, and artifacts were preserved. Check the model/API/network settings and reply “continue”, or provide new direction.",
+            ),
+            task.summary
+        );
+        self.store
+            .append_event(
+                failure.thread_id,
+                RuntimeEventKind::Warning,
+                RuntimeEventState::Blocked,
+                "Runtime",
+                localized(
+                    &locale,
+                    "自动恢复转交人工处理",
+                    "Automatic recovery handed off for human action",
+                ),
+                format!("failure_kind={:?}", failure.kind),
+            )
+            .await?;
+        let _ = self
+            .pause_for_user_action(
+                failure.thread_id,
+                task.session_messages,
+                question,
+                None,
+                HumanActionPurpose::TechnicalRecovery,
+            )
+            .await?;
+        Ok(())
     }
 
     fn run_grok_loop_session<'a>(
@@ -1000,27 +1457,25 @@ impl RuntimeKernel {
             let mut active_permission = settings.execution_permission_mode;
             let plugin_policy = task_plugin_usage_policy(&task);
             let (mut executed_tools, mut failed_network_command) = session_tool_evidence(&messages);
-            if let Some(correction) = correction {
-                messages.push(AgentMessage {
-                    role: AgentRole::User,
-                    content: format!(
-                        "{}\n{}",
-                        localized(
-                            &settings.locale,
-                            "【独立验收反馈，最高优先级】不要宣告完成；修复以下问题后重新交付。",
-                            "[Independent checker feedback, highest priority] Do not declare completion; fix these issues and deliver again."
-                        ),
-                        correction
-                    ),
-                    tool_calls: Vec::new(),
-                    tool_call_id: None,
-                });
+            // A checker-boundary snapshot intentionally discards old tool turns. Registered
+            // artifacts remain authoritative host evidence that an artifact operation succeeded.
+            if !task.artifacts.is_empty() {
+                executed_tools = executed_tools.max(1);
             }
-            let mut signatures: Vec<String> = Vec::new();
+            let reviewing_artifact = task_is_checker_revision(&task, correction.as_deref());
+            let mut runtime_contract_corrections = 0_usize;
+            let mut empty_model_turns = 0_usize;
+            if let Some(correction) = correction {
+                let correction = checker_correction_message(&settings.locale, &correction);
+                if messages.last() != Some(&correction) {
+                    messages.push(correction);
+                }
+            }
+            let mut evidence_occurrences: HashMap<String, usize> = HashMap::new();
             let mut turn_index = 0_usize;
             loop {
                 for _ in 0..AGENT_TURN_CHECKPOINT_INTERVAL {
-                    turn_index += 1;
+                    turn_index = turn_index.saturating_add(1);
                     if self.store.task_is_cancelled(task.id).await {
                         return Ok(SessionOutcome::Cancelled);
                     }
@@ -1064,6 +1519,19 @@ impl RuntimeKernel {
                             localized(&settings.locale, "思考中…", "Thinking…").into(),
                         )
                         .await?;
+                    let has_registered_artifacts = self
+                        .store
+                        .task(task.id)
+                        .await
+                        .is_some_and(|task| !task.artifacts.is_empty());
+                    let publish_mode = if matches!(&goal.output_mode, OutputMode::Artifact)
+                        || reviewing_artifact
+                        || has_registered_artifacts
+                    {
+                        ChatPublishMode::BufferedUntilAccepted
+                    } else {
+                        ChatPublishMode::Live
+                    };
                     let turn = self
                         .stream_model_turn_with_recovery(
                             task.id,
@@ -1072,10 +1540,29 @@ impl RuntimeKernel {
                             api_key.as_deref(),
                             &messages,
                             &definitions,
+                            publish_mode,
                         )
                         .await?;
                     if turn.tool_calls.is_empty() {
                         if turn.text.trim().is_empty() {
+                            empty_model_turns += 1;
+                            if empty_model_turns >= MAX_EMPTY_MODEL_TURNS {
+                                let question = localized(
+                                    &settings.locale,
+                                    "模型连续没有返回可执行内容，当前任务已交给你决定。上下文和产物均已保留；请调整要求、切换模型，或回复“继续”重试。",
+                                    "The model repeatedly returned no actionable content, so the task now awaits your decision. Context and artifacts were preserved; adjust the request, switch models, or reply “continue” to retry.",
+                                )
+                                .to_string();
+                                return self
+                                    .pause_for_user_action(
+                                        task.id,
+                                        messages,
+                                        question,
+                                        None,
+                                        HumanActionPurpose::RuntimeGuidance,
+                                    )
+                                    .await;
+                            }
                             let correction = localized(
                                 &settings.locale,
                                 "本回合没有生成可见答复或工具调用。重新检查已确认的 GoalSpec 与现有结果，选择下一项实际动作继续推进；不要结束任务。",
@@ -1103,6 +1590,7 @@ impl RuntimeKernel {
                                 .await?;
                             continue;
                         }
+                        empty_model_turns = 0;
                         let final_text = turn.text;
                         let latest_permission =
                             self.store.settings().await.execution_permission_mode;
@@ -1129,6 +1617,24 @@ impl RuntimeKernel {
                             executed_tools,
                             failed_network_command,
                         ) {
+                            if runtime_contract_corrections >= MAX_RUNTIME_CONTRACT_CORRECTIONS {
+                                let question = localized(
+                                    &settings.locale,
+                                    "模型连续无法遵守当前运行时事实，已停止自动重试。请切换模型、调整要求，或明确回复“继续”再试一次。",
+                                    "The model repeatedly contradicted current runtime facts, so automatic retries stopped. Switch models, adjust the request, or reply “continue” to try once more.",
+                                )
+                                .to_string();
+                                return self
+                                    .pause_for_user_action(
+                                        task.id,
+                                        messages,
+                                        question,
+                                        None,
+                                        HumanActionPurpose::RuntimeGuidance,
+                                    )
+                                    .await;
+                            }
+                            runtime_contract_corrections += 1;
                             messages.push(AgentMessage {
                                 role: AgentRole::Assistant,
                                 content: final_text,
@@ -1174,14 +1680,9 @@ impl RuntimeKernel {
                     }
 
                     let tool_calls = turn.tool_calls;
-                    let signature = tool_signature(&tool_calls);
-                    signatures.push(signature.clone());
-                    let repeated_plan = signatures.len() >= STUCK_REPEAT_THRESHOLD
-                        && signatures
-                            .iter()
-                            .rev()
-                            .take(STUCK_REPEAT_THRESHOLD)
-                            .all(|candidate| candidate == &signature);
+                    empty_model_turns = 0;
+                    runtime_contract_corrections = 0;
+                    let plan_signature = tool_signature(&tool_calls, reviewing_artifact);
                     messages.push(AgentMessage {
                         role: AgentRole::Assistant,
                         content: turn.text,
@@ -1211,6 +1712,7 @@ impl RuntimeKernel {
                                         tool_calls: Vec::new(),
                                         tool_call_id: Some(blocking.id.clone()),
                                     });
+                                    close_unanswered_tool_calls(&mut messages);
                                     self.store
                                         .append_event(
                                             task.id,
@@ -1230,6 +1732,24 @@ impl RuntimeKernel {
                                         .await?;
                                     continue;
                                 }
+                                let artifact_revisions = self
+                                    .store
+                                    .task(task.id)
+                                    .await
+                                    .map(|task| artifact_revision_values(&task))
+                                    .unwrap_or_default();
+                                bind_artifact_revisions_to_ask(
+                                    &mut messages,
+                                    &blocking.id,
+                                    artifact_revisions,
+                                );
+                                close_unanswered_tool_calls_except(
+                                    &mut messages,
+                                    Some(blocking.id.as_str()),
+                                );
+                                self.store
+                                    .set_session_messages(task.id, messages.clone())
+                                    .await?;
                                 self.store
                                     .set_needs_user_action(
                                         task.id,
@@ -1268,6 +1788,10 @@ impl RuntimeKernel {
                                     tool_calls: Vec::new(),
                                     tool_call_id: Some(blocking.id.clone()),
                                 });
+                                close_unanswered_tool_calls(&mut messages);
+                                self.store
+                                    .set_session_messages(task.id, messages.clone())
+                                    .await?;
                                 append_recoverable_tool_warning(
                                     &self.store,
                                     task.id,
@@ -1281,36 +1805,6 @@ impl RuntimeKernel {
                         }
                     }
 
-                    if repeated_plan {
-                        for call in tool_calls {
-                            messages.push(AgentMessage {
-                                role: AgentRole::Tool,
-                                content: repeated_tool_plan_output(&call, settings.locale),
-                                tool_calls: Vec::new(),
-                                tool_call_id: Some(call.id),
-                            });
-                        }
-                        signatures.clear();
-                        self.store
-                            .append_event(
-                                task.id,
-                                RuntimeEventKind::Warning,
-                                RuntimeEventState::Completed,
-                                "Runtime",
-                                localized(
-                                    &settings.locale,
-                                    "检测到重复方案，正在换路",
-                                    "Repeated plan detected; changing approach",
-                                ),
-                                signature,
-                            )
-                            .await?;
-                        self.store
-                            .set_session_messages(task.id, messages.clone())
-                            .await?;
-                        continue;
-                    }
-
                     let executions = join_all(tool_calls.into_iter().map(|call| {
                         let original_call = call.clone();
                         async {
@@ -1322,12 +1816,14 @@ impl RuntimeKernel {
                                     settings.clone(),
                                     api_key.clone(),
                                     call,
+                                    reviewing_artifact,
                                 )
                                 .await,
                             )
                         }
                     }))
                     .await;
+                    let mut tool_evidence_outputs = Vec::new();
                     for (call, result) in executions {
                         match result {
                             Ok(execution) => {
@@ -1337,6 +1833,11 @@ impl RuntimeKernel {
                                 {
                                     failed_network_command = true;
                                 }
+                                tool_evidence_outputs.push(format!(
+                                    "tool={}\n{}",
+                                    execution.call.name,
+                                    semantic_tool_evidence(&execution.call, &execution.output)
+                                ));
                                 messages.push(AgentMessage {
                                     role: AgentRole::Tool,
                                     content: execution.output,
@@ -1345,13 +1846,16 @@ impl RuntimeKernel {
                                 });
                             }
                             Err(error) if is_recoverable_tool_error(&error) => {
+                                let output =
+                                    recoverable_tool_error_output(&call, &error, settings.locale);
+                                tool_evidence_outputs.push(format!(
+                                    "tool={}\n{}",
+                                    call.name,
+                                    semantic_tool_evidence(&call, &output)
+                                ));
                                 messages.push(AgentMessage {
                                     role: AgentRole::Tool,
-                                    content: recoverable_tool_error_output(
-                                        &call,
-                                        &error,
-                                        settings.locale,
-                                    ),
+                                    content: output,
                                     tool_calls: Vec::new(),
                                     tool_call_id: Some(call.id.clone()),
                                 });
@@ -1366,6 +1870,74 @@ impl RuntimeKernel {
                             }
                             Err(error) => return Err(error),
                         }
+                    }
+                    let artifact_revisions = self
+                        .store
+                        .task(task.id)
+                        .await
+                        .map(|task| artifact_revision_map(&task))
+                        .unwrap_or_default();
+                    let evidence_signature = format!(
+                        "plan={plan_signature}\noutputs={}\nartifact_revisions={artifact_revisions:?}",
+                        tool_evidence_outputs.join("\n\n")
+                    );
+                    let evidence_digest = content_revision(evidence_signature.as_bytes());
+                    let evidence_occurrence = evidence_occurrences
+                        .entry(evidence_digest)
+                        .and_modify(|count| *count = count.saturating_add(1))
+                        .or_insert(1);
+                    let repeated_without_new_evidence = *evidence_occurrence
+                        >= STUCK_REPEAT_THRESHOLD
+                        && *evidence_occurrence % STUCK_REPEAT_THRESHOLD == 0;
+                    if repeated_without_new_evidence {
+                        let repeated_plan_recoveries =
+                            *evidence_occurrence / STUCK_REPEAT_THRESHOLD;
+                        let correction = localized(
+                            &settings.locale,
+                            "相同工具方案连续返回了相同结果，且产物没有变化。请换一条实际可验证的路径；如果现有能力无法继续，请使用 ask_user 转交人工，不要重复原方案。",
+                            "The same tool plan repeatedly returned identical results and no artifact changed. Choose a materially different, verifiable path; if current capabilities cannot continue, use ask_user to hand off to the user instead of repeating the plan.",
+                        );
+                        messages.push(AgentMessage {
+                            role: AgentRole::User,
+                            content: correction.into(),
+                            tool_calls: Vec::new(),
+                            tool_call_id: None,
+                        });
+                        self.store
+                            .append_event(
+                                task.id,
+                                RuntimeEventKind::Warning,
+                                RuntimeEventState::Completed,
+                                "Runtime",
+                                localized(
+                                    &settings.locale,
+                                    "检测到无新证据的重复方案",
+                                    "Repeated plan produced no new evidence",
+                                ),
+                                evidence_signature,
+                            )
+                            .await?;
+                        self.store
+                            .set_session_messages(task.id, messages.clone())
+                            .await?;
+                        if repeated_plan_recoveries >= MAX_REPEATED_PLAN_RECOVERIES {
+                            let question = localized(
+                                &settings.locale,
+                                "相同工具方案持续返回相同结果，模型没有形成新证据。任务已转交人工；请补充一个明确方向、切换能力，或取消任务。",
+                                "The same tool plan kept returning identical results and the model produced no new evidence. The task is now handed off to you; provide a concrete direction, switch capabilities, or cancel it.",
+                            )
+                            .to_string();
+                            return self
+                                .pause_for_user_action(
+                                    task.id,
+                                    messages,
+                                    question,
+                                    None,
+                                    HumanActionPurpose::RuntimeGuidance,
+                                )
+                                .await;
+                        }
+                        continue;
                     }
                     self.store
                         .set_session_messages(task.id, messages.clone())
@@ -1383,7 +1955,6 @@ impl RuntimeKernel {
                     tool_calls: Vec::new(),
                     tool_call_id: None,
                 });
-                signatures.clear();
                 self.store
                     .append_event(
                         task.id,
@@ -1413,6 +1984,7 @@ impl RuntimeKernel {
         api_key: Option<&str>,
         messages: &[AgentMessage],
         definitions: &[AgentToolDefinition],
+        publish_mode: ChatPublishMode,
     ) -> Result<ModelTurn, EngineError> {
         for attempt in 1..=MODEL_TURN_RECOVERY_ATTEMPTS {
             match self
@@ -1423,6 +1995,7 @@ impl RuntimeKernel {
                     api_key,
                     messages,
                     definitions,
+                    publish_mode,
                 )
                 .await
             {
@@ -1467,6 +2040,7 @@ impl RuntimeKernel {
         api_key: Option<&str>,
         messages: &[AgentMessage],
         definitions: &[AgentToolDefinition],
+        publish_mode: ChatPublishMode,
     ) -> Result<ModelTurn, EngineError> {
         let model_event = self
             .store
@@ -1526,14 +2100,16 @@ impl RuntimeKernel {
                     if text.is_empty() {
                         continue;
                     }
-                    if !visible_started {
-                        self.store.begin_assistant_visible_turn(task_id).await?;
-                        visible_started = true;
-                    }
                     self.store
                         .append_event_detail_live(model_event.id, &text)
                         .await;
-                    self.store.append_assistant_delta_live(task_id, &text).await;
+                    if publish_mode == ChatPublishMode::Live {
+                        if !visible_started {
+                            self.store.begin_assistant_visible_turn(task_id).await?;
+                            visible_started = true;
+                        }
+                        self.store.append_assistant_delta_live(task_id, &text).await;
+                    }
                 }
             }
         }
@@ -1592,6 +2168,41 @@ impl RuntimeKernel {
         Ok(turn)
     }
 
+    async fn register_created_artifacts(
+        &self,
+        task_id: Uuid,
+        records: Vec<ArtifactRecord>,
+        checker_revision: bool,
+        replacement_target: Option<Uuid>,
+    ) -> Result<Vec<ArtifactRegistration>, EngineError> {
+        if let Some(superseded_artifact_id) = replacement_target {
+            if records.len() != 1 {
+                return Err(EngineError::InvalidModelJson(
+                    "create_artifact.replaces requires exactly one generated artifact".into(),
+                ));
+            }
+            let replacement = records.into_iter().next().expect("one record was checked");
+            return Ok(self
+                .store
+                .supersede_artifacts(
+                    task_id,
+                    vec![ArtifactSupersession {
+                        superseded_artifact_id,
+                        replacement,
+                    }],
+                )
+                .await?);
+        }
+        if checker_revision {
+            Ok(self.store.revise_artifacts(task_id, records).await?)
+        } else {
+            Ok(self
+                .store
+                .add_artifacts_with_results(task_id, records)
+                .await?)
+        }
+    }
+
     async fn execute_tool(
         &self,
         task: TaskRecord,
@@ -1599,6 +2210,7 @@ impl RuntimeKernel {
         settings: RuntimeSettings,
         api_key: Option<String>,
         call: AgentToolCall,
+        checker_revision: bool,
     ) -> Result<ToolExecution, EngineError> {
         let plugin_policy = task_plugin_usage_policy(&task);
         let network_command = call.name == "run_command"
@@ -1784,6 +2396,19 @@ impl RuntimeKernel {
             }
             "create_artifact" => {
                 let arguments = parse_value_arguments(&call)?;
+                let replacement_target = if arguments.get("replaces").is_some() {
+                    let current_task = self
+                        .store
+                        .task(task.id)
+                        .await
+                        .ok_or(EngineError::MissingTask(task.id))?;
+                    create_artifact_replacement_target(&current_task, &arguments)?
+                } else {
+                    None
+                };
+                let requested_logical_key = create_artifact_key_from_arguments(&arguments);
+                let requested_semantic_context =
+                    create_artifact_semantic_context(&arguments, None);
                 let routed_capability = artifact_plugin_capability(&arguments).filter(|capability| {
                     plugin_policy == PluginUsagePolicy::Required
                         && self
@@ -1798,22 +2423,44 @@ impl RuntimeKernel {
                         .plugins
                         .execute_capability(
                             capability,
-                            arguments,
+                            arguments.clone(),
                             &settings.workspace,
                             latest_permission,
                             plugin_policy,
                             "create_artifact",
                         )
                         .await?;
-                    let records = execution
+                    let semantic_context = create_artifact_semantic_context(
+                        &arguments,
+                        serde_json::from_str::<Value>(&execution.output).ok().as_ref(),
+                    );
+                    let mut records = execution
                         .artifact_paths
                         .iter()
                         .map(|path| artifact_record_for_path(path))
                         .collect::<Result<Vec<_>, _>>()?;
-                    if !records.is_empty() {
-                        self.store.add_artifacts(task.id, records).await?;
+                    if records.len() == 1 {
+                        records[0].logical_key = requested_logical_key;
+                        records[0].semantic_context = semantic_context;
                     }
-                    execution.output
+                    if records.is_empty() {
+                        execution.output
+                    } else {
+                        let registrations = self
+                            .register_created_artifacts(
+                                task.id,
+                                records,
+                                checker_revision,
+                                replacement_target,
+                            )
+                            .await?;
+                        stable_create_artifact_output(
+                            &registrations,
+                            serde_json::from_str::<Value>(&execution.output)
+                                .ok()
+                                .and_then(|value| value.get("pluginRouting").cloned()),
+                        )
+                    }
                 } else {
                     let spec = serde_json::from_value::<ArtifactSpec>(arguments).map_err(|error| {
                         EngineError::InvalidModelJson(format!(
@@ -1821,9 +2468,25 @@ impl RuntimeKernel {
                             call.name
                         ))
                     })?;
-                    let records = materialize_artifacts(&settings.workspace, &[spec])?;
-                    self.store.add_artifacts(task.id, records.clone()).await?;
-                    json!({"ok":true,"artifacts":records,"pluginRouting":{"policy":plugin_policy_label(plugin_policy),"bypassed":true}}).to_string()
+                    let mut records = materialize_artifacts(&settings.workspace, &[spec])?;
+                    for record in &mut records {
+                        record.semantic_context = requested_semantic_context.clone();
+                    }
+                    let registrations = self
+                        .register_created_artifacts(
+                            task.id,
+                            records,
+                            checker_revision,
+                            replacement_target,
+                        )
+                        .await?;
+                    stable_create_artifact_output(
+                        &registrations,
+                        Some(json!({
+                            "policy": plugin_policy_label(plugin_policy),
+                            "bypassed": true
+                        })),
+                    )
                 }
             }
             "register_artifact" => {
@@ -1838,10 +2501,21 @@ impl RuntimeKernel {
                     }
                 };
                 let record = artifact_record_for_path(&path)?;
-                self.store
-                    .add_artifacts(task.id, vec![record.clone()])
-                    .await?;
-                json!({"ok":true,"artifact":record}).to_string()
+                let mut registrations = if checker_revision {
+                    self.store.revise_artifacts(task.id, vec![record]).await?
+                } else {
+                    self.store
+                        .add_artifacts_with_results(task.id, vec![record])
+                        .await?
+                };
+                let registration = registrations
+                    .pop()
+                    .ok_or_else(|| EngineError::MissingTask(task.id))?;
+                json!({
+                    "ok": true,
+                    "artifact": stable_artifact_registration_value(&registration)
+                })
+                .to_string()
             }
             "run_command" => {
                 let args = parse_arguments::<CommandArguments>(&call)?;
@@ -1890,6 +2564,7 @@ impl RuntimeKernel {
                         args.objective,
                         args.role,
                         args.engine.unwrap_or(task.loop_engine),
+                        checker_revision,
                     )
                     .await?
                 }
@@ -1941,7 +2616,11 @@ impl RuntimeKernel {
                         records.push(artifact_record_for_path(&path)?);
                     }
                     if !records.is_empty() {
-                        self.store.add_artifacts(task.id, records).await?;
+                        if checker_revision {
+                            self.store.revise_artifacts(task.id, records).await?;
+                        } else {
+                            self.store.add_artifacts(task.id, records).await?;
+                        }
                     }
                     execution.output
                 }
@@ -1999,6 +2678,7 @@ impl RuntimeKernel {
         objective: String,
         requested_role: String,
         engine: LoopEngineKind,
+        checker_revision: bool,
     ) -> Result<String, EngineError> {
         let participant = if requested_role.trim().is_empty() {
             localized(&settings.locale, "能力执行者", "Worker").to_string()
@@ -2104,8 +2784,13 @@ impl RuntimeKernel {
                         .complete(child_id, text.clone(), artifacts.clone())
                         .await?;
                     if !artifacts.is_empty() {
-                        self.store
-                            .add_artifacts(parent.id, artifacts.clone())
+                    self.store
+                            .register_child_artifacts(
+                                parent.id,
+                                child_id,
+                                artifacts.clone(),
+                                checker_revision,
+                            )
                             .await?;
                     }
                     self.store
@@ -2194,6 +2879,19 @@ impl RuntimeKernel {
             if self.store.task_is_cancelled(thread_id).await {
                 return Ok(SessionOutcome::Cancelled);
             }
+            let task = self
+                .store
+                .task(thread_id)
+                .await
+                .ok_or(EngineError::MissingTask(thread_id))?;
+            let artifact_revisions = artifact_revision_map(&task);
+            let changed_artifact_paths = changed_artifact_paths(
+                &task,
+                task.review_progress
+                    .last_reviewed_artifact_revisions
+                    .as_ref(),
+                &artifact_revisions,
+            );
             let verification = self
                 .run_checker(
                     thread_id,
@@ -2202,14 +2900,152 @@ impl RuntimeKernel {
                     api_key.as_deref(),
                     &final_text,
                     review_round,
+                    &changed_artifact_paths,
+                    task.review_progress
+                        .last_reviewed_artifact_revisions
+                        .is_some()
+                        && changed_artifact_paths.is_empty(),
                 )
                 .await?;
-            if verification.passed {
+            let disposition = verification.disposition()?;
+            let current_tool_evidence = current_semantic_tool_evidence(&task);
+            let latest_nonempty_tool_evidence = if current_tool_evidence.is_empty() {
+                task.review_progress.latest_nonempty_tool_evidence.clone()
+            } else {
+                current_tool_evidence
+            };
+            let rejection_signature =
+                (disposition == VerificationDisposition::NeedsRevision).then(|| {
+                    checker_rejection_evidence_signature(
+                        &verification,
+                        &task,
+                        &latest_nonempty_tool_evidence,
+                    )
+                });
+            let rejection_evidence_digest = rejection_signature
+                .as_deref()
+                .map(|signature| content_revision(signature.as_bytes()));
+            let checker_no_progress_occurrences = self
+                .store
+                .record_review_observation(
+                    thread_id,
+                    artifact_revisions.clone(),
+                    latest_nonempty_tool_evidence,
+                    rejection_evidence_digest,
+                )
+                .await?
+                .ok_or(EngineError::MissingTask(thread_id))?;
+            let human_confirmation_invalidated = latest_answered_human_checkpoint(&messages)
+                .is_some_and(|checkpoint| checkpoint.artifact_revisions != artifact_revisions);
+            if disposition == VerificationDisposition::Passed && human_confirmation_invalidated {
+                let question = localized(
+                    &settings.locale,
+                    "上次人工确认后产物已经发生变化，因此原确认不能用于当前版本。请查看当前产物，并明确回复“接受当前版本”，或给出具体修改点。",
+                    "The artifacts changed after the last human confirmation, so that confirmation cannot apply to the current version. Inspect the current artifacts, then explicitly accept this version or provide concrete changes.",
+                )
+                .to_string();
+                self.store
+                    .append_event(
+                        thread_id,
+                        RuntimeEventKind::HumanInteraction,
+                        RuntimeEventState::Blocked,
+                        "Checker",
+                        localized(
+                            &settings.locale,
+                            "产物变化，需要重新人工确认",
+                            "Artifact changed; renewed human confirmation required",
+                        ),
+                        format!("artifact_revisions={artifact_revisions:?}"),
+                    )
+                    .await?;
+                return self
+                    .pause_for_user_action(
+                        thread_id,
+                        messages,
+                        question,
+                        Some(final_text),
+                        HumanActionPurpose::ArtifactAcceptance,
+                    )
+                    .await;
+            }
+            if disposition == VerificationDisposition::Passed {
                 return Ok(SessionOutcome::Completed {
                     text: final_text,
                     messages,
                 });
             }
+
+            if disposition == VerificationDisposition::NeedsUserAction {
+                let question = verification
+                    .user_prompt
+                    .as_deref()
+                    .filter(|prompt| !prompt.trim().is_empty())
+                    .map(str::to_string)
+                    .unwrap_or_else(|| checker_human_question(&settings.locale, &verification));
+                self.store
+                    .append_event(
+                        thread_id,
+                        RuntimeEventKind::HumanInteraction,
+                        RuntimeEventState::Blocked,
+                        "Checker",
+                        localized(
+                            &settings.locale,
+                            "验收转交人工确认",
+                            "Verification handed off for human confirmation",
+                        ),
+                        format!(
+                            "disposition={:?}; artifact_progress={}; findings={}",
+                            disposition,
+                            !changed_artifact_paths.is_empty(),
+                            verification.findings.join(" | ")
+                        ),
+                    )
+                    .await?;
+                return self
+                    .pause_for_user_action(
+                        thread_id,
+                        messages,
+                        question,
+                        Some(final_text),
+                        HumanActionPurpose::ArtifactAcceptance,
+                    )
+                    .await;
+            }
+
+            let rejection_signature = rejection_signature
+                .expect("needs_revision always records canonical rejection evidence");
+            if checker_no_progress_occurrences >= CHECKER_NO_PROGRESS_HANDOFF_OCCURRENCE {
+                let question = localized(
+                    &settings.locale,
+                    "独立验收多次指出相同问题，但当前交付的语义版本没有变化；运行时已停止重复返工，且不会把未通过的版本当作完成。请补充一个明确修改方向、切换能力，或说明由谁人工处理这个客观缺陷。",
+                    "Independent verification repeatedly found the same defect while the semantic delivery did not change. The runtime stopped repeating the failed revision path and will not accept the rejected version. Provide a concrete revision direction, switch capabilities, or identify who should handle this objective defect manually.",
+                )
+                .to_string();
+                self.store
+                    .append_event(
+                        thread_id,
+                        RuntimeEventKind::Warning,
+                        RuntimeEventState::Blocked,
+                        "Runtime",
+                        localized(
+                            &settings.locale,
+                            "验收缺陷无语义进展，转交人工指导",
+                            "Checker defect made no semantic progress; awaiting guidance",
+                        ),
+                        rejection_signature,
+                    )
+                    .await?;
+                return self
+                    .pause_for_user_action(
+                        thread_id,
+                        messages,
+                        question,
+                        Some(final_text),
+                        HumanActionPurpose::RuntimeGuidance,
+                    )
+                    .await;
+            }
+
             self.store
                 .append_event(
                     thread_id,
@@ -2228,17 +3064,40 @@ impl RuntimeKernel {
                     ),
                 )
                 .await?;
-            let correction = format!(
+            let mut correction = format!(
                 "{}\n{}",
                 verification.summary,
                 verification.findings.join("\n")
             );
+            if checker_no_progress_occurrences == CHECKER_NO_PROGRESS_REROUTE_OCCURRENCE {
+                correction = format!(
+                    "{}\n{}",
+                    localized(
+                        &settings.locale,
+                        "【无语义进展】相同缺陷和相同交付内容再次出现。不要复述或改名重存；必须换一条可验证的修复策略，并实际改变交付内容。",
+                        "[No semantic progress] The same defect and delivery content appeared again. Do not restate or save the same content under a new name; use a different verifiable repair strategy and materially change the delivery."
+                    ),
+                    correction
+                );
+            }
             let mut task = self
                 .store
                 .task(thread_id)
                 .await
                 .ok_or(EngineError::MissingTask(thread_id))?;
-            task.session_messages = messages;
+            messages = compact_review_session_messages(
+                &messages,
+                &task,
+                &goal,
+                &artifact_revisions,
+                &final_text,
+                &correction,
+                settings.locale,
+            );
+            // The compacted checker snapshot is recovery authority, not just a local adapter
+            // input. Persist it before either the in-process or external Loop can fail.
+            self.persist_session_before_adapter(&mut task, messages)
+                .await?;
             let plugin_context = self.session_capability_context(&settings);
             match self
                 .run_loop_session(
@@ -2262,7 +3121,7 @@ impl RuntimeKernel {
                 }
                 other => return Ok(other),
             }
-            review_round += 1;
+            review_round = review_round.saturating_add(1);
         }
     }
 
@@ -2274,6 +3133,8 @@ impl RuntimeKernel {
         api_key: Option<&str>,
         final_text: &str,
         round: usize,
+        changed_artifact_paths: &BTreeSet<PathBuf>,
+        no_artifact_change: bool,
     ) -> Result<VerificationResult, EngineError> {
         let checker_id = self
             .store
@@ -2296,29 +3157,102 @@ impl RuntimeKernel {
             .artifacts
             .iter()
             .map(|artifact| match preview_file(&artifact.path) {
-                Ok(preview) => format!(
-                    "ARTIFACT {} ({})\n{}",
+                Ok(preview) => {
+                    let readable_content = readable_preview_text(&preview)
+                        .unwrap_or_else(|| "(no model-readable text; use human confirmation for visual or binary qualities)".into());
+                    format!(
+                        "REGISTERED DELIVERY ARTIFACT {} ({})\nchanged_this_round={}\nsize_bytes={}\nrevision={}\nsection_count={}\nfaithful_render={}\nrendered_mime_type={}\nrendered_preview_available={}\nEXTRACTED CONTENT:\n{}",
+                        artifact.path.display(),
+                        artifact.kind,
+                        changed_artifact_paths.contains(&artifact.path),
+                        preview.size_bytes,
+                        preview.revision,
+                        preview.sections.len(),
+                        preview.faithful,
+                        preview.rendered_mime_type.as_deref().unwrap_or("none"),
+                        preview.rendered_content.is_some(),
+                        truncate(&readable_content, 30_000)
+                    )
+                }
+                Err(error) => format!(
+                    "REGISTERED DELIVERY ARTIFACT {}\nchanged_this_round={}\nunreadable: {error}",
                     artifact.path.display(),
-                    artifact.kind,
-                    truncate(&preview.content, 30_000)
+                    changed_artifact_paths.contains(&artifact.path)
                 ),
-                Err(error) => format!("ARTIFACT {} unreadable: {error}", artifact.path.display()),
             })
             .collect::<Vec<_>>()
             .join("\n\n");
+        let tool_names = task
+            .session_messages
+            .iter()
+            .flat_map(|message| message.tool_calls.iter())
+            .map(|call| (call.id.clone(), call.name.clone()))
+            .collect::<HashMap<_, _>>();
+        let recent_tool_evidence = task
+            .session_messages
+            .iter()
+            .rev()
+            .filter(|message| {
+                message.role == AgentRole::Tool
+                    && message
+                        .tool_call_id
+                        .as_ref()
+                        .and_then(|call_id| tool_names.get(call_id))
+                        .is_none_or(|name| name != "ask_user")
+            })
+            .take(12)
+            .map(|message| {
+                format!(
+                    "TOOL EVIDENCE (not human confirmation) call_id={} tool={}\n{}",
+                    message.tool_call_id.as_deref().unwrap_or("unknown"),
+                    message
+                        .tool_call_id
+                        .as_ref()
+                        .and_then(|call_id| tool_names.get(call_id))
+                        .map(String::as_str)
+                        .unwrap_or("unknown"),
+                    truncate(&message.content, 6_000)
+                )
+            })
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect::<Vec<_>>()
+            .join("\n\n");
+        let human_confirmation = latest_answered_human_checkpoint(&task.session_messages)
+            .map(|checkpoint| {
+                format!(
+                    "HUMAN CHECKPOINT (purpose=artifact_acceptance; authoritative only for the exact listed revisions)\nartifact_revisions={:?}\nquestion={}\nanswer={}",
+                    checkpoint.artifact_revisions,
+                    checkpoint.question,
+                    checkpoint.answer
+                )
+            })
+            .unwrap_or_else(|| "(none)".into());
         let system = format!(
-            "{}\nYou are an independent checker. Verify the delivery against every GoalSpec success criterion and the actual registered artifact content. Return one JSON object only: {{\"passed\":true|false,\"summary\":\"...\",\"findings\":[\"...\"]}}. Do not pass claims that lack observable evidence.",
+            "{}\nYou are an independent checker. Verify the complete registered delivery against every GoalSpec success criterion using artifact content, metadata, tool evidence, and revision-bound human evidence. Return one JSON object only: {{\"disposition\":\"passed|needs_revision|needs_user_action\",\"summary\":\"...\",\"findings\":[\"...\"],\"user_prompt\":null|\"...\"}}. Legacy \"passed\" is optional; if emitted it must agree with disposition. Use passed only when every objective criterion is observably satisfied. Use needs_revision only for a concrete defect that the maker can change and you can objectively re-check. Use needs_user_action when acceptance depends on subjective taste, direct human viewing, a missing preference, evidence you cannot observe, or a judgment beyond model capability; never make the maker guess or regenerate variants for those questions. When objective defects and subjective questions coexist, request revision for the objective defects first, then hand off the remaining subjective decision. No fixed review-round limit exists: continue objective, observable, productive revision as long as needed. If there was no artifact change, decide whether you still have a different concrete, objectively checkable revision; otherwise use needs_user_action. An explicit HUMAN CHECKPOINT accepting the current version may resolve subjective criteria only when its artifact_revisions exactly match the current delivery; a generic reply such as 'continue' is not acceptance, and human acceptance never overrides objective defects such as a missing, unreadable, corrupt, or structurally incorrect file. TOOL EVIDENCE is never human acceptance. Every REGISTERED DELIVERY ARTIFACT remains part of the delivery even when unchanged; inspect unchanged companion files and cross-file consistency too. Do not mistake changed_this_round=false for an obsolete version.",
             settings.locale.language_directive()
         );
         let user = format!(
-            "GoalSpec:\n{}\n\nMaker final response:\n{}\n\nRegistered artifacts:\n{}",
+            "GoalSpec:\n{}\n\nMaker final response:\n{}\n\nArtifact progress since previous review:\n{}\n\nComplete registered delivery evidence:\n{}\n\nRecent observable tool evidence:\n{}\n\nLatest revision-bound human confirmation:\n{}",
             serde_json::to_string_pretty(goal).unwrap_or_default(),
             final_text,
+            if no_artifact_change {
+                "NO_ARTIFACT_CHANGE_SINCE_PREVIOUS_REVIEW"
+            } else {
+                "NEW_OR_CHANGED_ARTIFACT_EVIDENCE_PRESENT"
+            },
             if artifacts.is_empty() {
                 "(none)"
             } else {
                 &artifacts
-            }
+            },
+            if recent_tool_evidence.is_empty() {
+                "(none)"
+            } else {
+                &recent_tool_evidence
+            },
+            human_confirmation
         );
         let mut attempt = 0;
         let result = loop {
@@ -2340,7 +3274,10 @@ impl RuntimeKernel {
                 .await
                 .map_err(EngineError::from)
                 .and_then(|raw| decode_json::<VerificationResult>(&raw))
-            {
+                .and_then(|result| {
+                    result.disposition()?;
+                    Ok(result)
+                }) {
                 Ok(result) => {
                     self.store
                         .finish_event(
@@ -3032,12 +3969,13 @@ fn tool_definitions(
         tool("read_file", read_description, json!({"type":"object","properties":{"path":{"type":"string"}},"required":["path"]})),
         tool("list_files", list_description, json!({"type":"object","properties":{"path":{"type":"string"},"recursive":{"type":"boolean"}}})),
         tool("write_file", "Write a UTF-8 text file inside LingShu's Workspace. Do not use this tool to bypass a registered plugin capability.", json!({"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"}},"required":["path","content"]})),
-        tool("create_artifact", "Create and register a previewable Markdown, text, JSON, HTML, Word (.docx), PowerPoint (.pptx), or Excel (.xlsx) artifact. Artifact kinds backed by a runtime-ready plugin are automatically routed to the highest-priority provider unless the user explicitly disabled all plugins. For PowerPoint, write audience-facing content, choose layouts from the meaning of each slide, use at least three layout families for decks of six or more slides, and never put filenames, repeated deck titles, or page counters in slide body content. If the quality gate requests revised input, revise the plan and call create_artifact again.", json!({
+        tool("create_artifact", "Create and register a previewable Markdown, text, JSON, HTML, Word (.docx), PowerPoint (.pptx), or Excel (.xlsx) artifact. Reuse the same file_name when revising one delivery artifact. If a revision deliberately changes its file name, set replaces to the current artifact path or logicalKey shown in runtime evidence; a different file_name without replaces is a genuine companion file. Artifact kinds backed by a runtime-ready plugin are automatically routed to the highest-priority provider unless the user explicitly disabled all plugins. For PowerPoint, write audience-facing content, choose layouts from the meaning of each slide, use at least three layout families for decks of six or more slides, and never put filenames, repeated deck titles, or page counters in slide body content. If the quality gate requests revised input, revise the plan and call create_artifact again.", json!({
             "type":"object",
             "properties":{
                 "title":{"type":"string"},
                 "file_name":{"type":"string"},
                 "kind":{"type":"string","enum":["markdown","text","json","html","docx","pptx","xlsx"]},
+                "replaces":{"type":"string","description":"Current artifact id, logicalKey, or path to supersede when a revision intentionally changes file_name. Omit for a new companion."},
                 "content":{"type":"string"},
                 "theme":{"type":"string","enum":["midnight","graphite","ivory","sand","forest","royal"]},
                 "template":{"type":"string"},
@@ -3699,6 +4637,10 @@ fn artifact_record_for_path(path: &Path) -> Result<ArtifactRecord, EngineError> 
         .ok()
         .map(DateTime::<Utc>::from)
         .unwrap_or_else(Utc::now);
+    let revision =
+        file_revision(path).map_err(|error| EngineError::LocalOperation(error.to_string()))?;
+    let semantic_revision = semantic_file_revision(path)
+        .map_err(|error| EngineError::LocalOperation(error.to_string()))?;
     Ok(ArtifactRecord {
         id: Uuid::new_v4(),
         title: path
@@ -3714,7 +4656,798 @@ fn artifact_record_for_path(path: &Path) -> Result<ArtifactRecord, EngineError> 
             .to_ascii_lowercase(),
         size_bytes: metadata.len(),
         modified_at,
+        logical_key: Some(artifact_path_logical_key(path)),
+        revision,
+        semantic_revision,
+        semantic_context: String::new(),
+        supersedes: None,
+        superseded_by: None,
     })
+}
+
+fn create_artifact_key_from_arguments(arguments: &Value) -> Option<String> {
+    let file_name = arguments
+        .get("file_name")
+        .or_else(|| arguments.get("fileName"))?
+        .as_str()?;
+    let kind = arguments.get("kind")?.as_str()?;
+    Some(create_artifact_logical_key(file_name, kind))
+}
+
+fn create_artifact_replacement_target(
+    task: &TaskRecord,
+    arguments: &Value,
+) -> Result<Option<Uuid>, EngineError> {
+    let Some(value) = arguments.get("replaces") else {
+        return Ok(None);
+    };
+    let reference = value
+        .as_str()
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| {
+            EngineError::InvalidModelJson(
+            "create_artifact.replaces must be a non-empty current artifact id, logical key, or path"
+                .into(),
+        )
+        })?;
+    let target = task.artifacts.iter().find(|artifact| {
+        artifact.id.to_string() == reference
+            || artifact.logical_key.as_deref() == Some(reference)
+            || artifact.path.to_string_lossy() == reference
+    });
+    target.map(|artifact| Some(artifact.id)).ok_or_else(|| {
+        EngineError::InvalidModelJson(format!(
+            "create_artifact.replaces does not identify a current artifact: {reference}"
+        ))
+    })
+}
+
+fn create_artifact_semantic_context(arguments: &Value, output: Option<&Value>) -> String {
+    let mut context = serde_json::Map::new();
+    for key in [
+        "file_name",
+        "fileName",
+        "title",
+        "theme",
+        "palette",
+        "style",
+        "template",
+    ] {
+        if let Some(value) = arguments.get(key) {
+            context.insert(key.into(), value.clone());
+        }
+    }
+    if let Some(output) = output {
+        for key in ["engine", "theme"] {
+            if let Some(value) = output.get(key) {
+                context.insert(key.into(), value.clone());
+            }
+        }
+        if let Some(routing) = output.get("pluginRouting") {
+            for key in ["providerId", "providerTool"] {
+                if let Some(value) = routing.get(key) {
+                    context.insert(key.into(), value.clone());
+                }
+            }
+        }
+    }
+    if context.is_empty() {
+        String::new()
+    } else {
+        canonical_json_string(&Value::Object(context))
+    }
+}
+
+fn stable_artifact_registration_value(registration: &ArtifactRegistration) -> Value {
+    json!({
+        "path": registration.current.path,
+        "title": registration.current.title,
+        "kind": registration.current.kind,
+        "sizeBytes": registration.current.size_bytes,
+        "logicalKey": registration.current.logical_key,
+        "revision": registration.current.revision,
+        "semanticRevision": registration.current.semantic_revision,
+        "changed": registration.changed,
+    })
+}
+
+fn stable_create_artifact_output(
+    registrations: &[ArtifactRegistration],
+    plugin_routing: Option<Value>,
+) -> String {
+    json!({
+        "ok": true,
+        "artifacts": registrations
+            .iter()
+            .map(stable_artifact_registration_value)
+            .collect::<Vec<_>>(),
+        "pluginRouting": plugin_routing,
+    })
+    .to_string()
+}
+
+fn artifact_revision_map(task: &TaskRecord) -> BTreeMap<PathBuf, String> {
+    task.artifacts
+        .iter()
+        .map(|artifact| {
+            let revision = preview_file(&artifact.path)
+                .map(|preview| preview.revision)
+                .unwrap_or_else(|error| {
+                    format!(
+                        "unreadable:{}:{}:{}",
+                        artifact.kind, artifact.size_bytes, error
+                    )
+                });
+            (artifact.path.clone(), revision)
+        })
+        .collect()
+}
+
+/// Semantic delivery identity intentionally ignores paths and logical keys. Re-saving identical
+/// bytes under ever-changing names is not progress; distinct content, format, or semantic creation
+/// context still produces a new fingerprint and may continue revising without a round limit.
+fn artifact_semantic_revision_map(task: &TaskRecord) -> BTreeSet<String> {
+    task.artifacts
+        .iter()
+        .map(|artifact| {
+            let file_semantics = semantic_file_revision(&artifact.path)
+                .unwrap_or_else(|error| format!("unreadable:{}:{}", artifact.size_bytes, error));
+            let progress_context = semantic_progress_context(&artifact.semantic_context);
+            let revision =
+                content_revision(format!("{file_semantics}\0{progress_context}").as_bytes());
+            revision
+        })
+        .collect()
+}
+
+fn semantic_progress_context(raw: &str) -> String {
+    let Ok(mut value) = serde_json::from_str::<Value>(raw) else {
+        return raw.to_string();
+    };
+    if let Some(object) = value.as_object_mut() {
+        for volatile_identity in ["file_name", "fileName", "title"] {
+            object.remove(volatile_identity);
+        }
+    }
+    canonical_json_string(&value)
+}
+
+fn current_semantic_tool_evidence(task: &TaskRecord) -> String {
+    let calls = task
+        .session_messages
+        .iter()
+        .flat_map(|message| message.tool_calls.iter())
+        .map(|call| (call.id.clone(), call))
+        .collect::<HashMap<_, _>>();
+    let mut evidence = task
+        .session_messages
+        .iter()
+        .filter(|message| message.role == AgentRole::Tool)
+        .filter_map(|message| {
+            let call = calls.get(message.tool_call_id.as_ref()?)?;
+            matches!(call.name.as_str(), "create_artifact" | "register_artifact")
+                .then(|| semantic_tool_evidence(call, &message.content))
+        })
+        .collect::<Vec<_>>();
+    evidence.sort();
+    evidence.dedup();
+    evidence.join("\n")
+}
+
+fn checker_finding_signature(verification: &VerificationResult) -> String {
+    let mut findings = if verification.findings.is_empty() {
+        vec![verification.summary.as_str()]
+    } else {
+        verification.findings.iter().map(String::as_str).collect()
+    }
+    .into_iter()
+    .map(|finding| {
+        let mut normalized = String::new();
+        let mut pending_space = false;
+        for character in finding.to_lowercase().chars() {
+            if character.is_alphanumeric() || !character.is_ascii() && !character.is_whitespace() {
+                if pending_space && !normalized.is_empty() {
+                    normalized.push(' ');
+                }
+                normalized.push(character);
+                pending_space = false;
+            } else {
+                pending_space = true;
+            }
+        }
+        normalized
+    })
+    .collect::<Vec<_>>();
+    findings.sort();
+    findings.dedup();
+    findings.join(" | ")
+}
+
+fn checker_rejection_evidence_signature(
+    verification: &VerificationResult,
+    task: &TaskRecord,
+    canonical_tool_evidence: &str,
+) -> String {
+    format!(
+        "finding={}\ndelivery={:?}\ntool_evidence={canonical_tool_evidence}",
+        checker_finding_signature(verification),
+        artifact_semantic_revision_map(task),
+    )
+}
+
+fn artifact_revision_values(task: &TaskRecord) -> Vec<Value> {
+    artifact_revision_map(task)
+        .into_iter()
+        .map(|(path, revision)| json!({"path": path.display().to_string(), "revision": revision}))
+        .collect()
+}
+
+fn checker_correction_message(locale: &AppLocale, correction: &str) -> AgentMessage {
+    AgentMessage {
+        role: AgentRole::User,
+        content: format!(
+            "{}\n{}",
+            localized(
+                locale,
+                "【独立验收反馈，最高优先级】不要宣告完成；修复以下问题后重新交付。",
+                "[Independent checker feedback, highest priority] Do not declare completion; fix these issues and deliver again."
+            ),
+            correction
+        ),
+        tool_calls: Vec::new(),
+        tool_call_id: None,
+    }
+}
+
+fn external_result_protocol_error(detail: impl Into<String>) -> EngineError {
+    LoopError::ResultProtocol(detail.into()).into()
+}
+
+fn external_path_identity(path: &Path) -> String {
+    let mut value = normalize_path(path).to_string_lossy().replace('\\', "/");
+    if cfg!(windows) {
+        value.make_ascii_lowercase();
+    }
+    value
+}
+
+fn external_replacement_target<'a>(
+    task: &'a TaskRecord,
+    selector: &LoopArtifactSelector,
+) -> Result<&'a ArtifactRecord, EngineError> {
+    let matches = task
+        .artifacts
+        .iter()
+        .filter(|artifact| match selector.by {
+            LoopArtifactSelectorKind::Id => artifact.id.to_string() == selector.value,
+            LoopArtifactSelectorKind::LogicalKey => {
+                artifact.logical_key.as_deref() == Some(selector.value.as_str())
+            }
+            LoopArtifactSelectorKind::Path => {
+                external_path_identity(&artifact.path)
+                    == external_path_identity(Path::new(&selector.value))
+            }
+        })
+        .collect::<Vec<_>>();
+    match matches.as_slice() {
+        [target] => Ok(*target),
+        [] => Err(external_result_protocol_error(format!(
+            "replacement selector {:?}={} did not identify a current artifact",
+            selector.by, selector.value
+        ))),
+        _ => Err(external_result_protocol_error(format!(
+            "replacement selector {:?}={} is ambiguous",
+            selector.by, selector.value
+        ))),
+    }
+}
+
+/// External CLI adapters start a fresh process for every attempt, so they cannot infer a
+/// continuation from the in-process message transcript. Rebuild bounded human checkpoints and
+/// authoritative current/superseded artifact identity from persisted host state.
+fn external_continuation_context(
+    explicit_correction: Option<&str>,
+    task: &TaskRecord,
+) -> Option<String> {
+    let checker_correction = explicit_correction
+        .map(str::trim)
+        .filter(|correction| !correction.is_empty())
+        .map(str::to_string)
+        .or_else(|| latest_persisted_checker_correction(&task.session_messages));
+    let answered_asks = bounded_real_answered_ask_checkpoints(&task.session_messages);
+
+    let mut sections = Vec::new();
+    if let Some(manifest) = external_artifact_manifest(task) {
+        sections.push(manifest);
+    }
+    if let Some(correction) = checker_correction {
+        sections.push(format!(
+            "[Latest independent checker correction]\n{correction}"
+        ));
+    }
+    for checkpoint in answered_asks {
+        let evidence = checkpoint.evidence;
+        let artifact_revisions = if evidence.artifact_revisions.is_empty() {
+            "(none)".into()
+        } else {
+            evidence
+                .artifact_revisions
+                .iter()
+                .map(|artifact| format!("{}={}", artifact.path, artifact.revision))
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        sections.push(format!(
+            "[Retained answered ask_user checkpoint]\npurpose={}\nquestion={}\nanswer={}\nartifact_revisions:\n{}",
+            if evidence.purpose.trim().is_empty() {
+                "unspecified"
+            } else {
+                evidence.purpose.trim()
+            },
+            evidence.prompt,
+            checkpoint.answer,
+            artifact_revisions
+        ));
+    }
+
+    (!sections.is_empty()).then(|| sections.join("\n\n"))
+}
+
+fn external_artifact_manifest(task: &TaskRecord) -> Option<String> {
+    if task.artifacts.is_empty() && task.superseded_artifacts.is_empty() {
+        return None;
+    }
+    let current = task
+        .artifacts
+        .iter()
+        .map(|artifact| {
+            let raw_revision =
+                file_revision(&artifact.path).unwrap_or_else(|_| artifact.revision.clone());
+            let semantic_revision = semantic_file_revision(&artifact.path)
+                .unwrap_or_else(|_| artifact.semantic_revision.clone());
+            json!({
+                "id": artifact.id,
+                "logical_key": artifact.logical_key,
+                "path": artifact.path.display().to_string(),
+                "raw_revision": raw_revision,
+                "semantic_revision": semantic_revision,
+            })
+        })
+        .collect::<Vec<_>>();
+    let recent_superseded = task
+        .superseded_artifacts
+        .iter()
+        .rev()
+        .take(RECENT_SUPERSEDED_EXTERNAL_PATHS)
+        .map(|artifact| {
+            json!({
+                "id": artifact.id,
+                "logical_key": artifact.logical_key,
+                "path": artifact.path.display().to_string(),
+                "superseded_by": artifact.superseded_by,
+            })
+        })
+        .collect::<Vec<_>>();
+    Some(format!(
+        "[Host-derived artifact identity]\nCURRENT ARTIFACT MANIFEST (the only current delivery targets):\n{}\nRevision rule: overwrite the listed current path. A different or newly saved path is a companion by default; never infer replacement from a save-as operation. Only an explicit replaces target may supersede a current artifact.\n\nSUPERSEDED ARTIFACT HISTORY: total_count={}; recent denylist (at most {} paths):\n{}\nRule: except for paths in CURRENT ARTIFACT MANIFEST and explicit input attachments, every other workspace artifact is non-current history. Never edit it, register it as current, or treat it as a revision target.",
+        serde_json::to_string_pretty(&current).unwrap_or_else(|_| "[]".into()),
+        task.superseded_artifacts.len(),
+        RECENT_SUPERSEDED_EXTERNAL_PATHS,
+        serde_json::to_string_pretty(&recent_superseded).unwrap_or_else(|_| "[]".into())
+    ))
+}
+
+fn latest_persisted_checker_correction(messages: &[AgentMessage]) -> Option<String> {
+    messages.iter().rev().find_map(|message| {
+        if message.role != AgentRole::User {
+            return None;
+        }
+        let content = message.content.trim();
+        let is_checker_correction = content.starts_with("【独立验收反馈，最高优先级】")
+            || content.starts_with("[Independent checker feedback, highest priority]");
+        is_checker_correction.then(|| content.to_string())
+    })
+}
+
+fn real_answered_ask_checkpoints(messages: &[AgentMessage]) -> Vec<AnsweredAskCheckpoint> {
+    let answers = messages
+        .iter()
+        .filter(|message| message.role == AgentRole::Tool)
+        .filter_map(|message| {
+            let call_id = message.tool_call_id.clone()?;
+            (!is_runtime_generated_tool_closure(&message.content))
+                .then(|| (call_id, message.content.clone()))
+        })
+        .collect::<HashMap<_, _>>();
+    messages
+        .iter()
+        .enumerate()
+        .filter(|(_, message)| message.role == AgentRole::Assistant)
+        .flat_map(|(assistant_index, message)| {
+            let answers = &answers;
+            message.tool_calls.iter().filter_map(move |call| {
+                if call.name != "ask_user" {
+                    return None;
+                }
+                Some(AnsweredAskCheckpoint {
+                    assistant_index,
+                    evidence: serde_json::from_str::<RuntimeAskEvidence>(&call.arguments_json)
+                        .ok()?,
+                    answer: answers.get(&call.id)?.clone(),
+                })
+            })
+        })
+        .collect()
+}
+
+fn explicit_human_checkpoint_purpose(purpose: &str) -> Option<&'static str> {
+    match purpose.trim() {
+        "artifact_acceptance" => Some("artifact_acceptance"),
+        "runtime_guidance" => Some("runtime_guidance"),
+        "technical_recovery" => Some("technical_recovery"),
+        value if !value.is_empty() => Some("other_explicit"),
+        _ => None,
+    }
+}
+
+fn selected_answered_ask_group_indices(messages: &[AgentMessage]) -> Vec<usize> {
+    let checkpoints = real_answered_ask_checkpoints(messages);
+    let mut groups = checkpoints
+        .iter()
+        .map(|checkpoint| checkpoint.assistant_index)
+        .collect::<Vec<_>>();
+    groups.sort_unstable();
+    groups.dedup();
+
+    let recent = groups
+        .iter()
+        .rev()
+        .take(RECENT_HUMAN_CHECKPOINT_GROUPS)
+        .copied()
+        .collect::<HashSet<_>>();
+    let mut latest_explicit = HashMap::<&'static str, usize>::new();
+    for checkpoint in &checkpoints {
+        if let Some(purpose) = explicit_human_checkpoint_purpose(&checkpoint.evidence.purpose) {
+            latest_explicit.insert(purpose, checkpoint.assistant_index);
+        }
+    }
+    let mandatory = latest_explicit.values().copied().collect::<HashSet<_>>();
+    let mut selected = recent.union(&mandatory).copied().collect::<HashSet<_>>();
+    if selected.len() > MAX_RETAINED_HUMAN_CHECKPOINT_GROUPS {
+        let mut bounded = mandatory;
+        for index in groups.iter().rev() {
+            if bounded.len() >= MAX_RETAINED_HUMAN_CHECKPOINT_GROUPS {
+                break;
+            }
+            if selected.contains(index) {
+                bounded.insert(*index);
+            }
+        }
+        selected = bounded;
+    }
+    let mut selected = selected.into_iter().collect::<Vec<_>>();
+    selected.sort_unstable();
+    selected
+}
+
+fn bounded_real_answered_ask_checkpoints(messages: &[AgentMessage]) -> Vec<AnsweredAskCheckpoint> {
+    let selected = selected_answered_ask_group_indices(messages)
+        .into_iter()
+        .collect::<HashSet<_>>();
+    real_answered_ask_checkpoints(messages)
+        .into_iter()
+        .filter(|checkpoint| selected.contains(&checkpoint.assistant_index))
+        .collect()
+}
+
+fn is_runtime_generated_tool_closure(content: &str) -> bool {
+    serde_json::from_str::<Value>(content)
+        .ok()
+        .and_then(|value| value.as_object().cloned())
+        .is_some_and(|value| {
+            value.get("attempt_status").and_then(Value::as_str) == Some("interrupted")
+                || value.get("needs_user_action").and_then(Value::as_bool) == Some(false)
+        })
+}
+
+fn task_is_checker_revision(task: &TaskRecord, correction: Option<&str>) -> bool {
+    correction.is_some()
+        || task.session_messages.iter().any(|message| {
+            (message.role == AgentRole::User
+                && (message.content.starts_with("【独立验收反馈，最高优先级】")
+                    || message
+                        .content
+                        .starts_with("[Independent checker feedback, highest priority]")))
+                || (message.role == AgentRole::Assistant
+                    && message.tool_calls.iter().any(|call| {
+                        call.name == "ask_user"
+                            && serde_json::from_str::<RuntimeAskEvidence>(&call.arguments_json)
+                                .ok()
+                                .is_some_and(|evidence| {
+                                    evidence.purpose
+                                        == HumanActionPurpose::ArtifactAcceptance.as_str()
+                                })
+                    }))
+        })
+}
+
+/// Replace completed maker/checker history with host-derived current state at a review boundary.
+/// The audit trail remains in task events and checker child tasks; the model transcript keeps only
+/// the inputs needed for the next revision, so productive review rounds do not consume an
+/// ever-growing context window.
+fn compact_review_session_messages(
+    messages: &[AgentMessage],
+    task: &TaskRecord,
+    goal: &GoalSpec,
+    artifact_revisions: &BTreeMap<PathBuf, String>,
+    final_text: &str,
+    correction: &str,
+    locale: AppLocale,
+) -> Vec<AgentMessage> {
+    let mut normalized = messages.to_vec();
+    close_unanswered_tool_calls(&mut normalized);
+    let human_checkpoints = bounded_answered_ask_user_protocol_groups(messages, &normalized);
+
+    let artifact_manifest = artifact_revisions
+        .iter()
+        .map(|(path, revision)| {
+            let record = task
+                .artifacts
+                .iter()
+                .find(|artifact| artifact.path == *path);
+            json!({
+                "id": record.map(|artifact| artifact.id),
+                "path": path.display().to_string(),
+                "logical_key": record.and_then(|artifact| artifact.logical_key.as_deref()),
+                "revision": revision,
+                "kind": record.map(|artifact| artifact.kind.as_str()).unwrap_or("unknown"),
+                "size_bytes": record.map(|artifact| artifact.size_bytes),
+            })
+        })
+        .collect::<Vec<_>>();
+    let attachment_paths = if task.attachment_paths.is_empty() {
+        "(none)".into()
+    } else {
+        task.attachment_paths
+            .iter()
+            .map(|path| path.display().to_string())
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    let goal_json = serde_json::to_string_pretty(goal).unwrap_or_else(|_| "{}".into());
+    let artifact_json =
+        serde_json::to_string_pretty(&artifact_manifest).unwrap_or_else(|_| "[]".into());
+    let snapshot = AgentMessage {
+        role: AgentRole::System,
+        content: format!(
+            "[LingShu deterministic review continuation snapshot]\nThis state was rebuilt from the accepted runtime contract and current registered files; it is not a model-generated summary. Earlier revision transcripts were compacted, not treated as task completion.\n\nAccepted GoalSpec:\n{goal_json}\n\nCurrent registered artifact evidence (all paths and exact revisions):\n{artifact_json}"
+        ),
+        tool_calls: Vec::new(),
+        tool_call_id: None,
+    };
+    let original_request = AgentMessage {
+        role: AgentRole::User,
+        content: format!(
+            "{}\n{}\n\n{}\n{}",
+            localized(&locale, "【原始任务请求】", "[Original task request]"),
+            task.prompt,
+            localized(&locale, "附件路径：", "Attachment paths:"),
+            attachment_paths
+        ),
+        tool_calls: Vec::new(),
+        tool_call_id: None,
+    };
+
+    let mut compacted = Vec::with_capacity(5 + human_checkpoints.len());
+    if let Some(system) = normalized
+        .iter()
+        .find(|message| message.role == AgentRole::System)
+    {
+        compacted.push(system.clone());
+    }
+    compacted.push(snapshot);
+    compacted.push(original_request);
+    compacted.extend(human_checkpoints);
+    compacted.push(AgentMessage {
+        role: AgentRole::Assistant,
+        content: final_text.to_string(),
+        tool_calls: Vec::new(),
+        tool_call_id: None,
+    });
+    compacted.push(checker_correction_message(&locale, correction));
+
+    debug_assert!(tool_protocol_is_complete(&compacted));
+    compacted
+}
+
+/// Preserve bounded human provenance as complete Assistant call groups. A group is eligible only
+/// when at least one `ask_user` has a real human answer; all sibling calls receive their matching
+/// Tool result from the normalized transcript so no provider sees an orphan.
+fn compact_ask_user_arguments(arguments_json: &str) -> String {
+    let Ok(evidence) = serde_json::from_str::<RuntimeAskEvidence>(arguments_json) else {
+        return json!({
+            "prompt": truncate(arguments_json, HUMAN_CHECKPOINT_TEXT_LIMIT),
+            "lingshu_compacted_invalid_arguments": true,
+        })
+        .to_string();
+    };
+    json!({
+        "prompt": truncate(&evidence.prompt, HUMAN_CHECKPOINT_TEXT_LIMIT),
+        "purpose": evidence.purpose,
+        "artifact_revisions": evidence.artifact_revisions.into_iter().map(|artifact| json!({
+            "path": artifact.path,
+            "revision": artifact.revision,
+        })).collect::<Vec<_>>(),
+    })
+    .to_string()
+}
+
+fn compact_sibling_arguments(arguments_json: &str) -> String {
+    if arguments_json.chars().count() <= HUMAN_CHECKPOINT_SIBLING_LIMIT
+        && serde_json::from_str::<Value>(arguments_json).is_ok()
+    {
+        return arguments_json.to_string();
+    }
+    json!({
+        "lingshu_compacted": true,
+        "original_char_count": arguments_json.chars().count(),
+        "preview": truncate(arguments_json, HUMAN_CHECKPOINT_SIBLING_LIMIT),
+    })
+    .to_string()
+}
+
+fn compact_checkpoint_content(content: &str, limit: usize, label: &str) -> String {
+    if content.chars().count() <= limit {
+        content.to_string()
+    } else {
+        format!(
+            "[LingShu compacted {label}; original_char_count={}]\n{}",
+            content.chars().count(),
+            truncate(content, limit)
+        )
+    }
+}
+
+fn bounded_answered_ask_user_protocol_groups(
+    original: &[AgentMessage],
+    normalized: &[AgentMessage],
+) -> Vec<AgentMessage> {
+    let selected = selected_answered_ask_group_indices(original);
+    let results = normalized
+        .iter()
+        .filter(|message| message.role == AgentRole::Tool)
+        .filter_map(|message| Some((message.tool_call_id.clone()?, message.clone())))
+        .collect::<HashMap<_, _>>();
+    let mut retained = Vec::new();
+    for assistant_index in selected {
+        let Some(assistant) = original.get(assistant_index) else {
+            continue;
+        };
+        let mut compacted_assistant = assistant.clone();
+        compacted_assistant.content = compact_checkpoint_content(
+            &compacted_assistant.content,
+            HUMAN_CHECKPOINT_SIBLING_LIMIT,
+            "assistant checkpoint text",
+        );
+        for call in &mut compacted_assistant.tool_calls {
+            call.arguments_json = if call.name == "ask_user" {
+                compact_ask_user_arguments(&call.arguments_json)
+            } else {
+                compact_sibling_arguments(&call.arguments_json)
+            };
+        }
+        let mut group_results = Vec::with_capacity(assistant.tool_calls.len());
+        for call in &assistant.tool_calls {
+            let Some(mut result) = results.get(&call.id).cloned() else {
+                group_results.clear();
+                break;
+            };
+            let (limit, label) = if call.name == "ask_user" {
+                (HUMAN_CHECKPOINT_TEXT_LIMIT, "human answer")
+            } else {
+                (HUMAN_CHECKPOINT_SIBLING_LIMIT, "sibling tool result")
+            };
+            result.content = compact_checkpoint_content(&result.content, limit, label);
+            group_results.push(result);
+        }
+        if group_results.len() != assistant.tool_calls.len() {
+            continue;
+        }
+        retained.push(compacted_assistant);
+        retained.extend(group_results);
+    }
+    retained
+}
+
+fn tool_protocol_is_complete(messages: &[AgentMessage]) -> bool {
+    let mut calls = HashMap::<String, usize>::new();
+    let mut results = HashMap::<String, usize>::new();
+    for message in messages {
+        if message.role == AgentRole::Assistant {
+            for call in &message.tool_calls {
+                *calls.entry(call.id.clone()).or_default() += 1;
+            }
+        }
+        if message.role == AgentRole::Tool {
+            let Some(call_id) = message.tool_call_id.as_ref() else {
+                return false;
+            };
+            *results.entry(call_id.clone()).or_default() += 1;
+        }
+    }
+    calls == results
+}
+
+fn bind_artifact_revisions_to_ask(
+    messages: &mut [AgentMessage],
+    call_id: &str,
+    artifact_revisions: Vec<Value>,
+) {
+    let Some(call) = messages
+        .iter_mut()
+        .rev()
+        .flat_map(|message| message.tool_calls.iter_mut())
+        .find(|call| call.id == call_id && call.name == "ask_user")
+    else {
+        return;
+    };
+    let mut arguments = serde_json::from_str::<Value>(&call.arguments_json)
+        .unwrap_or_else(|_| json!({"prompt": call.arguments_json}));
+    if let Some(arguments) = arguments.as_object_mut() {
+        arguments.insert(
+            "artifact_revisions".into(),
+            Value::Array(artifact_revisions),
+        );
+        call.arguments_json = Value::Object(arguments.clone()).to_string();
+    }
+}
+
+fn latest_answered_human_checkpoint(messages: &[AgentMessage]) -> Option<HumanCheckpointEvidence> {
+    real_answered_ask_checkpoints(messages)
+        .into_iter()
+        .rev()
+        .find(|checkpoint| {
+            checkpoint.evidence.purpose == HumanActionPurpose::ArtifactAcceptance.as_str()
+        })
+        .map(|checkpoint| HumanCheckpointEvidence {
+            artifact_revisions: checkpoint
+                .evidence
+                .artifact_revisions
+                .into_iter()
+                .map(|artifact| (PathBuf::from(artifact.path), artifact.revision))
+                .collect(),
+            question: checkpoint.evidence.prompt,
+            answer: checkpoint.answer,
+        })
+}
+
+fn changed_artifact_paths(
+    task: &TaskRecord,
+    previously_reviewed: Option<&BTreeMap<PathBuf, String>>,
+    current: &BTreeMap<PathBuf, String>,
+) -> BTreeSet<PathBuf> {
+    task.artifacts
+        .iter()
+        .filter(|artifact| {
+            previously_reviewed
+                .is_none_or(|previous| previous.get(&artifact.path) != current.get(&artifact.path))
+        })
+        .map(|artifact| artifact.path.clone())
+        .collect()
+}
+
+fn checker_human_question(locale: &AppLocale, result: &VerificationResult) -> String {
+    let heading = localized(
+        locale,
+        "这个验收点依赖主观判断、人工查看或模型无法取得的证据。请明确回复“接受当前版本”，或给出具体修改点。",
+        "This acceptance point depends on subjective judgment, human viewing, or evidence unavailable to the model. Explicitly accept the current version or provide concrete changes.",
+    );
+    let findings = if result.findings.is_empty() {
+        result.summary.clone()
+    } else {
+        result.findings.join("\n")
+    };
+    format!("{heading}\n\n{findings}")
 }
 
 fn should_run_checker(goal: &GoalSpec, task: &Option<TaskRecord>) -> bool {
@@ -3753,21 +5486,6 @@ fn recoverable_tool_error_output(
     .to_string()
 }
 
-fn repeated_tool_plan_output(call: &AgentToolCall, locale: AppLocale) -> String {
-    json!({
-        "ok": false,
-        "recoverable": true,
-        "tool": call.name,
-        "error": "repeated_tool_plan",
-        "instruction": localized(
-            &locale,
-            "相同工具方案已重复多次且没有形成新证据。不要再次照搬；检查现有结果，改用不同参数、不同工具或不同子任务拆分继续推进。",
-            "The same tool plan repeated without producing new evidence. Do not repeat it again; inspect existing results and continue with different arguments, another tool, or a different subtask decomposition."
-        )
-    })
-    .to_string()
-}
-
 async fn append_recoverable_tool_warning(
     store: &RuntimeStore,
     task_id: Uuid,
@@ -3792,12 +5510,108 @@ async fn append_recoverable_tool_warning(
     Ok(())
 }
 
-fn tool_signature(calls: &[AgentToolCall]) -> String {
+fn tool_signature(calls: &[AgentToolCall], checker_revision: bool) -> String {
     calls
         .iter()
-        .map(|call| format!("{}:{}", call.name, call.arguments_json))
+        .map(|call| {
+            if checker_revision && call.name == "register_artifact" {
+                return call.name.clone();
+            }
+            if checker_revision && call.name == "create_artifact" {
+                let mut arguments = serde_json::from_str::<Value>(&call.arguments_json)
+                    .unwrap_or_else(|_| Value::String(call.arguments_json.clone()));
+                if let Some(arguments) = arguments.as_object_mut() {
+                    arguments.remove("file_name");
+                    arguments.remove("fileName");
+                    arguments.remove("title");
+                }
+                return format!("{}:{}", call.name, canonical_json_string(&arguments));
+            }
+            let arguments = serde_json::from_str::<Value>(&call.arguments_json)
+                .map(|value| canonical_json_string(&value))
+                .unwrap_or_else(|_| call.arguments_json.trim().to_string());
+            format!("{}:{}", call.name, arguments)
+        })
         .collect::<Vec<_>>()
         .join("|")
+}
+
+fn canonical_json_string(value: &Value) -> String {
+    match value {
+        Value::Object(object) => {
+            let mut keys = object.keys().collect::<Vec<_>>();
+            keys.sort();
+            format!(
+                "{{{}}}",
+                keys.into_iter()
+                    .map(|key| format!(
+                        "{}:{}",
+                        serde_json::to_string(key).unwrap_or_default(),
+                        canonical_json_string(&object[key])
+                    ))
+                    .collect::<Vec<_>>()
+                    .join(",")
+            )
+        }
+        Value::Array(values) => format!(
+            "[{}]",
+            values
+                .iter()
+                .map(canonical_json_string)
+                .collect::<Vec<_>>()
+                .join(",")
+        ),
+        _ => serde_json::to_string(value).unwrap_or_default(),
+    }
+}
+
+fn semantic_tool_evidence(call: &AgentToolCall, output: &str) -> String {
+    if !matches!(call.name.as_str(), "create_artifact" | "register_artifact") {
+        return truncate(output, 8_000);
+    }
+    let Ok(value) = serde_json::from_str::<Value>(output) else {
+        return truncate(output, 8_000);
+    };
+    let mut artifacts = value
+        .get("artifacts")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    if let Some(artifact) = value.get("artifact") {
+        artifacts.push(artifact.clone());
+    }
+    let mut revisions = artifacts
+        .iter()
+        .map(|artifact| {
+            format!(
+                "{}:{}",
+                artifact
+                    .get("semanticRevision")
+                    .or_else(|| artifact.get("revision"))
+                    .and_then(Value::as_str)
+                    .unwrap_or("unknown"),
+                artifact
+                    .get("changed")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false)
+            )
+        })
+        .collect::<Vec<_>>();
+    revisions.sort();
+    json!({
+        "ok": value.get("ok"),
+        "retry_with_revised_input": value
+            .get("retry_with_revised_input")
+            .or_else(|| value.get("retryWithRevisedInput")),
+        "needs_user_action": value
+            .get("needs_user_action")
+            .or_else(|| value.get("needsUserAction")),
+        "error_kind": value.get("error_kind").or_else(|| value.get("errorKind")),
+        "reason": value.get("reason"),
+        "requirements": value.get("requirements"),
+        "artifacts": revisions,
+    })
+    .to_string()
 }
 
 fn decode_json<T: serde::de::DeserializeOwned>(raw: &str) -> Result<T, EngineError> {
@@ -3972,14 +5786,31 @@ fn ensure_key(settings: &RuntimeSettings, api_key: Option<&str>) -> Result<(), E
     Ok(())
 }
 
-/// Configuration and protocol failures cannot change while a queue pass is running. Preserve the
-/// objective for an explicit retry after settings change; retry service/transient failures in the
-/// autonomous supervisor without manufacturing a human-interaction checkpoint.
+/// Only failures likely to clear without changing the goal or configuration receive another
+/// autonomous supervisor pass. Protocol, quota, configuration, and unknown local failures are
+/// handed to the user with the original session preserved.
 fn failure_allows_automatic_retry(kind: RuntimeFailureKind) -> bool {
-    !matches!(
+    matches!(
         kind,
-        RuntimeFailureKind::Authentication | RuntimeFailureKind::InvalidRequest
+        RuntimeFailureKind::RateLimited
+            | RuntimeFailureKind::Network
+            | RuntimeFailureKind::Timeout
+            | RuntimeFailureKind::Server
     )
+}
+
+fn automatic_recovery_decision(
+    kind: RuntimeFailureKind,
+    previous_streak: u32,
+) -> AutomaticRecoveryDecision {
+    let next_streak = previous_streak.saturating_add(1);
+    if failure_allows_automatic_retry(kind) && next_streak < MAX_AUTOMATIC_RECOVERY_CYCLES {
+        AutomaticRecoveryDecision::Retry {
+            streak: next_streak,
+        }
+    } else {
+        AutomaticRecoveryDecision::Handoff
+    }
 }
 
 fn root_recovery_delay(attempt: u32) -> Duration {
@@ -4103,20 +5934,20 @@ mod tests {
 
     #[test]
     fn only_transient_runtime_failures_are_automatically_retried() {
-        assert!(!failure_allows_automatic_retry(
-            RuntimeFailureKind::Authentication
-        ));
-        assert!(!failure_allows_automatic_retry(
-            RuntimeFailureKind::InvalidRequest
-        ));
         for kind in [
+            RuntimeFailureKind::Authentication,
             RuntimeFailureKind::Quota,
+            RuntimeFailureKind::InvalidRequest,
+            RuntimeFailureKind::InvalidResponse,
+            RuntimeFailureKind::Unknown,
+        ] {
+            assert!(!failure_allows_automatic_retry(kind), "{kind:?}");
+        }
+        for kind in [
             RuntimeFailureKind::RateLimited,
             RuntimeFailureKind::Network,
             RuntimeFailureKind::Timeout,
-            RuntimeFailureKind::InvalidResponse,
             RuntimeFailureKind::Server,
-            RuntimeFailureKind::Unknown,
         ] {
             assert!(failure_allows_automatic_retry(kind), "{kind:?}");
         }
@@ -4133,11 +5964,14 @@ mod tests {
         let captured = requests.clone();
         let responder: StdArc<MockResponder> = StdArc::new(responder);
         let handle = thread::spawn(move || {
-            let started = Instant::now();
+            let mut last_request = Instant::now();
             let mut handlers = Vec::new();
-            while handlers.len() < expected_requests && started.elapsed() < Duration::from_secs(8) {
+            while handlers.len() < expected_requests
+                && last_request.elapsed() < mock_provider_idle_timeout()
+            {
                 match listener.accept() {
                     Ok((mut stream, _)) => {
+                        last_request = Instant::now();
                         stream.set_nonblocking(false).unwrap();
                         let captured = captured.clone();
                         let responder = responder.clone();
@@ -4171,7 +6005,7 @@ mod tests {
 
     fn read_request_json(stream: &mut TcpStream) -> Value {
         stream
-            .set_read_timeout(Some(Duration::from_secs(5)))
+            .set_read_timeout(Some(mock_provider_idle_timeout()))
             .unwrap();
         let mut bytes = Vec::new();
         let mut chunk = [0_u8; 4_096];
@@ -4275,14 +6109,1146 @@ mod tests {
     }
 
     fn runtime_contract_test_timeout() -> Duration {
-        Duration::from_secs(if cfg!(target_os = "windows") { 45 } else { 5 })
+        agent_loop_test_timeout()
+    }
+
+    fn mock_provider_idle_timeout() -> Duration {
+        Duration::from_secs(if cfg!(target_os = "windows") { 90 } else { 30 })
+    }
+
+    fn agent_loop_test_timeout() -> Duration {
+        Duration::from_secs(if cfg!(target_os = "windows") { 90 } else { 30 })
     }
 
     #[test]
     fn extracts_balanced_json_without_leaking_surrounding_text() {
         let raw = "preface ```json\n{\"passed\":true,\"summary\":\"ok\",\"findings\":[]}\n``` tail";
         let result: VerificationResult = decode_json(raw).unwrap();
-        assert!(result.passed);
+        assert_eq!(
+            result.disposition().unwrap(),
+            VerificationDisposition::Passed
+        );
+
+        let new_contract: VerificationResult =
+            decode_json(r#"{"disposition":"passed","summary":"ok","findings":[]}"#).unwrap();
+        assert_eq!(
+            new_contract.disposition().unwrap(),
+            VerificationDisposition::Passed
+        );
+
+        let conflicting: VerificationResult =
+            decode_json(r#"{"disposition":"passed","passed":false,"summary":"bad","findings":[]}"#)
+                .unwrap();
+        assert!(conflicting.disposition().is_err());
+    }
+
+    #[test]
+    fn semantic_tool_signatures_canonicalize_json_and_creation_context() {
+        let left = AgentToolCall {
+            id: "left".into(),
+            name: "create_artifact".into(),
+            arguments_json: r#"{"kind":"pptx","theme":"ivory","slides":[{"title":"A"}],"file_name":"deck.pptx","title":"Deck"}"#.into(),
+        };
+        let right = AgentToolCall {
+            id: "right".into(),
+            name: "create_artifact".into(),
+            arguments_json: r#"{ "title":"Deck", "file_name":"deck.pptx", "slides":[{"title":"A"}], "theme":"ivory", "kind":"pptx" }"#.into(),
+        };
+        assert_eq!(
+            tool_signature(std::slice::from_ref(&left), false),
+            tool_signature(std::slice::from_ref(&right), false)
+        );
+        assert_eq!(
+            tool_signature(std::slice::from_ref(&left), true),
+            tool_signature(std::slice::from_ref(&right), true)
+        );
+
+        let arguments = serde_json::from_str::<Value>(&left.arguments_json).unwrap();
+        let ivory = create_artifact_semantic_context(
+            &arguments,
+            Some(&json!({"engine":"designkb-node","theme":"ivory"})),
+        );
+        let royal = create_artifact_semantic_context(
+            &arguments,
+            Some(&json!({"engine":"designkb-node","theme":"royal"})),
+        );
+        let other_engine = create_artifact_semantic_context(
+            &arguments,
+            Some(&json!({"engine":"designkb-python","theme":"ivory"})),
+        );
+        assert_ne!(ivory, royal);
+        assert_ne!(ivory, other_engine);
+
+        let first_output = json!({
+            "ok":true,
+            "artifacts":[{
+                "kind":"arbitrary-alias-for-the-same-bytes",
+                "logicalKey":"path:/workspace/report-r1.md",
+                "semanticRevision":"same-semantic-revision",
+                "changed":true
+            }]
+        })
+        .to_string();
+        let renamed_output = json!({
+            "ok":true,
+            "artifacts":[{
+                "kind":"markdown",
+                "logicalKey":"path:/workspace/report-r2.md",
+                "semanticRevision":"same-semantic-revision",
+                "changed":true
+            }]
+        })
+        .to_string();
+        assert_eq!(
+            semantic_tool_evidence(&left, &first_output),
+            semantic_tool_evidence(&right, &renamed_output),
+            "path-only renames must not manufacture semantic tool progress"
+        );
+    }
+
+    #[tokio::test]
+    async fn artifact_kind_alias_does_not_manufacture_semantic_review_progress() {
+        let directory = tempdir().unwrap();
+        let workspace = directory.path().join("Workspace");
+        std::fs::create_dir_all(&workspace).unwrap();
+        let path = workspace.join("same-content.md");
+        std::fs::write(&path, "identical semantic content").unwrap();
+        let store = RuntimeStore::open(directory.path().join("State")).unwrap();
+        let receipt = store
+            .enqueue("Test semantic aliases".into(), Vec::new())
+            .await
+            .unwrap();
+        let mut task = store.task(receipt.thread_id).await.unwrap();
+        let mut artifact = artifact_record_for_path(&path).unwrap();
+        artifact.kind = "markdown".into();
+        task.artifacts = vec![artifact.clone()];
+        let markdown = artifact_semantic_revision_map(&task);
+        artifact.kind = "arbitrary-kind-alias".into();
+        task.artifacts = vec![artifact];
+        assert_eq!(markdown, artifact_semantic_revision_map(&task));
+    }
+
+    #[tokio::test]
+    async fn review_compaction_preserves_current_state_and_complete_human_protocol_group() {
+        let directory = tempdir().unwrap();
+        let store = RuntimeStore::open(directory.path().join("State")).unwrap();
+        let artifact_path = directory.path().join("Workspace/current-report.md");
+        let receipt = store
+            .enqueue(
+                "Create the current report from the attached source.".into(),
+                vec![directory.path().join("source.txt")],
+            )
+            .await
+            .unwrap();
+        store
+            .add_artifacts(
+                receipt.thread_id,
+                vec![ArtifactRecord {
+                    id: Uuid::new_v4(),
+                    title: "Current report".into(),
+                    path: artifact_path.clone(),
+                    kind: "markdown".into(),
+                    size_bytes: 321,
+                    modified_at: Utc::now(),
+                    logical_key: Some("create:current-report.md".into()),
+                    revision: "current-revision".into(),
+                    semantic_revision: "current-semantic-revision".into(),
+                    semantic_context: String::new(),
+                    supersedes: None,
+                    superseded_by: None,
+                }],
+            )
+            .await
+            .unwrap();
+        let task = store.task(receipt.thread_id).await.unwrap();
+        let goal = GoalSpec {
+            objective: "Produce a checker-approved current report".into(),
+            kind: GoalKind::Task,
+            output_mode: OutputMode::Artifact,
+            reference_scope: ReferenceScope::CurrentInput,
+            reference_evidence: vec!["current request".into()],
+            reference_explicit: true,
+            reference_confidence: ReferenceConfidence::High,
+            constraints: Vec::new(),
+            boundaries: Vec::new(),
+            risks: Vec::new(),
+            success_criteria: vec!["The current report is complete".into()],
+            open_questions: Vec::new(),
+        };
+        let mut messages = vec![AgentMessage {
+            role: AgentRole::System,
+            content: "Authoritative runtime contract with Accepted GoalSpec".into(),
+            tool_calls: Vec::new(),
+            tool_call_id: None,
+        }];
+        for round in 0..128 {
+            let first_id = format!("old-{round}-a");
+            let second_id = format!("old-{round}-b");
+            messages.push(AgentMessage {
+                role: AgentRole::Assistant,
+                content: format!("Old maker round {round}"),
+                tool_calls: vec![
+                    AgentToolCall {
+                        id: first_id.clone(),
+                        name: "read_file".into(),
+                        arguments_json: "{\"path\":\"old\"}".into(),
+                    },
+                    AgentToolCall {
+                        id: second_id.clone(),
+                        name: "run_command".into(),
+                        arguments_json: "{\"command\":\"old-check\"}".into(),
+                    },
+                ],
+                tool_call_id: None,
+            });
+            for call_id in [first_id, second_id] {
+                messages.push(AgentMessage {
+                    role: AgentRole::Tool,
+                    content: format!("old result {round}"),
+                    tool_calls: Vec::new(),
+                    tool_call_id: Some(call_id),
+                });
+            }
+            messages.push(AgentMessage {
+                role: AgentRole::User,
+                content: format!("OLD CHECKER CORRECTION {round}"),
+                tool_calls: Vec::new(),
+                tool_call_id: None,
+            });
+        }
+        let answered_group = |id: &str, prompt: &str, purpose: Option<&str>, answer: &str| {
+            let mut arguments = json!({"prompt": prompt});
+            if let Some(purpose) = purpose {
+                arguments
+                    .as_object_mut()
+                    .unwrap()
+                    .insert("purpose".into(), Value::String(purpose.into()));
+            }
+            vec![
+                AgentMessage {
+                    role: AgentRole::Assistant,
+                    content: String::new(),
+                    tool_calls: vec![AgentToolCall {
+                        id: id.into(),
+                        name: "ask_user".into(),
+                        arguments_json: arguments.to_string(),
+                    }],
+                    tool_call_id: None,
+                },
+                AgentMessage {
+                    role: AgentRole::Tool,
+                    content: answer.into(),
+                    tool_calls: Vec::new(),
+                    tool_call_id: Some(id.into()),
+                },
+            ]
+        };
+        for index in 0..8 {
+            messages.extend(answered_group(
+                &format!("discarded-human-{index}"),
+                "An old ordinary question",
+                None,
+                &format!("discarded choice {index}"),
+            ));
+        }
+        messages.extend(answered_group(
+            "synthetic-only-checkpoint",
+            "This interrupted prompt was never answered by a human",
+            Some("runtime_guidance"),
+            &json!({"ok":false,"attempt_status":"interrupted"}).to_string(),
+        ));
+        messages.extend(answered_group(
+            "runtime-guidance-checkpoint",
+            "Which recovery direction should be used?",
+            Some("runtime_guidance"),
+            "Keep the evidence table and change the layout strategy.",
+        ));
+        messages.extend(answered_group(
+            "technical-recovery-checkpoint",
+            "How should technical recovery continue?",
+            Some("technical_recovery"),
+            "Use the repaired local renderer and continue the same goal.",
+        ));
+        messages.extend(answered_group(
+            "other-explicit-checkpoint",
+            "Record this explicit human decision.",
+            Some("custom_decision"),
+            "Keep this explicit decision through compaction.",
+        ));
+        messages.push(AgentMessage {
+            role: AgentRole::Assistant,
+            content: String::new(),
+            tool_calls: vec![
+                AgentToolCall {
+                    id: "current-acceptance".into(),
+                    name: "ask_user".into(),
+                    arguments_json: json!({
+                        "prompt": "Accept the current report?",
+                        "purpose": "artifact_acceptance",
+                        "artifact_revisions": [{
+                            "path": artifact_path.display().to_string(),
+                            "revision": "current-revision"
+                        }]
+                    })
+                    .to_string(),
+                },
+                AgentToolCall {
+                    id: "current-sibling".into(),
+                    name: "inspect_runtime".into(),
+                    arguments_json: json!({"payload":"A".repeat(50_000)}).to_string(),
+                },
+            ],
+            tool_call_id: None,
+        });
+        messages.push(AgentMessage {
+            role: AgentRole::Tool,
+            content: "I accept the current report.".into(),
+            tool_calls: Vec::new(),
+            tool_call_id: Some("current-acceptance".into()),
+        });
+        messages.push(AgentMessage {
+            role: AgentRole::Tool,
+            content: "R".repeat(50_000),
+            tool_calls: Vec::new(),
+            tool_call_id: Some("current-sibling".into()),
+        });
+        messages.extend(answered_group(
+            "discarded-format-checkpoint",
+            "Which old format preference applies?",
+            None,
+            "This older format answer should yield to newer ordinary answers.",
+        ));
+        messages.extend(answered_group(
+            "discarded-audience-checkpoint",
+            "Which old audience preference applies?",
+            None,
+            "This older audience answer should yield to newer ordinary answers.",
+        ));
+        messages.extend(answered_group(
+            "project-name-checkpoint",
+            "What project name should appear?",
+            None,
+            "Project Lumen",
+        ));
+        messages.extend(answered_group(
+            "theme-checkpoint",
+            "Which theme should be used?",
+            None,
+            "Use the ivory theme.",
+        ));
+
+        let artifact_revisions =
+            BTreeMap::from([(artifact_path.clone(), "current-revision".to_string())]);
+        let compacted = compact_review_session_messages(
+            &messages,
+            &task,
+            &goal,
+            &artifact_revisions,
+            "LATEST MAKER FINAL TEXT",
+            "CURRENT CHECKER CORRECTION",
+            AppLocale::En,
+        );
+        let rendered = compacted
+            .iter()
+            .map(|message| message.content.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert_eq!(selected_answered_ask_group_indices(&compacted).len(), 6);
+        assert!(tool_protocol_is_complete(&compacted));
+        assert!(rendered.contains("Produce a checker-approved current report"));
+        assert!(rendered.contains(&artifact_path.display().to_string()));
+        assert!(rendered.contains("current-revision"));
+        assert!(rendered.contains("LATEST MAKER FINAL TEXT"));
+        assert!(rendered.contains("CURRENT CHECKER CORRECTION"));
+        assert!(rendered.contains("Project Lumen"));
+        assert!(rendered.contains("Use the ivory theme."));
+        assert!(rendered.contains("Keep the evidence table and change the layout strategy."));
+        assert!(rendered.contains("Use the repaired local renderer and continue the same goal."));
+        assert!(rendered.contains("Keep this explicit decision through compaction."));
+        assert!(!rendered.contains("OLD CHECKER CORRECTION"));
+        assert!(!rendered.contains("discarded choice"));
+        assert!(!rendered.contains("This older format answer"));
+        assert!(!rendered.contains("This older audience answer"));
+        assert!(!rendered.contains("This interrupted prompt was never answered by a human"));
+
+        let retained_calls = compacted
+            .iter()
+            .flat_map(|message| message.tool_calls.iter())
+            .map(|call| call.id.as_str())
+            .collect::<BTreeSet<_>>();
+        let retained_results = compacted
+            .iter()
+            .filter(|message| message.role == AgentRole::Tool)
+            .filter_map(|message| message.tool_call_id.as_deref())
+            .collect::<BTreeSet<_>>();
+        assert_eq!(retained_calls, retained_results);
+        assert_eq!(
+            retained_calls,
+            BTreeSet::from([
+                "current-acceptance",
+                "current-sibling",
+                "other-explicit-checkpoint",
+                "project-name-checkpoint",
+                "runtime-guidance-checkpoint",
+                "technical-recovery-checkpoint",
+                "theme-checkpoint",
+            ])
+        );
+        assert!(!retained_calls.contains("synthetic-only-checkpoint"));
+        let retained_sibling_call = compacted
+            .iter()
+            .flat_map(|message| message.tool_calls.iter())
+            .find(|call| call.id == "current-sibling")
+            .unwrap();
+        assert!(serde_json::from_str::<Value>(&retained_sibling_call.arguments_json).is_ok());
+        assert!(retained_sibling_call.arguments_json.len() < 3_000);
+        let retained_sibling_result = compacted
+            .iter()
+            .find(|message| message.tool_call_id.as_deref() == Some("current-sibling"))
+            .unwrap();
+        assert!(retained_sibling_result
+            .content
+            .contains("LingShu compacted"));
+        assert!(retained_sibling_result.content.len() < 3_000);
+        let checkpoint = latest_answered_human_checkpoint(&compacted).unwrap();
+        assert_eq!(
+            checkpoint.artifact_revisions,
+            BTreeMap::from([(artifact_path, "current-revision".into())])
+        );
+        assert_eq!(checkpoint.answer, "I accept the current report.");
+        let mut external_task = task;
+        external_task.session_messages = compacted;
+        let continuation = external_continuation_context(None, &external_task).unwrap();
+        assert!(continuation.contains("Project Lumen"));
+        assert!(continuation.contains("Use the ivory theme."));
+        assert!(continuation.contains("Keep the evidence table and change the layout strategy."));
+        assert!(
+            continuation.contains("Use the repaired local renderer and continue the same goal.")
+        );
+        assert!(!continuation.contains("synthetic-only-checkpoint"));
+    }
+
+    #[tokio::test]
+    async fn external_checker_revision_survives_adapter_failure_and_technical_recovery() {
+        let directory = tempdir().unwrap();
+        let store = RuntimeStore::open(directory.path().join("State")).unwrap();
+        let kernel = RuntimeKernel::new(store.clone(), std::env::consts::OS).unwrap();
+        let receipt = store
+            .enqueue("Revise an externally generated artifact".into(), Vec::new())
+            .await
+            .unwrap();
+        let mut task = store.task(receipt.thread_id).await.unwrap();
+        let messages = vec![
+            AgentMessage {
+                role: AgentRole::System,
+                content: "[LingShu deterministic review continuation snapshot]".into(),
+                tool_calls: Vec::new(),
+                tool_call_id: None,
+            },
+            checker_correction_message(&AppLocale::En, "Fix the external artifact."),
+        ];
+
+        kernel
+            .persist_session_before_adapter(&mut task, messages.clone())
+            .await
+            .unwrap();
+        store
+            .require_recovery(
+                receipt.thread_id,
+                "External adapter failed".into(),
+                "simulated adapter failure".into(),
+            )
+            .await
+            .unwrap();
+        let recovered = store
+            .prepare_continue(receipt.thread_id)
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert!(tool_protocol_is_complete(&recovered.session_messages));
+        assert!(recovered.session_messages.iter().any(|message| {
+            message
+                .content
+                .contains("deterministic review continuation snapshot")
+        }));
+        assert!(recovered
+            .session_messages
+            .iter()
+            .any(|message| { message.content.contains("Fix the external artifact") }));
+        assert!(task_is_checker_revision(&recovered, None));
+        let continuation = external_continuation_context(None, &recovered).unwrap();
+        assert!(continuation.contains("Latest independent checker correction"));
+        assert!(continuation.contains("Fix the external artifact."));
+        assert!(!continuation.contains("simulated adapter failure"));
+    }
+
+    #[tokio::test]
+    async fn external_restart_manifest_is_bounded_and_marks_only_current_artifact_as_editable() {
+        let directory = tempdir().unwrap();
+        let state_directory = directory.path().join("State");
+        let store = RuntimeStore::open(&state_directory).unwrap();
+        let receipt = store
+            .enqueue("Keep revising one external report".into(), Vec::new())
+            .await
+            .unwrap();
+        let artifact = |index: usize| ArtifactRecord {
+            id: Uuid::new_v4(),
+            title: format!("Report revision {index}"),
+            path: directory
+                .path()
+                .join(format!("Workspace/report-r{index}.md")),
+            kind: "markdown".into(),
+            size_bytes: index as u64 + 1,
+            modified_at: Utc::now(),
+            logical_key: Some("create:external-report".into()),
+            revision: format!("raw-revision-{index}"),
+            semantic_revision: format!("semantic-revision-{index}"),
+            semantic_context: String::new(),
+            supersedes: None,
+            superseded_by: None,
+        };
+        store
+            .add_artifacts(receipt.thread_id, vec![artifact(0)])
+            .await
+            .unwrap();
+        for index in 1..=40 {
+            let current_id = store.task(receipt.thread_id).await.unwrap().artifacts[0].id;
+            store
+                .supersede_artifacts(
+                    receipt.thread_id,
+                    vec![ArtifactSupersession {
+                        superseded_artifact_id: current_id,
+                        replacement: artifact(index),
+                    }],
+                )
+                .await
+                .unwrap();
+        }
+        store
+            .set_session_messages(
+                receipt.thread_id,
+                vec![checker_correction_message(
+                    &AppLocale::En,
+                    "Revise only the current external report.",
+                )],
+            )
+            .await
+            .unwrap();
+        store
+            .require_recovery(
+                receipt.thread_id,
+                "External adapter interrupted".into(),
+                "simulated failure before restart".into(),
+            )
+            .await
+            .unwrap();
+        drop(store);
+
+        let reopened = RuntimeStore::open(&state_directory).unwrap();
+        let recovered = reopened
+            .prepare_continue(receipt.thread_id)
+            .await
+            .unwrap()
+            .unwrap();
+        let continuation = external_continuation_context(None, &recovered).unwrap();
+        let current_section = continuation
+            .split("SUPERSEDED ARTIFACT HISTORY")
+            .next()
+            .unwrap();
+
+        assert!(current_section.contains("report-r40.md"));
+        assert!(current_section.contains("raw-revision-40"));
+        assert!(current_section.contains("semantic-revision-40"));
+        assert!(!current_section.contains("report-r39.md"));
+        assert!(continuation.contains("total_count=40"));
+        for recent in 36..=39 {
+            assert!(continuation.contains(&format!("report-r{recent}.md")));
+        }
+        assert!(!continuation.contains("report-r0.md"));
+        assert!(continuation.contains("overwrite the listed current path"));
+        assert!(continuation.contains("newly saved path is a companion by default"));
+        assert!(continuation.contains("every other workspace artifact is non-current history"));
+        assert!(continuation.len() < 12_000, "{}", continuation.len());
+    }
+
+    #[tokio::test]
+    async fn external_save_as_claim_replaces_exact_current_artifact_and_keeps_companion() {
+        let directory = tempdir().unwrap();
+        let workspace = directory.path().join("Workspace");
+        std::fs::create_dir_all(&workspace).unwrap();
+        let store = RuntimeStore::open(directory.path().join("State")).unwrap();
+        let kernel = RuntimeKernel::new(store.clone(), std::env::consts::OS).unwrap();
+        let receipt = store
+            .enqueue("Revise a deck and add sources".into(), Vec::new())
+            .await
+            .unwrap();
+        let current_path = workspace.join("deck.md");
+        std::fs::write(&current_path, b"current deck").unwrap();
+        store
+            .add_artifacts(
+                receipt.thread_id,
+                vec![artifact_record_for_path(&current_path).unwrap()],
+            )
+            .await
+            .unwrap();
+        let before = store.task(receipt.thread_id).await.unwrap();
+        let current = before.artifacts[0].clone();
+        let replacement_path = workspace.join("deck-ivory.md");
+        let companion_path = workspace.join("sources.md");
+        std::fs::write(&replacement_path, b"revised ivory deck").unwrap();
+        std::fs::write(&companion_path, b"source appendix").unwrap();
+        let run_id = Uuid::new_v4();
+        let replacement_claim = LoopArtifactReplacement {
+            new_path: PathBuf::from("deck-ivory.md"),
+            replaces: LoopArtifactSelector {
+                by: LoopArtifactSelectorKind::Id,
+                value: current.id.to_string(),
+                expected_raw_revision: file_revision(&current_path).unwrap(),
+            },
+        };
+
+        kernel
+            .register_external_workspace_artifacts(
+                &before,
+                run_id,
+                "External result",
+                &workspace,
+                vec![PathBuf::from("deck-ivory.md"), PathBuf::from("sources.md")],
+                vec![replacement_claim.clone()],
+            )
+            .await
+            .unwrap();
+
+        let after = store.task(receipt.thread_id).await.unwrap();
+        assert_eq!(after.artifacts.len(), 2);
+        assert_eq!(after.superseded_artifacts.len(), 1);
+        assert!(after
+            .artifacts
+            .iter()
+            .any(|artifact| artifact.path == replacement_path));
+        assert!(after
+            .artifacts
+            .iter()
+            .any(|artifact| artifact.path == companion_path));
+        assert!(!after
+            .artifacts
+            .iter()
+            .any(|artifact| artifact.path == current_path));
+        assert_eq!(after.superseded_artifacts[0].id, current.id);
+
+        // A crash after Store commit but before receipt acknowledgement replays the same ready
+        // receipt. The durable run id must short-circuit stale target validation and mutation.
+        kernel
+            .register_external_workspace_artifacts(
+                &after,
+                run_id,
+                "External result",
+                &workspace,
+                vec![PathBuf::from("deck-ivory.md"), PathBuf::from("sources.md")],
+                vec![replacement_claim],
+            )
+            .await
+            .unwrap();
+        assert_eq!(store.task(receipt.thread_id).await.unwrap(), after);
+    }
+
+    #[tokio::test]
+    async fn restart_consumes_committed_external_outcome_without_reinvoking_the_maker() {
+        let (endpoint, requests, server) = mock_provider(0, |_request, _| unreachable!());
+        let directory = tempdir().unwrap();
+        let state_directory = directory.path().join("State");
+        let thread_id;
+        let run_id = Uuid::new_v4();
+        {
+            let store = RuntimeStore::open(&state_directory).unwrap();
+            let mut settings = store.settings().await;
+            settings.locale = AppLocale::En;
+            settings.provider_id = "custom-compatible".into();
+            settings.provider_name = "Mock provider".into();
+            settings.protocol = ProviderProtocol::OpenaiChatCompletions;
+            settings.endpoint = endpoint;
+            settings.model = "mock-agent".into();
+            settings.first_run_complete = true;
+            store.update_settings(settings).await.unwrap();
+            let receipt = store
+                .enqueue("Return one external result".into(), Vec::new())
+                .await
+                .unwrap();
+            thread_id = receipt.thread_id;
+            assert!(store.claim(thread_id).await.unwrap());
+            store
+                .set_goal(
+                    thread_id,
+                    GoalSpec {
+                        objective: "Return one external result".into(),
+                        kind: GoalKind::Question,
+                        output_mode: OutputMode::ChatReply,
+                        reference_scope: ReferenceScope::CurrentInput,
+                        reference_evidence: Vec::new(),
+                        reference_explicit: true,
+                        reference_confidence: ReferenceConfidence::High,
+                        constraints: Vec::new(),
+                        boundaries: Vec::new(),
+                        risks: Vec::new(),
+                        success_criteria: Vec::new(),
+                        open_questions: Vec::new(),
+                    },
+                )
+                .await
+                .unwrap();
+            store
+                .register_external_artifacts(
+                    thread_id,
+                    run_id,
+                    "PERSISTED_EXTERNAL_RESULT_SENTINEL".into(),
+                    Vec::new(),
+                )
+                .await
+                .unwrap();
+            store
+                .require_recovery(
+                    thread_id,
+                    "Simulated crash after artifact commit".into(),
+                    "crash between Store commit and final completion".into(),
+                )
+                .await
+                .unwrap();
+        }
+
+        let reopened = RuntimeStore::open(&state_directory).unwrap();
+        let kernel = RuntimeKernel::new(reopened.clone(), std::env::consts::OS).unwrap();
+        assert!(kernel
+            .continue_recovery(thread_id, Some("test-token".into()))
+            .await
+            .unwrap());
+        server.join().unwrap();
+
+        let task = reopened.task(thread_id).await.unwrap();
+        assert_eq!(task.status, TaskStatus::Completed);
+        assert_eq!(task.summary, "PERSISTED_EXTERNAL_RESULT_SENTINEL");
+        assert!(task.review_progress.pending_external_outcome.is_none());
+        assert!(requests.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn invalid_external_save_as_claim_rejects_the_whole_delta_without_state_change() {
+        let directory = tempdir().unwrap();
+        let workspace = directory.path().join("Workspace");
+        std::fs::create_dir_all(&workspace).unwrap();
+        let store = RuntimeStore::open(directory.path().join("State")).unwrap();
+        let kernel = RuntimeKernel::new(store.clone(), std::env::consts::OS).unwrap();
+        let receipt = store
+            .enqueue("Reject an invalid external claim".into(), Vec::new())
+            .await
+            .unwrap();
+        let current_path = workspace.join("report.md");
+        std::fs::write(&current_path, b"current report").unwrap();
+        store
+            .add_artifacts(
+                receipt.thread_id,
+                vec![artifact_record_for_path(&current_path).unwrap()],
+            )
+            .await
+            .unwrap();
+        let before = store.task(receipt.thread_id).await.unwrap();
+        let undeclared_companion = workspace.join("appendix.md");
+        let replacement_path = workspace.join("report-revised.md");
+        std::fs::write(&undeclared_companion, b"appendix").unwrap();
+        std::fs::write(&replacement_path, b"revision").unwrap();
+
+        let error = kernel
+            .register_external_workspace_artifacts(
+                &before,
+                Uuid::new_v4(),
+                "External result",
+                &workspace,
+                vec![PathBuf::from("appendix.md")],
+                vec![LoopArtifactReplacement {
+                    new_path: PathBuf::from("report-revised.md"),
+                    replaces: LoopArtifactSelector {
+                        by: LoopArtifactSelectorKind::Id,
+                        value: before.artifacts[0].id.to_string(),
+                        expected_raw_revision: file_revision(&current_path).unwrap(),
+                    },
+                }],
+            )
+            .await
+            .unwrap_err();
+
+        assert!(error
+            .to_string()
+            .contains("was not changed by this harness run"));
+        let after = store.task(receipt.thread_id).await.unwrap();
+        assert_eq!(after.artifacts, before.artifacts);
+        assert_eq!(after.superseded_artifacts, before.superseded_artifacts);
+    }
+
+    #[tokio::test]
+    async fn external_save_as_claim_cannot_overwrite_another_current_artifact_path() {
+        let directory = tempdir().unwrap();
+        let workspace = directory.path().join("Workspace");
+        std::fs::create_dir_all(&workspace).unwrap();
+        let store = RuntimeStore::open(directory.path().join("State")).unwrap();
+        let kernel = RuntimeKernel::new(store.clone(), std::env::consts::OS).unwrap();
+        let receipt = store
+            .enqueue("Keep two current companion reports".into(), Vec::new())
+            .await
+            .unwrap();
+        let primary_path = workspace.join("primary.md");
+        let companion_path = workspace.join("companion.md");
+        std::fs::write(&primary_path, b"primary").unwrap();
+        std::fs::write(&companion_path, b"companion").unwrap();
+        store
+            .add_artifacts(
+                receipt.thread_id,
+                vec![
+                    artifact_record_for_path(&primary_path).unwrap(),
+                    artifact_record_for_path(&companion_path).unwrap(),
+                ],
+            )
+            .await
+            .unwrap();
+        let before = store.task(receipt.thread_id).await.unwrap();
+        std::fs::write(&companion_path, b"attempted replacement").unwrap();
+
+        let error = kernel
+            .register_external_workspace_artifacts(
+                &before,
+                Uuid::new_v4(),
+                "External result",
+                &workspace,
+                vec![PathBuf::from("companion.md")],
+                vec![LoopArtifactReplacement {
+                    new_path: PathBuf::from("companion.md"),
+                    replaces: LoopArtifactSelector {
+                        by: LoopArtifactSelectorKind::Id,
+                        value: before.artifacts[0].id.to_string(),
+                        expected_raw_revision: file_revision(&primary_path).unwrap(),
+                    },
+                }],
+            )
+            .await
+            .unwrap_err();
+
+        assert!(error
+            .to_string()
+            .contains("already belongs to a current artifact"));
+        let after = store.task(receipt.thread_id).await.unwrap();
+        assert_eq!(after.artifacts, before.artifacts);
+        assert_eq!(after.superseded_artifacts, before.superseded_artifacts);
+    }
+
+    #[tokio::test]
+    async fn external_save_as_claim_cannot_reactivate_a_superseded_history_path() {
+        let directory = tempdir().unwrap();
+        let workspace = directory.path().join("Workspace");
+        std::fs::create_dir_all(&workspace).unwrap();
+        let store = RuntimeStore::open(directory.path().join("State")).unwrap();
+        let kernel = RuntimeKernel::new(store.clone(), std::env::consts::OS).unwrap();
+        let receipt = store
+            .enqueue("Never reactivate rejected history".into(), Vec::new())
+            .await
+            .unwrap();
+        let history_path = workspace.join("report-old.md");
+        let current_path = workspace.join("report-current.md");
+        std::fs::write(&history_path, b"rejected old report").unwrap();
+        store
+            .add_artifacts(
+                receipt.thread_id,
+                vec![artifact_record_for_path(&history_path).unwrap()],
+            )
+            .await
+            .unwrap();
+        let initial = store.task(receipt.thread_id).await.unwrap().artifacts[0].clone();
+        std::fs::write(&current_path, b"accepted current report").unwrap();
+        store
+            .supersede_artifacts(
+                receipt.thread_id,
+                vec![ArtifactSupersession {
+                    superseded_artifact_id: initial.id,
+                    replacement: artifact_record_for_path(&current_path).unwrap(),
+                }],
+            )
+            .await
+            .unwrap();
+        let before = store.task(receipt.thread_id).await.unwrap();
+        std::fs::write(&history_path, b"attempted history revival").unwrap();
+
+        let error = kernel
+            .register_external_workspace_artifacts(
+                &before,
+                Uuid::new_v4(),
+                "External result",
+                &workspace,
+                vec![PathBuf::from("report-old.md")],
+                vec![LoopArtifactReplacement {
+                    new_path: PathBuf::from("report-old.md"),
+                    replaces: LoopArtifactSelector {
+                        by: LoopArtifactSelectorKind::Id,
+                        value: before.artifacts[0].id.to_string(),
+                        expected_raw_revision: file_revision(&current_path).unwrap(),
+                    },
+                }],
+            )
+            .await
+            .unwrap_err();
+
+        assert!(error.to_string().contains("superseded history"));
+        let after = store.task(receipt.thread_id).await.unwrap();
+        assert_eq!(after.artifacts, before.artifacts);
+        assert_eq!(after.superseded_artifacts, before.superseded_artifacts);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn restart_preserves_review_baseline_and_same_rejection_count() {
+        const FINDING: &str = "The evidence table is still missing.";
+        let (endpoint, requests, server) = mock_provider(1, |_request, _| {
+            openai_response(
+                Some(
+                    json!({
+                        "disposition":"needs_revision",
+                        "summary":"The same objective defect remains after recovery.",
+                        "findings":[FINDING],
+                        "user_prompt":null
+                    })
+                    .to_string(),
+                ),
+                None,
+                Value::Null,
+            )
+        });
+        let directory = tempdir().unwrap();
+        let state_directory = directory.path().join("State");
+        let workspace = directory.path().join("Workspace");
+        let goal = GoalSpec {
+            objective: "Create a restart-safe reviewed report".into(),
+            kind: GoalKind::Task,
+            output_mode: OutputMode::Artifact,
+            reference_scope: ReferenceScope::CurrentInput,
+            reference_evidence: Vec::new(),
+            reference_explicit: true,
+            reference_confidence: ReferenceConfidence::High,
+            constraints: Vec::new(),
+            boundaries: Vec::new(),
+            risks: Vec::new(),
+            success_criteria: vec!["The report contains an evidence table".into()],
+            open_questions: Vec::new(),
+        };
+        let thread_id;
+
+        {
+            let store = RuntimeStore::open(&state_directory).unwrap();
+            let mut settings = store.settings().await;
+            settings.locale = AppLocale::En;
+            settings.provider_id = "custom-compatible".into();
+            settings.provider_name = "Mock provider".into();
+            settings.protocol = ProviderProtocol::OpenaiChatCompletions;
+            settings.endpoint = endpoint;
+            settings.model = "mock-agent".into();
+            settings.workspace = workspace.clone();
+            settings.first_run_complete = true;
+            store.update_settings(settings).await.unwrap();
+            let receipt = store
+                .enqueue("Create a restart-safe reviewed report".into(), Vec::new())
+                .await
+                .unwrap();
+            thread_id = receipt.thread_id;
+            assert!(store.claim(thread_id).await.unwrap());
+            store.set_goal(thread_id, goal.clone()).await.unwrap();
+            let records = materialize_artifacts(
+                &workspace,
+                &[ArtifactSpec {
+                    title: "Restart-safe report".into(),
+                    file_name: "restart-safe-report.md".into(),
+                    kind: "markdown".into(),
+                    content: "# Report\n\nThe evidence table is absent.".into(),
+                    slides: Vec::new(),
+                    sheets: Vec::new(),
+                }],
+            )
+            .unwrap();
+            store.add_artifacts(thread_id, records).await.unwrap();
+            let task = store.task(thread_id).await.unwrap();
+            let artifact_revisions = artifact_revision_map(&task);
+            let first_rejection = VerificationResult {
+                disposition: Some(VerificationDisposition::NeedsRevision),
+                passed: None,
+                summary: "The same objective defect remains before recovery.".into(),
+                findings: vec![FINDING.into()],
+                user_prompt: None,
+            };
+            let signature = checker_rejection_evidence_signature(
+                &first_rejection,
+                &task,
+                "canonical-create-register-evidence",
+            );
+            assert_eq!(
+                store
+                    .record_review_observation(
+                        thread_id,
+                        artifact_revisions,
+                        "canonical-create-register-evidence".into(),
+                        Some(content_revision(signature.as_bytes())),
+                    )
+                    .await
+                    .unwrap(),
+                Some(1)
+            );
+            store
+                .require_recovery(
+                    thread_id,
+                    "Resume the checker revision".into(),
+                    "simulated adapter interruption".into(),
+                )
+                .await
+                .unwrap();
+        }
+
+        let store = RuntimeStore::open(&state_directory).unwrap();
+        let recovered = store.prepare_continue(thread_id).await.unwrap().unwrap();
+        let current_revisions = artifact_revision_map(&recovered);
+        let changed_paths = changed_artifact_paths(
+            &recovered,
+            recovered
+                .review_progress
+                .last_reviewed_artifact_revisions
+                .as_ref(),
+            &current_revisions,
+        );
+        assert!(changed_paths.is_empty());
+        let settings = store.settings().await;
+        let kernel = RuntimeKernel::new(store.clone(), "windows").unwrap();
+        let verification = kernel
+            .run_checker(
+                thread_id,
+                &goal,
+                &settings,
+                Some("test-token"),
+                "The unchanged report remains registered.",
+                2,
+                &changed_paths,
+                true,
+            )
+            .await
+            .unwrap();
+        let task = store.task(thread_id).await.unwrap();
+        let signature = checker_rejection_evidence_signature(
+            &verification,
+            &task,
+            &task.review_progress.latest_nonempty_tool_evidence,
+        );
+        assert_eq!(
+            store
+                .record_review_observation(
+                    thread_id,
+                    current_revisions,
+                    String::new(),
+                    Some(content_revision(signature.as_bytes())),
+                )
+                .await
+                .unwrap(),
+            Some(2)
+        );
+        server.join().unwrap();
+
+        let checker_request = requests.lock().unwrap()[0].to_string();
+        assert!(checker_request.contains("changed_this_round=false"));
+        assert!(checker_request.contains("NO_ARTIFACT_CHANGE_SINCE_PREVIOUS_REVIEW"));
+        assert_eq!(
+            store
+                .task(thread_id)
+                .await
+                .unwrap()
+                .review_progress
+                .rejection_evidence_occurrences
+                .values()
+                .copied()
+                .collect::<Vec<_>>(),
+            vec![2]
+        );
+    }
+
+    #[tokio::test]
+    async fn external_artifact_acceptance_rejection_survives_human_resume() {
+        let directory = tempdir().unwrap();
+        let store = RuntimeStore::open(directory.path().join("State")).unwrap();
+        let receipt = store
+            .enqueue(
+                "Create a visually accepted external artifact".into(),
+                Vec::new(),
+            )
+            .await
+            .unwrap();
+        let question = "Accept this exact visual revision, or request a change?";
+        let call_id = "external-artifact-acceptance";
+        let messages = vec![
+            checker_correction_message(&AppLocale::En, "Correct the visual hierarchy."),
+            AgentMessage {
+                role: AgentRole::Assistant,
+                content: String::new(),
+                tool_calls: vec![AgentToolCall {
+                    id: call_id.into(),
+                    name: "ask_user".into(),
+                    arguments_json: json!({
+                        "prompt": question,
+                        "purpose": "artifact_acceptance",
+                        "artifact_revisions": [{
+                            "path": "deck.pptx",
+                            "revision": "visual-revision-1"
+                        }]
+                    })
+                    .to_string(),
+                }],
+                tool_call_id: None,
+            },
+        ];
+        store
+            .set_session_messages(receipt.thread_id, messages)
+            .await
+            .unwrap();
+        store
+            .set_needs_user_action(receipt.thread_id, call_id.into(), question.into())
+            .await
+            .unwrap();
+
+        let resumed = store
+            .prepare_resume(
+                receipt.thread_id,
+                "Do not accept it yet; make the title lighter and increase contrast.".into(),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        let continuation = external_continuation_context(None, &resumed).unwrap();
+
+        assert!(continuation.contains("Correct the visual hierarchy."));
+        assert!(continuation.contains(question));
+        assert!(continuation
+            .contains("Do not accept it yet; make the title lighter and increase contrast."));
+        assert!(continuation.contains("purpose=artifact_acceptance"));
+        assert!(continuation.contains("deck.pptx=visual-revision-1"));
+    }
+
+    #[tokio::test]
+    async fn external_initial_execution_has_no_continuation_context() {
+        let directory = tempdir().unwrap();
+        let store = RuntimeStore::open(directory.path().join("State")).unwrap();
+        let receipt = store
+            .enqueue("Create the first version.".into(), Vec::new())
+            .await
+            .unwrap();
+        let mut task = store.task(receipt.thread_id).await.unwrap();
+        let messages = vec![AgentMessage {
+            role: AgentRole::User,
+            content: "Create the first version.".into(),
+            tool_calls: Vec::new(),
+            tool_call_id: None,
+        }];
+        task.session_messages = messages;
+
+        assert_eq!(external_continuation_context(None, &task), None);
     }
 
     #[test]
@@ -4882,6 +7848,7 @@ mod tests {
                     })
                     .to_string(),
                 },
+                false,
             )
             .await
             .unwrap();
@@ -4941,6 +7908,7 @@ mod tests {
                     name: "list_files".into(),
                     arguments_json: json!({"path":outside,"recursive":true}).to_string(),
                 },
+                false,
             )
             .await
             .unwrap();
@@ -4964,6 +7932,7 @@ mod tests {
                     name: "read_file".into(),
                     arguments_json: json!({"path":document}).to_string(),
                 },
+                false,
             )
             .await
             .unwrap();
@@ -4983,6 +7952,7 @@ mod tests {
                     name: "register_artifact".into(),
                     arguments_json: json!({"path":document}).to_string(),
                 },
+                false,
             )
             .await
             .unwrap();
@@ -4991,6 +7961,171 @@ mod tests {
         assert_eq!(
             registered["artifact"]["path"],
             document.to_string_lossy().as_ref()
+        );
+    }
+
+    #[tokio::test]
+    async fn repeated_create_artifact_output_is_semantic_and_keeps_one_current_delivery() {
+        let root = tempdir().unwrap();
+        let workspace = root.path().join("Workspace");
+        let store = RuntimeStore::open(root.path().join("State")).unwrap();
+        let mut settings = store.settings().await;
+        settings.workspace = workspace;
+        store.update_settings(settings.clone()).await.unwrap();
+        let kernel = RuntimeKernel::new(store.clone(), std::env::consts::OS).unwrap();
+        let receipt = store
+            .enqueue("Create one stable report".into(), Vec::new())
+            .await
+            .unwrap();
+        let goal = GoalSpec {
+            objective: "Create one stable report".into(),
+            kind: GoalKind::Task,
+            output_mode: OutputMode::Artifact,
+            reference_scope: ReferenceScope::CurrentInput,
+            reference_evidence: Vec::new(),
+            reference_explicit: true,
+            reference_confidence: ReferenceConfidence::High,
+            constraints: Vec::new(),
+            boundaries: Vec::new(),
+            risks: Vec::new(),
+            success_criteria: vec!["One current report exists".into()],
+            open_questions: Vec::new(),
+        };
+        let arguments = json!({
+            "title": "Stable report",
+            "file_name": "stable-report.md",
+            "kind": "markdown",
+            "content": "# Stable report\n\nSame semantic content."
+        })
+        .to_string();
+        let mut outputs = Vec::new();
+        for index in 0..3 {
+            let task = store.task(receipt.thread_id).await.unwrap();
+            outputs.push(
+                kernel
+                    .execute_tool(
+                        task,
+                        goal.clone(),
+                        settings.clone(),
+                        None,
+                        AgentToolCall {
+                            id: format!("same-artifact-{index}"),
+                            name: "create_artifact".into(),
+                            arguments_json: arguments.clone(),
+                        },
+                        index > 0,
+                    )
+                    .await
+                    .unwrap()
+                    .output,
+            );
+        }
+
+        let first: Value = serde_json::from_str(&outputs[0]).unwrap();
+        let second: Value = serde_json::from_str(&outputs[1]).unwrap();
+        assert_eq!(first["artifacts"][0]["changed"], true);
+        assert_eq!(second["artifacts"][0]["changed"], false);
+        assert_eq!(outputs[1], outputs[2]);
+        assert!(outputs[1].contains("semanticRevision"));
+        assert!(!outputs[1].contains("modifiedAt"));
+        assert!(!outputs[1].contains("\"id\""));
+
+        let task = store.task(receipt.thread_id).await.unwrap();
+        assert_eq!(task.artifacts.len(), 1);
+        assert_eq!(task.superseded_artifacts.len(), 2);
+        assert!(task
+            .superseded_artifacts
+            .iter()
+            .all(|artifact| artifact.superseded_by == Some(task.artifacts[0].id)));
+    }
+
+    #[tokio::test]
+    async fn create_artifact_replaces_explicit_current_slot_when_revision_is_renamed() {
+        let root = tempdir().unwrap();
+        let workspace = root.path().join("Workspace");
+        let store = RuntimeStore::open(root.path().join("State")).unwrap();
+        let mut settings = store.settings().await;
+        settings.workspace = workspace;
+        store.update_settings(settings.clone()).await.unwrap();
+        let kernel = RuntimeKernel::new(store.clone(), std::env::consts::OS).unwrap();
+        let receipt = store
+            .enqueue("Rename one revised report".into(), Vec::new())
+            .await
+            .unwrap();
+        let goal = GoalSpec {
+            objective: "Rename one revised report".into(),
+            kind: GoalKind::Task,
+            output_mode: OutputMode::Artifact,
+            reference_scope: ReferenceScope::CurrentInput,
+            reference_evidence: Vec::new(),
+            reference_explicit: true,
+            reference_confidence: ReferenceConfidence::High,
+            constraints: Vec::new(),
+            boundaries: Vec::new(),
+            risks: Vec::new(),
+            success_criteria: vec!["Exactly one current renamed report exists".into()],
+            open_questions: Vec::new(),
+        };
+        let initial = kernel
+            .execute_tool(
+                store.task(receipt.thread_id).await.unwrap(),
+                goal.clone(),
+                settings.clone(),
+                None,
+                AgentToolCall {
+                    id: "initial-report".into(),
+                    name: "create_artifact".into(),
+                    arguments_json: json!({
+                        "title":"Report",
+                        "file_name":"report.md",
+                        "kind":"markdown",
+                        "content":"# Report\n\nInitial."
+                    })
+                    .to_string(),
+                },
+                false,
+            )
+            .await
+            .unwrap();
+        let initial: Value = serde_json::from_str(&initial.output).unwrap();
+        let initial_path = initial["artifacts"][0]["path"].as_str().unwrap();
+
+        let revised = kernel
+            .execute_tool(
+                store.task(receipt.thread_id).await.unwrap(),
+                goal,
+                settings,
+                None,
+                AgentToolCall {
+                    id: "renamed-report".into(),
+                    name: "create_artifact".into(),
+                    arguments_json: json!({
+                        "title":"Renamed report",
+                        "file_name":"renamed-report.md",
+                        "kind":"markdown",
+                        "content":"# Report\n\nRevised.",
+                        "replaces":initial_path
+                    })
+                    .to_string(),
+                },
+                true,
+            )
+            .await
+            .unwrap();
+        let revised: Value = serde_json::from_str(&revised.output).unwrap();
+        assert_eq!(revised["artifacts"][0]["changed"], true);
+        assert!(revised["artifacts"][0]["path"]
+            .as_str()
+            .unwrap()
+            .ends_with("renamed-report.md"));
+
+        let task = store.task(receipt.thread_id).await.unwrap();
+        assert_eq!(task.artifacts.len(), 1);
+        assert_eq!(task.superseded_artifacts.len(), 1);
+        assert!(task.artifacts[0].path.ends_with("renamed-report.md"));
+        assert_eq!(
+            task.artifacts[0].supersedes,
+            Some(task.superseded_artifacts[0].id)
         );
     }
 
@@ -5049,7 +8184,7 @@ mod tests {
             .unwrap();
 
         let completed = tokio::time::timeout(
-            Duration::from_secs(3),
+            agent_loop_test_timeout(),
             kernel.run_queue(Some("test-token".into())),
         )
         .await
@@ -5083,7 +8218,124 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn missing_channel_credential_enters_recovery_without_human_gate_or_spin() {
+    async fn identical_tool_plan_and_evidence_hands_off_without_a_turn_limit() {
+        let (endpoint, requests, server) = mock_provider(11, |_request, index| {
+            if index == 0 {
+                return goal_response(
+                    "Inspect the workspace until evidence changes",
+                    "task",
+                    "chat_reply",
+                );
+            }
+            openai_response(
+                None,
+                Some("Poll the same workspace state."),
+                json!([{
+                    "id":format!("list-files-{index}"),
+                    "type":"function",
+                    "function":{
+                        "name":"list_files",
+                        "arguments":json!({"path":"", "recursive":false}).to_string()
+                    }
+                }]),
+            )
+        });
+        let (_directory, store, kernel) = test_kernel(endpoint).await;
+        let receipt = kernel
+            .submit(
+                "Inspect the workspace until evidence changes.".into(),
+                Vec::new(),
+            )
+            .await
+            .unwrap();
+
+        let completed = tokio::time::timeout(
+            agent_loop_test_timeout(),
+            kernel.run_queue(Some("test-token".into())),
+        )
+        .await
+        .expect("identical tool evidence must hand off instead of running forever")
+        .unwrap();
+        assert_eq!(completed, 0);
+        server.join().unwrap();
+
+        let task = store.task(receipt.thread_id).await.unwrap();
+        assert_eq!(task.status, TaskStatus::NeedsUserAction);
+        let pending_call_id = task.pending_tool_call_id.as_deref().unwrap();
+        assert!(task.session_messages.iter().any(|message| {
+            message.role == AgentRole::Assistant
+                && message.tool_calls.iter().any(|call| {
+                    call.id == pending_call_id && call.arguments_json.contains("runtime_guidance")
+                })
+        }));
+        let answered = task
+            .session_messages
+            .iter()
+            .filter(|message| message.role == AgentRole::Tool)
+            .filter_map(|message| message.tool_call_id.as_deref())
+            .collect::<HashSet<_>>();
+        assert!(task
+            .session_messages
+            .iter()
+            .flat_map(|message| message.tool_calls.iter())
+            .filter(|call| call.id != pending_call_id)
+            .all(|call| answered.contains(call.id.as_str())));
+        assert_eq!(requests.lock().unwrap().len(), 11);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn alternating_tool_plans_without_new_evidence_hand_off_to_the_user() {
+        let (endpoint, requests, server) = mock_provider(20, |_request, index| {
+            if index == 0 {
+                return goal_response(
+                    "Inspect the unchanged workspace until evidence changes",
+                    "task",
+                    "chat_reply",
+                );
+            }
+            let recursive = index % 2 == 0;
+            openai_response(
+                None,
+                Some("Alternate between two unchanged workspace queries."),
+                json!([{
+                    "id":format!("alternating-list-files-{index}"),
+                    "type":"function",
+                    "function":{
+                        "name":"list_files",
+                        "arguments":json!({"path":"", "recursive":recursive}).to_string()
+                    }
+                }]),
+            )
+        });
+        let (_directory, store, kernel) = test_kernel(endpoint).await;
+        let receipt = kernel
+            .submit(
+                "Inspect the unchanged workspace until evidence changes.".into(),
+                Vec::new(),
+            )
+            .await
+            .unwrap();
+
+        let completed = tokio::time::timeout(
+            agent_loop_test_timeout(),
+            kernel.run_queue(Some("test-token".into())),
+        )
+        .await
+        .expect("an A/B no-evidence cycle must hand off instead of running forever")
+        .unwrap();
+        assert_eq!(completed, 0);
+        server.join().unwrap();
+
+        let task = store.task(receipt.thread_id).await.unwrap();
+        assert_eq!(task.status, TaskStatus::NeedsUserAction);
+        assert!(task.pending_question.as_deref().is_some_and(|question| {
+            question.contains("no new evidence") || question.contains("没有形成新证据")
+        }));
+        assert_eq!(requests.lock().unwrap().len(), 20);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn missing_channel_credential_hands_off_without_background_spin() {
         let (_directory, store, kernel) = test_kernel("http://127.0.0.1:9".into()).await;
         let receipt = kernel
             .submit(
@@ -5100,12 +8352,44 @@ mod tests {
                 .unwrap();
 
         let task = store.task(receipt.thread_id).await.unwrap();
-        assert_eq!(task.status, TaskStatus::NeedsRecovery);
-        assert!(task.pending_tool_call_id.is_none());
-        assert!(task.pending_question.is_none());
+        assert_eq!(task.status, TaskStatus::NeedsUserAction);
+        let pending_call_id = task.pending_tool_call_id.as_deref().unwrap();
+        assert!(pending_call_id.starts_with("runtime-ask-"));
+        assert!(task
+            .pending_question
+            .as_deref()
+            .is_some_and(|question| question.to_ascii_lowercase().contains("api token")));
+        assert!(task.session_messages.iter().any(|message| {
+            message.role == AgentRole::Assistant
+                && message
+                    .tool_calls
+                    .iter()
+                    .any(|call| call.id == pending_call_id && call.name == "ask_user")
+        }));
+        assert!(!store.has_runnable_tasks().await);
         assert_eq!(report.completed, 0);
         assert_eq!(report.failures.len(), 1);
         assert_eq!(report.failures[0].kind, RuntimeFailureKind::Authentication);
+    }
+
+    #[test]
+    fn persistent_transient_failure_has_a_finite_per_root_recovery_streak() {
+        assert_eq!(
+            automatic_recovery_decision(RuntimeFailureKind::Server, 0),
+            AutomaticRecoveryDecision::Retry { streak: 1 }
+        );
+        assert_eq!(
+            automatic_recovery_decision(RuntimeFailureKind::Server, 1),
+            AutomaticRecoveryDecision::Retry { streak: 2 }
+        );
+        assert_eq!(
+            automatic_recovery_decision(RuntimeFailureKind::Server, 2),
+            AutomaticRecoveryDecision::Handoff
+        );
+        assert_eq!(
+            automatic_recovery_decision(RuntimeFailureKind::InvalidResponse, 0),
+            AutomaticRecoveryDecision::Handoff
+        );
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -5137,7 +8421,7 @@ mod tests {
             .unwrap();
 
         let report = tokio::time::timeout(
-            Duration::from_secs(5),
+            agent_loop_test_timeout(),
             kernel.run_queue_report(Some("test-token".into())),
         )
         .await
@@ -5248,7 +8532,7 @@ mod tests {
             .unwrap();
 
         let completed = tokio::time::timeout(
-            Duration::from_secs(5),
+            agent_loop_test_timeout(),
             kernel.run_queue(Some("test-token".into())),
         )
         .await
@@ -5342,7 +8626,7 @@ mod tests {
             .unwrap();
 
         let completed = tokio::time::timeout(
-            Duration::from_secs(6),
+            agent_loop_test_timeout(),
             kernel.run_queue(Some("test-token".into())),
         )
         .await
@@ -5369,79 +8653,72 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn checker_rejection_keeps_revising_beyond_two_rounds() {
-        let (endpoint, requests, server) = mock_provider(8, |request, index| match index {
-            0 => goal_response("Create a repeatedly reviewed report", "task", "artifact"),
-            1 => openai_response(
-                None,
-                Some("Create the requested report."),
-                json!([{
-                    "id":"create-reviewed-report",
-                    "type":"function",
-                    "function":{
-                        "name":"create_artifact",
-                        "arguments":json!({
-                            "title":"Reviewed report",
-                            "file_name":"reviewed-report.md",
-                            "kind":"markdown",
-                            "content":"# Reviewed report\n\nInitial evidence."
-                        })
-                        .to_string()
+    async fn checker_allows_productive_revisions_beyond_any_small_round_limit() {
+        const FINDING: &str = "The evidence section still needs another concrete improvement.";
+        const PRODUCTIVE_REVISIONS: usize = 8;
+        let expected_requests = 1 + PRODUCTIVE_REVISIONS * 3;
+        let (endpoint, requests, server) = mock_provider(expected_requests, |request, index| {
+            if index == 0 {
+                return goal_response("Create a repeatedly reviewed report", "task", "artifact");
+            }
+            let revision = (index - 1) / 3;
+            match (index - 1) % 3 {
+                0 => {
+                    let mut arguments = json!({
+                        "title":format!("Reviewed report revision {revision}"),
+                        "file_name":format!("reviewed-report-r{revision}.md"),
+                        "kind":"markdown",
+                        "content":format!("# Reviewed report revision {revision}\n\nConcrete evidence revision {revision}.")
+                    });
+                    if revision > 0 {
+                        arguments["replaces"] = json!("create:reviewed-report-r0.md");
                     }
-                }]),
-            ),
-            2 => openai_response(
-                Some("Initial delivery.".into()),
-                Some("Submit the initial report."),
-                Value::Null,
-            ),
-            3 => openai_response(
-                Some(
-                    json!({
-                        "passed": false,
-                        "summary": "Revision one is required.",
-                        "findings": ["Add a clearer conclusion."]
-                    })
-                    .to_string(),
+                    openai_response(
+                        None,
+                        Some("Create a materially revised report artifact."),
+                        json!([{
+                            "id":format!("create-reviewed-report-{revision}"),
+                            "type":"function",
+                            "function":{
+                                "name":"create_artifact",
+                                "arguments":arguments.to_string()
+                            }
+                        }]),
+                    )
+                }
+                1 => openai_response(
+                    Some(format!("Delivery revision {revision}.")),
+                    Some("Submit the materially changed artifact for independent review."),
+                    Value::Null,
                 ),
-                None,
-                Value::Null,
-            ),
-            4 => openai_response(
-                Some("Revision one adds a clearer conclusion.".into()),
-                Some("Apply the first checker correction."),
-                Value::Null,
-            ),
-            5 => openai_response(
-                Some(
-                    json!({
-                        "passed": false,
-                        "summary": "Revision two is required.",
-                        "findings": ["State the verification result explicitly."]
-                    })
-                    .to_string(),
+                2 if revision + 1 == PRODUCTIVE_REVISIONS => openai_response(
+                    Some(
+                        json!({
+                            "disposition": "passed",
+                            "summary": format!("Delivery revision {revision} now satisfies every criterion."),
+                            "findings": []
+                        })
+                        .to_string(),
+                    ),
+                    None,
+                    Value::Null,
                 ),
-                None,
-                Value::Null,
-            ),
-            6 => openai_response(
-                Some("Revision two states the verification result explicitly.".into()),
-                Some("Apply the second checker correction."),
-                Value::Null,
-            ),
-            7 => openai_response(
-                Some(
-                    json!({
-                        "passed": true,
-                        "summary": "The delivery now satisfies every criterion.",
-                        "findings": []
-                    })
-                    .to_string(),
+                2 => openai_response(
+                    Some(
+                        json!({
+                            "disposition": "needs_revision",
+                            "passed": false,
+                            "summary": "Another objective revision is required.",
+                            "findings": [FINDING],
+                            "user_prompt": null
+                        })
+                        .to_string(),
+                    ),
+                    None,
+                    Value::Null,
                 ),
-                None,
-                Value::Null,
-            ),
-            _ => unreachable!("unexpected request: {request}"),
+                _ => unreachable!("unexpected request {index}: {request}"),
+            }
         });
         let (_directory, store, kernel) = test_kernel(endpoint).await;
         let receipt = kernel
@@ -5450,7 +8727,7 @@ mod tests {
             .unwrap();
 
         let completed = tokio::time::timeout(
-            Duration::from_secs(5),
+            Duration::from_secs(if cfg!(target_os = "windows") { 180 } else { 90 }),
             kernel.run_queue(Some("test-token".into())),
         )
         .await
@@ -5461,7 +8738,48 @@ mod tests {
 
         let task = store.task(receipt.thread_id).await.unwrap();
         assert_eq!(task.status, TaskStatus::Completed);
-        assert!(task.summary.contains("Revision two"));
+        assert!(task
+            .summary
+            .contains(&format!("revision {}", PRODUCTIVE_REVISIONS - 1)));
+        assert_eq!(task.artifacts.len(), 1);
+        assert_eq!(task.superseded_artifacts.len(), PRODUCTIVE_REVISIONS - 1);
+        assert!(std::fs::read_to_string(&task.artifacts[0].path)
+            .unwrap()
+            .contains(&format!(
+                "Concrete evidence revision {}",
+                PRODUCTIVE_REVISIONS - 1
+            )));
+        assert!(
+            task.session_messages.len() <= 8,
+            "{:#?}",
+            task.session_messages
+        );
+        assert!(tool_protocol_is_complete(&task.session_messages));
+        assert_eq!(
+            task.session_messages
+                .iter()
+                .filter(|message| message
+                    .content
+                    .contains("[Independent checker feedback, highest priority]"))
+                .count(),
+            1
+        );
+        let current_context = task
+            .session_messages
+            .iter()
+            .map(|message| message.content.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            current_context.contains(&format!("reviewed-report-r{}.md", PRODUCTIVE_REVISIONS - 2))
+        );
+        assert!(
+            current_context.contains(&format!("Delivery revision {}.", PRODUCTIVE_REVISIONS - 1))
+        );
+        assert_eq!(
+            store.children(receipt.thread_id).await.len(),
+            PRODUCTIVE_REVISIONS
+        );
         assert_eq!(
             store
                 .events_after(0)
@@ -5472,9 +8790,776 @@ mod tests {
                         && event.title == "Verification rejected; continuing revision"
                 })
                 .count(),
-            2
+            PRODUCTIVE_REVISIONS - 1
         );
+        assert!(!store.events_after(0).await.iter().any(|event| {
+            event.task_id == receipt.thread_id
+                && event.title == "Checker defect made no semantic progress; awaiting guidance"
+        }));
+        assert_eq!(requests.lock().unwrap().len(), expected_requests);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn subjective_checker_decision_hands_off_then_resumes_with_human_confirmation() {
+        const USER_PROMPT: &str =
+            "Please inspect the rendered deck and confirm whether the brightness is acceptable.";
+        let (endpoint, requests, server) = mock_provider(6, |_request, index| {
+            match index {
+            0 => goal_response("Create a bright presentation", "task", "artifact"),
+            1 => openai_response(
+                None,
+                Some("Create the presentation candidate."),
+                json!([{
+                    "id":"create-bright-deck",
+                    "type":"function",
+                    "function":{
+                        "name":"create_artifact",
+                        "arguments":json!({
+                            "title":"Bright deck candidate",
+                            "file_name":"bright-deck.md",
+                            "kind":"markdown",
+                            "content":"# Bright deck\n\nIvory visual direction."
+                        })
+                        .to_string()
+                    }
+                }]),
+            ),
+            2 => openai_response(
+                Some("The current bright candidate is ready for visual inspection.".into()),
+                Some("Deliver the candidate once."),
+                Value::Null,
+            ),
+            3 => openai_response(
+                Some(
+                    json!({
+                        "disposition": "needs_user_action",
+                        "passed": false,
+                        "summary": "Visual brightness requires direct human judgment.",
+                        "findings": [],
+                        "user_prompt": USER_PROMPT
+                    })
+                    .to_string(),
+                ),
+                None,
+                Value::Null,
+            ),
+            4 => openai_response(
+                Some("The user explicitly accepted the current bright candidate.".into()),
+                Some("Preserve and report the human acceptance evidence."),
+                Value::Null,
+            ),
+            5 => openai_response(
+                Some(
+                    json!({
+                        "disposition": "passed",
+                        "summary": "Objective checks passed and the user explicitly accepted the visual brightness.",
+                        "findings": []
+                    })
+                    .to_string(),
+                ),
+                None,
+                Value::Null,
+            ),
+            _ => unreachable!(),
+        }
+        });
+        let (_directory, store, kernel) = test_kernel(endpoint).await;
+        let receipt = kernel
+            .submit("Create a brighter presentation.".into(), Vec::new())
+            .await
+            .unwrap();
+
+        let completed = tokio::time::timeout(
+            agent_loop_test_timeout(),
+            kernel.run_queue(Some("test-token".into())),
+        )
+        .await
+        .expect("a subjective checker decision must pause instead of looping")
+        .unwrap();
+        assert_eq!(completed, 0);
+
+        let task = store.task(receipt.thread_id).await.unwrap();
+        assert_eq!(task.status, TaskStatus::NeedsUserAction);
+        assert_eq!(task.pending_question.as_deref(), Some(USER_PROMPT));
+        let pending_call_id = task.pending_tool_call_id.as_deref().unwrap();
+        assert!(task.session_messages.iter().any(|message| {
+            message.role == AgentRole::Assistant
+                && message.tool_calls.iter().any(|call| {
+                    call.id == pending_call_id
+                        && call.name == "ask_user"
+                        && call.arguments_json.contains(USER_PROMPT)
+                })
+        }));
+        assert_eq!(store.children(receipt.thread_id).await.len(), 1);
+        assert_eq!(requests.lock().unwrap().len(), 4);
+
+        let resumed = tokio::time::timeout(
+            agent_loop_test_timeout(),
+            kernel.resume(
+                receipt.thread_id,
+                "I explicitly accept the current version.".into(),
+                Some("test-token".into()),
+            ),
+        )
+        .await
+        .expect("explicit human confirmation must resume the same session")
+        .unwrap();
+        assert!(resumed);
+        server.join().unwrap();
+
+        let completed_task = store.task(receipt.thread_id).await.unwrap();
+        assert_eq!(completed_task.status, TaskStatus::Completed);
+        assert!(completed_task.summary.contains("explicitly accepted"));
+        assert_eq!(store.children(receipt.thread_id).await.len(), 2);
+        assert_eq!(requests.lock().unwrap().len(), 6);
+        assert!(requests.lock().unwrap()[5]
+            .to_string()
+            .contains("I explicitly accept the current version."));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn human_acceptance_is_bound_to_the_reviewed_artifact_revisions() {
+        let (endpoint, requests, server) = mock_provider(9, |_request, index| {
+            match index {
+            0 => goal_response("Create a visually reviewed deck", "task", "artifact"),
+            1 | 4 => {
+                let revision = if index == 1 { 0 } else { 1 };
+                let mut arguments = json!({
+                    "title":format!("Reviewed deck {revision}"),
+                    "file_name":format!("reviewed-deck-r{revision}.md"),
+                    "kind":"markdown",
+                    "content":format!("# Reviewed deck\n\nVisual revision {revision}.")
+                });
+                if revision > 0 {
+                    arguments["replaces"] = json!("create:reviewed-deck-r0.md");
+                }
+                openai_response(
+                    None,
+                    Some("Create the requested deck revision."),
+                    json!([{
+                        "id":format!("create-reviewed-deck-{revision}"),
+                        "type":"function",
+                        "function":{
+                            "name":"create_artifact",
+                            "arguments":arguments.to_string()
+                        }
+                    }]),
+                )
+            }
+            2 => openai_response(
+                Some("The first visual version is ready.".into()),
+                Some("Submit the first visual version."),
+                Value::Null,
+            ),
+            3 => openai_response(
+                Some(
+                    json!({
+                        "disposition":"needs_user_action",
+                        "summary":"Visual acceptance requires human viewing.",
+                        "findings":[],
+                        "user_prompt":"Inspect and accept this exact artifact revision, or request changes."
+                    })
+                    .to_string(),
+                ),
+                None,
+                Value::Null,
+            ),
+            5 => openai_response(
+                Some("The requested lighter revision is ready.".into()),
+                Some("Submit the changed visual version."),
+                Value::Null,
+            ),
+            6 | 8 => openai_response(
+                Some(
+                    json!({
+                        "disposition":"passed",
+                        "summary":"Objective checks pass and the latest human evidence is available.",
+                        "findings":[]
+                    })
+                    .to_string(),
+                ),
+                None,
+                Value::Null,
+            ),
+            7 => openai_response(
+                Some("The user accepted the unchanged revised artifact.".into()),
+                Some("Preserve the exact accepted revision."),
+                Value::Null,
+            ),
+            _ => unreachable!(),
+        }
+        });
+        let (_directory, store, kernel) = test_kernel(endpoint).await;
+        let receipt = kernel
+            .submit("Create a visually reviewed deck.".into(), Vec::new())
+            .await
+            .unwrap();
+
+        assert_eq!(
+            kernel.run_queue(Some("test-token".into())).await.unwrap(),
+            0
+        );
+        assert!(kernel
+            .resume(
+                receipt.thread_id,
+                "Make the current version lighter before I accept it.".into(),
+                Some("test-token".into()),
+            )
+            .await
+            .unwrap());
+        let changed = store.task(receipt.thread_id).await.unwrap();
+        assert_eq!(changed.status, TaskStatus::NeedsUserAction);
+        assert!(changed
+            .pending_question
+            .as_deref()
+            .is_some_and(|question| question.contains("artifacts changed")
+                || question.contains("产物已经发生变化")));
+        assert!(kernel
+            .resume(
+                receipt.thread_id,
+                "I explicitly accept this revised version.".into(),
+                Some("test-token".into()),
+            )
+            .await
+            .unwrap());
+        server.join().unwrap();
+
+        let completed = store.task(receipt.thread_id).await.unwrap();
+        assert_eq!(completed.status, TaskStatus::Completed);
+        assert_eq!(completed.artifacts.len(), 1);
+        assert_eq!(completed.superseded_artifacts.len(), 1);
+        assert_eq!(store.children(receipt.thread_id).await.len(), 3);
+        assert_eq!(requests.lock().unwrap().len(), 9);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn repeated_checker_finding_without_artifact_progress_hands_off() {
+        const FINDING: &str = "The artifact still lacks the required evidence table.";
+        let (endpoint, requests, server) = mock_provider(6, |_request, index| {
+            match index {
+            0 => goal_response("Create an evidence report", "task", "artifact"),
+            1 => openai_response(
+                None,
+                Some("Create the first report candidate."),
+                json!([{
+                    "id":"create-evidence-report",
+                    "type":"function",
+                    "function":{
+                        "name":"create_artifact",
+                        "arguments":json!({
+                            "title":"Evidence report",
+                            "file_name":"evidence-report.md",
+                            "kind":"markdown",
+                            "content":"# Evidence report\n\nNo table yet."
+                        })
+                        .to_string()
+                    }
+                }]),
+            ),
+            2 => openai_response(
+                Some("Initial evidence report delivery.".into()),
+                Some("Submit the first candidate."),
+                Value::Null,
+            ),
+            3 => openai_response(
+                Some(
+                    json!({
+                        "disposition": "needs_revision",
+                        "passed": false,
+                        "summary": "The objective artifact defect remains.",
+                        "findings": [FINDING],
+                        "user_prompt": null
+                    })
+                    .to_string(),
+                ),
+                None,
+                Value::Null,
+            ),
+            4 => openai_response(
+                Some("I described a revision but did not change the registered artifact.".into()),
+                Some("No artifact-changing action was taken."),
+                Value::Null,
+            ),
+            5 => openai_response(
+                Some(
+                    json!({
+                        "disposition": "needs_user_action",
+                        "summary": "The maker did not change the artifact, and no further objectively verifiable revision path is available.",
+                        "findings": [FINDING],
+                        "user_prompt": format!("Please provide a concrete revision direction. {FINDING}")
+                    })
+                    .to_string(),
+                ),
+                None,
+                Value::Null,
+            ),
+            _ => unreachable!(),
+        }
+        });
+        let (_directory, store, kernel) = test_kernel(endpoint).await;
+        let receipt = kernel
+            .submit("Create an evidence report.".into(), Vec::new())
+            .await
+            .unwrap();
+
+        let completed = tokio::time::timeout(
+            agent_loop_test_timeout(),
+            kernel.run_queue(Some("test-token".into())),
+        )
+        .await
+        .expect("unchanged artifact evidence must hand off instead of looping")
+        .unwrap();
+        assert_eq!(completed, 0);
+        server.join().unwrap();
+
+        let task = store.task(receipt.thread_id).await.unwrap();
+        assert_eq!(task.status, TaskStatus::NeedsUserAction);
+        assert_eq!(task.artifacts.len(), 1);
+        assert!(task
+            .pending_question
+            .as_deref()
+            .is_some_and(|question| question.contains(FINDING)));
+        assert_eq!(store.children(receipt.thread_id).await.len(), 2);
+        assert_eq!(
+            store
+                .events_after(0)
+                .await
+                .iter()
+                .filter(|event| {
+                    event.task_id == receipt.thread_id
+                        && event.title == "Verification rejected; continuing revision"
+                })
+                .count(),
+            1
+        );
+        assert_eq!(requests.lock().unwrap().len(), 6);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn host_hands_off_after_same_checker_finding_and_semantic_delivery_repeat() {
+        const FINDING: &str = "The required evidence table is still missing.";
+        let (endpoint, requests, server) = mock_provider(8, |_request, index| match index {
+            0 => goal_response("Create a guarded evidence report", "task", "artifact"),
+            1 => openai_response(
+                None,
+                Some("Create the initial report."),
+                json!([{
+                    "id":"create-guarded-report",
+                    "type":"function",
+                    "function":{
+                        "name":"create_artifact",
+                        "arguments":json!({
+                            "title":"Guarded report",
+                            "file_name":"guarded-report.md",
+                            "kind":"markdown",
+                            "content":"# Guarded report\n\nThe evidence table is absent."
+                        }).to_string()
+                    }
+                }]),
+            ),
+            2 => openai_response(
+                Some("The unchanged report is ready.".into()),
+                Some("Submit it."),
+                Value::Null,
+            ),
+            3 | 5 | 7 => openai_response(
+                Some(
+                    json!({
+                        "disposition":"needs_revision",
+                        "summary":"The same objective defect remains.",
+                        "findings":[FINDING],
+                        "user_prompt":null
+                    })
+                    .to_string(),
+                ),
+                None,
+                Value::Null,
+            ),
+            4 | 6 => openai_response(
+                Some("The unchanged report is ready.".into()),
+                Some("No artifact change was made."),
+                Value::Null,
+            ),
+            _ => unreachable!(),
+        });
+        let (_directory, store, kernel) = test_kernel(endpoint).await;
+        let receipt = kernel
+            .submit("Create a guarded evidence report.".into(), Vec::new())
+            .await
+            .unwrap();
+
+        let completed = tokio::time::timeout(
+            agent_loop_test_timeout(),
+            kernel.run_queue(Some("test-token".into())),
+        )
+        .await
+        .expect("same semantic rejection must stop without accepting the bad artifact")
+        .unwrap();
+        assert_eq!(completed, 0);
+        server.join().unwrap();
+
+        let task = store.task(receipt.thread_id).await.unwrap();
+        assert_eq!(task.status, TaskStatus::NeedsUserAction);
+        assert_eq!(task.artifacts.len(), 1);
+        assert!(task.pending_question.as_deref().is_some_and(|question| {
+            question.contains("semantic delivery") || question.contains("语义版本")
+        }));
+        assert!(task.session_messages.iter().any(|message| {
+            message.role == AgentRole::Assistant
+                && message.tool_calls.iter().any(|call| {
+                    call.name == "ask_user" && call.arguments_json.contains("runtime_guidance")
+                })
+        }));
+        assert_eq!(store.children(receipt.thread_id).await.len(), 3);
         assert_eq!(requests.lock().unwrap().len(), 8);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn renamed_identical_companions_do_not_fake_semantic_review_progress() {
+        const FINDING: &str = "The required evidence table is still missing.";
+        let (endpoint, requests, server) = mock_provider(10, |_request, index| match index {
+            0 => goal_response("Create a rename-guarded report", "task", "artifact"),
+            1 | 4 | 7 => {
+                let revision = match index {
+                    1 => 0,
+                    4 => 1,
+                    _ => 2,
+                };
+                openai_response(
+                    None,
+                    Some("Save the same report under another name."),
+                    json!([{
+                        "id":format!("create-renamed-copy-{revision}"),
+                        "type":"function",
+                        "function":{
+                            "name":"create_artifact",
+                            "arguments":json!({
+                                "title":format!("Renamed report {revision}"),
+                                "file_name":format!("renamed-report-r{revision}.md"),
+                                "kind":"markdown",
+                                "content":"# Report\n\nThe evidence table is absent."
+                            }).to_string()
+                        }
+                    }]),
+                )
+            }
+            2 | 5 | 8 => openai_response(
+                Some("The renamed but unchanged report is ready.".into()),
+                Some("Submit the renamed copy."),
+                Value::Null,
+            ),
+            3 | 6 | 9 => openai_response(
+                Some(
+                    json!({
+                        "disposition":"needs_revision",
+                        "summary":"The same objective defect remains.",
+                        "findings":[FINDING],
+                        "user_prompt":null
+                    })
+                    .to_string(),
+                ),
+                None,
+                Value::Null,
+            ),
+            _ => unreachable!(),
+        });
+        let (_directory, store, kernel) = test_kernel(endpoint).await;
+        let receipt = kernel
+            .submit("Create a rename-guarded report.".into(), Vec::new())
+            .await
+            .unwrap();
+
+        let completed = tokio::time::timeout(
+            agent_loop_test_timeout(),
+            kernel.run_queue(Some("test-token".into())),
+        )
+        .await
+        .expect("renamed identical copies must hand off instead of revising forever")
+        .unwrap();
+        assert_eq!(completed, 0);
+        server.join().unwrap();
+
+        let task = store.task(receipt.thread_id).await.unwrap();
+        assert_eq!(task.status, TaskStatus::NeedsUserAction);
+        assert_eq!(task.artifacts.len(), 3);
+        assert!(task.superseded_artifacts.is_empty());
+        assert!(task.pending_question.as_deref().is_some_and(|question| {
+            question.contains("semantic delivery") || question.contains("语义版本")
+        }));
+        assert_eq!(store.children(receipt.thread_id).await.len(), 3);
+        assert_eq!(requests.lock().unwrap().len(), 10);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn alternating_checker_evidence_cycles_accumulate_independently() {
+        const FINDING_A: &str = "Criterion A still lacks its required evidence table.";
+        const FINDING_B: &str = "Criterion B still lacks its required source note.";
+        let (endpoint, requests, server) = mock_provider(12, |_request, index| match index {
+            0 => goal_response("Create a cycle-guarded report", "task", "artifact"),
+            1 => openai_response(
+                None,
+                Some("Create the initial report."),
+                json!([{
+                    "id":"create-cycle-guarded-report",
+                    "type":"function",
+                    "function":{
+                        "name":"create_artifact",
+                        "arguments":json!({
+                            "title":"Cycle guarded report",
+                            "file_name":"cycle-guarded-report.md",
+                            "kind":"markdown",
+                            "content":"# Cycle guarded report\n\nNeither requested evidence item is present."
+                        }).to_string()
+                    }
+                }]),
+            ),
+            2 | 4 | 6 | 8 | 10 => openai_response(
+                Some("The unchanged report remains registered.".into()),
+                Some("Return the current delivery without changing it."),
+                Value::Null,
+            ),
+            3 | 5 | 7 | 9 | 11 => {
+                let finding = if matches!(index, 3 | 7 | 11) {
+                    FINDING_A
+                } else {
+                    FINDING_B
+                };
+                openai_response(
+                    Some(
+                        json!({
+                            "disposition":"needs_revision",
+                            "summary":"The selected objective criterion still fails.",
+                            "findings":[finding],
+                            "user_prompt":null
+                        })
+                        .to_string(),
+                    ),
+                    None,
+                    Value::Null,
+                )
+            }
+            _ => unreachable!(),
+        });
+        let (_directory, store, kernel) = test_kernel(endpoint).await;
+        let receipt = kernel
+            .submit("Create a cycle-guarded report.".into(), Vec::new())
+            .await
+            .unwrap();
+
+        let completed = tokio::time::timeout(
+            agent_loop_test_timeout(),
+            kernel.run_queue(Some("test-token".into())),
+        )
+        .await
+        .expect("A/B evidence cycling must reach a deterministic human handoff")
+        .unwrap();
+        assert_eq!(completed, 0);
+        server.join().unwrap();
+
+        let task = store.task(receipt.thread_id).await.unwrap();
+        assert_eq!(task.status, TaskStatus::NeedsUserAction);
+        let mut occurrences = task
+            .review_progress
+            .rejection_evidence_occurrences
+            .values()
+            .copied()
+            .collect::<Vec<_>>();
+        occurrences.sort_unstable();
+        assert_eq!(occurrences, vec![2, 3]);
+        assert!(task
+            .review_progress
+            .last_reviewed_artifact_revisions
+            .is_some());
+        assert!(task.pending_question.as_deref().is_some_and(|question| {
+            question.contains("semantic delivery") || question.contains("语义版本")
+        }));
+        assert!(requests
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|request| request.to_string().contains("[No semantic progress]")));
+        assert_eq!(store.children(receipt.thread_id).await.len(), 5);
+        assert_eq!(requests.lock().unwrap().len(), 12);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn changed_checker_finding_resets_semantic_no_progress_streak() {
+        let (endpoint, requests, server) = mock_provider(10, |_request, index| match index {
+            0 => goal_response("Create a multi-criterion report", "task", "artifact"),
+            1 => openai_response(
+                None,
+                Some("Create the initial report."),
+                json!([{
+                    "id":"create-multi-criterion-report",
+                    "type":"function",
+                    "function":{
+                        "name":"create_artifact",
+                        "arguments":json!({
+                            "title":"Multi criterion report",
+                            "file_name":"multi-criterion.md",
+                            "kind":"markdown",
+                            "content":"# Multi criterion report\n\nCurrent content."
+                        }).to_string()
+                    }
+                }]),
+            ),
+            2 | 4 | 6 | 8 => openai_response(
+                Some("The current report remains registered.".into()),
+                Some("Return the current delivery evidence."),
+                Value::Null,
+            ),
+            3 | 5 | 7 => {
+                let finding = match index {
+                    3 => "Criterion A is not yet supported.",
+                    5 => "Criterion B is not yet supported.",
+                    _ => "Criterion C is not yet supported.",
+                };
+                openai_response(
+                    Some(
+                        json!({
+                            "disposition":"needs_revision",
+                            "summary":"A different criterion is now under review.",
+                            "findings":[finding],
+                            "user_prompt":null
+                        })
+                        .to_string(),
+                    ),
+                    None,
+                    Value::Null,
+                )
+            }
+            9 => openai_response(
+                Some(
+                    json!({
+                        "disposition":"passed",
+                        "summary":"All distinct criteria now pass.",
+                        "findings":[]
+                    })
+                    .to_string(),
+                ),
+                None,
+                Value::Null,
+            ),
+            _ => unreachable!(),
+        });
+        let (_directory, store, kernel) = test_kernel(endpoint).await;
+        let receipt = kernel
+            .submit("Create a multi-criterion report.".into(), Vec::new())
+            .await
+            .unwrap();
+
+        assert_eq!(
+            kernel.run_queue(Some("test-token".into())).await.unwrap(),
+            1
+        );
+        server.join().unwrap();
+        let task = store.task(receipt.thread_id).await.unwrap();
+        assert_eq!(task.status, TaskStatus::Completed);
+        assert!(!store.events_after(0).await.iter().any(|event| {
+            event.task_id == receipt.thread_id
+                && event.title == "Checker defect made no semantic progress; awaiting guidance"
+        }));
+        assert_eq!(store.children(receipt.thread_id).await.len(), 4);
+        assert_eq!(requests.lock().unwrap().len(), 10);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn rejected_artifact_drafts_stay_out_of_the_main_chat_bubble() {
+        const REJECTED: &str = "REJECTED_DRAFT_SENTINEL";
+        const ACCEPTED: &str = "ACCEPTED_DELIVERY_SENTINEL";
+        let (endpoint, requests, server) = mock_provider(7, |_request, index| match index {
+            0 => goal_response("Create an accepted report", "task", "artifact"),
+            1 | 4 => {
+                let revision = if index == 1 { 0 } else { 1 };
+                openai_response(
+                    None,
+                    Some("Create a report candidate."),
+                    json!([{
+                        "id":format!("create-chat-report-{revision}"),
+                        "type":"function",
+                        "function":{
+                            "name":"create_artifact",
+                            "arguments":json!({
+                                "title":format!("Chat report revision {revision}"),
+                                "file_name":format!("chat-report-r{revision}.md"),
+                                "kind":"markdown",
+                                "content":format!("# Chat report\n\nRevision {revision}.")
+                            })
+                            .to_string()
+                        }
+                    }]),
+                )
+            }
+            2 => openai_response(
+                Some(REJECTED.into()),
+                Some("Submit the draft."),
+                Value::Null,
+            ),
+            3 => openai_response(
+                Some(
+                    json!({
+                        "disposition": "needs_revision",
+                        "passed": false,
+                        "summary": "One objective revision is required.",
+                        "findings": ["Add the final revision evidence."],
+                        "user_prompt": null
+                    })
+                    .to_string(),
+                ),
+                None,
+                Value::Null,
+            ),
+            5 => openai_response(
+                Some(ACCEPTED.into()),
+                Some("Deliver the accepted version."),
+                Value::Null,
+            ),
+            6 => openai_response(
+                Some(
+                    json!({
+                        "disposition": "passed",
+                        "summary": "The revised artifact is accepted.",
+                        "findings": []
+                    })
+                    .to_string(),
+                ),
+                None,
+                Value::Null,
+            ),
+            _ => unreachable!(),
+        });
+        let (_directory, store, kernel) = test_kernel(endpoint).await;
+        let receipt = kernel
+            .submit("Create an accepted report.".into(), Vec::new())
+            .await
+            .unwrap();
+
+        let completed = tokio::time::timeout(
+            agent_loop_test_timeout(),
+            kernel.run_queue(Some("test-token".into())),
+        )
+        .await
+        .expect("an accepted artifact revision must complete")
+        .unwrap();
+        assert_eq!(completed, 1);
+        server.join().unwrap();
+
+        let task = store.task(receipt.thread_id).await.unwrap();
+        assert_eq!(task.status, TaskStatus::Completed);
+        assert!(task
+            .session_messages
+            .iter()
+            .any(|message| message.content.contains(REJECTED)));
+        let snapshot = kernel.snapshot(true).await;
+        let bubble = snapshot
+            .messages
+            .iter()
+            .find(|message| message.id == receipt.assistant_message_id)
+            .unwrap();
+        assert_eq!(bubble.state, MessageState::Complete);
+        assert_eq!(bubble.text, ACCEPTED);
+        assert!(!bubble.text.contains(REJECTED));
+        assert_eq!(requests.lock().unwrap().len(), 7);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -5770,7 +9855,7 @@ mod tests {
             .unwrap();
 
         tokio::time::timeout(
-            Duration::from_secs(5),
+            agent_loop_test_timeout(),
             kernel.run_queue(Some("test-token".into())),
         )
         .await
@@ -5843,7 +9928,10 @@ mod tests {
             openai_response(
                 None,
                 Some("A real human confirmation is required."),
-                json!([{"id":"confirm-1","type":"function","function":{"name":"ask_user","arguments":"{\"prompt\":\"Confirm the external prerequisite.\"}"}}]),
+                json!([
+                    {"id":"confirm-1","type":"function","function":{"name":"ask_user","arguments":"{\"prompt\":\"Confirm the external prerequisite.\"}"}},
+                    {"id":"deferred-sibling","type":"function","function":{"name":"list_files","arguments":"{\"path\":\"\",\"recursive\":false}"}}
+                ]),
             )
         });
         let (_directory, store, kernel) = test_kernel(endpoint).await;
@@ -5863,6 +9951,14 @@ mod tests {
             blocked.pending_question.as_deref(),
             Some("Confirm the external prerequisite.")
         );
+        assert!(blocked.session_messages.iter().any(|message| {
+            message.role == AgentRole::Tool
+                && message.tool_call_id.as_deref() == Some("deferred-sibling")
+                && message.content.contains("interrupted")
+        }));
+        assert!(!blocked.session_messages.iter().any(|message| {
+            message.role == AgentRole::Tool && message.tool_call_id.as_deref() == Some("confirm-1")
+        }));
         assert!(kernel
             .resume(
                 receipt.thread_id,

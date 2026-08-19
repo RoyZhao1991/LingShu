@@ -4,6 +4,7 @@ use quick_xml::events::Event;
 use quick_xml::Reader;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::collections::HashSet;
 use std::fs;
 use std::io::{Cursor, Read};
 use std::path::{Path, PathBuf};
@@ -58,6 +59,367 @@ pub enum PreviewError {
     Zip(#[from] zip::result::ZipError),
 }
 
+pub(crate) fn content_revision(bytes: &[u8]) -> String {
+    format!("{:x}", Sha256::digest(bytes))
+}
+
+pub(crate) fn file_revision(path: impl AsRef<Path>) -> Result<String, PreviewError> {
+    Ok(content_revision(&fs::read(path)?))
+}
+
+pub(crate) fn semantic_file_revision(path: impl AsRef<Path>) -> Result<String, PreviewError> {
+    let path = path.as_ref();
+    let preview = preview_file(path)?;
+    let bytes = fs::read(path)?;
+    let extension = path
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let mut hasher = Sha256::new();
+    hasher.update(
+        serde_json::to_string(&preview.kind)
+            .unwrap_or_default()
+            .as_bytes(),
+    );
+    hasher.update(preview.mime_type.as_bytes());
+    hasher.update(if preview.faithful {
+        b"faithful".as_slice()
+    } else {
+        b"textual".as_slice()
+    });
+
+    match preview.kind {
+        PreviewKind::Image => hasher.update(&bytes),
+        PreviewKind::Unsupported => hasher.update(&bytes),
+        PreviewKind::Pdf => {
+            hasher.update(format!("pages:{}", preview.sections.len()).as_bytes());
+            for section in &preview.sections {
+                hasher.update(b"\0page\0");
+                hasher.update(normalize_semantic_text(section).as_bytes());
+            }
+            // Extracted text alone misses layout, color, vector, image, font, and annotation
+            // changes. Canonicalize the page-facing PDF object graph instead of hashing the raw
+            // container, whose Info dictionary, trailer ID, xref offsets, and timestamps are
+            // volatile. A malformed/unsupported PDF falls back to exact bytes rather than losing
+            // a real revision.
+            if let Some(visual_revision) = pdf_visual_revision(&bytes) {
+                hasher.update(b"\0pdf-visual\0");
+                hasher.update(visual_revision.as_bytes());
+            } else {
+                hasher.update(b"\0pdf-fallback\0");
+                hasher.update(&bytes);
+            }
+        }
+        _ => {
+            hasher.update(normalize_semantic_text(&preview.content).as_bytes());
+            for section in &preview.sections {
+                hasher.update(b"\0section\0");
+                hasher.update(normalize_semantic_text(section).as_bytes());
+            }
+        }
+    }
+
+    // Hash decompressed OOXML parts in name order. ZIP timestamps, compression choices, entry
+    // ordering, and volatile core document timestamps cannot manufacture semantic progress;
+    // slide themes, layouts, styles, relationships, media, and audience content still can.
+    let office_prefix = match extension.as_str() {
+        "docx" => Some("word/"),
+        "pptx" => Some("ppt/"),
+        "xlsx" => Some("xl/"),
+        _ => None,
+    };
+    if let Some(prefix) = office_prefix {
+        let mut archive = ZipArchive::new(Cursor::new(bytes))?;
+        let mut parts = Vec::new();
+        for index in 0..archive.len() {
+            let mut entry = archive.by_index(index)?;
+            let name = entry.name().replace('\\', "/");
+            if !name.starts_with(prefix) || entry.is_dir() {
+                continue;
+            }
+            let mut part = Vec::new();
+            entry.read_to_end(&mut part)?;
+            if name.ends_with(".xml") || name.ends_with(".rels") {
+                part = normalize_semantic_text(&String::from_utf8_lossy(&part)).into_bytes();
+            }
+            parts.push((name, part));
+        }
+        parts.sort_by(|left, right| left.0.cmp(&right.0));
+        for (name, part) in parts {
+            hasher.update(b"\0part\0");
+            hasher.update(name.as_bytes());
+            hasher.update(b"\0");
+            hasher.update(part);
+        }
+    } else if let (Some(rendered), Some(mime_type)) =
+        (&preview.rendered_content, &preview.rendered_mime_type)
+    {
+        // PDF exporters commonly inject timestamps and document ids. Office sources are covered
+        // by their canonical package parts above; other faithful rendered payloads can be hashed
+        // directly when their format is not PDF.
+        if mime_type != "application/pdf" {
+            if let Some((_, payload)) = rendered.split_once(',') {
+                if let Ok(decoded) = base64::engine::general_purpose::STANDARD.decode(payload) {
+                    hasher.update(decoded);
+                }
+            }
+        }
+    }
+    Ok(format!("{:x}", hasher.finalize()))
+}
+
+fn normalize_semantic_text(value: &str) -> String {
+    value
+        .replace("\r\n", "\n")
+        .replace('\r', "\n")
+        .lines()
+        .map(str::trim_end)
+        .collect::<Vec<_>>()
+        .join("\n")
+        .trim()
+        .to_string()
+}
+
+fn pdf_visual_revision(bytes: &[u8]) -> Option<String> {
+    use pdf_extract::Document;
+
+    let document = Document::load_mem(bytes).ok()?;
+    let pages = document.get_pages();
+    if pages.is_empty() {
+        return None;
+    }
+
+    let mut hasher = Sha256::new();
+    hasher.update(b"lingshu-pdf-visual-v1");
+    hasher.update((pages.len() as u64).to_be_bytes());
+    let mut active_references = HashSet::new();
+
+    if let Ok(catalog) = document.catalog() {
+        for key in [b"OutputIntents".as_slice(), b"OCProperties".as_slice()] {
+            if let Ok(value) = catalog.get(key) {
+                hash_tagged_bytes(&mut hasher, b"catalog-key", key);
+                hash_pdf_object(
+                    &document,
+                    value,
+                    &mut hasher,
+                    &mut active_references,
+                    0,
+                    false,
+                );
+            }
+        }
+    }
+
+    for (page_number, page_id) in pages {
+        hasher.update(b"\0page\0");
+        hasher.update(page_number.to_be_bytes());
+        for key in [
+            b"MediaBox".as_slice(),
+            b"CropBox".as_slice(),
+            b"BleedBox".as_slice(),
+            b"TrimBox".as_slice(),
+            b"ArtBox".as_slice(),
+            b"Rotate".as_slice(),
+            b"UserUnit".as_slice(),
+            b"Resources".as_slice(),
+            b"Contents".as_slice(),
+            b"Annots".as_slice(),
+            b"Group".as_slice(),
+        ] {
+            if let Some(value) = inherited_pdf_page_value(&document, page_id, key) {
+                hash_tagged_bytes(&mut hasher, b"page-key", key);
+                hash_pdf_object(
+                    &document,
+                    value,
+                    &mut hasher,
+                    &mut active_references,
+                    0,
+                    key == b"Contents",
+                );
+            }
+        }
+    }
+
+    Some(format!("{:x}", hasher.finalize()))
+}
+
+fn inherited_pdf_page_value<'a>(
+    document: &'a pdf_extract::Document,
+    page_id: pdf_extract::ObjectId,
+    key: &[u8],
+) -> Option<&'a pdf_extract::Object> {
+    let mut current_id = page_id;
+    let mut visited = HashSet::new();
+    loop {
+        if !visited.insert(current_id) {
+            return None;
+        }
+        let dictionary = document.get_dictionary(current_id).ok()?;
+        if let Ok(value) = dictionary.get(key) {
+            return Some(value);
+        }
+        current_id = dictionary.get(b"Parent").ok()?.as_reference().ok()?;
+    }
+}
+
+fn hash_pdf_object(
+    document: &pdf_extract::Document,
+    object: &pdf_extract::Object,
+    hasher: &mut Sha256,
+    active_references: &mut HashSet<pdf_extract::ObjectId>,
+    depth: usize,
+    content_stream: bool,
+) {
+    use pdf_extract::Object;
+
+    if depth > 64 {
+        hasher.update(b"depth-limit");
+        return;
+    }
+    match object {
+        Object::Null => hasher.update(b"null"),
+        Object::Boolean(value) => {
+            hasher.update(b"bool");
+            hasher.update([u8::from(*value)]);
+        }
+        Object::Integer(value) => {
+            hasher.update(b"integer");
+            hasher.update(value.to_be_bytes());
+        }
+        Object::Real(value) => {
+            hasher.update(b"real");
+            let normalized = if *value == 0.0 { 0.0 } else { *value };
+            hasher.update(normalized.to_bits().to_be_bytes());
+        }
+        Object::Name(value) => hash_tagged_bytes(hasher, b"name", value),
+        Object::String(value, _) => hash_tagged_bytes(hasher, b"string", value),
+        Object::Array(values) => {
+            hasher.update(b"array");
+            hasher.update((values.len() as u64).to_be_bytes());
+            for value in values {
+                hash_pdf_object(
+                    document,
+                    value,
+                    hasher,
+                    active_references,
+                    depth + 1,
+                    content_stream,
+                );
+            }
+        }
+        Object::Dictionary(dictionary) => hash_pdf_dictionary(
+            document,
+            dictionary,
+            hasher,
+            active_references,
+            depth + 1,
+            false,
+        ),
+        Object::Stream(stream) => {
+            let (content, decompressed) = match stream.decompressed_content() {
+                Ok(content) => (content, true),
+                Err(_) => (stream.content.clone(), false),
+            };
+            hash_pdf_dictionary(
+                document,
+                &stream.dict,
+                hasher,
+                active_references,
+                depth + 1,
+                decompressed,
+            );
+            let is_form = stream
+                .dict
+                .get(b"Subtype")
+                .ok()
+                .and_then(|value| value.as_name().ok())
+                == Some(b"Form".as_slice());
+            let canonical_content = if content_stream || is_form {
+                pdf_extract::content::Content::decode(&content)
+                    .and_then(|content| content.encode())
+                    .unwrap_or(content)
+            } else {
+                content
+            };
+            hash_tagged_bytes(hasher, b"stream-content", &canonical_content);
+        }
+        Object::Reference(object_id) => {
+            if !active_references.insert(*object_id) {
+                hasher.update(b"reference-cycle");
+                return;
+            }
+            hasher.update(b"reference");
+            if let Ok(value) = document.get_object(*object_id) {
+                hash_pdf_object(
+                    document,
+                    value,
+                    hasher,
+                    active_references,
+                    depth + 1,
+                    content_stream,
+                );
+            } else {
+                hasher.update(b"missing-reference");
+            }
+            active_references.remove(object_id);
+        }
+    }
+}
+
+fn hash_pdf_dictionary(
+    document: &pdf_extract::Document,
+    dictionary: &pdf_extract::Dictionary,
+    hasher: &mut Sha256,
+    active_references: &mut HashSet<pdf_extract::ObjectId>,
+    depth: usize,
+    decompressed_stream: bool,
+) {
+    let mut entries = dictionary
+        .iter()
+        .filter(|(key, _)| {
+            !is_pdf_metadata_key(key)
+                && key.as_slice() != b"Length"
+                && (!decompressed_stream || !matches!(key.as_slice(), b"Filter" | b"DecodeParms"))
+        })
+        .collect::<Vec<_>>();
+    entries.sort_by(|left, right| left.0.cmp(right.0));
+    hasher.update(b"dictionary");
+    hasher.update((entries.len() as u64).to_be_bytes());
+    for (key, value) in entries {
+        hash_tagged_bytes(hasher, b"dictionary-key", key);
+        hash_pdf_object(document, value, hasher, active_references, depth + 1, false);
+    }
+}
+
+fn is_pdf_metadata_key(key: &[u8]) -> bool {
+    matches!(
+        key,
+        b"Metadata"
+            | b"PieceInfo"
+            | b"LastModified"
+            | b"StructParent"
+            | b"StructParents"
+            | b"CreationDate"
+            | b"ModDate"
+            | b"Producer"
+            | b"Creator"
+            | b"Author"
+            | b"Title"
+            | b"Subject"
+            | b"Keywords"
+            | b"Trapped"
+            | b"Info"
+            | b"ID"
+    )
+}
+
+fn hash_tagged_bytes(hasher: &mut Sha256, tag: &[u8], value: &[u8]) {
+    hasher.update(tag);
+    hasher.update((value.len() as u64).to_be_bytes());
+    hasher.update(value);
+}
+
 pub fn preview_file(path: impl AsRef<Path>) -> Result<PreviewPayload, PreviewError> {
     let path = path.as_ref();
     if !path.is_file() {
@@ -75,7 +437,7 @@ pub fn preview_file(path: impl AsRef<Path>) -> Result<PreviewPayload, PreviewErr
         .unwrap_or("")
         .to_ascii_lowercase();
     let bytes = fs::read(path)?;
-    let revision = format!("{:x}", Sha256::digest(&bytes));
+    let revision = content_revision(&bytes);
     let mut payload = PreviewPayload {
         name,
         path: path.display().to_string(),
@@ -564,8 +926,76 @@ fn xml_text(xml: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use pdf_extract::content::{Content, Operation};
+    use pdf_extract::{Dictionary, Document, Object, Stream};
     use std::fs;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
+
+    fn write_visual_pdf(path: &Path, background_gray: f32, producer: &str) {
+        let mut document = Document::with_version("1.5");
+        let pages_id = document.new_object_id();
+
+        let mut font = Dictionary::new();
+        font.set("Type", "Font");
+        font.set("Subtype", "Type1");
+        font.set("BaseFont", "Helvetica");
+        let font_id = document.add_object(font);
+
+        let mut fonts = Dictionary::new();
+        fonts.set("F1", font_id);
+        let mut resources = Dictionary::new();
+        resources.set("Font", fonts);
+        let resources_id = document.add_object(resources);
+
+        let content = Content {
+            operations: vec![
+                Operation::new("g", vec![background_gray.into()]),
+                Operation::new("re", vec![0.into(), 0.into(), 300.into(), 200.into()]),
+                Operation::new("f", vec![]),
+                Operation::new("g", vec![0.into()]),
+                Operation::new("BT", vec![]),
+                Operation::new("Tf", vec!["F1".into(), 18.into()]),
+                Operation::new("Td", vec![40.into(), 100.into()]),
+                Operation::new("Tj", vec![Object::string_literal("Same text")]),
+                Operation::new("ET", vec![]),
+            ],
+        };
+        let content_id = document.add_object(Stream::new(
+            Dictionary::new(),
+            content.encode().expect("encode PDF content"),
+        ));
+
+        let mut page = Dictionary::new();
+        page.set("Type", "Page");
+        page.set("Parent", pages_id);
+        page.set("Contents", content_id);
+        let page_id = document.add_object(page);
+
+        let mut pages = Dictionary::new();
+        pages.set("Type", "Pages");
+        pages.set("Kids", vec![Object::Reference(page_id)]);
+        pages.set("Count", 1);
+        pages.set("Resources", resources_id);
+        pages.set("MediaBox", vec![0.into(), 0.into(), 300.into(), 200.into()]);
+        document.objects.insert(pages_id, Object::Dictionary(pages));
+
+        let mut catalog = Dictionary::new();
+        catalog.set("Type", "Catalog");
+        catalog.set("Pages", pages_id);
+        let catalog_id = document.add_object(catalog);
+        document.trailer.set("Root", catalog_id);
+
+        let mut info = Dictionary::new();
+        info.set("Producer", Object::string_literal(producer));
+        info.set(
+            "CreationDate",
+            Object::string_literal(format!("D:{producer}")),
+        );
+        let info_id = document.add_object(info);
+        document.trailer.set("Info", info_id);
+        document.compress();
+        document.save(path).expect("save PDF fixture");
+    }
 
     #[test]
     fn pdf_preview_keeps_bytes_and_extracts_text_for_the_agent() {
@@ -595,5 +1025,41 @@ mod tests {
 
         assert_ne!(first.revision, second.revision);
         assert_eq!(second.content, "second version");
+    }
+
+    #[test]
+    fn pdf_same_text_with_different_visuals_has_different_semantic_revision() {
+        let directory = tempfile::tempdir().unwrap();
+        let light = directory.path().join("light.pdf");
+        let dark = directory.path().join("dark.pdf");
+        write_visual_pdf(&light, 0.9, "same-producer");
+        write_visual_pdf(&dark, 0.2, "same-producer");
+
+        let light_preview = preview_file(&light).unwrap();
+        let dark_preview = preview_file(&dark).unwrap();
+        assert_eq!(light_preview.sections, dark_preview.sections);
+        assert!(light_preview.sections.join("\n").contains("Same text"));
+        assert_ne!(
+            semantic_file_revision(&light).unwrap(),
+            semantic_file_revision(&dark).unwrap()
+        );
+    }
+
+    #[test]
+    fn pdf_metadata_only_change_keeps_semantic_revision() {
+        let directory = tempfile::tempdir().unwrap();
+        let first = directory.path().join("first.pdf");
+        let second = directory.path().join("second.pdf");
+        write_visual_pdf(&first, 0.7, "producer-one");
+        write_visual_pdf(&second, 0.7, "producer-two-with-a-different-length");
+
+        assert_ne!(
+            file_revision(&first).unwrap(),
+            file_revision(&second).unwrap()
+        );
+        assert_eq!(
+            semantic_file_revision(&first).unwrap(),
+            semantic_file_revision(&second).unwrap()
+        );
     }
 }
