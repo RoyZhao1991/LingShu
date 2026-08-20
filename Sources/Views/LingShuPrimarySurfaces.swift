@@ -44,6 +44,9 @@ struct LingShuRootView: View {
                     .allowsHitTesting(false)
             }
         }
+        // 窗口模式控制器必须挂在不随 standard/orb 条件分支切换的根容器上。
+        // 否则退出自主模式时 SwiftUI 可能先销毁 representable/coordinator，遗失标题栏快照。
+        .background(LingShuAutonomousWindowController(active: orbActive))
         .dropDestination(for: URL.self) { urls, _ in
             attachDroppedFiles(urls)
         } isTargeted: { targeted in
@@ -79,7 +82,6 @@ struct LingShuRootView: View {
         }
         // 进入仪式只在「上岗→终态之前」的过渡期覆盖(界面融化→离子化凝成本体);终态(只剩本体)不再覆盖。
         .overlay { if state.isStandingPersonOnDuty && !autonomousOrbMode { LingShuAutonomousIntroOverlay(state: state) } }
-        .background(LingShuAutonomousWindowController(active: orbActive))
         // **已删除「移动鼠标/键鼠接管」打断演示的整套流程(用户定调 2026-06-25)**:演示是语音驱动的,
         // 移动鼠标不该打断演示。**暂停**走语音(说「暂停/停一下」);**停止演示**=关演示窗
         // (下面 onUserClosedWindow → abortActiveFlow → stopPresentationIfActive 自动停)。
