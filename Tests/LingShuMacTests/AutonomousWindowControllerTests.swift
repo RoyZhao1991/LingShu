@@ -78,8 +78,25 @@ final class AutonomousWindowControllerTests: XCTestCase {
     }
 
     private func makeStandardWindow() -> NSWindow {
+        // Keep the fixture fully inside the runner's virtual display. A fixed
+        // 1240 x 820 content rect is larger than the visible frame exposed by
+        // some GitHub macOS runners, so AppKit legitimately constrains it when
+        // the titled style is restored and makes an exact snapshot comparison
+        // impossible. The production window still uses its real captured frame.
+        let visibleFrame = NSScreen.main?.visibleFrame
+            ?? NSRect(x: 0, y: 0, width: 1024, height: 768)
+        let contentSize = NSSize(
+            width: min(900, visibleFrame.width * 0.7),
+            height: min(600, visibleFrame.height * 0.6)
+        )
+        let contentRect = NSRect(
+            x: visibleFrame.midX - contentSize.width / 2,
+            y: visibleFrame.midY - contentSize.height / 2,
+            width: contentSize.width,
+            height: contentSize.height
+        )
         let window = NSWindow(
-            contentRect: NSRect(x: 80, y: 90, width: 1240, height: 820),
+            contentRect: contentRect,
             styleMask: [.titled, .closable, .miniaturizable, .resizable],
             backing: .buffered,
             defer: false
@@ -92,8 +109,12 @@ final class AutonomousWindowControllerTests: XCTestCase {
         window.backgroundColor = .windowBackgroundColor
         window.hasShadow = true
         window.level = .normal
-        window.minSize = NSSize(width: 1240, height: 820)
+        window.minSize = contentSize
         window.isMovableByWindowBackground = false
+        XCTAssertTrue(
+            visibleFrame.contains(window.frame),
+            "Autonomous-window test fixture must begin inside the visible screen"
+        )
         return window
     }
 

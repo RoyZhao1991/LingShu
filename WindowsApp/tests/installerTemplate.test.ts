@@ -65,6 +65,7 @@ test("executes only the verified legacy uninstaller with NSIS-safe path syntax",
   assert.match(pageLeave, /StrCpy \$R1 "\$\\"\$4\\uninstall\.exe\$\\""/);
   assert.match(pageLeave, /StrCpy \$R1 "\$R1 _\?=\$4"/);
   assert.match(pageLeave, /\$UninstallPreviousMode = 1/);
+  assert.match(pageLeave, /StrCpy \$R1 "\$R1 \/S"/);
   assert.doesNotMatch(pageLeave, /ReadRegStr \$R1 SHCTX "\$\{UNINSTKEY\}" "UninstallString"/);
   assert.match(
     template,

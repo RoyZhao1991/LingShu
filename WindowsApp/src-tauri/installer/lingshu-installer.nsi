@@ -415,7 +415,16 @@ Function PageLeaveReinstall
         ; arbitrary registry command with a separately resolved directory.
         StrCpy $R1 "$\"$4\uninstall.exe$\""
         ${IfThen} $UpdateMode = 1 ${|} StrCpy $R1 "$R1 /UPDATE" ${|} ; append /UPDATE
-        ${IfThen} $PassiveMode = 1 ${|} StrCpy $R1 "$R1 /P" ${|} ; append /P
+        ; The explicit scripted clean-up contract is fully unattended. Older
+        ; Tauri uninstallers can leave their passive UI open indefinitely on a
+        ; non-interactive Windows runner, while `/S` follows the same removal
+        ; path and exits deterministically. Ordinary passive installs retain
+        ; upstream's visible `/P` behavior.
+        ${If} $UninstallPreviousMode = 1
+          StrCpy $R1 "$R1 /S"
+        ${ElseIf} $PassiveMode = 1
+          StrCpy $R1 "$R1 /P"
+        ${EndIf}
         ; Per NSIS' command-line contract `_?=` must be last and unquoted, even
         ; when its absolute path contains spaces. The executable itself is quoted.
         StrCpy $R1 "$R1 _?=$4" ; append uninstall directory
