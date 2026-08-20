@@ -8448,12 +8448,9 @@ mod tests {
         let system = &messages[0].content;
         assert!(system.contains("available_external_skills"));
         assert!(system.contains("activate_skill"));
-        assert!(system.contains(
-            &std::fs::canonicalize(manifest)
-                .unwrap()
-                .display()
-                .to_string()
-        ));
+        let canonical_manifest_json =
+            serde_json::to_string(&std::fs::canonicalize(manifest).unwrap()).unwrap();
+        assert!(system.contains(&canonical_manifest_json));
         assert!(system.contains("codex"));
     }
 
