@@ -56,11 +56,13 @@ Skills unless they include a valid standard `SKILL.md` directory.
 Vendor flags that forbid automatic model invocation are enforced. Their
 vendor-specific manual slash-command channel is not emulated in this preview.
 
+The x64 setup executable uses a LingShu-branded installer and preserves upgrades from older publisher registry layouts. Application data in `%LOCALAPPDATA%\LingShu` is not removed during a normal upgrade or uninstall unless the user explicitly chooses to delete it.
+
 ## Download
 
-- [Windows x64 setup executable](https://github.com/RoyZhao1991/LingShu/releases/download/windows-v0.1.0-preview.26/Nous-Windows-x64-Setup.exe)
-- [Windows preview release and MSI alternatives](https://github.com/RoyZhao1991/LingShu/releases/tag/windows-v0.1.0-preview.26)
-- [SHA-256 checksums](https://github.com/RoyZhao1991/LingShu/releases/download/windows-v0.1.0-preview.26/SHA256SUMS.txt)
+- [Windows x64 setup executable](https://github.com/RoyZhao1991/LingShu/releases/download/windows-v0.1.0-preview.27/Nous-Windows-x64-Setup.exe)
+- [Windows preview release and MSI alternatives](https://github.com/RoyZhao1991/LingShu/releases/tag/windows-v0.1.0-preview.27)
+- [SHA-256 checksums](https://github.com/RoyZhao1991/LingShu/releases/download/windows-v0.1.0-preview.27/SHA256SUMS.txt)
 - [Signed and notarized macOS alpha](https://github.com/RoyZhao1991/LingShu/releases/download/v0.1.0-alpha.9/LingShu-0.1.0-12-macOS-universal.dmg)
 
 Windows preview installers are not yet Authenticode-signed. Windows may show a SmartScreen warning; verify the downloaded file against `SHA256SUMS.txt` before installing it.

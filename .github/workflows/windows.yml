@@ -36,7 +36,7 @@ jobs:
   build:
     name: Windows x64 installers
     runs-on: windows-latest
-    timeout-minutes: 60
+    timeout-minutes: 90
     defaults:
       run:
         shell: pwsh
@@ -246,6 +246,26 @@ jobs:
           }
           Write-Host "Verified WINDOWS_GUI subsystem for $executable"
 
+      - name: Verify NSIS upgrade, reinstall, uninstall, and data preservation
+        run: |
+          $bundle = Join-Path $env:GITHUB_WORKSPACE "WindowsApp/src-tauri/target/release/bundle"
+          $nsisInstallers = @(Get-ChildItem -Path $bundle -Recurse -File | Where-Object { $_.Name -like "*-setup.exe" })
+          if ($nsisInstallers.Count -ne 1) {
+            throw "Expected exactly one newly built NSIS installer for upgrade testing; found $($nsisInstallers.Count)."
+          }
+          $testScript = Join-Path $env:GITHUB_WORKSPACE "WindowsApp/scripts/test-nsis-upgrade.ps1"
+          $tokens = $null
+          $parseErrors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile($testScript, [ref]$tokens, [ref]$parseErrors) | Out-Null
+          if ($parseErrors.Count -gt 0) {
+            $formattedParseErrors = $parseErrors -join "`n"
+            throw "NSIS regression script has PowerShell parse errors:`n$formattedParseErrors"
+          }
+          $expectedVersion = (Get-Content (Join-Path $env:GITHUB_WORKSPACE "WindowsApp/package.json") -Raw | ConvertFrom-Json).version
+          & $testScript `
+            -NewInstaller $nsisInstallers[0].FullName `
+            -ExpectedVersion $expectedVersion
+
       - name: Collect installers and checksums
         run: |
           $bundle = Join-Path $env:GITHUB_WORKSPACE "WindowsApp/src-tauri/target/release/bundle"
@@ -304,7 +324,9 @@ jobs:
           $notes = @"
           Windows x64 technical preview built and tested on GitHub's Windows runner.
 
-          Windows now includes a macOS-aligned Memory page backed by the actual shared Runtime Core. It supports search, kind/tier/source filters, stable pagination, create/edit/delete with optimistic concurrency protection, and explicit reveal for one sensitive record at a time. Sensitive payloads remain redacted in list/search responses and excluded from automatic model recall.
+          Preview 0.1.0-27 replaces the default-looking setup flow with a LingShu-branded light-and-teal installer across welcome, location, maintenance, progress, completion, and uninstall surfaces. It also repairs upgrades from the legacy `royzhao` publisher registry layout to `Roy Zhao`, including custom installation directories, while preserving `%LOCALAPPDATA%\LingShu` conversation and long-term-memory data. The release workflow now exercises preview.25-to-current upgrade, same-version reinstall, uninstall, and data preservation on a real Windows runner before publishing.
+
+          Windows includes a macOS-aligned Memory page backed by the actual shared Runtime Core. It supports search, kind/tier/source filters, stable pagination, create/edit/delete with optimistic concurrency protection, and explicit reveal for one sensitive record at a time. Sensitive payloads remain redacted in list/search responses and excluded from automatic model recall.
 
           Installer and application metadata identify the publisher as Roy Zhao. This is descriptive package metadata, not an Authenticode signature; Windows may still show an unknown-publisher or SmartScreen warning, so verify the published SHA-256 checksums.
 
