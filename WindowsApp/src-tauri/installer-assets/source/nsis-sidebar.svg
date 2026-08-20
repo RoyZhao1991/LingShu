@@ -1,18 +1,51 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="164" height="314" viewBox="0 0 164 314">
-  <rect width="164" height="314" fill="#075f59"/>
-  <path d="M0 226c47-35 104-53 164-52v140H0Z" fill="#087d74"/>
-  <path d="M0 253c50-29 106-40 164-35v96H0Z" fill="#09978b"/>
-  <g transform="translate(26 28)">
-    <circle cx="56" cy="56" r="52" fill="#eef8f6" stroke="#8bd0c9" stroke-width="2"/>
-    <circle cx="56" cy="56" r="41" fill="#ffffff" stroke="#43b8ae" stroke-width="2"/>
-    <circle cx="56" cy="56" r="31" fill="none" stroke="#0b978c" stroke-width="4" stroke-dasharray="34 12 18 10" transform="rotate(-18 56 56)"/>
-    <circle cx="56" cy="56" r="21" fill="none" stroke="#63cec5" stroke-width="3" stroke-dasharray="17 8 25 9" transform="rotate(29 56 56)"/>
-    <circle cx="56" cy="56" r="9" fill="#d8f0ed" stroke="#0b978c" stroke-width="3"/>
-    <circle cx="56" cy="56" r="3.5" fill="#173f3b"/>
+  <defs>
+    <linearGradient id="surface" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#f4f9f8"/>
+      <stop offset="1" stop-color="#dcecea"/>
+    </linearGradient>
+    <linearGradient id="depth" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0b625c"/>
+      <stop offset="1" stop-color="#073f3b"/>
+    </linearGradient>
+    <filter id="glow" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="4"/>
+    </filter>
+  </defs>
+
+  <rect width="164" height="314" fill="url(#surface)"/>
+  <rect x="0" y="0" width="4" height="314" fill="#16a89d"/>
+  <path d="M4 208c35-24 74-35 116-33 17 1 31 5 44 11v128H4Z" fill="url(#depth)"/>
+  <path d="M4 220c44-28 98-37 160-23" fill="none" stroke="#2bb8ae" stroke-opacity=".45"/>
+  <path d="M4 239c45-22 99-27 160-12" fill="none" stroke="#8de1da" stroke-opacity=".18"/>
+
+  <g transform="translate(21 22)">
+    <circle cx="61" cy="61" r="56" fill="#6ee0d5" opacity=".16" filter="url(#glow)"/>
+    <circle cx="61" cy="61" r="51" fill="#ffffff" stroke="#b6ddda" stroke-width="1.5"/>
+    <circle cx="61" cy="61" r="41" fill="#edf8f6" stroke="#80cdc6" stroke-width="1.5"/>
+    <circle cx="61" cy="61" r="31" fill="none" stroke="#0d9488" stroke-width="3.5" stroke-linecap="round" stroke-dasharray="28 10 15 10" transform="rotate(-18 61 61)"/>
+    <circle cx="61" cy="61" r="21" fill="none" stroke="#53c8be" stroke-width="3" stroke-linecap="round" stroke-dasharray="15 8 21 9" transform="rotate(28 61 61)"/>
+    <circle cx="61" cy="61" r="9" fill="#d3efec" stroke="#0d9488" stroke-width="3"/>
+    <circle cx="61" cy="61" r="3.5" fill="#173f3b"/>
+    <circle cx="61" cy="8" r="2.5" fill="#16a89d"/>
+    <circle cx="107" cy="87" r="2.5" fill="#16a89d"/>
+    <circle cx="15" cy="87" r="2.5" fill="#16a89d"/>
   </g>
-  <text x="82" y="166" text-anchor="middle" fill="#ffffff" font-family="Segoe UI, Microsoft YaHei, sans-serif" font-size="27" font-weight="700">灵枢</text>
-  <text x="82" y="193" text-anchor="middle" fill="#b9eee8" font-family="Segoe UI, sans-serif" font-size="18" font-weight="700">NOUS</text>
-  <line x1="48" y1="211" x2="116" y2="211" stroke="#91d9d2"/>
-  <text x="82" y="236" text-anchor="middle" fill="#e8f7f5" font-family="Segoe UI, sans-serif" font-size="8" font-weight="600" letter-spacing="1.6">GENERAL AGENT HUB</text>
-  <text x="82" y="283" text-anchor="middle" fill="#d5f1ee" font-family="Segoe UI, sans-serif" font-size="9">Open model · Shared runtime</text>
+
+  <g fill="none" stroke="#90bab6" stroke-width="1">
+    <path d="M25 150h36l6 6h28l6-6h38"/>
+    <path d="M37 164h90" stroke-dasharray="2 4"/>
+  </g>
+  <circle cx="25" cy="150" r="2" fill="#0d9488"/>
+  <circle cx="139" cy="150" r="2" fill="#0d9488"/>
+
+  <text x="82" y="230" text-anchor="middle" fill="#ffffff" font-family="Segoe UI, Microsoft YaHei, sans-serif" font-size="24" font-weight="700">灵枢</text>
+  <text x="82" y="253" text-anchor="middle" fill="#9de6df" font-family="Segoe UI, sans-serif" font-size="12" font-weight="700" letter-spacing="3">NOUS</text>
+  <line x1="55" y1="267" x2="109" y2="267" stroke="#78cfc8" stroke-opacity=".65"/>
+  <text x="82" y="286" text-anchor="middle" fill="#d9f1ef" font-family="Segoe UI, sans-serif" font-size="7.5" font-weight="600" letter-spacing="1.4">GENERAL AGENT HUB</text>
+  <g fill="#61d1c8">
+    <circle cx="61" cy="300" r="1.5"/>
+    <circle cx="82" cy="300" r="1.5"/>
+    <circle cx="103" cy="300" r="1.5"/>
+  </g>
 </svg>

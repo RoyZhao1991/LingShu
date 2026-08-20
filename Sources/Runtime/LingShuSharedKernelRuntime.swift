@@ -49,6 +49,11 @@ enum LingShuKernelExecutionPermissionMode: String, Codable, Sendable {
     case fullAccess = "full_access"
 }
 
+enum LingShuKernelLoopEngine: String, Codable, Sendable {
+    case grok
+    case codex
+}
+
 struct LingShuKernelRuntimeSettings: Codable, Sendable, Equatable {
     var locale: LingShuKernelLocale
     var providerId: String
@@ -58,6 +63,7 @@ struct LingShuKernelRuntimeSettings: Codable, Sendable, Equatable {
     var model: String
     var workspace: String
     var executionPermissionMode: LingShuKernelExecutionPermissionMode
+    var loopEngine: LingShuKernelLoopEngine
     var firstRunComplete: Bool
 }
 
@@ -66,6 +72,75 @@ struct LingShuKernelPlatformCapabilities: Codable, Sendable, Equatable {
     var realtimePerception: Bool
     var internalPreview: Bool
     var externalOpen: Bool
+}
+
+enum LingShuKernelMemoryKind: String, Codable, Sendable {
+    case conversation
+    case task
+    case fact
+    case preference
+    case experience
+    case artifact
+    case knowledge
+}
+
+enum LingShuKernelMemoryTier: String, Codable, Sendable {
+    case hot
+    case cold
+}
+
+enum LingShuKernelMemorySource: String, Codable, Sendable {
+    case runtime
+    case userExplicit = "user_explicit"
+    case task
+    case legacySwift = "legacy_swift"
+    case platform
+}
+
+struct LingShuKernelMemorySnapshot: Codable, Sendable, Equatable {
+    var schemaVersion: UInt32
+    var totalCount: Int
+    var hotCount: Int
+    var coldCount: Int
+    var countsByKind: [String: Int]
+    var latestUpdatedAt: String?
+    var lastConsolidatedAt: String?
+    var importedSources: [String: String]
+}
+
+struct LingShuKernelMemoryImportEntry: Codable, Sendable {
+    var id: String
+    var kind: LingShuKernelMemoryKind
+    var tier: LingShuKernelMemoryTier
+    var title: String
+    var content: String
+    var lastPrompt: String
+    var tags: [String]
+    var source: LingShuKernelMemorySource
+    var importance: Double
+    var confidence: Double
+    var sensitive: Bool
+    var messageCount: UInt32
+    var taskId: String?
+    var executionRecordId: String?
+    var createdAt: String?
+    var updatedAt: String?
+    var archivedAt: String?
+    var compressedAt: String?
+    var aliases: [String]
+}
+
+struct LingShuKernelMemoryImportPayload: Codable, Sendable {
+    var source: String
+    var sourceVersion: String
+    var entries: [LingShuKernelMemoryImportEntry]
+}
+
+struct LingShuKernelMemoryImportResult: Codable, Sendable {
+    var imported: Int
+    var updated: Int
+    var skipped: Int
+    var snapshot: LingShuKernelMemorySnapshot
 }
 
 enum LingShuKernelMessageRole: String, Codable, Sendable {
@@ -77,6 +152,7 @@ enum LingShuKernelMessageRole: String, Codable, Sendable {
 enum LingShuKernelMessageState: String, Codable, Sendable {
     case complete
     case thinking
+    case needsRecovery = "needs_recovery"
     case failed
     case needsUserAction = "needs_user_action"
 }
@@ -152,13 +228,14 @@ enum LingShuKernelTaskStatus: String, Codable, Sendable {
     case queued
     case understanding
     case running
+    case needsRecovery = "needs_recovery"
     case needsUserAction = "needs_user_action"
     case completed
     case failed
     case cancelled
 
     var isTerminal: Bool {
-        self == .completed || self == .failed || self == .cancelled
+        self == .completed || self == .cancelled
     }
 }
 
@@ -211,7 +288,65 @@ struct LingShuKernelTaskRecord: Codable, Sendable {
     var origin: LingShuKernelTaskOrigin
     var participantName: String
     var depth: UInt8
+    var loopEngine: LingShuKernelLoopEngine
     var pendingQuestion: String?
+}
+
+enum LingShuKernelExternalSkillSourceFormat: String, Codable, Sendable, Equatable {
+    case codex
+    case claude
+    case openAgentSkill = "open_agent_skill"
+}
+
+enum LingShuKernelExternalSkillResourceKind: String, Codable, Sendable, Equatable {
+    case script
+    case reference
+    case asset
+    case other
+}
+
+struct LingShuKernelExternalSkillResource: Codable, Sendable, Equatable {
+    var path: String
+    var kind: LingShuKernelExternalSkillResourceKind
+    var sizeBytes: UInt64
+}
+
+struct LingShuKernelExternalSkillRecord: Codable, Sendable, Equatable {
+    var id: String
+    var name: String
+    var description: String
+    var sourceFormat: LingShuKernelExternalSkillSourceFormat
+    var sourcePath: String
+    var manifestPath: String
+    var enabled: Bool
+    var available: Bool
+    var modelInvocationEnabled: Bool
+    var statusDetail: String
+    var warnings: [String]
+    var scripts: [LingShuKernelExternalSkillResource]
+    var references: [LingShuKernelExternalSkillResource]
+    var assets: [LingShuKernelExternalSkillResource]
+    var license: String?
+    var compatibility: String?
+    var allowedTools: [String]
+    var contentFingerprint: String
+}
+
+struct LingShuKernelLoopEngineRecord: Codable, Sendable, Equatable {
+    var id: LingShuKernelLoopEngine
+    var name: String
+    var description: String
+    var descriptionZh: String
+    var adapterBuiltin: Bool
+    var available: Bool
+    var selected: Bool
+    var executionMode: String
+    var executable: String?
+    var statusDetail: String
+    var harnessOnly: Bool
+    var transportOwner: String
+    var nativeAuthDisabled: Bool
+    var nativeQuotaDisabled: Bool
 }
 
 enum LingShuKernelEventKind: String, Codable, Sendable {
@@ -231,6 +366,7 @@ enum LingShuKernelEventState: String, Codable, Sendable {
     case completed
     case failed
     case blocked
+    case cancelled
 }
 
 struct LingShuKernelRuntimeEvent: Codable, Sendable {
@@ -259,6 +395,9 @@ struct LingShuKernelRuntimeSnapshot: Codable, Sendable {
     var providerConfigured: Bool
     var events: [LingShuKernelRuntimeEvent]
     var latestEventSequence: UInt64
+    var externalSkills: [LingShuKernelExternalSkillRecord]
+    var memory: LingShuKernelMemorySnapshot?
+    var loopEngines: [LingShuKernelLoopEngineRecord]
 }
 
 struct LingShuKernelSubmitReceipt: Codable, Sendable {
@@ -380,6 +519,19 @@ private struct LingShuKernelThreadParams: Encodable, Sendable {
     var threadId: UUID
 }
 
+private struct LingShuKernelExternalSkillImportParams: Encodable, Sendable {
+    var path: String
+}
+
+private struct LingShuKernelExternalSkillIDParams: Encodable, Sendable {
+    var id: String
+}
+
+private struct LingShuKernelExternalSkillEnabledParams: Encodable, Sendable {
+    var id: String
+    var enabled: Bool
+}
+
 private struct LingShuKernelEmptyParams: Encodable, Sendable {}
 
 private struct LingShuKernelAcceptedResult: Decodable {
@@ -388,6 +540,10 @@ private struct LingShuKernelAcceptedResult: Decodable {
 
 private struct LingShuKernelCancelledResult: Decodable {
     var cancelled: Bool
+}
+
+private struct LingShuKernelRemovedResult: Decodable {
+    var removed: Bool
 }
 
 private actor LingShuSharedKernelClient {
@@ -525,6 +681,52 @@ final class LingShuSharedKernelRuntime: ObservableObject {
             "kernel/snapshot",
             params: LingShuKernelSnapshotParams(providerConfigured: providerConfigured)
         )
+    }
+
+    func importMemory(
+        _ payload: LingShuKernelMemoryImportPayload
+    ) async throws -> LingShuKernelMemoryImportResult {
+        try await client.request("kernel/import_memory", params: payload)
+    }
+
+    func listExternalSkills() async throws -> [LingShuKernelExternalSkillRecord] {
+        try await client.request(
+            "kernel/list_external_skills",
+            params: LingShuKernelEmptyParams()
+        )
+    }
+
+    func refreshExternalSkills() async throws -> [LingShuKernelExternalSkillRecord] {
+        try await client.request(
+            "kernel/refresh_external_skills",
+            params: LingShuKernelEmptyParams()
+        )
+    }
+
+    func importExternalSkill(path: String) async throws -> [LingShuKernelExternalSkillRecord] {
+        try await client.request(
+            "kernel/import_external_skill",
+            params: LingShuKernelExternalSkillImportParams(path: path)
+        )
+    }
+
+    func setExternalSkillEnabled(
+        id: String,
+        enabled: Bool
+    ) async throws -> LingShuKernelExternalSkillRecord {
+        try await client.request(
+            "kernel/set_external_skill_enabled",
+            params: LingShuKernelExternalSkillEnabledParams(id: id, enabled: enabled)
+        )
+    }
+
+    @discardableResult
+    func removeExternalSkill(id: String) async throws -> Bool {
+        let result: LingShuKernelRemovedResult = try await client.request(
+            "kernel/remove_external_skill",
+            params: LingShuKernelExternalSkillIDParams(id: id)
+        )
+        return result.removed
     }
 
     func submit(prompt: String, attachmentPaths: [String]) async throws -> LingShuKernelSubmitReceipt {

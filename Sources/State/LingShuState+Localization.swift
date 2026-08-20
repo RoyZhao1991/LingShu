@@ -341,6 +341,7 @@ extension LingShuTaskExecutionStatus {
         case .answered: "Answered"
         case .dispatched: "Dispatched"
         case .completed: "Completed"
+        case .terminated: "Terminated"
         case .needsRevision: "Needs Revision"
         case .blocked: "Blocked"
         case .suspended: "Paused"
@@ -350,7 +351,7 @@ extension LingShuTaskExecutionStatus {
         case .ready: "Ready"
         case .partial: "Partially Completed"
         case .verified: "Verified"
-        case .failed: "Failed"
+        case .failed: "Waiting to Resume"
         }
     }
 }

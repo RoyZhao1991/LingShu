@@ -289,7 +289,38 @@ final class ScheduledTriggerTests: XCTestCase {
         XCTAssertTrue(prompt.contains("ISO 日期：2026-06-23"))
         XCTAssertTrue(prompt.contains("日期戳：20260623"))
         XCTAssertTrue(prompt.contains("文件名时，日期必须使用 20260623"))
+        XCTAssertTrue(prompt.contains(LingShuState.scheduledTriggerExecutionMarker(for: trigger)))
         XCTAssertTrue(prompt.contains(trigger.prompt))
         XCTAssertFalse(prompt.contains("20250718"), "定时任务不得继承历史产物中的错误日期")
+    }
+
+    func testScheduledTriggerExecutionRecordMatchingUsesStableMarkerAndSupportsLegacyRuns() {
+        let trigger = LingShuScheduledTrigger(
+            title: "每周报告",
+            prompt: "统计本周 Star 并生成报告",
+            hour: 10,
+            minute: 0,
+            repeatsDaily: true
+        )
+        let markedPrompt = """
+        【定时任务触发上下文】
+        - 内部任务标识：\(LingShuState.scheduledTriggerExecutionMarker(for: trigger))
+
+        【原定时指令】
+        \(trigger.prompt)
+        """
+        let legacyPrompt = """
+        【定时任务触发上下文】
+
+        【原定时指令】
+        \(trigger.prompt)
+        """
+
+        XCTAssertTrue(LingShuState.scheduledTrigger(trigger, matchesExecutionPrompt: markedPrompt))
+        XCTAssertTrue(LingShuState.scheduledTrigger(trigger, matchesExecutionPrompt: legacyPrompt))
+        XCTAssertTrue(LingShuState.scheduledTrigger(trigger, matchesExecutionPrompt: trigger.prompt))
+        XCTAssertFalse(
+            LingShuState.scheduledTrigger(trigger, matchesExecutionPrompt: "统计另一个项目的 Star")
+        )
     }
 }

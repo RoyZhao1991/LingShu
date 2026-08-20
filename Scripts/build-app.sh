@@ -139,9 +139,30 @@ fi
 
 # DesignKB(自进化 PPT 设计知识库:生成器 + 配色/版式/字体 + rubric + Lucide 图标)随包交付。
 if [ -d "$ROOT_DIR/Resources/DesignKB" ]; then
+  PPTXGENJS_DIR="$ROOT_DIR/Resources/DesignKB/pptxgenjs"
+  if [ -f "$PPTXGENJS_DIR/package-lock.json" ] && command -v npm >/dev/null 2>&1; then
+    echo "==> building self-contained DesignKB PptxGenJS generator"
+    npm --prefix "$PPTXGENJS_DIR" ci --no-audit --no-fund
+    case "$(uname -m)" in
+      arm64)
+        npm --prefix "$PPTXGENJS_DIR" run build:mac:arm64
+        cp "$ROOT_DIR/Resources/DesignKB/bin/designkb-pptxgenjs-arm64" "$ROOT_DIR/Resources/DesignKB/bin/designkb-pptxgenjs"
+        ;;
+      x86_64)
+        npm --prefix "$PPTXGENJS_DIR" run build:mac:x64
+        cp "$ROOT_DIR/Resources/DesignKB/bin/designkb-pptxgenjs-x64" "$ROOT_DIR/Resources/DesignKB/bin/designkb-pptxgenjs"
+        ;;
+      *)
+        echo "   (unsupported architecture for the PptxGenJS helper; keeping the compatible generator)"
+        ;;
+    esac
+    if [ -f "$ROOT_DIR/Resources/DesignKB/bin/designkb-pptxgenjs" ]; then
+      chmod +x "$ROOT_DIR/Resources/DesignKB/bin/designkb-pptxgenjs"
+    fi
+  fi
   echo "==> copying DesignKB"
   mkdir -p "$RES_DIR/DesignKB"
-  ditto "$ROOT_DIR/Resources/DesignKB" "$RES_DIR/DesignKB"
+  rsync -a --delete --exclude 'pptxgenjs/node_modules/' "$ROOT_DIR/Resources/DesignKB/" "$RES_DIR/DesignKB/"
 fi
 
 # SenseVoice 是可选增强。开发构建默认保留历史行为；官网轻量包显式传 0，

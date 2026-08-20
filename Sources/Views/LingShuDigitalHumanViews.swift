@@ -4,10 +4,16 @@ struct LingShuDigitalHumanMiniOrb: View {
     let snapshot: LingShuDigitalHumanSnapshot
     /// 真实音频输出电平(0–1):驱动发声特效。有声才有,无声归零——与音频卡顿同步。
     var audioLevel: Double = 0
+    var paused = false
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { timeline in
-            MiniOrbStack(snapshot: snapshot, now: timeline.date.timeIntervalSinceReferenceDate, audioLevel: audioLevel)
+        TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: paused)) { timeline in
+            MiniOrbStack(
+                snapshot: snapshot,
+                now: timeline.date.timeIntervalSinceReferenceDate,
+                audioLevel: audioLevel,
+                paused: paused
+            )
         }
         .help(LingShuLanguagePreferenceStore.localized(
             "灵枢：\(snapshot.expression.displayName) · \(snapshot.displayText)",
@@ -25,6 +31,7 @@ private struct MiniOrbStack: View {
     let snapshot: LingShuDigitalHumanSnapshot
     let now: Double
     var audioLevel: Double = 0
+    var paused = false
 
     var body: some View {
         // 发声特效改由**真实音频电平**驱动(voiceActive/level),不再用逻辑 signalIsActive(.mouth)——音频卡顿/断续时同步无特效。
@@ -47,7 +54,12 @@ private struct MiniOrbStack: View {
 
             MiniOrbRotatingRing(accent: snapshot.accent, ringOpacity: ringOpacity, glow: glow, angle: angle)
 
-            LingShuDigitalHumanOrbView(snapshot: snapshot, compact: true, audioLevel: audioLevel)
+            LingShuDigitalHumanOrbView(
+                snapshot: snapshot,
+                compact: true,
+                audioLevel: audioLevel,
+                paused: paused
+            )
                 .padding(7)
 
             MiniOrbSignalDots(snapshot: snapshot)
@@ -203,9 +215,10 @@ struct LingShuDigitalHumanOrbView: View {
     var compact = false
     /// 真实音频输出电平(0–1):驱动中心圆脉冲扩缩 + 发声音波。有声才有,无声归零(与音频卡顿同步)。
     var audioLevel: Double = 0
+    var paused = false
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { timeline in
+        TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: paused)) { timeline in
             Canvas { context, size in
                 let t = timeline.date.timeIntervalSinceReferenceDate
                 let center = CGPoint(x: size.width / 2, y: size.height / 2)

@@ -42,29 +42,33 @@ extension LingShuState {
         case .queued: .queued
         case .understanding: .analyzing
         case .running: .running
+        case .needsRecovery: .suspended
         case .needsUserAction: .waitingForUser
         case .completed:
             goal?.outputMode == .chatReply && !hasArtifacts ? .answered : .completed
-        case .failed: .failed
-        case .cancelled: .failed
+        // Legacy persisted value only. A runtime interruption keeps the goal recoverable.
+        case .failed: .suspended
+        // Runtime cancellation is sealed. Keep it neutral, but never project it as a resumable
+        // suspension: doing so can re-dispatch a task that the user explicitly terminated.
+        case .cancelled: .terminated
         }
     }
 
     nonisolated static func sharedKernelPlanStatus(_ status: LingShuKernelTaskStatus) -> LingShuPlanStep.Status {
         switch status {
-        case .queued, .needsUserAction: .pending
-        case .understanding, .running: .inProgress
+        case .queued, .needsUserAction, .failed: .pending
+        case .understanding, .running, .needsRecovery: .inProgress
         case .completed: .completed
-        case .failed, .cancelled: .failed
+        case .cancelled: .cancelled
         }
     }
 
     nonisolated static func sharedKernelRoleStatus(_ status: LingShuKernelTaskStatus) -> LingShuTaskRoleSlotStatus {
         switch status {
-        case .queued, .needsUserAction: .pending
-        case .understanding, .running: .running
+        case .queued, .needsUserAction, .failed: .pending
+        case .understanding, .running, .needsRecovery: .running
         case .completed: .completed
-        case .failed, .cancelled: .failed
+        case .cancelled: .cancelled
         }
     }
 
@@ -108,10 +112,70 @@ extension LingShuState {
         case .queued: english ? "Queued" : "排队中"
         case .understanding: english ? "Understanding" : "理解中"
         case .running: english ? "Running" : "执行中"
+        case .needsRecovery: english ? "Recovering" : "自动恢复中"
         case .needsUserAction: english ? "Waiting for user" : "等待用户"
         case .completed: english ? "Completed" : "已完成"
-        case .failed: english ? "Failed" : "失败"
-        case .cancelled: english ? "Cancelled" : "已取消"
+        case .failed: english ? "Waiting to resume" : "待恢复"
+        case .cancelled: english ? "Terminated" : "已终止"
         }
+    }
+
+    /// Main chat receives only a concise, user-facing progress sentence. Event detail is the
+    /// diagnostic payload and remains available in the task execution record.
+    nonisolated static func sharedKernelUserFacingEventText(
+        _ event: LingShuKernelRuntimeEvent,
+        language: LingShuVoiceLanguage
+    ) -> String? {
+        let title = event.title.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        switch event.kind {
+        case .tool, .plan, .delegation:
+            return sharedKernelNonEmpty(title)
+        case .reasoning:
+            return language == .english ? "Thinking…" : "思考中…"
+        case .model:
+            if let detail = sharedKernelReadableEventDetail(event.detail) {
+                return detail
+            }
+            if title.hasPrefix("模型回合 ") || title.hasPrefix("Model turn ") {
+                return language == .english ? "Thinking…" : "思考中…"
+            }
+            return sharedKernelNonEmpty(title)
+                ?? (language == .english ? "Thinking…" : "思考中…")
+        case .status, .humanInteraction, .warning, .result:
+            guard let detail = sharedKernelReadableEventDetail(event.detail) else {
+                return sharedKernelNonEmpty(title)
+            }
+            guard let visibleTitle = sharedKernelNonEmpty(title),
+                  detail != visibleTitle,
+                  !detail.hasPrefix(visibleTitle) else {
+                return detail
+            }
+            return "\(visibleTitle)\n\(detail)"
+        }
+    }
+
+    private nonisolated static func sharedKernelReadableEventDetail(_ raw: String) -> String? {
+        let visible = LingShuVisibleModelText.clean(raw)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !visible.isEmpty else { return nil }
+
+        let lowercased = visible.lowercased()
+        let internalMarkers = [
+            "\"file_name\"", "\"slides\"", "\"layout\"", "\"theme\"",
+            "\"tool_calls\"", "\"arguments\"", "\"recursive\"", "\"command\"",
+            "\"ok\"", "\"path\"", "[truncated]"
+        ]
+        let beginsLikePayload = visible.hasPrefix("{") || visible.hasPrefix("[")
+        let markerCount = internalMarkers.reduce(into: 0) { count, marker in
+            if lowercased.contains(marker) { count += 1 }
+        }
+        guard !beginsLikePayload || markerCount < 2 else { return nil }
+        guard !lowercased.contains("[truncated]") else { return nil }
+        return visible
+    }
+
+    private nonisolated static func sharedKernelNonEmpty(_ value: String) -> String? {
+        value.isEmpty ? nil : value
     }
 }

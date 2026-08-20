@@ -481,7 +481,10 @@ enum LingShuWorkflowNodeStatus: String, Codable, Equatable, Sendable {
     case pending
     case running
     case waitingForHuman = "waiting_for_human"
+    case needsRecovery = "needs_recovery"
     case completed
+    /// Legacy decode-only value. New executions must use `needsRecovery` so an
+    /// attempt error never becomes a terminal task result.
     case failed
     case skipped
 }
@@ -643,7 +646,9 @@ struct LingShuWorkflowRun: Codable, Equatable, Sendable, Identifiable {
     enum Status: String, Codable, Equatable, Sendable {
         case running
         case waitingForHuman = "waiting_for_human"
+        case needsRecovery = "needs_recovery"
         case completed
+        /// Legacy decode-only value. `reconcileStatus()` migrates it in memory.
         case failed
     }
 
@@ -803,12 +808,19 @@ struct LingShuWorkflowRun: Codable, Equatable, Sendable, Identifiable {
     }
 
     mutating func reconcileStatus() {
+        // Old records may contain terminal-looking failure values. Preserve the
+        // evidence on the node, but restore the workflow to a resumable checkpoint.
+        for index in nodes.indices where nodes[index].status == .failed {
+            nodes[index].status = .needsRecovery
+        }
         if nodes.contains(where: { $0.status == .waitingForHuman }) {
             status = .waitingForHuman
         } else if !nodes.isEmpty && nodes.allSatisfy({ $0.status == .completed || $0.status == .skipped }) {
             status = .completed
-        } else if nodes.contains(where: { $0.status == .failed }) && readyNodes.isEmpty && !nodes.contains(where: { $0.status == .running }) {
-            status = .failed
+        } else if nodes.contains(where: { $0.status == .needsRecovery })
+                    && readyNodes.isEmpty
+                    && !nodes.contains(where: { $0.status == .running }) {
+            status = .needsRecovery
         } else {
             status = .running
         }

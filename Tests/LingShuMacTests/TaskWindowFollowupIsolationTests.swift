@@ -73,6 +73,61 @@ final class TaskWindowFollowupIsolationTests: XCTestCase {
         XCTAssertFalse(state.batchInterruptRequested, "复位 batchInterrupt 防泄漏")
     }
 
+    func testTerminatedTaskWindowCannotReDispatchOrMutateTheRecord() {
+        let state = LingShuState()
+        let rid = state.createTaskExecutionRecord(for: "保留已经执行的内容")
+        guard let index = state.taskExecutionRecords.firstIndex(where: { $0.id == rid }) else {
+            return XCTFail("应创建任务记录")
+        }
+        state.taskExecutionRecords[index].status = .terminated
+        state.taskExecutionRecords[index].summary = "已经生成并验证了第一版文件。"
+        let messagesBefore = state.taskExecutionRecords[index].messages
+
+        state.continueTaskThread("绕过窗口重新执行", recordID: rid)
+        state.submitTaskFollowup("绕过控制路由重新执行", recordID: rid)
+        state.interjectCorrection("绕过纠偏入口重新执行", recordID: rid)
+        state.beginTaskThreadRun(recordID: rid, summary: "不应写入")
+
+        let record = state.taskExecutionRecords.first { $0.id == rid }
+        XCTAssertEqual(record?.status, .terminated, "已终止任务不得被窗口输入复活")
+        XCTAssertEqual(record?.summary, "已经生成并验证了第一版文件。", "终止后已执行内容必须保留")
+        XCTAssertEqual(record?.messages, messagesBefore, "终止后的输入不得写进执行记录")
+        XCTAssertNil(state.dispatchedTaskBubbles[rid], "终止后的输入不得重新派发隔离任务")
+        XCTAssertFalse(state.activeTaskThreadRecordIDs.contains(rid), "终止后的输入不得恢复运行态")
+        XCTAssertTrue(state.pendingChatTurnIDs.isEmpty, "终止后的输入也不得落入主会话")
+
+        let staleInteraction = LingShuHumanInteractionRequest(
+            id: "stale-choice",
+            kind: .question,
+            prompt: "请选择是否继续"
+        )
+        let staleBubble = ChatMessage(
+            speaker: "灵枢",
+            text: "请选择是否继续",
+            isUser: false,
+            isLoading: false,
+            taskRecordID: rid,
+            awaitingInputForRecordID: rid,
+            humanInteraction: staleInteraction
+        )
+        state.chatMessages.append(staleBubble)
+        state.pendingDispatchedHumanInteractions[rid] = staleInteraction
+        state.sharedKernelBubbleIDs[rid] = staleBubble.id
+        state.dispatchedTaskBubbles[rid] = staleBubble.id
+        let chatCountBeforeLateAnswer = state.chatMessages.count
+
+        XCTAssertTrue(state.answerSharedKernelTaskIfNeeded(
+            recordID: rid,
+            answer: "继续",
+            displayAnswer: nil
+        ))
+        XCTAssertEqual(state.chatMessages.count, chatCountBeforeLateAnswer, "迟到的人机回调不得追加消息或续跑气泡")
+        XCTAssertNil(state.pendingDispatchedHumanInteractions[rid], "终止投影应清除遗留人机交互")
+        XCTAssertNil(state.dispatchedTaskBubbles[rid], "终止投影应清除遗留续跑入口")
+        XCTAssertFalse(state.sharedKernelActiveThreadIDs.contains(rid), "迟到回调不得重新激活共享内核任务")
+        XCTAssertNil(state.chatMessages.last?.awaitingInputForRecordID)
+    }
+
     func testFollowupOnRecordWithSubSessionStaysIsolated() {
         let state = LingShuState()
         state.markAllTaskThreadsRead()

@@ -14,14 +14,14 @@ struct LingShuQueuedDispatchTask: Identifiable, Equatable {
     let gap: LingShuGapAnalysis?
     let requirements: [LingShuCapabilityRequirement]
     let createdAt: Date
-    /// 主对话里紧跟用户消息的答复气泡。任务排队时复用它显示"已入队",晋级时继续复用它显示执行进度,
-    /// 保证聊天流永远是一问一答,不把多条用户消息堆在一起。
-    let bubbleID: UUID?
+    let attachmentNames: [String]
+    let attachmentPaths: [String]
     /// 入队时暂存的**直发大脑的图片/PDF**(排队后 pendingDirectBrainImages 会被清/覆盖,故随队列项带住,晋级时直发)。
     let imageDataURLs: [String]?
 
     init(prompt: String, visiblePrompt: String? = nil, goal: String?, goalSpec: LingShuGoalSpec?, gap: LingShuGapAnalysis?,
-         requirements: [LingShuCapabilityRequirement], createdAt: Date = Date(), bubbleID: UUID? = nil,
+         requirements: [LingShuCapabilityRequirement], createdAt: Date = Date(),
+         attachmentNames: [String] = [], attachmentPaths: [String] = [],
          imageDataURLs: [String]? = nil) {
         self.id = "queued-\(UUID().uuidString.prefix(8))"
         self.prompt = prompt
@@ -31,7 +31,8 @@ struct LingShuQueuedDispatchTask: Identifiable, Equatable {
         self.gap = gap
         self.requirements = requirements
         self.createdAt = createdAt
-        self.bubbleID = bubbleID
+        self.attachmentNames = attachmentNames
+        self.attachmentPaths = attachmentPaths
         self.imageDataURLs = imageDataURLs
     }
 
@@ -49,23 +50,39 @@ extension LingShuState {
     /// 并发已满 → 把这条(已分诊为 task)请求放进**可见队列区等待**,不创建记录/不派发。带上已派生的前置认知,晋级时直接用。
     func enqueueDispatchTask(prompt: String, visiblePrompt: String? = nil, goal: String?, goalSpec: LingShuGoalSpec?,
                             gap: LingShuGapAnalysis?, requirements: [LingShuCapabilityRequirement],
-                            existingBubbleID: UUID? = nil) {
+                            existingBubbleID: UUID? = nil,
+                            attachmentNames: [String] = [], attachmentPaths: [String] = []) {
+        var queuedAttachmentNames = attachmentNames
+        var queuedAttachmentPaths = attachmentPaths
+        if let existingBubbleID,
+           let assistantIndex = chatMessages.firstIndex(where: { $0.id == existingBubbleID }) {
+            if assistantIndex > chatMessages.startIndex {
+                let userIndex = chatMessages.index(before: assistantIndex)
+                if chatMessages[userIndex].isUser {
+                    if queuedAttachmentNames.isEmpty {
+                        queuedAttachmentNames = chatMessages[userIndex].attachmentNames ?? []
+                    }
+                    if queuedAttachmentPaths.isEmpty {
+                        queuedAttachmentPaths = chatMessages[userIndex].attachmentPaths ?? []
+                    }
+                    chatMessages.remove(at: assistantIndex)
+                    chatMessages.remove(at: userIndex)
+                } else {
+                    chatMessages.remove(at: assistantIndex)
+                }
+            } else {
+                chatMessages.remove(at: assistantIndex)
+            }
+            clearSpeechIntent(for: existingBubbleID)
+        }
         // 入队时把"直发大脑的图"消费下来随队列项带住(晋级派发时 pending 早已被清/覆盖)。
         let item = LingShuQueuedDispatchTask(prompt: prompt, visiblePrompt: visiblePrompt, goal: goal, goalSpec: goalSpec, gap: gap,
-                                             requirements: requirements, bubbleID: existingBubbleID,
+                                             requirements: requirements,
+                                             attachmentNames: queuedAttachmentNames, attachmentPaths: queuedAttachmentPaths,
                                              imageDataURLs: consumePendingDirectBrainImages())
         queuedDispatchTasks.append(item)
         appendTrace(kind: .route, actor: "派发队列", title: "进队列区等待",
                     detail: "并发已满,本条进队列区等空位;晋级前可删除。")
-        // 复用 submitTextInput 已经紧跟用户消息创建的占位气泡,不要删掉再尾部追加,
-        // 否则快速连发会变成"多个问题在上、多个回答在下"。
-        let text = "📥 已加入队列区等待(前面有任务在执行);前一条完成后我自动开始,排期间你可在队列区删掉它。"
-        if let existingBubbleID, let idx = chatMessages.firstIndex(where: { $0.id == existingBubbleID }) {
-            chatMessages[idx].text = text
-            chatMessages[idx].isLoading = false
-        } else {
-            chatMessages.append(.init(speaker: "灵枢", text: text, isUser: false))
-        }
     }
 
     /// 当前正在执行的子线程——供「进行中」长条自动定位。
@@ -99,7 +116,7 @@ extension LingShuState {
             dispatchedTaskBubbles.removeValue(forKey: recordID)
             if blockedDispatchedRecordID == recordID { blockedDispatchedRecordID = nil }
             appendTaskRecordMessage(recordID, actor: "用户", role: "停止", kind: .warning, text: "用户已停止该任务。")
-            finishTaskRecord(recordID, status: .failed, summary: "用户已停止该任务。")
+            finishTaskRecord(recordID, status: .suspended, summary: "用户已停止该任务，断点已保留。")
             manuallyStoppedTaskRecords.remove(recordID)
             promoteQueuedDispatchIfPossible()
             return
@@ -115,7 +132,7 @@ extension LingShuState {
             if self.blockedDispatchedRecordID == recordID { self.blockedDispatchedRecordID = nil }
             self.markTaskRecordManuallyStopped(recordID)
             self.appendTaskRecordMessage(recordID, actor: "用户", role: "停止", kind: .warning, text: "用户已停止该任务。")
-            self.finishTaskRecord(recordID, status: .failed, summary: "用户已停止该任务。")
+            self.finishTaskRecord(recordID, status: .suspended, summary: "用户已停止该任务，断点已保留。")
             self.manuallyStoppedTaskRecords.remove(recordID)
             self.promoteQueuedDispatchIfPossible()
         }
@@ -125,12 +142,18 @@ extension LingShuState {
     /// 但编排器已无对应 drive(驱动早结束/异常退出却没置终态)→ 自动收口成 .partial、移除气泡、释放串行队列。
     /// 根因:currentlyExecutingTurn 把卡 .running 的派发气泡当"执行中"、prune 又只清终态 → 队列永久死锁。
     func reapOrphanedDispatchedTasks() async {
+        guard !isDispatchWatchdogReaping else { return }
+        isDispatchWatchdogReaping = true
+        defer { isDispatchWatchdogReaping = false }
         let trackedRecordIDs = activeTaskThreadRecordIDs.union(dispatchedTaskBubbles.keys)
         guard !trackedRecordIDs.isEmpty else { return }
         let liveIDs = await agentOrchestrator.activeDriveIDs()
         let active: Set<LingShuTaskExecutionStatus> = [.running, .dispatched, .analyzing, .acquiringCapability, .ready]
         var reaped = false
         for recordID in trackedRecordIDs {
+            // Rust 共享内核拥有这些线程的唯一生命周期。它们不会出现在旧 Swift
+            // agentOrchestrator 的 activeDriveIDs 中，不能据此判定为孤儿。
+            if sharedKernelKnownThreadIDs.contains(recordID) { continue }
             guard let status = taskExecutionRecords.first(where: { $0.id == recordID })?.status,
                   active.contains(status) else { continue }
             if livePipelineRecordIDs.contains(recordID) { continue }   // **角色管线正在驱动它**(直接 Task,不在 orchestrator drive 里)→ 不是孤儿,跳过
@@ -175,10 +198,23 @@ extension LingShuState {
         guard let idx = queuedDispatchTasks.firstIndex(where: { $0.id == id }) else { return }
         let removed = queuedDispatchTasks.remove(at: idx)
         appendTrace(kind: .route, actor: "派发队列", title: "已从队列区删除", detail: String(removed.prompt.prefix(36)))
-        if let bubbleID = removed.bubbleID, let idx = chatMessages.firstIndex(where: { $0.id == bubbleID }) {
-            chatMessages[idx].text = "已从队列区移除。"
-            chatMessages[idx].isLoading = false
-        }
+    }
+
+    /// Queue management is tray-only. Conversation history begins only when the queued request
+    /// is promoted into a real turn, at which point it gets a fresh user/assistant pair.
+    @discardableResult
+    func appendPromotedDispatchConversation(_ item: LingShuQueuedDispatchTask) -> UUID {
+        chatMessages.append(ChatMessage(
+            speaker: "你",
+            text: item.visiblePrompt,
+            isUser: true,
+            attachmentNames: item.attachmentNames,
+            attachmentPaths: item.attachmentPaths
+        ))
+        let placeholder = ChatMessage(speaker: "灵枢", text: "", isUser: false, isLoading: true)
+        chatMessages.append(placeholder)
+        requestChatScrollToLatestForUserSend()
+        return placeholder.id
     }
 
     /// 有空位 → 把队列区最早的一条晋级为真派发(创建记录 + 绑定前置认知 + dispatchIsolatedTask)。
@@ -204,7 +240,9 @@ extension LingShuState {
             self.bindGapAnalysis(next.gap, to: rid)
             self.bindCapabilityRequirements(next.requirements, to: rid)
             self.appendTrace(kind: .route, actor: "派发队列", title: "晋级派发", detail: "有空位,队列区最早一条开始执行:\(String(next.visiblePrompt.prefix(28)))")
-            self.dispatchIsolatedTask(prompt: next.prompt, taskRecordID: rid, goal: next.goal, existingBubbleID: next.bubbleID, imageDataURLs: next.imageDataURLs)
+            let placeholderID = self.appendPromotedDispatchConversation(next)
+            self.dispatchIsolatedTask(prompt: next.prompt, taskRecordID: rid, goal: next.goal,
+                                      existingBubbleID: placeholderID, imageDataURLs: next.imageDataURLs)
             // 可能还有空位 + 更多排队 → 继续晋级下一条。
             self.promoteQueuedDispatchIfPossible()
         }

@@ -49,17 +49,25 @@ extension LingShuState {
             title: previewController.title.isEmpty ? artifact.title : previewController.title,
             pageText: pageText
         )
-        voiceManager?.speak(narration)
-        recordSpokenLine(narration)
-        appendTaskRecordMessage(recordID, actor: "灵枢", role: "首段讲解", kind: .result, text: narration)
+        let shouldNarrate = shouldAllowDirectSpeech(request: prompt)
+        if shouldNarrate {
+            markCurrentReplyAsSpoken()
+            voiceManager?.speak(narration)
+            recordSpokenLine(narration)
+            appendTaskRecordMessage(recordID, actor: "灵枢", role: "首段讲解", kind: .result, text: narration)
+        }
 
-        var suffix = "我已把材料打开在预览窗口，并先讲解了第一页。你可以继续提问，或让我接着往下讲。"
+        var suffix = shouldNarrate
+            ? "我已把材料打开在预览窗口，并先讲解了第一页。你可以继续提问，或让我接着往下讲。"
+            : "我已把材料打开在预览窗口。你可以继续提问，或明确让我演示、讲解。"
         if isLiveInteraction {
             let handoff = managedInteractionHandoffPrompt(originalPrompt: prompt, artifact: artifact)
             appendTaskRecordMessage(recordID, actor: "交互交付", role: "转入自主模式", kind: .router,
                                     text: "本轮目标包含实时讲解/演示/答疑,已把当前材料交给在岗上下文继续推进。")
             goLiveForInteractiveTask(prompt: handoff)
-            suffix = "我已把材料打开并讲解了开头；这类任务需要持续演示/答疑，我已把它交给自主模式接着推进。你可以随时插话提问、翻页或要求收尾。"
+            suffix = shouldNarrate
+                ? "我已把材料打开并讲解了开头；这类任务需要持续演示/答疑，我已把它交给自主模式接着推进。你可以随时插话提问、翻页或要求收尾。"
+                : "我已把材料打开，并把持续演示/答疑交给自主模式接着推进。你可以随时插话提问、翻页或要求收尾。"
         }
         return text.contains(suffix) ? result : .completed(text: text + "\n\n" + suffix)
     }

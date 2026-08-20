@@ -112,7 +112,6 @@ extension LingShuState {
         // 不切麦克风引擎、不起系统声音 ASR——这两样都曾把麦克风搞哑:① 两个 SFSpeech 并发互相饿死;
         // ② 切到 SenseVoice 后麦克风没跑通(实测 13:11 上岗后说话不回复)。系统声音转写(会议纪要)
         // 需要"两路 ASR 真并发"的能力,尚未验证跑通,**暂不自动开**,绝不再因此弄哑麦克风。
-        voiceOutputEnabled = true   // 自主模式语音播报必须自动打开(否则只有文字、没有"回应中"语音)
         startStandingVoiceListening?()
         guard autonomousPerceptionDriverTask == nil else { return }
         // 驱动 Task **不是 @MainActor**:主线程只做廉价心跳,AX 焦点窗口签名(慢)在后台算,绝不卡主线程音频。

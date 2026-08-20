@@ -18,15 +18,12 @@ struct LingShuPendingSerialInput: Identifiable, Equatable {
     let source: LingShuDialogueInputSource
     let attachmentNames: [String]
     let attachmentPaths: [String]
-    /// 入队时紧跟用户消息放的"已排队"气泡;出队执行时复用它显示进度/结果(保持聊天流一问一答)。
-    let bubbleID: UUID
     let createdAt: Date
 
     init(
         prompt: String,
         visiblePrompt: String? = nil,
         source: LingShuDialogueInputSource,
-        bubbleID: UUID,
         attachmentNames: [String] = [],
         attachmentPaths: [String] = [],
         createdAt: Date = Date()
@@ -37,7 +34,6 @@ struct LingShuPendingSerialInput: Identifiable, Equatable {
         self.source = source
         self.attachmentNames = attachmentNames
         self.attachmentPaths = attachmentPaths
-        self.bubbleID = bubbleID
         self.createdAt = createdAt
     }
 
@@ -60,25 +56,22 @@ extension LingShuState {
         return !activeTaskThreadRecordIDs.isEmpty        // 任务子线程在执行(与主对话气泡解耦)
     }
 
-    /// 有回合在跑 → 把这条新输入放进串行队列,显示"已排队"气泡,等当前回合完全返回后自动接着处理。
+    /// 有回合在跑 → 把新输入只放进队列托盘。排队和删除属于队列管理动作，不能污染主对话时间线。
     func enqueueSerialInput(
         prompt: String,
         source: LingShuDialogueInputSource,
         visiblePrompt: String? = nil,
         attachmentNames: [String] = [],
-        attachmentPaths: [String] = []
+        attachmentPaths: [String] = [],
+        queuedUserMessageID: UUID? = nil
     ) {
-        let bubble = ChatMessage(
-            speaker: "灵枢",
-            text: "📥 已排队(前面还有一件事在跑,完成后我自动接着处理这条;排队中你可在队列区删掉它)。",
-            isUser: false
-        )
-        chatMessages.append(bubble)
+        if let queuedUserMessageID {
+            chatMessages.removeAll { $0.id == queuedUserMessageID && $0.isUser }
+        }
         pendingSerialInputs.append(.init(
             prompt: prompt,
             visiblePrompt: visiblePrompt,
             source: source,
-            bubbleID: bubble.id,
             attachmentNames: attachmentNames,
             attachmentPaths: attachmentPaths
         ))
@@ -86,7 +79,7 @@ extension LingShuState {
                     detail: "有回合在跑,本条排队等它完全返回(单串行,不并行污染上下文):\(String((visiblePrompt ?? prompt).prefix(36)))")
     }
 
-    /// 当前回合完全返回、系统空闲 → 出队**最早一条**,复用其"已排队"气泡重新提交走正常分诊。
+    /// 当前回合完全返回、系统空闲 → 出队**最早一条**重新提交走正常分诊。
     /// 一次只出一条:出队后若它又起了新回合(问答/任务),后续仍排队,等它收尾再出下一条 → 严格串行。
     func drainSerialInputsIfIdle() {
         guard !pendingSerialInputs.isEmpty else { return }
@@ -94,12 +87,11 @@ extension LingShuState {
         let next = pendingSerialInputs.removeFirst()
         appendTrace(kind: .route, actor: "输入队列", title: "出队处理",
                     detail: "上一件事已完全返回,接着处理排队的这条:\(String(next.visiblePrompt.prefix(36)))")
-        // 用户消息入队时已显示,这里不重复 append;复用"已排队"气泡承载本轮进度/结果。
+        // 排队期间主对话不留气泡；真正开始时才写入用户消息和本轮助手进度。
         _ = submitTextInput(
             next.prompt,
             source: next.source,
-            appendUserMessage: false,
-            reusePlaceholderID: next.bubbleID,
+            appendUserMessage: true,
             visibleUserText: next.visiblePrompt,
             attachmentNames: next.attachmentNames,
             attachmentPaths: next.attachmentPaths
@@ -111,9 +103,5 @@ extension LingShuState {
         guard let idx = pendingSerialInputs.firstIndex(where: { $0.id == id }) else { return }
         let removed = pendingSerialInputs.remove(at: idx)
         appendTrace(kind: .route, actor: "输入队列", title: "已从队列区删除", detail: String(removed.prompt.prefix(36)))
-        if let bIdx = chatMessages.firstIndex(where: { $0.id == removed.bubbleID }) {
-            chatMessages[bIdx].text = "已从队列区移除。"
-            chatMessages[bIdx].isLoading = false
-        }
     }
 }

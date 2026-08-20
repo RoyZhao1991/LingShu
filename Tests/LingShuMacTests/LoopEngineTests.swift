@@ -2,16 +2,16 @@ import XCTest
 @testable import LingShuMac
 
 final class LoopEngineTests: XCTestCase {
-    func testOnlyEmbeddedRuntimeIsExposedAsNativeLoop() {
-        XCTAssertEqual(LingShuLoopEngine.allCases, [.native])
-        XCTAssertEqual(LingShuLoopEngine.native.rawValue, "embeddedGrok")
-        XCTAssertEqual(LingShuLoopEngine.native.displayName(language: .chinese), "灵枢原生 Loop")
-        XCTAssertEqual(LingShuLoopEngine.native.displayName(language: .english), "LingShu Native Loop")
+    func testGrokAndCodexAreSameClassReplaceableLoopChoices() {
+        XCTAssertEqual(LingShuLoopEngine.allCases, [.grok, .codex])
+        XCTAssertEqual(LingShuLoopEngine.grok.displayName(language: .english), "Grok Loop (built in)")
+        XCTAssertEqual(LingShuLoopEngine.codex.displayName(language: .english), "Codex Loop (managed)")
     }
 
-    func testCleanAndLegacyPreferencesResolveToEmbeddedRuntime() {
-        XCTAssertEqual(LingShuLoopEngine.resolvePersisted(nil), .native)
-        XCTAssertEqual(LingShuLoopEngine.resolvePersisted("native"), .native)
-        XCTAssertEqual(LingShuLoopEngine.resolvePersisted("embeddedGrok"), .native)
+    func testCleanAndLegacyPreferencesResolveToGrok() {
+        XCTAssertEqual(LingShuLoopEngine.resolvePersisted(nil), .grok)
+        XCTAssertEqual(LingShuLoopEngine.resolvePersisted("native"), .grok)
+        XCTAssertEqual(LingShuLoopEngine.resolvePersisted("embeddedGrok"), .grok)
+        XCTAssertEqual(LingShuLoopEngine.resolvePersisted("codex"), .codex)
     }
 }

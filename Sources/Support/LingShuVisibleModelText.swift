@@ -3,7 +3,33 @@ import Foundation
 /// UI/账本展示层的模型文本清洗。
 /// 流程控制仍只读取严格 JSON；这里仅负责把违规混合输出里的 `reply` 提取成用户可见文本。
 enum LingShuVisibleModelText {
+    private static let cache = Cache()
+
+    private final class Cache: @unchecked Sendable {
+        final class Entry: NSObject {
+            let value: String
+            init(_ value: String) { self.value = value }
+        }
+
+        let values: NSCache<NSString, Entry> = {
+            let cache = NSCache<NSString, Entry>()
+            cache.countLimit = 384
+            cache.totalCostLimit = 8 * 1_024 * 1_024
+            return cache
+        }()
+    }
+
     static func clean(_ raw: String) -> String {
+        let key = raw as NSString
+        if let cached = cache.values.object(forKey: key) {
+            return cached.value
+        }
+        let value = cleanUncached(raw)
+        cache.values.setObject(Cache.Entry(value), forKey: key, cost: raw.utf8.count)
+        return value
+    }
+
+    private static func cleanUncached(_ raw: String) -> String {
         // Checker 硬驳回不能被展示层的“从混合输出提取 reply”逻辑吃掉。
         // 否则内部状态是未通过，用户却只会看到 Maker 原先的“已完成”自述。
         if LingShuVerificationFailure.isMarked(raw) {
@@ -19,8 +45,35 @@ enum LingShuVisibleModelText {
         let original = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         if !visible.isEmpty, visible != original { return visible }
         if let reply = bestEffortReply(from: original), !reply.isEmpty { return reply }
+        if let progress = readablePrefixBeforeInternalPayload(from: original) { return progress }
         if let legacy = legacyRolePipelineSummary(from: original) { return legacy }
         return visible.isEmpty ? original : visible
+    }
+
+    /// 工具事件偶尔会被错误投影成“可读进展 + 原始参数 JSON”。主对话只保留前面的
+    /// 自然语言；原始 payload 仍留在任务执行记录中。这里只处理宿主明确加过
+    /// `[truncated]` 的内部明细，避免把用户正常要求展示的 JSON 示例误删。
+    private static func readablePrefixBeforeInternalPayload(from raw: String) -> String? {
+        let candidates = ["\n{", "\n["].compactMap { marker -> String.Index? in
+            raw.range(of: marker)?.lowerBound
+        }
+        guard let payloadStart = candidates.min(),
+              payloadStart > raw.startIndex else { return nil }
+
+        let prefix = raw[..<payloadStart]
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !prefix.isEmpty else { return nil }
+
+        let payload = String(raw[payloadStart...])
+        let internalMarkers = [
+            "\"file_name\"", "\"slides\"", "\"layout\"", "\"theme\"",
+            "\"tool_calls\"", "\"arguments\"", "\"recursive\"", "\"command\""
+        ]
+        let markerCount = internalMarkers.reduce(into: 0) { count, marker in
+            if payload.contains(marker) { count += 1 }
+        }
+        guard payload.contains("[truncated]"), markerCount >= 1 else { return nil }
+        return prefix
     }
 
     /// 模型偶尔在长回复中把最终 JSON 截断。流程层仍然拒绝这种无效协议,

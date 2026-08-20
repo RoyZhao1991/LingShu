@@ -140,71 +140,186 @@ struct LingShuAutonomousOrbOnlyView: View {
 struct LingShuAutonomousWindowController: NSViewRepresentable {
     let active: Bool   // true = 进入只剩本体的小浮窗终态
 
-    func makeNSView(context: Context) -> NSView { NSView() }
-
-    func updateNSView(_ nsView: NSView, context: Context) {
-        let coord = context.coordinator
-        DispatchQueue.main.async {
-            guard let window = nsView.window else { return }
-            if active, !coord.shrunk {
-                coord.capture(window)
-                Self.applyOrbMode(window)
-                coord.shrunk = true
-            } else if !active, coord.shrunk {
-                coord.restore(window)
-                coord.shrunk = false
-            }
+    func makeNSView(context: Context) -> LingShuWindowResolverView {
+        let view = LingShuWindowResolverView()
+        view.onWindowChange = { [weak coordinator = context.coordinator] window in
+            coordinator?.attach(window)
         }
+        context.coordinator.update(active: active, window: view.window)
+        return view
     }
 
-    private static func applyOrbMode(_ w: NSWindow) {
-        // **无边框=无标题栏视图=无黑框**(根治)。不再 object_setClass(实测会让 SwiftUI 窗口崩溃)——
-        // 只改 styleMask 为 borderless;按钮在前台 app 里靠鼠标事件仍可点(canBecomeKey 只影响键盘焦点)。
-        w.styleMask = [.borderless, .resizable]
-        w.isOpaque = false
-        w.backgroundColor = .clear
-        w.hasShadow = false
-        w.isMovableByWindowBackground = true                  // 拖本体即可挪动这颗悬浮球
-        w.minSize = NSSize(width: 150, height: 210)
-        w.level = .floating
-        if let screen = w.screen ?? NSScreen.main {
-            let width: CGFloat = 168, height: CGFloat = 224, margin: CGFloat = 24   // 固定留白容纳光晕与 LOOP 相位标签,避免本体被裁切
-            let vf = screen.visibleFrame
-            w.setFrame(NSRect(x: vf.maxX - width - margin, y: vf.maxY - height - margin, width: width, height: height), display: true, animate: true)
-        }
-        w.orderFront(nil)
+    func updateNSView(_ nsView: LingShuWindowResolverView, context: Context) {
+        context.coordinator.update(active: active, window: nsView.window)
+    }
+
+    static func dismantleNSView(_ nsView: LingShuWindowResolverView, coordinator: Coordinator) {
+        nsView.onWindowChange = nil
+        coordinator.restoreForDismantle()
     }
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
+    @MainActor
     final class Coordinator {
-        var shrunk = false
-        private var frame: NSRect?
-        private var opaque = true
-        private var bg: NSColor?
-        private var shadow = true
-        private var styleMask: NSWindow.StyleMask = []
-        private var movableByBG = false
-        private var level: NSWindow.Level = .normal
-        private var minSize = NSSize.zero
+        private var desiredActive = false
+        private weak var managedWindow: NSWindow?
 
-        @MainActor
-        func capture(_ w: NSWindow) {
-            frame = w.frame; opaque = w.isOpaque; bg = w.backgroundColor; shadow = w.hasShadow
-            styleMask = w.styleMask
-            movableByBG = w.isMovableByWindowBackground
-            level = w.level; minSize = w.minSize
+        func update(active: Bool, window: NSWindow?) {
+            desiredActive = active
+            if let window { managedWindow = window }
+            guard let managedWindow else { return }
+            LingShuAutonomousWindowMode.setActive(
+                active,
+                on: managedWindow,
+                animate: true,
+                bringForward: !active
+            )
         }
 
-        @MainActor
-        func restore(_ w: NSWindow) {
-            w.styleMask = styleMask                                       // 恢复 .titled 等(标题栏回来)
-            w.isOpaque = opaque; w.backgroundColor = bg; w.hasShadow = shadow
-            w.isMovableByWindowBackground = movableByBG
-            w.level = level; w.minSize = minSize
-            if let frame { w.setFrame(frame, display: true, animate: true) }
-            w.makeKeyAndOrderFront(nil)
+        func attach(_ window: NSWindow?) {
+            guard let window else { return }
+            managedWindow = window
+            LingShuAutonomousWindowMode.setActive(
+                desiredActive,
+                on: window,
+                animate: true,
+                bringForward: !desiredActive
+            )
         }
+
+        func restoreForDismantle() {
+            guard let managedWindow else { return }
+            LingShuAutonomousWindowMode.setActive(
+                false,
+                on: managedWindow,
+                animate: false,
+                bringForward: false
+            )
+        }
+    }
+}
+
+/// `updateNSView` 可能发生在 view 尚未挂到 NSWindow 之前。实体 resolver 只上报当前 window；
+/// Coordinator 始终使用最新的 desiredActive，杜绝旧 async 闭包晚到后重新进入无边框模式。
+final class LingShuWindowResolverView: NSView {
+    var onWindowChange: ((NSWindow?) -> Void)?
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        onWindowChange?(window)
+    }
+}
+
+/// 窗口级快照不依赖某个短命的 SwiftUI Coordinator；即使 representable identity 被重建，
+/// 新 Coordinator 也能用同一 NSWindow 恢复进入自主模式前的真实状态（包括极简语音窗属性）。
+@MainActor
+enum LingShuAutonomousWindowMode {
+    private final class StoredSnapshot {
+        weak var window: NSWindow?
+        let value: Snapshot
+
+        init(window: NSWindow, value: Snapshot) {
+            self.window = window
+            self.value = value
+        }
+    }
+
+    @MainActor
+    private struct Snapshot {
+        let frame: NSRect
+        let isOpaque: Bool
+        let backgroundColor: NSColor?
+        let hasShadow: Bool
+        let styleMask: NSWindow.StyleMask
+        let isMovableByWindowBackground: Bool
+        let level: NSWindow.Level
+        let minSize: NSSize
+        let titleVisibility: NSWindow.TitleVisibility
+        let titlebarAppearsTransparent: Bool
+        let titlebarSeparatorStyle: NSTitlebarSeparatorStyle
+        let collectionBehavior: NSWindow.CollectionBehavior
+        let hiddenStandardButtons: [NSWindow.ButtonType: Bool]
+
+        init(window: NSWindow) {
+            frame = window.frame
+            isOpaque = window.isOpaque
+            backgroundColor = window.backgroundColor
+            hasShadow = window.hasShadow
+            styleMask = window.styleMask
+            isMovableByWindowBackground = window.isMovableByWindowBackground
+            level = window.level
+            minSize = window.minSize
+            titleVisibility = window.titleVisibility
+            titlebarAppearsTransparent = window.titlebarAppearsTransparent
+            titlebarSeparatorStyle = window.titlebarSeparatorStyle
+            collectionBehavior = window.collectionBehavior
+            hiddenStandardButtons = Dictionary(uniqueKeysWithValues: [
+                NSWindow.ButtonType.closeButton,
+                .miniaturizeButton,
+                .zoomButton,
+            ].compactMap { type in
+                window.standardWindowButton(type).map { (type, $0.isHidden) }
+            })
+        }
+
+        func restore(_ window: NSWindow, animate: Bool, bringForward: Bool) {
+            window.styleMask = styleMask
+            window.titleVisibility = titleVisibility
+            window.titlebarAppearsTransparent = titlebarAppearsTransparent
+            window.titlebarSeparatorStyle = titlebarSeparatorStyle
+            window.collectionBehavior = collectionBehavior
+            window.isOpaque = isOpaque
+            window.backgroundColor = backgroundColor
+            window.hasShadow = hasShadow
+            window.isMovableByWindowBackground = isMovableByWindowBackground
+            window.level = level
+            window.minSize = minSize
+            hiddenStandardButtons.forEach { type, hidden in
+                window.standardWindowButton(type)?.isHidden = hidden
+            }
+            window.setFrame(frame, display: true, animate: animate)
+            if bringForward { window.makeKeyAndOrderFront(nil) }
+        }
+    }
+
+    private static var snapshots: [ObjectIdentifier: StoredSnapshot] = [:]
+
+    static func setActive(_ active: Bool, on window: NSWindow, animate: Bool = true, bringForward: Bool = false) {
+        discardReleasedWindows()
+        let key = ObjectIdentifier(window)
+        if active {
+            guard snapshots[key] == nil else { return }
+            snapshots[key] = StoredSnapshot(window: window, value: Snapshot(window: window))
+            applyOrbMode(to: window, animate: animate)
+        } else if let stored = snapshots.removeValue(forKey: key), stored.window === window {
+            stored.value.restore(window, animate: animate, bringForward: bringForward)
+        }
+    }
+
+    private static func discardReleasedWindows() {
+        snapshots = snapshots.filter { $0.value.window != nil }
+    }
+
+    private static func applyOrbMode(to window: NSWindow, animate: Bool) {
+        // **无边框=无标题栏视图=无黑框**。只改 styleMask，不替换 SwiftUI 窗口实例。
+        window.styleMask = [.borderless, .resizable]
+        window.isOpaque = false
+        window.backgroundColor = .clear
+        window.hasShadow = false
+        window.isMovableByWindowBackground = true
+        window.minSize = NSSize(width: 150, height: 210)
+        window.level = .floating
+        if let screen = window.screen ?? NSScreen.main {
+            let width: CGFloat = 168, height: CGFloat = 224, margin: CGFloat = 24
+            let visibleFrame = screen.visibleFrame
+            window.setFrame(
+                NSRect(x: visibleFrame.maxX - width - margin, y: visibleFrame.maxY - height - margin, width: width, height: height),
+                display: true,
+                animate: animate
+            )
+        }
+        window.orderFront(nil)
     }
 }
 

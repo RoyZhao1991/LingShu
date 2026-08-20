@@ -172,6 +172,79 @@ final class CloudGatewayTests: XCTestCase {
         XCTAssertTrue(migrated.setAPIKey("", forProvider: provider))
     }
 
+    func testCredentialStoreRoundTripsThroughEncryptedAppFile() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lingshu-file-credential-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let provider = "deepseek"
+        let token = "sk-file-backend-unit-test"
+
+        let store = LingShuCredentialStore(directory: directory, useKeychain: false)
+        XCTAssertTrue(store.setAPIKey(token, forProvider: provider))
+
+        let credentialFile = directory.appendingPathComponent("credentials.json")
+        let raw = try Data(contentsOf: credentialFile)
+        XCTAssertFalse(String(decoding: raw, as: UTF8.self).contains(token))
+        let attributes = try FileManager.default.attributesOfItem(atPath: credentialFile.path)
+        XCTAssertEqual((attributes[.posixPermissions] as? NSNumber)?.intValue, 0o600)
+
+        let reopened = LingShuCredentialStore(directory: directory, useKeychain: false)
+        XCTAssertEqual(reopened.apiKey(forProvider: provider), token)
+    }
+
+    func testCredentialStoreCreatesAppFileBeforeOptionalKeychainMigration() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lingshu-file-credential-bootstrap-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        _ = LingShuCredentialStore(
+            directory: directory,
+            useKeychain: false,
+            importLegacyKeychain: false
+        )
+
+        let credentialFile = directory.appendingPathComponent("credentials.json")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: credentialFile.path))
+        let attributes = try FileManager.default.attributesOfItem(atPath: credentialFile.path)
+        XCTAssertEqual((attributes[.posixPermissions] as? NSNumber)?.intValue, 0o600)
+    }
+
+    func testCredentialStoreReportsFilePersistenceFailureAndRollsBackCache() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lingshu-file-credential-blocked-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let blockedDirectory = root.appendingPathComponent("not-a-directory")
+        try Data("occupied".utf8).write(to: blockedDirectory)
+        let store = LingShuCredentialStore(directory: blockedDirectory, useKeychain: false)
+
+        XCTAssertFalse(store.setAPIKey("must-not-be-cached", forProvider: "deepseek"))
+        XCTAssertNil(store.apiKey(forProvider: "deepseek"))
+    }
+
+    func testStaleKeychainMigrationMarkerWithoutCredentialFileRepairsItself() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lingshu-keychain-marker-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let marker = directory.appendingPathComponent(".keychain-imported-v3")
+        try Data("imported".utf8).write(to: marker)
+
+        _ = LingShuCredentialStore(
+            service: "cn.lingshu.tests.\(UUID().uuidString)",
+            directory: directory,
+            useKeychain: false,
+            importLegacyKeychain: true
+        )
+
+        let credentialFile = directory.appendingPathComponent("credentials.json")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: credentialFile.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: marker.path))
+        let attributes = try FileManager.default.attributesOfItem(atPath: credentialFile.path)
+        XCTAssertEqual((attributes[.posixPermissions] as? NSNumber)?.intValue, 0o600)
+    }
+
     func testCredentialStoreEnvironmentKeyNaming() {
         XCTAssertEqual(
             LingShuCredentialStore.environmentKey(forProvider: "datanet-gateway"),

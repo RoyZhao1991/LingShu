@@ -133,7 +133,7 @@ final class GoalExperienceTests: XCTestCase {
     }
 
     @MainActor
-    func testFailedTerminalTaskSinksReusableExperienceRule() {
+    func testLegacyFailedCheckpointDoesNotSinkReusableExperienceRule() {
         let key = "lingshu.goal.experiences"
         UserDefaults.standard.removeObject(forKey: key)
         defer { UserDefaults.standard.removeObject(forKey: key) }
@@ -159,14 +159,15 @@ final class GoalExperienceTests: XCTestCase {
         )
         state.taskExecutionRecords = [record]
 
+        let experienceCountBefore = state.goalExperiences().count
         state.rememberGoalExperienceIfNeeded(recordID: record.id, status: .failed)
 
-        XCTAssertEqual(state.goalExperiences().last?.sourceRecordID, record.id, "失败终态必须进入结构化经验库")
-        XCTAssertGreaterThanOrEqual(state.memoryService.experienceRuleCount, ruleCountBefore + 1, "失败/打回类终态必须同步沉淀为经验规则")
+        XCTAssertEqual(state.goalExperiences().count, experienceCountBefore, "待恢复检查点不能冒充完成经验")
+        XCTAssertEqual(state.memoryService.experienceRuleCount, ruleCountBefore, "未完成路径不能沉淀为可复用成功规则")
     }
 
     @MainActor
-    func testMemoryDashboardStatsBackfillsTerminalHotAndColdRecords() {
+    func testMemoryDashboardStatsBackfillsOnlySuccessfulTerminalRecords() {
         let key = "lingshu.goal.experiences"
         UserDefaults.standard.removeObject(forKey: key)
         defer { UserDefaults.standard.removeObject(forKey: key) }
@@ -211,11 +212,11 @@ final class GoalExperienceTests: XCTestCase {
         let result = state.reconcileExperienceArtifactsFromRecords(maxGoalExperiences: 10, maxRules: 10)
         let stats = state.memoryDashboardStats()
 
-        XCTAssertEqual(result.goalExperiencesAdded, 2, "热记录和冷备终态记录都应能回填结构化经验")
-        XCTAssertGreaterThanOrEqual(result.rulesAdded, 1, "未达标/失败类记录应回填经验规则")
+        XCTAssertEqual(result.goalExperiencesAdded, 1, "只有真实完成的记录可以回填可复用经验")
+        XCTAssertEqual(result.rulesAdded, 0, "待修订检查点不能被沉淀成成功经验规则")
         XCTAssertEqual(stats.hotTaskRecords, 1)
         XCTAssertEqual(stats.coldTaskRecords, 1)
-        XCTAssertGreaterThanOrEqual(stats.goalExperiences, 2)
-        XCTAssertGreaterThanOrEqual(stats.experienceAssets, 2)
+        XCTAssertGreaterThanOrEqual(stats.goalExperiences, 1)
+        XCTAssertGreaterThanOrEqual(stats.experienceAssets, 1)
     }
 }

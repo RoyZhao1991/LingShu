@@ -1,6 +1,55 @@
 import SwiftUI
 import AppKit
 
+private final class LingShuMessageBlockCache: @unchecked Sendable {
+    final class Entry: NSObject {
+        let blocks: [LingShuMessageBlock]
+        init(_ blocks: [LingShuMessageBlock]) { self.blocks = blocks }
+    }
+
+    let values: NSCache<NSString, Entry> = {
+        let cache = NSCache<NSString, Entry>()
+        cache.countLimit = 256
+        cache.totalCostLimit = 12 * 1_024 * 1_024
+        return cache
+    }()
+}
+
+private enum LingShuMarkdownElement: Sendable {
+    case line(String)
+    case table(header: [String], rows: [[String]])
+}
+
+private final class LingShuMarkdownRenderCache: @unchecked Sendable {
+    final class ElementsEntry: NSObject {
+        let elements: [LingShuMarkdownElement]
+        init(_ elements: [LingShuMarkdownElement]) { self.elements = elements }
+    }
+
+    final class AttributedEntry: NSObject {
+        let value: AttributedString
+        init(_ value: AttributedString) { self.value = value }
+    }
+
+    final class PathEntry: NSObject {
+        let value: LingShuLocalPathDetector.Presentation
+        init(_ value: LingShuLocalPathDetector.Presentation) { self.value = value }
+    }
+
+    let elements = NSCache<NSString, ElementsEntry>()
+    let attributed = NSCache<NSString, AttributedEntry>()
+    let paths = NSCache<NSString, PathEntry>()
+
+    init() {
+        elements.countLimit = 256
+        elements.totalCostLimit = 12 * 1_024 * 1_024
+        attributed.countLimit = 1_024
+        attributed.totalCostLimit = 12 * 1_024 * 1_024
+        paths.countLimit = 512
+        paths.totalCostLimit = 4 * 1_024 * 1_024
+    }
+}
+
 /// 把灵枢回复的纯文本解析成「子块」渲染：围栏代码块单独成卡片（等宽、深底、语言标签、复制按钮），
 /// 其余正文按 Markdown 渲染（标题 / 列表 / 加粗 / 行内代码）。
 ///
@@ -27,12 +76,28 @@ struct LingShuMessageContentView: View {
 }
 
 /// 一条回复拆出的子块：要么是正文 Markdown，要么是一段围栏代码。
-enum LingShuMessageBlock {
+enum LingShuMessageBlock: Sendable {
     case markdown(String)
     case code(language: String?, code: String)
 
+    private static let cache = LingShuMessageBlockCache()
+
     /// 按 ``` 围栏切块。未闭合的围栏（流式生成中常见）按到结尾处理，照样进代码卡片。
     static func parse(_ text: String) -> [LingShuMessageBlock] {
+        let key = text as NSString
+        if let cached = cache.values.object(forKey: key) {
+            return cached.blocks
+        }
+        let blocks = parseUncached(text)
+        cache.values.setObject(
+            LingShuMessageBlockCache.Entry(blocks),
+            forKey: key,
+            cost: text.utf8.count
+        )
+        return blocks
+    }
+
+    private static func parseUncached(_ text: String) -> [LingShuMessageBlock] {
         var blocks: [LingShuMessageBlock] = []
         let lines = text.components(separatedBy: "\n")
         var buffer: [String] = []
@@ -128,6 +193,7 @@ struct LingShuMarkdownText: View {
     var color: Color = Color.lingFg.opacity(0.88)
     var onPreviewFile: ((URL) -> Void)? = nil
     private static let previewURLScheme = "lingshu-preview-file"
+    private static let renderCache = LingShuMarkdownRenderCache()
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -151,12 +217,23 @@ struct LingShuMarkdownText: View {
     }
 
     /// 正文元素:普通行,或一张 Markdown 表格(连续 `|...|` 行 + 第二行分隔线)。
-    private enum MDElement {
-        case line(String)
-        case table(header: [String], rows: [[String]])
-    }
+    private typealias MDElement = LingShuMarkdownElement
 
     private static func elements(from content: String) -> [MDElement] {
+        let key = content as NSString
+        if let cached = renderCache.elements.object(forKey: key) {
+            return cached.elements
+        }
+        let elements = parseElements(from: content)
+        renderCache.elements.setObject(
+            LingShuMarkdownRenderCache.ElementsEntry(elements),
+            forKey: key,
+            cost: content.utf8.count
+        )
+        return elements
+    }
+
+    private static func parseElements(from content: String) -> [MDElement] {
         let lines = content.components(separatedBy: "\n")
         var out: [MDElement] = []
         var i = 0
@@ -203,7 +280,7 @@ struct LingShuMarkdownText: View {
             GridRow {
                 ForEach(0..<colCount, id: \.self) { c in
                     let cell = c < header.count ? header[c] : ""
-                    inline(displayText(cell), previewPaths: previewPaths(in: cell))
+                    inline(cell)
                         .font(.system(size: 13, weight: .bold)).foregroundStyle(color)
                 }
             }
@@ -212,7 +289,7 @@ struct LingShuMarkdownText: View {
                 GridRow {
                     ForEach(0..<colCount, id: \.self) { c in
                         let cell = c < row.count ? row[c] : ""
-                        inline(displayText(cell), previewPaths: previewPaths(in: cell))
+                        inline(cell)
                             .font(.system(size: 13, weight: .medium)).foregroundStyle(color.opacity(0.92))
                     }
                 }
@@ -235,19 +312,19 @@ struct LingShuMarkdownText: View {
         } else if trimmed.hasPrefix("### ") {
             let body = String(trimmed.dropFirst(4))
             richLine {
-                inline(displayText(body), previewPaths: previewPaths(in: raw))
+                inline(body)
                     .font(.system(size: 14, weight: .bold)).foregroundStyle(color)
             }
         } else if trimmed.hasPrefix("## ") {
             let body = String(trimmed.dropFirst(3))
             richLine {
-                inline(displayText(body), previewPaths: previewPaths(in: raw))
+                inline(body)
                     .font(.system(size: 15.5, weight: .bold)).foregroundStyle(color)
             }
         } else if trimmed.hasPrefix("# ") {
             let body = String(trimmed.dropFirst(2))
             richLine {
-                inline(displayText(body), previewPaths: previewPaths(in: raw))
+                inline(body)
                     .font(.system(size: 17, weight: .bold)).foregroundStyle(color)
             }
         } else if let (marker, body) = listItem(trimmed) {
@@ -256,26 +333,16 @@ struct LingShuMarkdownText: View {
                     .font(.system(size: 14.5, weight: .semibold, design: .monospaced))
                     .foregroundStyle(Color.lingHolo.opacity(0.82))
                 richLine {
-                    inline(displayText(body), previewPaths: previewPaths(in: body))
+                    inline(body)
                         .font(.system(size: 14.5, weight: .medium)).foregroundStyle(color)
                 }
             }
         } else {
             richLine {
-                inline(displayText(trimmed), previewPaths: previewPaths(in: raw))
+                inline(trimmed)
                     .font(.system(size: 14.5, weight: .medium)).foregroundStyle(color)
             }
         }
-    }
-
-    private func displayText(_ raw: String) -> String {
-        guard onPreviewFile != nil else { return raw }
-        return LingShuLocalPathDetector.displayTextHidingExistingFilePaths(in: raw)
-    }
-
-    private func previewPaths(in raw: String) -> [String] {
-        guard onPreviewFile != nil else { return [] }
-        return LingShuLocalPathDetector.existingFilePaths(in: raw)
     }
 
     @ViewBuilder
@@ -310,20 +377,52 @@ struct LingShuMarkdownText: View {
     }
 
     /// 行内 Markdown：交给系统解析器，保留空白；解析失败回退为纯文本。
-    private func inline(_ s: String, previewPaths: [String] = []) -> Text {
+    private func inline(_ raw: String) -> Text {
+        let presentation = pathPresentation(for: raw)
+        let cacheKey = ([presentation.displayText] + presentation.paths)
+            .joined(separator: "\u{001F}") as NSString
+        if let cached = Self.renderCache.attributed.object(forKey: cacheKey) {
+            return Text(cached.value)
+        }
         var attributed = (try? AttributedString(
-            markdown: s,
+            markdown: presentation.displayText,
             options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)
-        )) ?? AttributedString(s)
-        for (index, path) in previewPaths.enumerated() {
+        )) ?? AttributedString(presentation.displayText)
+        for (index, path) in presentation.paths.enumerated() {
             guard let url = Self.previewURL(for: path) else { continue }
             attributed.append(AttributedString(" "))
-            var link = AttributedString(previewPaths.count == 1 ? "预览" : "预览\(index + 1)")
+            var link = AttributedString(presentation.paths.count == 1 ? "预览" : "预览\(index + 1)")
             link.link = url
             link.foregroundColor = Color.lingHolo
             attributed.append(link)
         }
+        Self.renderCache.attributed.setObject(
+            LingShuMarkdownRenderCache.AttributedEntry(attributed),
+            forKey: cacheKey,
+            cost: presentation.displayText.utf8.count + presentation.paths.reduce(0) { $0 + $1.utf8.count }
+        )
         return Text(attributed)
+    }
+
+    private func pathPresentation(for raw: String) -> LingShuLocalPathDetector.Presentation {
+        guard onPreviewFile != nil else {
+            return .init(displayText: raw, paths: [])
+        }
+        let key = raw as NSString
+        if let cached = Self.renderCache.paths.object(forKey: key) {
+            return cached.value
+        }
+        let presentation = LingShuLocalPathDetector.presentation(in: raw)
+        // Only positive matches are retained. A file mentioned before it exists must become
+        // previewable as soon as the producer creates it.
+        if !presentation.paths.isEmpty {
+            Self.renderCache.paths.setObject(
+                LingShuMarkdownRenderCache.PathEntry(presentation),
+                forKey: key,
+                cost: raw.utf8.count
+            )
+        }
+        return presentation
     }
 
     private static func previewURL(for path: String) -> URL? {

@@ -2,19 +2,31 @@ import Darwin
 import Foundation
 
 enum LingShuLoopEngine: String, CaseIterable, Identifiable, Sendable {
-    /// 灵枢当前的内置原生 Loop。实现来自已内嵌、同进程常驻的 Grok 派生 Runtime。
-    /// rawValue 沿用 embeddedGrok，保证已启用用户无损迁移；旧 rawValue "native"
-    /// 会由 `resolvePersisted` 迁移到这里，不再作为可配置引擎出现。
-    case native = "embeddedGrok"
+    /// Loop 只负责推理与工具编排。模型通道、身份、额度、权限、记忆和插件始终归灵枢。
+    case grok
+    case codex
 
     var id: String { rawValue }
 
+    var kernelKind: LingShuKernelLoopEngine {
+        self == .codex ? .codex : .grok
+    }
+
     func displayName(language: LingShuVoiceLanguage) -> String {
-        language == .english ? "LingShu Native Loop" : "灵枢原生 Loop"
+        switch self {
+        case .grok:
+            return language == .english ? "Grok Loop (built in)" : "Grok Loop（内置）"
+        case .codex:
+            return language == .english ? "Codex Loop (managed)" : "Codex Loop（灵枢托管）"
+        }
     }
 
     static func resolvePersisted(_ rawValue: String?) -> LingShuLoopEngine {
-        rawValue.flatMap(Self.init(rawValue:)) ?? .native
+        switch rawValue {
+        case "codex": return .codex
+        case "grok", "native", "embeddedGrok", "embedded_grok": return .grok
+        default: return .grok
+        }
     }
 }
 

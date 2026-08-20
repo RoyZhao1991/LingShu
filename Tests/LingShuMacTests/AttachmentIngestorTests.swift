@@ -19,6 +19,39 @@ final class AttachmentIngestorTests: XCTestCase {
         XCTAssertTrue(LingShuState.droppedFilePaths(in: "随便聊聊").isEmpty, "普通文字 → 不转")
     }
 
+    func testWindowDropAcceptsFilesInOrderAndDeduplicates() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("ling-window-drop-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let first = dir.appendingPathComponent("first.docx")
+        let second = dir.appendingPathComponent("second.pdf")
+        try Data("first".utf8).write(to: first)
+        try Data("second".utf8).write(to: second)
+
+        let accepted = LingShuState.acceptedDroppedFileURLs([first, second, first, dir])
+
+        XCTAssertEqual(accepted.map(\.lastPathComponent), ["first.docx", "second.pdf"])
+    }
+
+    func testWindowDropExcludesAttachmentsAlreadyInComposer() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("ling-window-drop-existing-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let existing = dir.appendingPathComponent("existing.txt")
+        let fresh = dir.appendingPathComponent("fresh.txt")
+        try Data("existing".utf8).write(to: existing)
+        try Data("fresh".utf8).write(to: fresh)
+
+        let accepted = LingShuState.acceptedDroppedFileURLs(
+            [existing, fresh],
+            excluding: [existing.path]
+        )
+
+        XCTAssertEqual(accepted.map(\.lastPathComponent), ["fresh.txt"])
+    }
+
     func testKindDetectionByExtension() {
         XCTAssertEqual(LingShuAttachmentIngestor.kind(forExtension: "png"), .image)
         XCTAssertEqual(LingShuAttachmentIngestor.kind(forExtension: "JPEG"), .image)

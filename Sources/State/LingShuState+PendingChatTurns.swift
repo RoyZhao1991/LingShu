@@ -12,6 +12,7 @@ extension LingShuState {
             chatMessages.remove(at: idx)
             if let userIdx { chatMessages.remove(at: userIdx) }   // userIdx < idx,移除 idx 后仍有效
         }
+        clearSpeechIntent(for: bubbleID)
         appendTrace(kind: .route, actor: "问答队列", title: "删除等待问答", detail: "用户删除一条尚未执行的问答。")
     }
 

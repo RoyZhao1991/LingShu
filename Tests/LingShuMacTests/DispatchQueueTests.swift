@@ -132,6 +132,8 @@ final class DispatchQueueTests: XCTestCase {
     @MainActor
     func testEnqueueThenDeleteBeforeDispatch() {
         let state = LingShuState()
+        let existing = ChatMessage(speaker: "灵枢", text: "当前任务正在执行", isUser: false)
+        state.chatMessages = [existing]
         XCTAssertTrue(state.queuedDispatchTasks.isEmpty)
         state.enqueueDispatchTask(prompt: "任务A", goal: "做A", goalSpec: nil, gap: nil, requirements: [])
         state.enqueueDispatchTask(prompt: "任务B", goal: "做B", goalSpec: nil, gap: nil, requirements: [])
@@ -141,6 +143,7 @@ final class DispatchQueueTests: XCTestCase {
         state.removeQueuedDispatchTask(id: firstID)
         XCTAssertEqual(state.queuedDispatchTasks.count, 1)
         XCTAssertEqual(state.queuedDispatchTasks.first?.prompt, "任务B", "删掉 A 后剩 B")
+        XCTAssertEqual(state.chatMessages.map(\.id), [existing.id], "队列追加和删除不能写入主对话")
         // 入队不创建任务记录(没进主窗口);删除后也不残留。
         XCTAssertFalse(state.taskExecutionRecords.contains { $0.prompt == "任务A" }, "入队不提前建记录/进主窗口")
     }
@@ -176,42 +179,51 @@ final class DispatchQueueTests: XCTestCase {
     }
 
     @MainActor
-    func testQueuedTaskReusesAdjacentAnswerBubble() {
+    func testQueuedTaskRemovesProvisionalConversationPair() {
         let state = LingShuState()
         let q1 = ChatMessage(speaker: "你", text: "任务1", isUser: true)
         let a1 = ChatMessage(speaker: "灵枢", text: "执行中", isUser: false, isLoading: true)
-        let q2 = ChatMessage(speaker: "你", text: "任务2", isUser: true)
+        let q2 = ChatMessage(
+            speaker: "你",
+            text: "任务2",
+            isUser: true,
+            attachmentNames: ["spec.docx"],
+            attachmentPaths: ["/tmp/spec.docx"]
+        )
         let a2 = ChatMessage(speaker: "灵枢", text: "", isUser: false, isLoading: true)
         state.chatMessages = [q1, a1, q2, a2]
 
         state.enqueueDispatchTask(prompt: "任务2", goal: "做任务2", goalSpec: nil, gap: nil,
                                   requirements: [], existingBubbleID: a2.id)
 
-        XCTAssertEqual(state.chatMessages.map(\.id), [q1.id, a1.id, q2.id, a2.id],
-                       "入队必须复用用户消息后的占位答复,不能删掉后追加到聊天尾部")
-        XCTAssertFalse(state.chatMessages[3].isLoading)
-        XCTAssertTrue(state.chatMessages[3].text.contains("已加入队列区等待"))
-        XCTAssertEqual(state.queuedDispatchTasks.first?.bubbleID, a2.id)
+        XCTAssertEqual(state.chatMessages.map(\.id), [q1.id, a1.id],
+                       "排队请求及其临时答复必须从主对话移入队列托盘")
+        XCTAssertEqual(state.queuedDispatchTasks.first?.attachmentNames, ["spec.docx"])
+        XCTAssertEqual(state.queuedDispatchTasks.first?.attachmentPaths, ["/tmp/spec.docx"])
     }
 
     @MainActor
-    func testPromoteQueuedTaskKeepsSameAnswerBubble() {
+    func testPromoteQueuedTaskAppendsFreshConversationPair() {
         let state = LingShuState()
-        let answer = ChatMessage(speaker: "灵枢", text: "", isUser: false, isLoading: true)
-        state.chatMessages = [
-            ChatMessage(speaker: "你", text: "任务2", isUser: true),
-            answer
-        ]
-        state.enqueueDispatchTask(prompt: "任务2", goal: "做任务2", goalSpec: nil, gap: nil,
-                                  requirements: [], existingBubbleID: answer.id)
+        state.chatMessages = []
+        state.enqueueDispatchTask(
+            prompt: "模型任务2",
+            visiblePrompt: "任务2",
+            goal: "做任务2",
+            goalSpec: nil,
+            gap: nil,
+            requirements: [],
+            attachmentNames: ["spec.docx"],
+            attachmentPaths: ["/tmp/spec.docx"]
+        )
 
         let item = state.queuedDispatchTasks.removeFirst()
-        let rid = state.createTaskExecutionRecord(for: item.prompt)
-        state.dispatchIsolatedTask(prompt: item.prompt, taskRecordID: rid, goal: item.goal, existingBubbleID: item.bubbleID)
+        let placeholderID = state.appendPromotedDispatchConversation(item)
 
-        XCTAssertEqual(state.chatMessages.count, 2, "晋级执行也应复用原答复气泡,不能再追加一条执行气泡")
-        XCTAssertEqual(state.chatMessages.last?.id, answer.id)
-        XCTAssertEqual(state.chatMessages.last?.taskRecordID, rid)
+        XCTAssertEqual(state.chatMessages.count, 2, "真正晋级执行时才创建一问一答")
+        XCTAssertEqual(state.chatMessages.first?.text, "任务2")
+        XCTAssertEqual(state.chatMessages.first?.attachmentNames, ["spec.docx"])
+        XCTAssertEqual(state.chatMessages.last?.id, placeholderID)
         XCTAssertTrue(state.chatMessages.last?.isLoading ?? false)
     }
 

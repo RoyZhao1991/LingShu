@@ -403,8 +403,8 @@ struct ChatMessage: Identifiable, Codable, Equatable, Sendable {
     var form: LingShuConfirmForm?
     /// 主人提交的表单答案(key→值);非 nil=已提交,卡片置为已解决不再可改。
     var formAnswers: [String: String]?
-    /// **这条气泡在等某条派发任务的用户输入**(选择/追加信息)→ UI 在气泡内渲染回复控件,答复**直达该记录的隔离会话**
-    /// (不经主输入/分诊,避免被后续聊天淹没后找不回那条任务)。nil=普通消息。Optional 向后兼容。
+    /// **这条气泡在等某条派发任务的用户输入**。底部统一输入框据此把答案直达原任务。
+    /// 作答后原问题进入只读历史，后续输出必须写入新的助手气泡。nil=普通消息。Optional 向后兼容。
     var awaitingInputForRecordID: String?
     /// 通用人机协作卡。扫码/外部登录/实体操作/选文件等都走同一结构；OAuth 授权卡不走这里。
     var humanInteraction: LingShuHumanInteractionRequest?

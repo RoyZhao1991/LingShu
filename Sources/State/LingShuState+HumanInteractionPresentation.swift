@@ -124,7 +124,12 @@ extension LingShuState {
         return true
     }
 
-    func resolveMainHumanInteraction(messageID: UUID, answer: String, displayAnswer: String? = nil) {
+    func resolveMainHumanInteraction(
+        messageID: UUID,
+        answer: String,
+        displayAnswer: String? = nil,
+        appendUserMessage: Bool = true
+    ) {
         guard let pending = pendingHumanInteractionContexts.removeValue(forKey: messageID) else { return }
         pendingChoiceContexts.removeValue(forKey: messageID)
         pendingFormContexts.removeValue(forKey: messageID)
@@ -132,11 +137,17 @@ extension LingShuState {
         clearHardHumanInteraction(requestID: pending.request.id)
         let visible = (displayAnswer ?? answer).trimmingCharacters(in: .whitespacesAndNewlines)
         if let index = chatMessages.firstIndex(where: { $0.id == messageID }) {
-            chatMessages[index].humanInteraction = nil
-            chatMessages[index].choices = nil
-            chatMessages[index].form = nil
             chatMessages[index].resolvedChoice = visible
-            chatMessages[index].formAnswers = nil
+            chatMessages[index].isLoading = false
+        }
+        if appendUserMessage, !visible.isEmpty {
+            chatMessages.append(.init(
+                speaker: loc("你", "You"),
+                text: visible,
+                isUser: true,
+                taskRecordID: pending.inputContext.recordID
+            ))
+            requestChatScrollToLatestForUserSend()
         }
         let prerequisiteOption = selectedPrerequisiteOption(for: pending.request, answer: answer)
         let wasWaiting = pending.inputContext.recordID.flatMap { recordID in
@@ -150,7 +161,7 @@ extension LingShuState {
             if let index = chatMessages.firstIndex(where: { $0.id == messageID }) {
                 chatMessages[index].resolvedChoice = visible
             }
-            closeDispatchedTaskForDeniedPrerequisite(recordID: recordID, answer: visible)
+            closeDispatchedTaskForDeniedPrerequisite(recordID: recordID, answer: visible, appendChatUser: false)
             return
         }
         let semanticAnswer: String
@@ -181,9 +192,12 @@ extension LingShuState {
                 guard let self else { return }
                 switch await self.resumeVerificationInteraction(pending.request, answer: answer) {
                 case .waiting(let next):
+                    let continuationID = self.appendHumanInteractionContinuationBubble(
+                        recordID: pending.inputContext.recordID
+                    )
                     _ = self.renderGenericHumanInteraction(
                         next,
-                        bubbleID: messageID,
+                        bubbleID: continuationID,
                         recordID: pending.inputContext.recordID,
                         context: pending.inputContext,
                         prompt: pending.inputContext.originalPrompt,
@@ -194,15 +208,17 @@ extension LingShuState {
                         prompt: objective,
                         taskRecordID: recordID ?? pending.inputContext.recordID,
                         originalPromptForVerification: pending.inputContext.originalPrompt,
-                        existingBubbleID: messageID,
                         acceptanceCheckpoint: makerResult
                     )
                 case .interrupted(let reason):
                     var retry = pending.request
                     retry.prompt = "验收通道暂时中断。人工步骤结果已保留；通道恢复后点击继续即可从验收断点接上。\n\n\(LingShuModelServiceFailure.suspendedSummary(for: reason))"
+                    let continuationID = self.appendHumanInteractionContinuationBubble(
+                        recordID: pending.inputContext.recordID
+                    )
                     _ = self.renderGenericHumanInteraction(
                         retry,
-                        bubbleID: messageID,
+                        bubbleID: continuationID,
                         recordID: pending.inputContext.recordID,
                         context: pending.inputContext,
                         prompt: pending.inputContext.originalPrompt,
@@ -213,8 +229,7 @@ extension LingShuState {
                         prompt: input,
                         taskRecordID: pending.inputContext.recordID,
                         resumeBlocked: true,
-                        originalPromptForVerification: pending.inputContext.originalPrompt,
-                        existingBubbleID: messageID
+                        originalPromptForVerification: pending.inputContext.originalPrompt
                     )
                 }
             }
@@ -229,9 +244,12 @@ extension LingShuState {
                     answer: answer
                 ) {
                     if let next = LingShuWorkflowControlEnvelope.extract(from: workflowOutput)?.humanInteraction {
+                        let continuationID = self.appendHumanInteractionContinuationBubble(
+                            recordID: pending.inputContext.recordID
+                        )
                         _ = self.renderGenericHumanInteraction(
                             next,
-                            bubbleID: messageID,
+                            bubbleID: continuationID,
                             recordID: pending.inputContext.recordID,
                             context: pending.inputContext,
                             prompt: pending.inputContext.originalPrompt,
@@ -264,6 +282,18 @@ extension LingShuState {
         )
     }
 
+    private func appendHumanInteractionContinuationBubble(recordID: String?) -> UUID {
+        let bubble = ChatMessage(
+            speaker: loc("灵枢", "Nous"),
+            text: "",
+            isUser: false,
+            isLoading: true,
+            taskRecordID: recordID
+        )
+        chatMessages.append(bubble)
+        return bubble.id
+    }
+
     func selectedPrerequisiteOption(
         for request: LingShuHumanInteractionRequest,
         answer: String
@@ -280,7 +310,7 @@ extension LingShuState {
         guard let entry = pendingHumanInteractionContexts.first(where: { $0.value.inputContext.recordID == recordID }) else {
             return false
         }
-        resolveMainHumanInteraction(messageID: entry.key, answer: answer)
+        resolveMainHumanInteraction(messageID: entry.key, answer: answer, appendUserMessage: false)
         return true
     }
 
@@ -292,9 +322,19 @@ extension LingShuState {
             guard let self, satisfied, !Task.isCancelled else { return }
             self.appendTrace(kind: .result, actor: "人机协作探针", title: "检测到已完成", detail: String(request.prompt.prefix(100)))
             if self.pendingHumanInteractionContexts[bubbleID] != nil {
-                self.resolveMainHumanInteraction(messageID: bubbleID, answer: "完成探针已通过", displayAnswer: "已自动检测到操作完成")
+                self.resolveMainHumanInteraction(
+                    messageID: bubbleID,
+                    answer: "完成探针已通过",
+                    displayAnswer: "已自动检测到操作完成",
+                    appendUserMessage: false
+                )
             } else if let recordID, self.pendingDispatchedHumanInteractions[recordID] != nil {
-                self.answerDispatchedTask(recordID: recordID, answer: "完成探针已通过", displayAnswer: "已自动检测到操作完成")
+                self.answerDispatchedTask(
+                    recordID: recordID,
+                    answer: "完成探针已通过",
+                    displayAnswer: "已自动检测到操作完成",
+                    appendUserMessage: false
+                )
             }
         }
     }

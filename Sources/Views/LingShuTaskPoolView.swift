@@ -15,11 +15,17 @@ struct LingShuTaskPoolView: View {
     private var pool: [LingShuTaskExecutionRecord] {
         (includeArchived ? hot + cold : hot).sorted { $0.updatedAt > $1.updatedAt }
     }
-    private var ongoing: [LingShuTaskExecutionRecord] {
-        pool.filter { !$0.status.isSuccessfulCompletion }
+    private var groups: [LingShuTaskThreadHierarchyGroup] {
+        LingShuTaskThreadHierarchy.groups(pool)
     }
-    private var done: [LingShuTaskExecutionRecord] {
-        pool.filter { $0.status.isSuccessfulCompletion }
+    private var ongoing: [LingShuTaskThreadHierarchyGroup] {
+        groups.filter { !$0.root.status.isTerminal }
+    }
+    private var done: [LingShuTaskThreadHierarchyGroup] {
+        groups.filter { $0.root.status.isSuccessfulCompletion }
+    }
+    private var terminated: [LingShuTaskThreadHierarchyGroup] {
+        groups.filter { $0.root.status == .terminated }
     }
 
     var body: some View {
@@ -31,6 +37,7 @@ struct LingShuTaskPoolView: View {
                         emptyState
                     } else {
                         if !ongoing.isEmpty { section(state.loc("进行中 / 待处理", "In Progress / Needs Attention"), ongoing) }
+                        if !terminated.isEmpty { section(state.loc("已终止", "Terminated"), terminated) }
                         if !done.isEmpty { section(state.loc("已完成", "Completed"), done) }
                     }
                 }
@@ -53,7 +60,10 @@ struct LingShuTaskPoolView: View {
                 .font(.system(size: 16, weight: .bold))
                 .foregroundStyle(Color.lingHolo)
                 .help(state.loc("主线程是全能中枢;每个任务是一条线程,派生的子线程像专项工作室——其上下文对该任务更聚焦、价值更高。", "The main thread is the general hub. Each task has a focused thread, and its child threads act as specialist workspaces."))
-            Text(state.loc("进行中 \(ongoing.count) · 已完成 \(done.count)", "In progress \(ongoing.count) · Completed \(done.count)"))
+            Text(state.loc(
+                "主任务：进行中 \(ongoing.count) · 已终止 \(terminated.count) · 已完成 \(done.count) · 子任务 \(max(0, pool.count - groups.count))",
+                "Main tasks: in progress \(ongoing.count) · terminated \(terminated.count) · completed \(done.count) · child tasks \(max(0, pool.count - groups.count))"
+            ))
                 .font(.system(size: 12))
                 .foregroundStyle(Color.lingFg.opacity(0.5))
             Spacer()
@@ -74,23 +84,45 @@ struct LingShuTaskPoolView: View {
         .background(Color.lingFg.opacity(0.03))
     }
 
-    private func section(_ title: String, _ items: [LingShuTaskExecutionRecord]) -> some View {
+    private func section(_ title: String, _ items: [LingShuTaskThreadHierarchyGroup]) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             Text(title)
                 .font(.system(size: 12.5, weight: .semibold))
                 .foregroundStyle(Color.lingFg.opacity(0.55))
-            ForEach(items) { row($0) }
+            ForEach(items) { group in
+                row(
+                    group.root,
+                    depth: 0,
+                    isRootTask: group.isRootTask,
+                    childCount: group.descendants.count
+                )
+                ForEach(group.descendants) { item in
+                    row(item.record, depth: item.depth, isRootTask: false, childCount: 0)
+                }
+            }
         }
     }
 
-    private func row(_ record: LingShuTaskExecutionRecord) -> some View {
-        Button {
+    private func row(
+        _ record: LingShuTaskExecutionRecord,
+        depth: Int,
+        isRootTask: Bool,
+        childCount: Int
+    ) -> some View {
+        let status = record.status.rootLifecycleStatus
+        return Button {
             state.openTaskRecord(record.id)
         } label: {
             HStack(spacing: 12) {
+                if depth > 0 {
+                    Image(systemName: "arrow.turn.down.right")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(Color.lingHolo.opacity(0.55))
+                        .frame(width: 14)
+                }
                 ZStack(alignment: .topTrailing) {
                     Circle()
-                        .fill(statusColor(record.status))
+                        .fill(statusColor(status))
                         .frame(width: 8, height: 8)
                     if state.isTaskThreadUnread(record.id) {
                         Circle()
@@ -102,14 +134,26 @@ struct LingShuTaskPoolView: View {
                 }
                 .frame(width: 12, height: 12)
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(record.title)
-                        .font(.system(size: 13.5, weight: .medium))
-                        .foregroundStyle(Color.lingFg.opacity(0.9))
-                        .lineLimit(1)
+                    HStack(spacing: 7) {
+                        Text(isRootTask
+                             ? state.loc("主任务", "Main")
+                             : state.loc("子任务", "Child"))
+                            .font(.system(size: 9.5, weight: .bold))
+                            .foregroundStyle(isRootTask ? Color.lingHolo : Color.lingFg.opacity(0.5))
+                        Text(record.title)
+                            .font(.system(size: 13.5, weight: isRootTask ? .semibold : .medium))
+                            .foregroundStyle(Color.lingFg.opacity(isRootTask ? 0.92 : 0.78))
+                            .lineLimit(1)
+                        if childCount > 0 {
+                            Text(state.loc("\(childCount) 个子任务", "\(childCount) children"))
+                                .font(.system(size: 9.5, weight: .medium))
+                                .foregroundStyle(Color.lingFg.opacity(0.42))
+                        }
+                    }
                     HStack(spacing: 9) {
-                        Text(state.language == .english ? record.status.englishName : record.status.rawValue)
+                        Text(state.language == .english ? status.englishName : status.rawValue)
                             .font(.system(size: 10.5, weight: .semibold))
-                            .foregroundStyle(statusColor(record.status))
+                            .foregroundStyle(statusColor(status))
                         Text(record.updatedAt.taskRecordDisplayTime)
                             .font(.system(size: 10.5))
                             .foregroundStyle(Color.lingFg.opacity(0.38))
@@ -127,7 +171,8 @@ struct LingShuTaskPoolView: View {
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 11)
-            .background(RoundedRectangle(cornerRadius: 10).fill(Color.lingFg.opacity(0.045)))
+            .background(RoundedRectangle(cornerRadius: 8).fill(Color.lingFg.opacity(isRootTask ? 0.05 : 0.025)))
+            .padding(.leading, CGFloat(min(depth, 4)) * 22)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -150,10 +195,12 @@ struct LingShuTaskPoolView: View {
     private func statusColor(_ status: LingShuTaskExecutionStatus) -> Color {
         switch status {
         case .completed, .answered, .verified: return Color.lingHolo
+        case .terminated: return Color.lingFg.opacity(0.52)
         case .running, .dispatched, .analyzing, .acquiringCapability, .ready: return Color.lingHoloAlt
         case .queued: return Color.lingFg.opacity(0.4)
         case .needsRevision, .partial: return .orange
-        case .blocked, .failed: return .red
+        case .blocked: return .red
+        case .failed: return .yellow
         case .suspended, .waitingForUser: return .yellow   // 暂停/待用户(可续),区别于红色异常
         }
     }

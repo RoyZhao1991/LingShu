@@ -6,7 +6,7 @@ import Foundation
 /// - 网络/5xx/限流:可能自行恢复,可以挂起后重试。
 /// - 鉴权/额度/参数:不会因为“等一下”变好,必须停止自动重试并向用户暴露真实原因。
 struct LingShuModelServiceFailure: Equatable, Sendable {
-    enum Kind: String, Equatable, Sendable {
+    enum Kind: String, Codable, Equatable, Sendable {
         case network
         case timeout
         case rateLimited
@@ -44,10 +44,8 @@ struct LingShuModelServiceFailure: Equatable, Sendable {
 
     var taskStatus: LingShuTaskExecutionStatus {
         switch kind {
-        case .auth, .quota:
+        case .auth, .quota, .multimodalUnsupported, .requestInvalid, .unknown:
             return .waitingForUser
-        case .multimodalUnsupported, .requestInvalid, .unknown:
-            return .failed
         case .network, .timeout, .rateLimited, .server:
             return .suspended
         }

@@ -55,6 +55,9 @@ struct TaskWindowFooter: View {
     }
 
     private var running: Bool { state.canStopTaskWindowRecord(recordID) }
+    private var terminated: Bool {
+        state.taskExecutionRecordLookup.first(where: { $0.id == recordID })?.status == .terminated
+    }
 
     private var followupInput: some View {
         VStack(spacing: 6) {
@@ -89,10 +92,15 @@ struct TaskWindowFooter: View {
                         .background(Color.lingFg.opacity(0.07), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
                 }
                 .buttonStyle(.plain)
-                .help(state.loc("为这条任务上传附件", "Upload an Attachment to This Task"))
+                .disabled(terminated)
+                .help(terminated
+                      ? state.loc("任务已终止", "Task Terminated")
+                      : state.loc("为这条任务上传附件", "Upload an Attachment to This Task"))
 
                 TextField(
-                    running
+                    terminated
+                    ? state.loc("任务已终止，已执行内容已保留", "Task terminated; work already performed was preserved")
+                    : running
                     ? state.loc("回复这条线程…（执行中也会立即采纳）", "Reply to this thread… (applied while running)")
                     : state.loc("回复这条线程…（发消息就续跑）", "Reply to this thread… (send to continue)"),
                     text: $draft,
@@ -117,6 +125,7 @@ struct TaskWindowFooter: View {
                     .onChange(of: draft) { _, newValue in
                         if state.convertDroppedFilePaths(in: newValue) { draft = "" }
                     }
+                    .disabled(terminated)
 
                 Button(action: send) {
                     Image(systemName: running ? "arrow.triangle.2.circlepath.circle.fill" : "arrow.up.circle.fill")
@@ -132,9 +141,9 @@ struct TaskWindowFooter: View {
         }
     }
 
-    /// 只要有文字或附件即可发。子线程=独立隔离线程,发消息就续跑(对齐 codex)。
+    /// 只要有文字或附件即可发；手动终止是不可恢复终态，不允许再派发。
     private var canSend: Bool {
-        !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !state.pendingAttachments.isEmpty
+        !terminated && (!draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !state.pendingAttachments.isEmpty)
     }
 
     private func send() {

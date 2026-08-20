@@ -68,7 +68,7 @@ struct LingShuTopPerceptionStrip: View {
             return state.loc("说", "Speaking")
         }
         if !state.voiceOutputEnabled {
-            return state.loc("静音", "Muted")
+            return state.loc("按需", "On demand")
         }
         return isSpeechOutputConfigured ? state.loc("待命", "Ready") : state.loc("待配置", "Setup")
     }
@@ -160,7 +160,7 @@ struct LingShuPerceptionPopoverContent: View {
                     label: state.loc("嘴巴", "Audio Out"),
                     value: state.voiceOutputEnabled
                         ? state.localizedRuntimeText(voice.outputStatusMessage, fallback: voice.isSpeaking ? "Speaking" : "Audio output ready")
-                        : state.loc("静音", "Muted"),
+                        : state.loc("按需发声", "On-demand speech"),
                     isActive: state.voiceOutputEnabled
                 )
                 PerceptionDetailRow(
@@ -388,7 +388,9 @@ struct LingShuPerceptionPopoverContent: View {
                 }
 
                 PerceptionActionButton(
-                    title: state.voiceOutputEnabled ? state.loc("关闭发声", "Mute Voice") : state.loc("启用发声", "Enable Voice"),
+                    title: state.voiceOutputEnabled
+                        ? state.loc("恢复按需发声", "Use On-Demand Speech")
+                        : state.loc("持续朗读回复", "Always Read Replies"),
                     icon: state.voiceOutputEnabled ? "speaker.slash.fill" : "speaker.wave.2.fill",
                     isActive: state.voiceOutputEnabled
                 ) {

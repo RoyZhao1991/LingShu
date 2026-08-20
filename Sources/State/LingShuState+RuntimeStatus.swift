@@ -240,7 +240,7 @@ extension LingShuState {
         case .checking: return "验收"
         case .delivering: return "交付"
         case .waiting: return "等待"
-        case .failed: return "失败"
+        case .failed: return "等待恢复"
         }
     }
 
@@ -286,7 +286,9 @@ extension LingShuState {
             return "等待用户"
         case .acquiringCapability:
             return "等待能力"
-        case .blocked, .needsRevision, .partial, .suspended, .failed:
+        case .failed:
+            return "等待恢复"
+        case .blocked, .needsRevision, .partial, .suspended:
             return record.status.rawValue
         default:
             break

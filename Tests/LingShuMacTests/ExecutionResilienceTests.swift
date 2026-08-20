@@ -110,8 +110,9 @@ final class ExecutionResilienceTests: XCTestCase {
         XCTAssertEqual(summary?.contains("已修好并完成"), true)
     }
 
-    func testDriveHonestFailWhenHookCannotRecover() async {
-        // 对照:acceptanceHook 原样透传撞顶(模拟恢复后仍未收尾)→ 诚实记 failed。
+    func testDriveKeepsCheckpointWhenHookCannotRecover() async {
+        // 对照:acceptanceHook 原样透传撞顶(模拟恢复后仍未收尾)→ 保留断点并等待下一轮恢复，
+        // 根目标不得写入不可恢复的失败终态。
         let orch = LingShuAgentOrchestrator(maxConcurrent: 3)
         await orch.setAcceptanceHook { @MainActor _, _, _, initial in initial }   // 不恢复,透传
         let noop = LingShuAgentTool(name: "noop", description: "空转") { _ in "ok" }
@@ -120,6 +121,10 @@ final class ExecutionResilienceTests: XCTestCase {
 
         _ = await orch.spawnDetached(id: "sub-fail", objective: "撞顶且无法恢复", session: sub)
         let status = await waitForTerminal(orch, id: "sub-fail")
-        XCTAssertEqual(status, .failed, "恢复无效时应诚实记 failed")
+        XCTAssertEqual(status, .needsRecovery, "恢复尚未完成时应保留断点并继续恢复，不能把根目标记为 failed")
+        let entry = await orch.ledger().first(where: { $0.id == "sub-fail" })
+        XCTAssertTrue(entry?.summary.contains("目标尚未完成") == true)
+        let pushes = await orch.pendingPushes()
+        XCTAssertTrue(pushes.contains { $0.contains("尚未达到验收目标") })
     }
 }

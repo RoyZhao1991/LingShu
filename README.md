@@ -29,7 +29,7 @@
     ·
     <a href="https://github.com/RoyZhao1991/LingShu/releases/download/v0.1.0-alpha.9/LingShu-0.1.0-12-macOS-universal.dmg"><strong>macOS signed alpha</strong></a>
     ·
-    <a href="https://github.com/RoyZhao1991/LingShu/releases/download/windows-v0.1.0-preview.6/Nous-Windows-x64-Setup.exe"><strong>Windows x64 preview</strong></a>
+    <a href="https://github.com/RoyZhao1991/LingShu/releases/download/windows-v0.1.0-preview.27/Nous-Windows-x64-Setup.exe"><strong>Windows x64 preview</strong></a>
     · <a href="#real-public-sample"><strong>Inspect a real sample</strong></a>
     · <a href="#quick-start">Quick start</a>
     · <a href="https://github.com/RoyZhao1991/LingShu/discussions">Community</a>
@@ -166,7 +166,7 @@ The public DMG is Universal (`arm64` + `x86_64`), signed with a Developer ID cer
 
 ### Install on Windows (Technical Preview)
 
-1. Download [Nous-Windows-x64-Setup.exe](https://github.com/RoyZhao1991/LingShu/releases/download/windows-v0.1.0-preview.6/Nous-Windows-x64-Setup.exe) and [SHA256SUMS.txt](https://github.com/RoyZhao1991/LingShu/releases/download/windows-v0.1.0-preview.6/SHA256SUMS.txt).
+1. Download [Nous-Windows-x64-Setup.exe](https://github.com/RoyZhao1991/LingShu/releases/download/windows-v0.1.0-preview.27/Nous-Windows-x64-Setup.exe) and [SHA256SUMS.txt](https://github.com/RoyZhao1991/LingShu/releases/download/windows-v0.1.0-preview.27/SHA256SUMS.txt).
 2. Verify the installer in PowerShell:
 
    ```powershell
@@ -176,7 +176,7 @@ The public DMG is Universal (`arm64` + `x86_64`), signed with a Developer ID cer
 
 3. Run the setup executable, choose a language, connect a model provider, and send a small first request.
 
-The Windows preview runs the exact same Rust `RuntimeKernel` as macOS: one serialized main task, isolated concurrent child sessions, visible reasoning summaries and tool events, human-action pause/resume, independent checking, artifact registration, and built-in preview. PDF, DOCX, and PPTX embedded text is read by the shared runtime without a host plugin; scanned PDFs return a structured OCR capability gap so the agent can acquire or compose a fallback instead of stopping at “no plugin.” It intentionally excludes direct Windows computer control and realtime audio/video perception. This preview is not yet Authenticode-signed, so Windows may show a SmartScreen warning; verify its published SHA-256 before installation. See the complete [Windows capability boundary](./Docs/WINDOWS.md).
+The Windows preview runs the exact same Rust `RuntimeKernel` as macOS: one serialized main task, isolated concurrent child sessions, visible reasoning summaries and tool events, human-action pause/resume, independent checking, artifact registration, built-in preview, and automatic long-term memory recall. Its new Memory page manages that real shared-core store with search, filters, create/edit/delete, optimistic concurrency protection, and explicit per-item reveal for sensitive records. Conversation messages can be copied, and user messages can be restored with their recorded attachments into the composer for editing and explicit resend; neither action sends automatically or changes prior history. PDF, DOCX, and PPTX embedded text is read by the shared runtime without a host plugin; scanned PDFs return a structured OCR capability gap so the agent can acquire or compose a fallback instead of stopping at “no plugin.” DesignKB is bundled as a model-callable presentation tool, and local plugin packages use the shared runtime registry described in the [Plugin SDK](./Docs/PLUGIN_SDK.md). That shared core also registers standard Codex, Claude Code, and Open Agent Skills directories without converting them, exposing only a bounded catalog until the model activates one Skill and reads its instructions or resources on demand. Importing never auto-executes bundled scripts. Preview 0.1.0-27 adds a LingShu-branded setup experience and repairs upgrades from older publisher-registry layouts without deleting conversation or memory data. Installer and application metadata identify the publisher as Roy Zhao, but this preview is not yet Authenticode-signed, so Windows may still show an unknown-publisher or SmartScreen warning; verify its published SHA-256 before installation. Direct Windows computer control and realtime audio/video perception remain outside this preview. See the complete [Windows capability boundary](./Docs/WINDOWS.md).
 
 ### Run a First Traceable Task
 

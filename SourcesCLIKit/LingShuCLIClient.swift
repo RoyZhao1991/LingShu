@@ -245,14 +245,9 @@ public final class LingShuCLIClient: @unchecked Sendable {
                                 messageID: messageID
                             )
                         }
-                        if ["异常", "已暂停"].contains(status), !loading {
-                            return .init(
-                                status: .failed,
-                                reply: finalText,
-                                recordID: resolvedRecordID,
-                                messageID: messageID
-                            )
-                        }
+                        // Recovery checkpoints remain attached to the accepted task. The
+                        // CLI keeps polling the same record instead of turning an adapter
+                        // interruption into a terminal root-task failure.
                     }
                 }
             } catch {
@@ -358,8 +353,8 @@ public final class LingShuCLIClient: @unchecked Sendable {
         switch string(detail["status"]) {
         case "已直接回答", "已完成", "已核验":
             return (true, true)
-        case "未达标", "失败", "部分完成":
-            return (true, false)
+        case "未达标", "失败", "部分完成", "异常", "已暂停":
+            return nil
         default:
             return nil
         }

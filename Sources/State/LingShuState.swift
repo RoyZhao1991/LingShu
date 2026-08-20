@@ -208,7 +208,9 @@ final class LingShuState: ObservableObject {
         get { runtimeStore.isModelExecuting }
         set { runtimeStore.isModelExecuting = newValue }
     }
-    @Published var voiceOutputEnabled = true
+    /// Manual "always read replies" override. Normal operation is on-demand:
+    /// only voice/meeting turns and explicit narration or presentation requests speak.
+    @Published var voiceOutputEnabled = false
     @Published var voiceWakeListeningEnabled = false
     /// 听觉·本地模式：开=强制本机识别（Apple Speech，实时麦克风兜底永远可用）；关=偏好数据网关云端 ASR。
     /// 本机有兜底方案的能力（耳/口）给用户一个显式开关，确认到底走不走本机，而不是悄悄自动降级。
@@ -247,6 +249,9 @@ final class LingShuState: ObservableObject {
     /// （状态机：我在听 →(无有效内容)→ 待机），下次唤醒/开口重新响铃。供状态机推导与 tick 复位共用。
     let voiceListeningWindowSeconds: TimeInterval = 6
     var lastSpokenMessageID: UUID?
+    /// Per-reply audible-output decision. This keeps a spoken request attached to
+    /// its own bubble across queueing/streaming without enabling later replies.
+    var speechIntentDecisions: [UUID: LingShuSpeechIntentDecision] = [:]
     /// 最近经 `speak` 念出口的话(环形缓冲,封顶 40 条)——供脚本核验演示文字稿对得上幻灯片。
     @Published var recentSpokenLines: [String] = []
     @Published var temperature = 0.2
@@ -312,8 +317,18 @@ final class LingShuState: ObservableObject {
     let sharedKernelRuntime = LingShuSharedKernelRuntime.shared
     var sharedKernelKnownThreadIDs: Set<String> = []
     var sharedKernelActiveThreadIDs: Set<String> = []
+    /// A submit becomes visible in the Rust snapshot only after its async RPC returns. Keep the
+    /// serial-input gate closed during that gap so rapid follow-up input stays in the local tray.
+    var sharedKernelSubmissionsInFlight = 0
     var sharedKernelBubbleIDs: [String: UUID] = [:]
     var sharedKernelPollingTask: Task<Void, Never>?
+    /// Frontend-only projection state. The Rust runtime remains the canonical task engine;
+    /// these fingerprints let the SwiftUI adapter skip rebuilding unchanged records.
+    var sharedKernelProjectionFingerprints: [String: Int] = [:]
+    var sharedKernelRecordPersistenceTask: Task<Void, Never>?
+    var sharedKernelLastRecordPersistenceAt = Date.distantPast
+    var sharedKernelLegacyMemoryImported = false
+    @Published var sharedKernelLoopEngines: [LingShuKernelLoopEngineRecord] = []
     @Published var selectedTaskRecordID: String?
     @Published var isTaskRecordPresented = false
     /// 任务窗口的用户反馈:recordID → 👍true/👎false(持久 UserDefaults)。👎 的任务不进 dreaming 固化样本。
@@ -463,6 +478,8 @@ final class LingShuState: ObservableObject {
     var activeAgentTurnTask: Task<Void, Never>?
     /// `activeAgentTurnTask` 对应的气泡 id。取消后旧 worker 可能晚返回;用它防止旧 worker 清掉新 worker。
     var activeAgentTurnBubbleID: UUID?
+    /// 当前主回合仍可接收流式正文的气泡。人机交互后会切到新气泡，而根回合 id 保持不变。
+    var activeAgentVisibleBubbleID: UUID?
     /// 编排器事件 sink 是否已注入(幂等)。
     var agentEventSinkInstalled = false
     /// 网络可达性监控(断网时唤醒模型通道重试);懒启动(首次有 agent 活动时),见 LingShuState+AgentOrchestration。
@@ -499,6 +516,8 @@ final class LingShuState: ObservableObject {
     var memoryCompactionTimer: Timer?
     /// 派发任务看门狗:定时收割「驱动已结束但状态卡活跃态」的孤儿,根治僵死执行中堵死串行队列(2026-06-27)。
     var dispatchWatchdogTimer: Timer?
+    /// 看门狗一次只允许执行一轮。activeDriveIDs 是异步读取，定时器重入会让两轮收割基于不同快照重复改状态。
+    var isDispatchWatchdogReaping = false
 
     /// 能力通道校验状态(channelKey → 校验结果):中枢/视觉/视频/听/语音各通道"是否实测校验通过"。
     /// channelKey 形如 `brain:DeepSeek` / `vision:datanet` / `tts:dataNetSpeakerTTS` / `asr:local`。
@@ -643,7 +662,7 @@ final class LingShuState: ObservableObject {
     var thinkingPreviewBuffers: [UUID: String] = [:]
     var thinkingPreviewFlushTasks: [UUID: Task<Void, Never>] = [:]
     /// 流式分句早读：根视图在语音输出开启时注册；流式正文每攒满一句立即播报。
-    var streamingSentenceSpeaker: ((String) -> Void)?
+    var streamingSentenceSpeaker: ((UUID, String) -> Void)?
     /// 根视图注入：掐断当前 TTS 朗读。新一轮开始时调,避免上一条回复音频盖到新轮(音频/文字 desync)。
     var interruptSpeechOutput: (() -> Void)?
     /// 每条流式消息已播报到的字符偏移（分句早读去重，定稿即清）。
@@ -893,7 +912,7 @@ final class LingShuState: ObservableObject {
     }
 
     var hasActiveModelCall: Bool {
-        isModelReplying || isModelExecuting || !sharedKernelActiveThreadIDs.isEmpty
+        isModelReplying || isModelExecuting || sharedKernelSubmissionsInFlight > 0 || !sharedKernelActiveThreadIDs.isEmpty
     }
 
     var shouldShowTaskRuntime: Bool {
@@ -1138,6 +1157,7 @@ final class LingShuState: ObservableObject {
         activeAgentTurnTask?.cancel()
         activeAgentTurnTask = nil
         activeAgentTurnBubbleID = nil
+        activeAgentVisibleBubbleID = nil
         if let currentChatTurnID {
             // 停止语义必须同步释放串行闸门:worker 已被取消,但它的 defer 可能要等远端调用返回才执行。
             // 若这里不立刻清掉 executing/pending 标记,下一条顶层输入会被误判为“前面还有回合在跑”并卡进队列。
@@ -1194,7 +1214,7 @@ final class LingShuState: ObservableObject {
             chatMessages.append(.init(speaker: "灵枢", text: response, isUser: false))
         }
         appendTaskRecordMessage(currentRecordID, actor: "用户", role: "停止", kind: .warning, text: response)
-        finishTaskRecord(currentRecordID, status: .failed, summary: "用户已停止本轮调用。")
+        finishTaskRecord(currentRecordID, status: .suspended, summary: "用户已停止本轮调用，断点已保留。")
         if let currentRecordID { manuallyStoppedTaskRecords.remove(currentRecordID) }
 
         logEvent("现在  用户停止了本轮模型调用。")
@@ -1573,7 +1593,9 @@ final class LingShuState: ObservableObject {
             appendTrace(kind: .system, actor: "灵枢", title: "关闭前台预览", detail: String(userFacingPrompt.prefix(40)))
             appendTaskRecordMessage(recordID, actor: "预览控制", role: "关闭", kind: .agent, text: closeResult)
             appendTaskRecordMessage(recordID, actor: "灵枢", role: "确认", kind: .result, text: ack)
-            chatMessages.append(.init(speaker: "灵枢", text: ack, isUser: false, taskRecordID: recordID))
+            let reply = ChatMessage(speaker: "灵枢", text: ack, isUser: false, taskRecordID: recordID)
+            registerSpeechIntent(for: reply.id, request: userFacingPrompt, source: source)
+            chatMessages.append(reply)
             finishTaskRecord(recordID, status: .answered, summary: ack)
             missionStatus = "预览材料已关闭。"
             enterCoreState(.standby, resetTimer: false)
@@ -1594,11 +1616,30 @@ final class LingShuState: ObservableObject {
 
         // 记录**按需建**(不再在最顶 eager 建):被续答/在岗/答复等早返回接管的轮次用各自的记录,
         // 否则会在任务列表里留一条空壳记录(实测:答"做什么主题"时多出一条空的"介绍你自己的能力·执行中")。
+        var appendedUserMessageID: UUID?
         if appendUserMessage {
-            chatMessages.append(.init(speaker: "你", text: userFacingPrompt, isUser: true))
+            let userMessage = ChatMessage(
+                speaker: "你",
+                text: userFacingPrompt,
+                isUser: true,
+                attachmentNames: attachmentNames,
+                attachmentPaths: attachmentPaths
+            )
+            chatMessages.append(userMessage)
+            appendedUserMessageID = userMessage.id
             requestChatScrollToLatestForUserSend()
         }
         prompt = ""
+
+        // 人机协作答复只回到原暂停节点。统一输入框已经登记了独立用户气泡，
+        // 恢复执行时必须在其后新建助手气泡，不能再把答复当成新问题分诊。
+        if let recordID = pendingMainQuestionRecordID,
+           consumePendingMainHumanInteraction(recordID: recordID, answer: trimmedPrompt) {
+            return ""
+        }
+        if consumeLatestDispatchedHumanInteraction(answer: trimmedPrompt) {
+            return ""
+        }
 
         // 已有回合在跑时不清在飞轨迹（agent 循环里严格串行接续）；否则重置轨迹。
         if !bypassActiveGate && hasActiveModelCall {
@@ -1622,7 +1663,9 @@ final class LingShuState: ObservableObject {
             bindGoalSpec(LingShuGoalSpec(objective: deterministicRoutingPrompt, kind: .question), to: recordID)
             appendTaskRecordMessage(recordID, actor: "弱脑", role: "本地直答", kind: .core, text: "命中本机确定性问答,无需远端模型。")
             appendTaskRecordMessage(recordID, actor: "灵枢", role: "答复", kind: .result, text: localAnswer)
-            chatMessages.append(.init(speaker: "灵枢", text: localAnswer, isUser: false, taskRecordID: recordID))
+            let reply = ChatMessage(speaker: "灵枢", text: localAnswer, isUser: false, taskRecordID: recordID)
+            registerSpeechIntent(for: reply.id, request: userFacingPrompt, source: source)
+            chatMessages.append(reply)
             appendTrace(kind: .result, actor: "弱脑", title: "本地直答", detail: String(localAnswer.prefix(80)))
             finishTaskRecord(recordID, status: .answered, summary: localAnswer)
             rememberMainThreadTurn(prompt: deterministicRoutingPrompt, reply: localAnswer)
@@ -1636,20 +1679,16 @@ final class LingShuState: ObservableObject {
             bindGoalSpec(LingShuGoalSpec(objective: deterministicRoutingPrompt, kind: .question), to: recordID)
             appendTaskRecordMessage(recordID, actor: "主线程记忆", role: "本地工作记忆", kind: .core, text: "命中本地工作记忆,无需远端模型。")
             appendTaskRecordMessage(recordID, actor: "灵枢", role: "答复", kind: .result, text: localAnswer)
-            chatMessages.append(.init(speaker: "灵枢", text: localAnswer, isUser: false, taskRecordID: recordID))
+            let reply = ChatMessage(speaker: "灵枢", text: localAnswer, isUser: false, taskRecordID: recordID)
+            registerSpeechIntent(for: reply.id, request: userFacingPrompt, source: source)
+            chatMessages.append(reply)
             appendTrace(kind: .result, actor: "主线程记忆", title: "本地召回", detail: String(localAnswer.prefix(80)))
             finishTaskRecord(recordID, status: .answered, summary: localAnswer)
             rememberMainThreadTurn(prompt: deterministicRoutingPrompt, reply: localAnswer)
             return localAnswer
         }
 
-        // 通用人机协作必须拥有最高续接优先级。扫码、登录、实体操作、选文件等完成后的简短答复
-        // 只能回到原节点，不能先被自主/在岗模式理解成一条新命令。
         let isGroundedEvidenceInput = turnInput.hasAttachments || Self.inputMentionsGroundedEvidence(userFacingPrompt)
-        if let recordID = pendingMainQuestionRecordID,
-           consumePendingMainHumanInteraction(recordID: recordID, answer: trimmedPrompt) {
-            return ""
-        }
 
         // 自主运行卡在 ask_user 提问上时，本轮输入即为答案：回填续跑（优先于常规分流）。
         // 这些早返回的续接handler都用各自的记录(自主/在岗/被卡住的派发任务),不需要本轮新建记录。
@@ -1683,7 +1722,9 @@ final class LingShuState: ObservableObject {
                 submitSharedKernelTurn(
                     prompt: trimmedPrompt,
                     attachmentPaths: attachmentPaths,
-                    reusePlaceholderID: reusePlaceholderID
+                    reusePlaceholderID: reusePlaceholderID,
+                    speechRequest: userFacingPrompt,
+                    inputSource: source
                 )
                 return ""
             }
@@ -1705,7 +1746,9 @@ final class LingShuState: ObservableObject {
                     recordID: existing,
                     source: "explicit_task_record",
                     reason: wasWaiting ? "resume_waiting_record" : "resume_existing_record"
-                )
+                ),
+                speechRequest: userFacingPrompt,
+                inputSource: source
             )
         }
 
@@ -1718,10 +1761,15 @@ final class LingShuState: ObservableObject {
                 source: source,
                 visiblePrompt: userFacingPrompt,
                 attachmentNames: attachmentNames,
-                attachmentPaths: attachmentPaths
+                attachmentPaths: attachmentPaths,
+                queuedUserMessageID: appendedUserMessageID
             )
             return ""
         }
+
+        // 上一个任务的子线程完成提示只保留到下一项顶层任务真正开始。排队时不提前清除，
+        // 出队进入这里后再消费，避免旧提示与新任务的运行条同时占据输入框上方。
+        consumeTaskThreadCompletionNoticesForNewTask()
 
         // macOS 与 Windows 的常规主线程、GoalSpec、子线程、checker 和人机恢复统一由
         // Runtime/LingShuCore::RuntimeKernel 驱动。此前的 Swift agent 管线只保留为测试夹具
@@ -1730,7 +1778,9 @@ final class LingShuState: ObservableObject {
             submitSharedKernelTurn(
                 prompt: trimmedPrompt,
                 attachmentPaths: attachmentPaths,
-                reusePlaceholderID: reusePlaceholderID
+                reusePlaceholderID: reusePlaceholderID,
+                speechRequest: userFacingPrompt,
+                inputSource: source
             )
             return ""
         }
@@ -1755,6 +1805,7 @@ final class LingShuState: ObservableObject {
             placeholder = fresh
         }
         let placeholderID = placeholder.id
+        registerSpeechIntent(for: placeholderID, request: userFacingPrompt, source: source)
         Task { @MainActor [weak self] in
             guard let self else { return }
             // 注:主会话待答问题不再无脑把后续都接回主会话(那会阻塞——新任务本该派子线程并行)。
@@ -1958,7 +2009,8 @@ final class LingShuState: ObservableObject {
                 if Self.shouldQueueDispatch(running: active, capacity: cap) {
                     self.enqueueDispatchTask(prompt: trimmedPrompt, visiblePrompt: userFacingPrompt,
                                              goal: triage.goal, goalSpec: goalSpec, gap: gap,
-                                             requirements: reqs, existingBubbleID: placeholderID)
+                                             requirements: reqs, existingBubbleID: placeholderID,
+                                             attachmentNames: attachmentNames, attachmentPaths: attachmentPaths)
                 } else {
                     // 要占屏实时演示/互动时,由大脑自己调 enter_managed_mode 申请、弹窗征主人同意后才转入托管。
                     self.dispatchIsolatedTask(prompt: trimmedPrompt, taskRecordID: newRecordBoundToGoal(.task, triage.goal), goal: triage.goal, existingBubbleID: placeholderID)

@@ -9,7 +9,7 @@ extension LingShuState {
             ?? legacyEnvelope.flatMap { legacyHumanInteractionRequest($0, recordID: recordID) })?.normalized
             .map(prepareHumanInteractionRequest)
         let cleanQuestion = LingShuHumanInputEnvelope.userFacingText(from: question)
-        let text = interaction.map { "⏸ 等待人机协作:\($0.prompt)" } ?? "⏸ 等待前提:\(cleanQuestion)"
+        var text = interaction.map { "⏸ 等待人机协作:\($0.prompt)" } ?? "⏸ 等待前提:\(cleanQuestion)"
         let isHard = interaction.map(Self.requiresHardHumanInteractionPresentation) ?? false
         let choices = isHard ? nil : (
             interaction?.choicePrompt
@@ -18,6 +18,9 @@ extension LingShuState {
                 ?? userPrerequisiteChoicePromptIfNeeded(resultText: cleanQuestion, taskRecordID: recordID)
         )
         let form = isHard ? nil : interaction?.confirmForm
+        if interaction == nil, choices == nil, form == nil {
+            text += "\n\n" + loc("请在下方统一输入框回复。", "Reply using the composer below.")
+        }
         if let bid = dispatchedTaskBubbles[recordID], let idx = chatMessages.firstIndex(where: { $0.id == bid }) {
             chatMessages[idx].text = text
             chatMessages[idx].isLoading = false
@@ -49,12 +52,18 @@ extension LingShuState {
         dispatchedTaskBubbles[recordID] = nil
     }
 
-    /// 气泡内的回答直达原隔离会话，并按恢复令牌接回精确的工作流或验收节点。
-    func answerDispatchedTask(recordID: String, answer: String, displayAnswer: String? = nil) {
+    /// 用户回答直达原隔离会话，并按恢复令牌接回精确的工作流或验收节点。
+    func answerDispatchedTask(
+        recordID: String,
+        answer: String,
+        displayAnswer: String? = nil,
+        appendUserMessage: Bool = true
+    ) {
         if answerSharedKernelTaskIfNeeded(
             recordID: recordID,
             answer: answer,
-            displayAnswer: displayAnswer
+            displayAnswer: displayAnswer,
+            appendUserMessage: appendUserMessage
         ) {
             return
         }
@@ -66,13 +75,20 @@ extension LingShuState {
             clearHardHumanInteraction(requestID: request.id)
         }
         let visibleAnswer = (displayAnswer ?? trimmed).trimmingCharacters(in: .whitespacesAndNewlines)
-        if let index = chatMessages.firstIndex(where: { $0.awaitingInputForRecordID == recordID }) {
+        if let index = chatMessages.lastIndex(where: { $0.awaitingInputForRecordID == recordID }) {
             chatMessages[index].awaitingInputForRecordID = nil
             if chatMessages[index].resolvedChoice == nil {
                 chatMessages[index].resolvedChoice = visibleAnswer
             }
         }
-        chatMessages.append(.init(speaker: "你", text: visibleAnswer, isUser: true, taskRecordID: recordID))
+        if appendUserMessage {
+            chatMessages.append(.init(
+                speaker: loc("你", "You"),
+                text: visibleAnswer,
+                isUser: true,
+                taskRecordID: recordID
+            ))
+        }
         requestChatScrollToLatestForUserSend()
         appendTaskRecordMessage(recordID, actor: "你", role: "答复", kind: .user, text: visibleAnswer)
         if recordID == blockedDispatchedRecordID { blockedDispatchedRecordID = nil }
@@ -164,5 +180,17 @@ extension LingShuState {
             await self?.prepareSubtaskArtifactDelta(subID: subID, recordID: recordID)
             await orchestrator.resumeWithInput(id: subID, input: resumeInput)
         }
+    }
+
+    /// 底部统一输入框优先回答当前时间线上最后一条待人机输入的任务。
+    /// 用户气泡已由统一输入框写入，因此恢复任务时不再重复登记。
+    func consumeLatestDispatchedHumanInteraction(answer: String) -> Bool {
+        guard let message = chatMessages.last(where: {
+            !$0.isUser && $0.awaitingInputForRecordID != nil
+        }), let recordID = message.awaitingInputForRecordID else {
+            return false
+        }
+        answerDispatchedTask(recordID: recordID, answer: answer, appendUserMessage: false)
+        return true
     }
 }

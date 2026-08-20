@@ -12,7 +12,6 @@ extension LingShuState {
             let anchoredPrompt = Self.scheduledTriggerPrompt(trigger: trigger, firedAt: now)
             let anchor = Self.scheduledTriggerDateAnchor(firedAt: now)
             appendTrace(kind: .system, actor: "定时触发", title: "到点执行", detail: "\(trigger.scheduleText)「\(trigger.title)」已触发，触发日 \(anchor.isoDate)，交给灵枢处理。")
-            chatMessages.append(.init(speaker: "灵枢", text: "⏰ 定时任务到点：\(trigger.title)，我现在处理。", isUser: false))
             _ = submitTextInput(anchoredPrompt, source: .plugin("定时触发"), appendUserMessage: false)
         }
     }
@@ -28,6 +27,7 @@ extension LingShuState {
         let anchor = scheduledTriggerDateAnchor(firedAt: firedAt, timeZone: timeZone, locale: locale)
         return """
         【定时任务触发上下文】
+        - 内部任务标识：\(scheduledTriggerExecutionMarker(for: trigger))
         - 任务标题：\(trigger.title)
         - 本次触发的权威本地时间：\(anchor.dateTime)
         - ISO 日期：\(anchor.isoDate)
@@ -43,6 +43,27 @@ extension LingShuState {
         【原定时指令】
         \(trigger.prompt)
         """
+    }
+
+    nonisolated static func scheduledTriggerExecutionMarker(
+        for trigger: LingShuScheduledTrigger
+    ) -> String {
+        "[lingshu-scheduled-trigger:\(trigger.id)]"
+    }
+
+    nonisolated static func scheduledTrigger(
+        _ trigger: LingShuScheduledTrigger,
+        matchesExecutionPrompt prompt: String
+    ) -> Bool {
+        if prompt.contains(scheduledTriggerExecutionMarker(for: trigger)) {
+            return true
+        }
+
+        // Compatibility with runs created before stable trigger markers were introduced.
+        if prompt == trigger.prompt {
+            return true
+        }
+        return prompt.contains("【原定时指令】\n\(trigger.prompt)")
     }
 
     nonisolated static func scheduledTriggerDateAnchor(

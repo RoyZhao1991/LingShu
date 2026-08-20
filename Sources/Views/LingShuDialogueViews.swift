@@ -624,6 +624,7 @@ struct LingShuStableRichInputHost: View, Equatable {
     let aliases: [String]
     let onSubmit: () -> Void
     let onPasteImage: ((Data) -> Void)?
+    let onDropFiles: (([URL]) -> Void)?
     let onMentionChange: (LingShuMentionQuery?) -> Void
     let onMentionMove: (Bool) -> Void
     let onMentionCommit: () -> Void
@@ -648,6 +649,7 @@ struct LingShuStableRichInputHost: View, Equatable {
             accent: .lingHolo,
             onSubmit: onSubmit,
             onPasteImage: onPasteImage,
+            onDropFiles: onDropFiles,
             onMentionChange: onMentionChange,
             onMentionMove: onMentionMove,
             onMentionCommit: onMentionCommit,
@@ -702,6 +704,9 @@ struct LingShuInputDock: View {
                 aliases: inputAliases,
                 onSubmit: { submit() },
                 onPasteImage: { png in state.ingestPastedImage(png) },
+                onDropFiles: { urls in
+                    _ = state.ingestDroppedAttachments(at: urls)
+                },
                 onMentionChange: { mq in handleMentionChange(mq) },
                 onMentionMove: { up in moveMentionSelection(up: up) },
                 onMentionCommit: { commitMention() },
@@ -812,8 +817,8 @@ struct LingShuInputDock: View {
                 }
                 .buttonStyle(.plain)
                 .help(state.voiceOutputEnabled
-                      ? state.loc("关闭语音输出", "Disable Voice Output")
-                      : state.loc("开启语音输出", "Enable Voice Output"))
+                      ? state.loc("关闭持续朗读，恢复按需发声", "Disable Always Read and return to on-demand speech")
+                      : state.loc("开启持续朗读所有回复", "Always Read Replies"))
 
                 // 正在播报时出现：一键打断当前 TTS（含分句早读队列）。
                 if voice.isSpeaking {

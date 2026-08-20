@@ -37,12 +37,21 @@ final class SerialInputQueueTests: XCTestCase {
         XCTAssertFalse(state.currentlyExecutingTurn(), "waitingForUser → 让出输入权,答复不入队")
     }
 
-    func testEnqueueShowsBubbleAndQueuesInput() {
+    func testEnqueueOnlyUpdatesQueueTray() {
         let state = LingShuState()
-        state.enqueueSerialInput(prompt: "排队的问句", source: .typed)
+        let existing = ChatMessage(speaker: "灵枢", text: "当前任务正在执行", isUser: false)
+        let queuedUser = ChatMessage(speaker: "你", text: "排队的问句", isUser: true)
+        state.chatMessages = [existing, queuedUser]
+
+        state.enqueueSerialInput(
+            prompt: "排队的问句",
+            source: .typed,
+            queuedUserMessageID: queuedUser.id
+        )
+
         XCTAssertEqual(state.pendingSerialInputs.count, 1)
         XCTAssertEqual(state.pendingSerialInputs.first?.prompt, "排队的问句")
-        XCTAssertTrue(state.chatMessages.last?.text.contains("已排队") ?? false, "入队要在聊天里显示一条排队气泡")
+        XCTAssertEqual(state.chatMessages.map(\.id), [existing.id], "排队只更新托盘，不进入主对话")
     }
 
     func testSerialQueuePreservesVisibleInputAndAttachmentMetadata() {
@@ -147,12 +156,21 @@ final class SerialInputQueueTests: XCTestCase {
         XCTAssertTrue(state.chatMessages.first?.text.contains("手动中止") ?? false)
     }
 
-    func testRemoveSerialInputDropsItAndMarksBubble() {
+    func testRemoveSerialInputOnlyUpdatesQueueTray() {
         let state = LingShuState()
+        let existing = ChatMessage(speaker: "灵枢", text: "当前任务正在执行", isUser: false)
+        state.chatMessages = [existing]
         state.enqueueSerialInput(prompt: "要删的", source: .typed)
         let id = state.pendingSerialInputs.first!.id
         state.removeSerialInput(id: id)
         XCTAssertTrue(state.pendingSerialInputs.isEmpty, "删除后队列空")
-        XCTAssertTrue(state.chatMessages.last?.text.contains("已从队列区移除") ?? false)
+        XCTAssertEqual(state.chatMessages.map(\.id), [existing.id], "删除队列项不能生成聊天回执")
+    }
+
+    func testSharedKernelSubmissionGapCountsAsExecuting() {
+        let state = LingShuState()
+        state.sharedKernelSubmissionsInFlight = 1
+
+        XCTAssertTrue(state.currentlyExecutingTurn(), "共享内核 RPC 回执前也必须关闭串行闸门")
     }
 }

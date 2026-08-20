@@ -129,7 +129,8 @@ struct TaskExecutionRecordSheet: View {
     }
 
     private func content(record: LingShuTaskExecutionRecord) -> some View {
-        VStack(spacing: 0) {
+        let status = record.status.rootLifecycleStatus
+        return VStack(spacing: 0) {
             HStack(alignment: .top, spacing: 12) {
                 Image(systemName: "bubble.left.and.bubble.right.fill")
                     .font(.system(size: 20, weight: .bold))
@@ -143,9 +144,9 @@ struct TaskExecutionRecordSheet: View {
                         .foregroundStyle(Color.lingFg)
                         .lineLimit(1)
                     HStack(spacing: 8) {
-                        Text(state.loc(record.status.rawValue, record.status.englishName))
+                        Text(state.loc(status.rawValue, status.englishName))
                             .font(.system(size: 11, weight: .bold))
-                            .foregroundStyle(record.status.color)
+                            .foregroundStyle(status.color)
                         Text(state.loc(
                             "\(participantFilters(record).count) 个参与方",
                             "\(participantFilters(record).count) participants"
@@ -651,15 +652,16 @@ struct TaskExecutionRecordHistoryBlock: View {
     }
 
     var body: some View {
+        let status = record.status.rootLifecycleStatus
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 Text(record.title)
                     .font(.system(size: 13.5, weight: .bold))
                     .foregroundStyle(Color.lingFg.opacity(0.9))
                     .lineLimit(1)
-                Text(LingShuLanguagePreferenceStore.localized(record.status.rawValue, record.status.englishName))
+                Text(LingShuLanguagePreferenceStore.localized(status.rawValue, status.englishName))
                     .font(.system(size: 10.5, weight: .bold))
-                    .foregroundStyle(record.status.color)
+                    .foregroundStyle(status.color)
                 Spacer()
                 Text(record.updatedAt.taskRecordDisplayTime)
                     .font(.system(size: 10.5, weight: .semibold, design: .monospaced))

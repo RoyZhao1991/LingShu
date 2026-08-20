@@ -1,15 +1,17 @@
 # 灵枢内核 ABI（契约接口)
 
-> **内核 ABI 版本:1.0.0**
+> **内核 ABI 版本:1.2.0**
 >
 > 目的:把灵枢的核心能力固化成**稳定平台**。外围组件(插件 / 感知源 / 执行器)无论怎么自我生长,
 > **只能通过下面五个协议接内核**;内核版本化、由契约测试守住,绝不被外围改坏。
 >
-> 真相源 = 代码 `Sources/Kernel/LingShuKernelABI.swift`(版本 + 协议清单)+ 各协议定义文件。
+> 跨平台 Runtime 真相源 = `Runtime/LingShuCore` 与 `Runtime/LingShuCore/resources/kernel-contract.json`。
+> `Sources/Kernel/LingShuKernelABI.swift` 是 macOS 原生外围协议镜像，版本必须与 Rust 契约一致。
 > 守门 = `Tests/LingShuMacTests/KernelABIContractTests.swift`(协议形状变 → 编译/断言红)。
 >
-> 维护规则:**改动任一内核协议的形状(增删/改字段、改方法签名、改名)= 破坏性契约改动**,必须:
-> ① 升 `LingShuKernelABI.version`(主版本)② 更新本文档 ③ 过/改契约测试。向后兼容的新增升次版本。
+> 维护规则:**改动任一内核协议的形状(删改字段、改方法签名、改名)= 破坏性契约改动**,必须:
+> ① 升 `LingShuKernelABI.version`(主版本)② 更新本文档 ③ 过/改契约测试。跨平台 Runtime
+> 快照字段、RPC 或协议的向后兼容新增升次版本；不影响契约的内部修缮升修订版。
 
 ---
 
@@ -83,6 +85,27 @@
 - **风险评级**(`LingShuPluginPermissionChecker.riskLevel`):系统敏感=高;跑命令且(任意联网或任意写)=高;三者任一=中;否则低。
 - **越权检测/作用域匹配**:`LingShuPluginPermissionChecker`(glob + 域名,纯逻辑)。
 
+### 跨平台 Runtime JSON/RPC 扩展（v1.2）
+
+macOS 动态库宿主与 Windows Tauri 宿主均直接持有同一个
+`Runtime/LingShuCore::RuntimeKernel`。除上述五个原生外围协议外，宿主投影的
+`RuntimeSnapshot` 与 JSON/RPC 方法也属于版本化跨平台契约。
+
+v1.2 新增开放 Agent Skills 桥接：
+
+- `RuntimeSnapshot.externalSkills` 投影共享注册表的只读记录；
+- `kernel/list_external_skills` 列出登记项；
+- `kernel/refresh_external_skills` 显式重扫源目录，使源文件修改或删除无需重启即可显现；
+- `kernel/import_external_skill` 以文件或目录路径登记一个或多个标准 `SKILL.md`；
+- `kernel/set_external_skill_enabled` 启停登记项；
+- `kernel/remove_external_skill` 只解除灵枢登记，绝不删除 Codex、Claude 或其他来源的原始文件。
+
+`ExternalSkillRecord.modelInvocationEnabled` 保留 Claude 兼容的
+`disable-model-invocation: true` 语义：此类 Skill 仍可在管理界面登记和刷新，但不会进入模型目录或激活工具。
+
+Skill 内容仍按需渐进加载，导入本身不会执行 `scripts/`，也不会把厂商私有 hooks、
+市场元数据或 MCP 配置静默转成可执行插件。所有实际工具与脚本继续受现有权限和人工确认门约束。
+
 ---
 
 ## 2. 外围组件 = 一个插件(自我编程的对象)
@@ -143,6 +166,8 @@ print(...)                     # 结果写 stdout
 
 ## 变更日志
 
+- **2026-08-20 v1.2.0**：新增跨平台开放 Agent Skills 运行时契约。Runtime 快照加入 `externalSkills`，macOS 动态库宿主与 Windows Tauri 宿主共同暴露列出、显式重扫、原地登记、启停、解除登记能力；兼容标准 Codex / Claude / Open Agent `SKILL.md`，保持源文件只读归属、渐进披露、路径边界与“导入不执行脚本”的安全约束。
+- **2026-07-28 v1.1.0**：新增跨平台可替换 Loop Harness 契约。Grok、Codex 与后续 Harness 只负责推理和工具编排；模型传输、身份、额度、权限、记忆、插件、任务账本、产物与验收统一归 `Runtime/LingShuCore`。外部 Harness 只能使用短期本地网关令牌和隔离 HOME，禁止继承厂商登录态、原生 API 凭据或订阅额度。Runtime 快照同步新增 Loop 选择、可用性与归属策略字段，供 macOS/Windows 共用。
 - **2026-06-20 v1.0.0**:首版。五大内核协议固化(核心循环/工具 ABI/runner 契约/感知输入/清单权限)+ 契约测试守门 + `LingShuKernelABI` 单一真相源。M1 `author_component` 自编工具型外围闭环落地。
 - **2026-06-20 (v1.0.0,无协议形状变更)**:M2 自编传感器型外围落地——感知输入协议④补**运行时动态注册**(`registerSource`/`unregisterSource`)+ `LingShuRunnerSensorySource`(runner 驱动源,复用契约③)+ `author_component(component_kind=sensor)`。数据真进感知链、`perceive` 拉得到、跨重启持久化。五大协议**形状未变**故 ABI 版本不动(纯 additive 实现 + Hub 方法)。
 - **2026-06-20 (v1.0.0,无协议形状变更)**:M4 执行器/动作型外围架构——`author_component` 第三类 `component_kind=actuator`(控制真实设备,暴露工具 + `actuator_target`/`actuator_risk`);执行安全模型 `LingShuActuatorSafety`(reversible 首次审批 / **physical 每次执行强制确认**,非交互安全拒绝);`actuatorGatedTool` 在工具装配处给 physical 执行器包每次确认门(复用 run_command `forceConfirm` 审批);`LoadedSkill.frontmatter` 补字段供识别 actuator_risk/sensor_channel。实测:可逆音量执行器真改硬件输出、physical 舵机执行器每次确认拦截。执行器 runner 在现有 P3 沙箱即可 effect(osascript/Apple Events 通)。

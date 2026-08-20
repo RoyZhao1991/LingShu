@@ -22,7 +22,7 @@ struct LingShuPerceptionPanel: View {
                     title: state.loc("嘴巴", "Audio Out"),
                     value: state.voiceOutputEnabled
                         ? (voice.isSpeaking ? state.loc("发声中", "Speaking") : state.loc("可发声", "Ready"))
-                        : state.loc("静音", "Muted"),
+                        : state.loc("按需", "On demand"),
                     icon: state.voiceOutputEnabled ? "speaker.wave.2.fill" : "speaker.slash.fill",
                     color: state.voiceOutputEnabled ? .lingHolo : Color.lingFg.opacity(0.46)
                 )

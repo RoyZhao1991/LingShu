@@ -70,7 +70,7 @@ extension LingShuState {
         return experienceBackfillCandidates().filter { !existingSources.contains($0.id) }.count
     }
 
-    /// 历史回填：把已有任务记录中带 GoalSpec 的交付终态补成结构化经验。
+    /// 历史回填：只把已有任务记录中真正完成且带 GoalSpec 的交付终态补成结构化经验。
     /// 只看 typed status / GoalSpec，不看关键词；排除普通直答，避免聊天内容把经验库冲脏。
     @discardableResult
     func reconcileExperienceArtifactsFromRecords(maxGoalExperiences: Int = 200, maxRules: Int = 80) -> (goalExperiencesAdded: Int, rulesAdded: Int) {
@@ -186,9 +186,8 @@ extension LingShuState {
         case .completed: return "已完成"
         case .verified: return "已核验完成"
         case .answered: return "已直接回答"
-        case .needsRevision: return "未达标"
-        case .partial: return "部分完成"
-        case .failed: return "失败"
+        case .needsRevision, .partial, .failed:
+            return nil   // 未完成检查点只用于恢复和诊断,不能沉淀成完成经验
         default: return nil
         }
     }

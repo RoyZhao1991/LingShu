@@ -37,7 +37,6 @@ extension LingShuState {
         }
         // **气泡内待输入的派发任务**:选项点击**直达那条隔离会话**(不经分诊/主输入),修"卡住任务被聊天淹没回复对不上"。
         if let rid = chatMessages[index].awaitingInputForRecordID {
-            chatMessages[index].awaitingInputForRecordID = nil
             switch Self.prerequisiteChoiceSemantics(option) {
             case .denyOrStop:
                 closeDispatchedTaskForDeniedPrerequisite(recordID: rid, answer: option.label)
@@ -54,6 +53,9 @@ extension LingShuState {
         }
         // ask_choice:有在飞的循环挂起等点选 → 直接唤醒它继续(不另起新输入);否则走旧 route-choice 路径。
         if let resolver = pendingChoiceResolvers.removeValue(forKey: messageID) {
+            let recordID = chatMessages[index].taskRecordID ?? currentAgentTurnRecordID
+            appendInteractionUserMessage(option.label, recordID: recordID)
+            beginActiveMainTurnContinuation(recordID: recordID)
             resolver(option.label)
         } else if let context = pendingChoiceContexts.removeValue(forKey: messageID) {
             let displayAnswer = "主人选择：\(option.label)"
@@ -64,12 +66,18 @@ extension LingShuState {
             switch Self.prerequisiteChoiceSemantics(option) {
             case .denyOrStop where wasWaiting:
                 if let recordID = context.recordID {
-                    closeDispatchedTaskForDeniedPrerequisite(recordID: recordID, answer: option.label)
+                    appendInteractionUserMessage(option.label, recordID: recordID)
+                    closeDispatchedTaskForDeniedPrerequisite(
+                        recordID: recordID,
+                        answer: option.label,
+                        appendChatUser: false
+                    )
                 }
                 return
             default:
                 break
             }
+            appendInteractionUserMessage(option.label, recordID: context.recordID)
             appendTaskRecordMessage(context.recordID, actor: "你", role: "选项答复", kind: .user, text: displayAnswer)
             let semanticInput: String
             switch Self.prerequisiteChoiceSemantics(option) {
@@ -173,6 +181,46 @@ extension LingShuState {
         }
     }
 
+    /// 在同一主回合内完成一次人机交互后，把后续流式输出切到新的助手气泡。
+    /// 根回合 id 不变，因此队列、取消和任务账本仍属于原任务；只有可见写入目标发生切换。
+    func beginActiveMainTurnContinuation(recordID: String?) {
+        guard let rootID = activeAgentTurnBubbleID else { return }
+        let visibleID = activeAgentVisibleBubbleID ?? rootID
+        flushStreamingBubbleText(for: visibleID)
+        clearThinkingPreview(for: visibleID)
+        if let index = chatMessages.firstIndex(where: { $0.id == visibleID }) {
+            chatMessages[index].isLoading = false
+            if chatMessages[index].text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+               chatMessages[index].choices == nil,
+               chatMessages[index].form == nil,
+               chatMessages[index].humanInteraction == nil,
+               chatMessages[index].attachmentNames?.isEmpty != false {
+                chatMessages.remove(at: index)
+            }
+        }
+        let continuation = ChatMessage(
+            speaker: loc("灵枢", "Nous"),
+            text: "",
+            isUser: false,
+            isLoading: true,
+            taskRecordID: recordID
+        )
+        chatMessages.append(continuation)
+        activeAgentVisibleBubbleID = continuation.id
+    }
+
+    func appendInteractionUserMessage(_ text: String, recordID: String?) {
+        let visible = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !visible.isEmpty else { return }
+        chatMessages.append(.init(
+            speaker: loc("你", "You"),
+            text: visible,
+            isUser: true,
+            taskRecordID: recordID
+        ))
+        requestChatScrollToLatestForUserSend()
+    }
+
     /// 执行阶段的流式气泡：正文增量边到边追加上屏；语音输出开启时整句即到即读。
     func appendStreamingBubbleText(_ delta: String, to messageID: UUID?) {
         guard let messageID,
@@ -250,7 +298,8 @@ extension LingShuState {
     /// 分句早读：流式正文每攒满一句（。！？；换行）立即交给注册的播报器，
     /// 语音对话不必等整段回复生成完——首句即开口。
     private func emitCompletedStreamSentences(for messageID: UUID, text: String) {
-        guard let speaker = streamingSentenceSpeaker else { return }
+        guard shouldSpeakReply(messageID: messageID),
+              let speaker = streamingSentenceSpeaker else { return }
         let terminators: Set<Character> = ["。", "！", "？", "!", "?", "；", ";", "\n"]
         let characters = Array(text)
         let offset = spokenStreamOffsets[messageID] ?? 0
@@ -267,7 +316,7 @@ extension LingShuState {
         spokenStreamOffsets[messageID] = boundary + 1
         if let safeSentence = LingShuInteractionFulfillment.speechSafeStreamText(sentence) {
             lingShuControlLog("流式早读句: 「\(safeSentence.prefix(12))」 id=\(messageID.uuidString.prefix(8))")
-            speaker(safeSentence)
+            speaker(messageID, safeSentence)
         }
     }
 
@@ -275,18 +324,21 @@ extension LingShuState {
     /// 避免根视图把整段回复再念一遍；没早读过则不干预（保持原有整段播报）。
     func concludeStreamedSpeech(for messageID: UUID, streamedText: String) {
         guard let offset = spokenStreamOffsets.removeValue(forKey: messageID) else {
-            lingShuControlLog("concludeStreamedSpeech: 无早读offset → 根视图会整段朗读 id=\(messageID.uuidString.prefix(8))")
+            lingShuControlLog("concludeStreamedSpeech: 无早读offset → 根视图按本轮语音意图处理 id=\(messageID.uuidString.prefix(8))")
             return
         }
         lingShuControlLog("concludeStreamedSpeech: 设去重标记 id=\(messageID.uuidString.prefix(8))")
         lastSpokenMessageID = messageID
         let characters = Array(streamedText)
-        if offset < characters.count, let speaker = streamingSentenceSpeaker {
+        if offset < characters.count,
+           shouldSpeakReply(messageID: messageID),
+           let speaker = streamingSentenceSpeaker {
             let tail = String(characters[offset...]).trimmingCharacters(in: .whitespacesAndNewlines)
             if let safeTail = LingShuInteractionFulfillment.speechSafeStreamText(tail) {
-                speaker(safeTail)
+                speaker(messageID, safeTail)
             }
         }
+        clearSpeechIntent(for: messageID)
         // 没有更多句子了 → 流式发声收口(drainer 播完剩余即 finishAndDrain)。
         voiceManager?.finishStreamingSpeech()
     }
@@ -303,6 +355,7 @@ extension LingShuState {
                 streamingBubblePendingDeltas.removeValue(forKey: messageID)
                 if text.isEmpty {
                     chatMessages.remove(at: index)
+                    clearSpeechIntent(for: messageID)
                 } else {
                     chatMessages[index].text = text
                     chatMessages[index].isLoading = false

@@ -122,11 +122,11 @@ extension LingShuState {
             )
             chatMessages[idx].isLoading = false
         }
-        if !wasCancelled {   // 被停止的已由 stopDispatchedTask 标 .failed,别再覆盖成 verified/needsRevision
+        if !wasCancelled {   // 被停止的已由 stopDispatchedTask 标为暂停,别再覆盖成 verified/needsRevision
             // **评审未通过用 .needsRevision(未达标),不要 .partial(部分完成)**:气泡明说"未交付、需修正后重验",
             // 而 .partial 显示"部分完成"=暗示有部分交付,与气泡矛盾(用户实测:内 部分完成 / 外 评审未通过已交还,不一致)。
             // .needsRevision 的"未达标"与气泡同义、且仍可被「继续」恢复返工(已加入 isResumableUnfinished)。
-            let finalStatus: LingShuTaskExecutionStatus = passed ? .verified : (unavailableNotice == nil ? .needsRevision : .failed)
+            let finalStatus: LingShuTaskExecutionStatus = passed ? .verified : (unavailableNotice == nil ? .needsRevision : .waitingForUser)
             let finalPrefix = passed ? "角色管线评审通过:"
                 : (unavailableNotice.map { "角色管线因 agent 插件不可用中止:\($0)。" } ?? "角色管线评审未通过(未达标·已交还、未交付):")
             finishTaskRecord(rid, status: finalStatus,

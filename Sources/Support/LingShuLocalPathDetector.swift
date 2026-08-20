@@ -6,7 +6,20 @@ enum LingShuLocalPathDetector {
         let range: Range<String.Index>
     }
 
+    struct Presentation: Equatable, Sendable {
+        let displayText: String
+        let paths: [String]
+    }
+
     private static let localPathPattern = #"(?<![A-Za-z0-9_~.-])(/[^\n\r]+?\.[A-Za-z0-9][A-Za-z0-9_-]{0,15})(?=$|[^A-Za-z0-9_./-])"#
+    private static let regexStore = RegexStore()
+
+    private final class RegexStore: @unchecked Sendable {
+        let localPath = try? NSRegularExpression(pattern: localPathPattern)
+        let emptyMarkdownWrapper = try? NSRegularExpression(pattern: "(`{1,3})\\s*\\1")
+        let danglingSeparator = try? NSRegularExpression(pattern: "\\s*[:：]\\s*[`'\"“”‘’\\s]*[—–-]\\s*")
+        let repeatedWhitespace = try? NSRegularExpression(pattern: "\\s{2,}")
+    }
 
     nonisolated static func existingFilePaths(
         in text: String,
@@ -19,8 +32,17 @@ enum LingShuLocalPathDetector {
         in text: String,
         fileExists: (String) -> Bool = LingShuLocalPathDetector.isExistingRegularFile
     ) -> String {
+        presentation(in: text, fileExists: fileExists).displayText
+    }
+
+    /// Resolves preview paths and the human-readable line in one pass. Message rendering used to
+    /// run the same regex and `fileExists` checks twice for every table cell and every body line.
+    nonisolated static func presentation(
+        in text: String,
+        fileExists: (String) -> Bool = LingShuLocalPathDetector.isExistingRegularFile
+    ) -> Presentation {
         let matches = existingFilePathMatches(in: text, fileExists: fileExists)
-        guard !matches.isEmpty else { return text }
+        guard !matches.isEmpty else { return Presentation(displayText: text, paths: []) }
         var output = ""
         var cursor = text.startIndex
         for match in matches {
@@ -29,14 +51,17 @@ enum LingShuLocalPathDetector {
             cursor = removalRange.upperBound
         }
         output += text[cursor..<text.endIndex]
-        return cleanHiddenPathText(output)
+        return Presentation(
+            displayText: cleanHiddenPathText(output),
+            paths: matches.map(\.path)
+        )
     }
 
     nonisolated static func existingFilePathMatches(
         in text: String,
         fileExists: (String) -> Bool = LingShuLocalPathDetector.isExistingRegularFile
     ) -> [Match] {
-        guard let regex = try? NSRegularExpression(pattern: localPathPattern) else { return [] }
+        guard text.contains("/"), let regex = regexStore.localPath else { return [] }
         let nsRange = NSRange(text.startIndex..<text.endIndex, in: text)
         var seen = Set<String>()
         var matches: [Match] = []
@@ -52,11 +77,27 @@ enum LingShuLocalPathDetector {
     }
 
     private nonisolated static func cleanHiddenPathText(_ raw: String) -> String {
-        raw
-            .replacingOccurrences(of: "(`{1,3})\\s*\\1", with: "", options: .regularExpression)
-            .replacingOccurrences(of: "\\s*[:：]\\s*[`'\"“”‘’\\s]*[—–-]\\s*", with: "：", options: .regularExpression)
-            .replacingOccurrences(of: "\\s{2,}", with: " ", options: .regularExpression)
+        replacing(regexStore.repeatedWhitespace, in:
+            replacing(regexStore.danglingSeparator, in:
+                replacing(regexStore.emptyMarkdownWrapper, in: raw, with: ""),
+                with: "："
+            ),
+            with: " "
+        )
             .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private nonisolated static func replacing(
+        _ regex: NSRegularExpression?,
+        in text: String,
+        with template: String
+    ) -> String {
+        guard let regex else { return text }
+        return regex.stringByReplacingMatches(
+            in: text,
+            range: NSRange(text.startIndex..<text.endIndex, in: text),
+            withTemplate: template
+        )
     }
 
     private nonisolated static func expandedMarkdownWrapperRange(

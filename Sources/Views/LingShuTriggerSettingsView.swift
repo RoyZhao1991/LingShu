@@ -14,10 +14,10 @@ struct LingShuTriggerSettingsView: View {
     /// 当前展开看「执行记录」的定时任务 id(点开/收起)。
     @State private var expandedTriggerID: String?
 
-    /// 某定时任务到点跑出来的执行记录(按 prompt 匹配——触发时 submitTextInput(trigger.prompt) 落的记录),最近在前。
+    /// 某定时任务到点跑出来的执行记录。新记录按稳定任务标识关联，旧记录兼容原指令匹配。
     private func recordsFor(_ trigger: LingShuScheduledTrigger) -> [LingShuTaskExecutionRecord] {
         state.taskExecutionRecords
-            .filter { $0.prompt == trigger.prompt }
+            .filter { LingShuState.scheduledTrigger(trigger, matchesExecutionPrompt: $0.prompt) }
             .sorted { $0.updatedAt > $1.updatedAt }
     }
 
@@ -156,6 +156,15 @@ struct LingShuTriggerSettingsView: View {
                     .font(.system(size: 10, weight: .medium, design: .monospaced))
                     .foregroundStyle(Color.lingFg.opacity(0.32))
             }
+            if let latest = records.first {
+                let status = latest.status.rootLifecycleStatus
+                Text(state.loc("最近 \(status.rawValue)", "Latest \(status.englishName)"))
+                    .font(.system(size: 9.5, weight: .bold))
+                    .foregroundStyle(status.color)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(status.color.opacity(0.12), in: Capsule())
+            }
             Button { expandedTriggerID = expanded ? nil : trigger.id } label: {
                 HStack(spacing: 3) {
                     Image(systemName: expanded ? "chevron.down" : "chevron.right").font(.system(size: 8, weight: .bold))
@@ -183,12 +192,13 @@ struct LingShuTriggerSettingsView: View {
                         .font(.system(size: 10.5, weight: .medium)).foregroundStyle(Color.lingFg.opacity(0.4))
                 } else {
                     ForEach(records) { rec in
+                        let status = rec.status.rootLifecycleStatus
                         Button { state.openTaskRecord(rec.id) } label: {
                             HStack(spacing: 8) {
-                                Circle().fill(rec.status.color).frame(width: 5, height: 5)
+                                Circle().fill(status.color).frame(width: 5, height: 5)
                                 Text(rec.updatedAt.taskRecordDisplayTime)
                                     .font(.system(size: 10, weight: .medium, design: .monospaced)).foregroundStyle(Color.lingFg.opacity(0.62))
-                                Text(state.language == .english ? rec.status.englishName : rec.status.rawValue).font(.system(size: 10, weight: .bold)).foregroundStyle(rec.status.color)
+                                Text(state.language == .english ? status.englishName : status.rawValue).font(.system(size: 10, weight: .bold)).foregroundStyle(status.color)
                                 Text(state.loc("\(rec.messages.count) 条", "\(rec.messages.count) messages")).font(.system(size: 10)).foregroundStyle(Color.lingFg.opacity(0.4))
                                 Spacer()
                                 Text(state.loc("查看 →", "View →")).font(.system(size: 10, weight: .semibold)).foregroundStyle(Color.lingHolo)

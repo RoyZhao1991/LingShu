@@ -144,13 +144,16 @@ extension LingShuState {
             .trimmingCharacters(in: .whitespacesAndNewlines)
         let finalSummary = visibleSummary.isEmpty ? summary : visibleSummary
 
-        taskExecutionRecords[index].finish(status: status, summary: finalSummary)
+        // 根目标不以“失败”终止。旧宿主路径仍可能上报 `.failed`，在唯一收口点
+        // 转成可续的待恢复状态；具体错误证据保留在消息/工具/验收明细中。
+        let effectiveStatus: LingShuTaskExecutionStatus = status == .failed ? .suspended : status
+        taskExecutionRecords[index].finish(status: effectiveStatus, summary: finalSummary)
         endTaskThreadRun(recordID: recordID)
         _ = reconcileTaskRecordArtifactsFromMentionedExistingFiles(recordID: recordID)
         commitTaskThreadState(
             recordID: recordID,
-            status: status,
-            phase: LingShuTaskThreadCommit.phase(for: status),
+            status: effectiveStatus,
+            phase: LingShuTaskThreadCommit.phase(for: effectiveStatus),
             summary: taskExecutionRecords[index].summary,
             persist: false,
             trace: true
@@ -158,23 +161,26 @@ extension LingShuState {
         // **停止留残影根治(2026-06-29)**:记录进终态 → 把还在转圈、指向这条记录的聊天气泡一并收口。
         // 原来 finishTaskRecord 只改记录、不碰气泡,声明式@agent / 角色管线 / 派发这类**非主回合**路径
         // 停止或出错后会留下永久"进行中/推进中"转圈气泡 + 点开报"任务记录不存在"。这里统一收口(各路径通用,非特判)。
-        syncLoadingBubblesToFinishedRecord(recordID, status: status, summary: finalSummary)
+        syncLoadingBubblesToFinishedRecord(recordID, status: effectiveStatus, summary: finalSummary)
         persistTaskExecutionRecords()
         recordWorldTask(.init(
             id: recordID,
             title: taskExecutionRecords[index].title,
-            phase: worldTaskPhase(from: status),
+            phase: worldTaskPhase(from: effectiveStatus),
             ownerAgentID: "agent:lingshu",
             updatedAt: taskExecutionRecords[index].updatedAt
         ))
-        recordWorldEvent(kind: .task, source: "任务记录", summary: "任务收尾:\(status.rawValue) \(finalSummary)", payload: ["recordID": recordID])
-        rememberGoalExperienceIfNeeded(recordID: recordID, status: status)   // P1 记忆消费:目标终态→结构化经验沉淀进知识图谱(可检索)
-        if status == .completed || status == .verified { recordBrainTaskCompleted() }   // 大脑评分:自主完成一个任务 +1(verified=核验通过同样算)
-        // 收尾(终态或可续停):结束当前线程段、抓代码改动、起队列下一段、触发离线固化。
-        // 通用中枢 P2 真闭环:partial/failed/waitingForUser 也要收尾(否则线程卡住);未完成的(非完成/核验)按 blocked 计。
-        let finishesSegment: Set<LingShuTaskExecutionStatus> = [.answered, .completed, .verified, .blocked, .partial, .failed, .waitingForUser]
-        if finishesSegment.contains(status) {
-            let asSuccess = status == .completed || status == .verified || status == .answered
+        recordWorldEvent(kind: .task, source: "任务记录", summary: "任务状态:\(effectiveStatus.rawValue) \(finalSummary)", payload: ["recordID": recordID])
+        rememberGoalExperienceIfNeeded(recordID: recordID, status: effectiveStatus)   // P1 记忆消费:目标终态→结构化经验沉淀进知识图谱(可检索)
+        if effectiveStatus == .completed || effectiveStatus == .verified { recordBrainTaskCompleted() }   // 大脑评分:自主完成一个任务 +1(verified=核验通过同样算)
+        // 收尾(完成或可续停):结束当前线程段、抓代码改动、起队列下一段、触发离线固化。
+        // 未达标状态只结束本次运行段，不终结根目标；后续从原断点恢复。
+        let finishesSegment: Set<LingShuTaskExecutionStatus> = [
+            .answered, .completed, .verified, .blocked, .partial,
+            .needsRevision, .waitingForUser, .suspended, .terminated, .failed
+        ]
+        if finishesSegment.contains(effectiveStatus) {
+            let asSuccess = effectiveStatus == .completed || effectiveStatus == .verified || effectiveStatus == .answered
             markTaskSegmentFinished(recordID: recordID, blocked: !asSuccess)
             captureCodeChanges(recordID: recordID)   // 代码任务:抓分支+未提交改动文件,落进记录供右侧面板展示
             DispatchQueue.main.async { [weak self] in
@@ -191,7 +197,7 @@ extension LingShuState {
     func syncLoadingBubblesToFinishedRecord(_ recordID: String, status: LingShuTaskExecutionStatus, summary: String) {
         let ans = summary.trimmingCharacters(in: .whitespacesAndNewlines)
         let ok = (status == .completed || status == .verified || status == .answered)
-        let icon = ok ? "✅ " : (status == .failed || status == .blocked ? "⏹ " : "")
+        let icon = ok ? "✅ " : (status == .failed || status == .blocked || status == .terminated ? "⏹ " : "")
         var touched = false
         for i in chatMessages.indices
         where chatMessages[i].taskRecordID == recordID && chatMessages[i].isLoading && !chatMessages[i].isUser {
@@ -394,7 +400,7 @@ extension LingShuState {
         if archivedTaskExecutionRecords != saved.archived {
             archivedTaskExecutionRecords = saved.archived
         }
-        publishControlSnapshot()
+        scheduleControlSnapshotPublish()
     }
 
     func formatElapsed(_ seconds: Int) -> String {

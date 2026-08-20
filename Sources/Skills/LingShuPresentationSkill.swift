@@ -43,7 +43,10 @@ final class LingShuPresentationSkill: LingShuBuiltinSkill {
         var paths = LingShuState.extractExistingFilePaths(rest)
         if paths.isEmpty { paths = LingShuState.extractExistingFilePaths(fullPrompt) }
         guard !paths.isEmpty else {
-            host?.speakAndChat("好,用演示插件——把要演示的文档路径发我(比如 /Users/.../方案.pdf),我就开讲。")
+            host?.speakAndChat(
+                "好,用演示插件——把要演示的文档路径发我(比如 /Users/.../方案.pdf),我就开讲。",
+                forceSpeech: true
+            )
             return true
         }
         // 开场白由 startPresentation → play(opening:) → announce 串行念出并进聊天,这里**不再 append**(否则双开场白 + 抢通道)。

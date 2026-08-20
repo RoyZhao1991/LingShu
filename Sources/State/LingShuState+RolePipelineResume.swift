@@ -81,7 +81,7 @@ extension LingShuState {
         }
         let (result, passed, reviewSummary) = await runRolePipeline(recordID: rid, task: resumeTask, steps: steps, initialPrior: priorContext)
         let unavailableNotice = LingShuAgentPluginStore.unavailableNotice(from: result, knownPlugins: LingShuAgentPluginStore.load())?.message
-        finishTaskRecord(rid, status: passed ? .verified : (unavailableNotice == nil ? .needsRevision : .failed),
+        finishTaskRecord(rid, status: passed ? .verified : (unavailableNotice == nil ? .needsRevision : .waitingForUser),
             summary: (passed ? "续跑评审通过、已交付:"
                       : (unavailableNotice.map { "续跑因 agent 插件不可用中止:\($0)。" } ?? "续跑评审未通过(需修正后重验):"))
                 + steps.map(\.roleTitle).joined(separator: "→"))

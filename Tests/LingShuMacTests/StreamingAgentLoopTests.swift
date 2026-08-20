@@ -241,4 +241,27 @@ final class StreamingAgentLoopTests: XCTestCase {
         XCTAssertFalse(visible.contains("pixelHeight"))
         XCTAssertFalse(visible.contains("blockingIssues"))
     }
+
+    func testDesignKBProgressHidesRawToolPayloadTail() {
+        let raw = """
+        使用 DesignKB 生成演示文稿
+        {"title":"基于自学习的标注能力","file_name":"demo.pptx","theme":"midnight","slides":[{"layout":"cover","title":"封面"}]}
+        [truncated]
+        """
+
+        let visible = LingShuVisibleModelText.clean(raw)
+
+        XCTAssertEqual(visible, "使用 DesignKB 生成演示文稿")
+        XCTAssertFalse(visible.contains("\"slides\""))
+        XCTAssertFalse(visible.contains("[truncated]"))
+    }
+
+    func testRequestedJSONExampleRemainsVisible() {
+        let raw = """
+        下面是可复用的演示文稿 JSON：
+        {"file_name":"demo.pptx","theme":"midnight","slides":[{"layout":"cover"}]}
+        """
+
+        XCTAssertEqual(LingShuVisibleModelText.clean(raw), raw)
+    }
 }

@@ -56,6 +56,47 @@ extension LingShuState {
         }
     }
 
+    /// Finder 文件拖到主窗口任意位置时，统一进入主输入框的附件托盘。
+    /// 返回实际新增数量，供视图决定是否切回对话页；目录、失效路径和已在托盘中的文件会被忽略。
+    @discardableResult
+    func ingestDroppedAttachments(at urls: [URL]) -> Int {
+        let existingPaths = Set(pendingAttachments.compactMap { attachment in
+            attachment.localURL.map(Self.normalizedAttachmentPath)
+        })
+        let accepted = Self.acceptedDroppedFileURLs(urls, excluding: existingPaths)
+        for url in accepted {
+            ingestAttachment(at: url)
+        }
+        return accepted.count
+    }
+
+    /// 纯文件筛选与去重，保持 Finder 原始拖入顺序。
+    nonisolated static func acceptedDroppedFileURLs(
+        _ urls: [URL],
+        excluding existingPaths: Set<String> = []
+    ) -> [URL] {
+        var seen = Set(existingPaths.map { normalizedAttachmentPath(URL(fileURLWithPath: $0)) })
+        var accepted: [URL] = []
+        let fileManager = FileManager.default
+
+        for candidate in urls where candidate.isFileURL {
+            let url = candidate.resolvingSymlinksInPath().standardizedFileURL
+            var isDirectory: ObjCBool = false
+            guard fileManager.fileExists(atPath: url.path, isDirectory: &isDirectory),
+                  !isDirectory.boolValue else {
+                continue
+            }
+            let path = normalizedAttachmentPath(url)
+            guard seen.insert(path).inserted else { continue }
+            accepted.append(url)
+        }
+        return accepted
+    }
+
+    nonisolated private static func normalizedAttachmentPath(_ url: URL) -> String {
+        url.resolvingSymlinksInPath().standardizedFileURL.path
+    }
+
     /// 把**发出去的附件**落到稳定目录(供事后点击**重新预览**):粘贴图等临时文件会被系统清掉,复制一份到
     /// `~/Library/Application Support/LingShu/SentAttachments`;已是持久路径的(用户上传/拖入的原文件)**原样返回**(不复制)。
     /// 纯文件系统操作,不挑场景。返回稳定可预览的绝对路径(复制失败则回退原路径)。

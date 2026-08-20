@@ -898,10 +898,18 @@ final class TaskCompletionGateTests: XCTestCase {
 
     func testNewStatusSemantics() {
         XCTAssertTrue(LingShuTaskExecutionStatus.verified.isTerminal)
-        XCTAssertTrue(LingShuTaskExecutionStatus.partial.isTerminal)
+        XCTAssertTrue(LingShuTaskExecutionStatus.terminated.isTerminal)
+        XCTAssertFalse(LingShuTaskExecutionStatus.terminated.isSuccessfulCompletion)
+        XCTAssertFalse(LingShuTaskExecutionStatus.terminated.isResumableUnfinished)
+        XCTAssertFalse(LingShuState.canRouteInputToExistingThread(status: .terminated))
+        XCTAssertFalse(LingShuTaskExecutionStatus.partial.isTerminal, "部分完成必须继续推进,不能结束根任务")
+        XCTAssertFalse(LingShuTaskExecutionStatus.needsRevision.isTerminal, "验收打回必须继续修订")
+        XCTAssertFalse(LingShuTaskExecutionStatus.failed.isTerminal, "旧失败状态只允许作为待恢复检查点")
         XCTAssertFalse(LingShuTaskExecutionStatus.waitingForUser.isTerminal, "待用户是可续中间停,非终态")
         XCTAssertTrue(LingShuTaskExecutionStatus.waitingForUser.isResumableUnfinished)
         XCTAssertTrue(LingShuTaskExecutionStatus.partial.isResumableUnfinished)
+        XCTAssertTrue(LingShuTaskExecutionStatus.needsRevision.isResumableUnfinished)
+        XCTAssertTrue(LingShuTaskExecutionStatus.failed.isResumableUnfinished)
         XCTAssertTrue(LingShuTaskExecutionStatus.blocked.isResumableUnfinished)
         XCTAssertFalse(LingShuTaskExecutionStatus.completed.isResumableUnfinished)
     }

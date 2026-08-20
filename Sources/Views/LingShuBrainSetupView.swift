@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 struct LingShuBrainSetupView: View {
     @ObservedObject var state: LingShuState
@@ -172,6 +173,17 @@ struct LingShuBrainSetupView: View {
                 .font(.system(size: 10.5, weight: .medium))
                 .foregroundStyle(Color.lingFg.opacity(0.45))
             Spacer()
+            Button {
+                NSApp.terminate(nil)
+            } label: {
+                Text(state.loc("退出应用", "Quit App"))
+                    .font(.system(size: 11.5, weight: .semibold))
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 7)
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(Color.lingFg.opacity(0.64))
+            .keyboardShortcut("q", modifiers: .command)
             Button {
                 connect()
             } label: {

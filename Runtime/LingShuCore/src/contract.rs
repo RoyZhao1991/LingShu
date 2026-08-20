@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-pub const KERNEL_ABI_VERSION: &str = "1.0.0";
+pub const KERNEL_ABI_VERSION: &str = "1.2.0";
 pub const KERNEL_CONTRACT_JSON: &str = include_str!("../resources/kernel-contract.json");
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -52,6 +52,9 @@ mod tests {
         assert_eq!(contract.contracts.len(), 5);
         assert_eq!(contract.contracts[0].symbol, "LingShuAgentSessioning");
         assert_eq!(contract.goal_spec_fields.len(), 12);
+        assert!(contract
+            .runtime_features
+            .contains(&"external_agent_skills".to_string()));
         assert!(!contract.platform_capabilities["windows"].computer_control);
         assert!(contract.platform_capabilities["windows"].internal_preview);
     }

@@ -17,22 +17,11 @@ final class LingShuAppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    func application(_ sender: NSApplication, shouldSaveApplicationState coder: NSCoder) -> Bool {
-        false
-    }
-
-    func application(_ sender: NSApplication, shouldRestoreApplicationState coder: NSCoder) -> Bool {
-        false
-    }
-
-    func applicationSupportsSecureRestorableState(_ app: NSApplication) -> Bool {
-        false
-    }
-
-    /// 常驻：关掉主窗口不退出，灵枢继续在菜单栏值守（定时触发/后台任务不中断）。
-    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
-        false
-    }
+    func application(_ sender: NSApplication, shouldSaveApplicationState coder: NSCoder) -> Bool { false }
+    func application(_ sender: NSApplication, shouldRestoreApplicationState coder: NSCoder) -> Bool { false }
+    func applicationSupportsSecureRestorableState(_ app: NSApplication) -> Bool { false }
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply { .terminateNow }
 
     private static func removeSavedApplicationState() {
         guard let bundleID = Bundle.main.bundleIdentifier else { return }
@@ -43,11 +32,8 @@ final class LingShuAppDelegate: NSObject, NSApplicationDelegate {
 }
 
 enum LingShuWindowPlacement {
-    /// 进入极简模式前的主窗布局，退出时原样恢复。
     @MainActor private static var savedStandardFrame: NSRect?
 
-    /// 极简语音模式 = 一个小小的常浮窗口（视频画面 + 两条音轨），不再占满整个主窗。
-    /// 进入时收到屏幕右下角并置顶，退出时恢复原来的标准窗口。
     @MainActor
     static func applyMinimalVoiceWindow(_ minimal: Bool) {
         guard let window = NSApp.windows.first(where: { shouldManage($0) }) else { return }
@@ -88,7 +74,6 @@ enum LingShuWindowPlacement {
         NSApp.activate(ignoringOtherApps: true)
         NSApp.windows.forEach { window in
             guard shouldManage(window) else { return }
-            // 极简模式的小浮窗（level 已置顶）不参与标准窗口归位，避免被强行撑回大窗。
             guard window.level != .floating else { return }
             configureWindowSurface(window)
             centerWindowOnMainScreen(window)
@@ -120,13 +105,8 @@ enum LingShuWindowPlacement {
         let visibleFrame = screen.visibleFrame
         let width = min(max(window.frame.width, 1240), visibleFrame.width - 40)
         let height = min(max(window.frame.height, 820), visibleFrame.height - 40)
-        let frame = NSRect(
-            x: visibleFrame.midX - width / 2,
-            y: visibleFrame.midY - height / 2,
-            width: width,
-            height: height
-        )
-
+        let frame = NSRect(x: visibleFrame.midX - width / 2, y: visibleFrame.midY - height / 2,
+                           width: width, height: height)
         window.setFrame(frame, display: true)
     }
 }
@@ -134,7 +114,6 @@ enum LingShuWindowPlacement {
 @main
 struct LingShuMacApp: App {
     @NSApplicationDelegateAdaptor(LingShuAppDelegate.self) private var appDelegate
-    // 状态归 App 持有：主窗口关闭后灵枢仍在菜单栏常驻，定时触发与后台任务不中断。
     @StateObject private var state = LingShuState()
     @StateObject private var voice = VoiceIOManager()
     @StateObject private var vision = VisionIOManager()
@@ -142,8 +121,6 @@ struct LingShuMacApp: App {
 
     var body: some Scene {
         WindowGroup(state.appName) {
-            // 尺寸约束在 LingShuRootView 内部按模式切换：
-            // 标准界面 ≥1240×820，极简语音模式收成 340×560 的小浮窗。
             LingShuRootView(
                 state: state,
                 voice: voice,
@@ -156,19 +133,14 @@ struct LingShuMacApp: App {
             .task(id: state.hasCompletedInitialLanguageSelection) {
                 guard state.hasCompletedInitialLanguageSelection else { return }
                 guard LingShuRuntimeEnvironment.allowsBackgroundServices else { return }
-                // 启动本机回环 MCP 控制服务(幂等),让外部测试/MCP 客户端可驱动灵枢内部动作。
                 LingShuControlServer.shared.start(state: state)
-                // 主线程卡死看门狗:独立后台探测 MainActor,卡死自动重启续作(不挂 MainActor,否则自身也被卡)。
                 LingShuMainActorWatchdog.shared.start(state: state)
-                // 默认 Loop Runtime 与灵枢同寿命：启动阶段预热，任务到来时只开 Maker / Checker 逻辑会话。
+                await state.prepareSharedKernelOnLaunch()
                 await state.prepareLoopRuntimeOnLaunch()
-                // 先真实验证主脑；只有可用时才预热会话。无配置/失效时由首配引导接管，避免启动即发无效请求。
                 if await state.prepareBrainOnLaunch() {
                     _ = await state.mainAgentSession()
                 }
-                // 常驻全局入口:⌥Space 唤起"问/找/做"快速面板(本机知识中枢)。
                 LingShuQuickAskController.shared.install(state: state)
-                // 本机知识 FSEvents 自动增量:opt-in 目录文件一变就增量重索引。
                 LingShuFolderWatcher.shared.start(state: state)
             }
         }
@@ -177,7 +149,6 @@ struct LingShuMacApp: App {
         .commands {
             LingShuPublicHelpCommands(state: state)
         }
-        // 菜单栏常驻：主窗关闭后这里是灵枢的值守入口。
         MenuBarExtra(state.appName, systemImage: "brain") {
             if state.hasCompletedInitialLanguageSelection {
                 Text("\(state.loc("状态", "Status")): \(state.coreStateDisplay)")

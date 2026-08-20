@@ -1,12 +1,13 @@
 export type Locale = "zh_cn" | "en";
 export type ProviderProtocol = "openai_responses" | "openai_chat_completions" | "anthropic_messages";
 export type ExecutionPermissionMode = "sandbox" | "full_access";
-export type MessageState = "complete" | "thinking" | "failed" | "needs_user_action";
-export type TaskStatus = "queued" | "understanding" | "running" | "needs_user_action" | "completed" | "failed" | "cancelled";
+export type LoopEngine = "grok" | "codex";
+export type MessageState = "complete" | "thinking" | "needs_recovery" | "failed" | "needs_user_action";
+export type TaskStatus = "queued" | "understanding" | "running" | "needs_recovery" | "needs_user_action" | "completed" | "failed" | "cancelled";
 export type TaskRole = "main" | "worker" | "checker";
 export type TaskOrigin = "conversation" | "subtask" | "verification";
 export type RuntimeEventKind = "status" | "model" | "reasoning" | "tool" | "plan" | "delegation" | "human_interaction" | "warning" | "result";
-export type RuntimeEventState = "running" | "completed" | "failed" | "blocked";
+export type RuntimeEventState = "running" | "completed" | "failed" | "blocked" | "cancelled";
 
 export interface RuntimeSettings {
   locale: Locale;
@@ -17,6 +18,7 @@ export interface RuntimeSettings {
   model: string;
   workspace: string;
   executionPermissionMode: ExecutionPermissionMode;
+  loopEngine: LoopEngine;
   firstRunComplete: boolean;
 }
 
@@ -81,6 +83,8 @@ export interface TaskRecord {
   artifacts: ArtifactRecord[];
   summary: string;
   error?: string;
+  userMessageId?: string;
+  assistantMessageId?: string;
   attachmentPaths: string[];
   parentTaskId?: string;
   rootTaskId?: string;
@@ -88,7 +92,26 @@ export interface TaskRecord {
   origin: TaskOrigin;
   participantName: string;
   depth: number;
+  loopEngine: LoopEngine;
+  pendingToolCallId?: string;
   pendingQuestion?: string;
+}
+
+export interface LoopEngineRecord {
+  id: LoopEngine;
+  name: string;
+  description: string;
+  descriptionZh: string;
+  adapterBuiltin: boolean;
+  available: boolean;
+  selected: boolean;
+  executionMode: string;
+  executable?: string;
+  statusDetail: string;
+  harnessOnly: boolean;
+  transportOwner: string;
+  nativeAuthDisabled: boolean;
+  nativeQuotaDisabled: boolean;
 }
 
 export interface RuntimeEvent {
@@ -105,6 +128,169 @@ export interface RuntimeEvent {
   updatedAt: string;
 }
 
+export interface PluginPermissions {
+  fileRead: boolean;
+  fileWrite: boolean;
+  network: boolean;
+  shell: boolean;
+  systemSensitive: boolean;
+}
+
+export interface PluginToolRecord {
+  name: string;
+  exposedName: string;
+  description: string;
+  descriptionZh: string;
+  parameters: Record<string, unknown>;
+}
+
+export interface PluginRecord {
+  id: string;
+  name: string;
+  version: string;
+  description: string;
+  descriptionZh: string;
+  source: "built_in" | "user";
+  enabled: boolean;
+  available: boolean;
+  runtimeReady: boolean;
+  rootPath: string;
+  permissions: PluginPermissions;
+  tools: PluginToolRecord[];
+  statusDetail: string;
+}
+
+export type ExternalSkillSourceFormat = "open_agent_skill" | "codex" | "claude";
+
+export interface ExternalSkillResource {
+  path: string;
+  kind: "script" | "reference" | "asset" | "other";
+  sizeBytes: number;
+}
+
+export interface ExternalSkillRecord {
+  id: string;
+  name: string;
+  description: string;
+  sourceFormat: ExternalSkillSourceFormat;
+  sourcePath: string;
+  manifestPath: string;
+  enabled: boolean;
+  available: boolean;
+  modelInvocationEnabled: boolean;
+  statusDetail: string;
+  warnings: string[];
+  scripts: ExternalSkillResource[];
+  references: ExternalSkillResource[];
+  assets: ExternalSkillResource[];
+  license?: string;
+  compatibility?: string;
+  allowedTools: string[];
+  contentFingerprint: string;
+}
+
+export interface MemorySnapshot {
+  schemaVersion: number;
+  totalCount: number;
+  hotCount: number;
+  coldCount: number;
+  countsByKind: Record<string, number>;
+  latestUpdatedAt?: string;
+  lastConsolidatedAt?: string;
+  importedSources: Record<string, string>;
+}
+
+export type MemoryKind = "conversation" | "task" | "fact" | "preference" | "experience" | "artifact" | "knowledge";
+export type MemoryTier = "hot" | "cold";
+export type MemorySource = "runtime" | "user_explicit" | "task" | "legacy_swift" | "platform";
+
+export interface MemoryEntry {
+  id: string;
+  kind: MemoryKind;
+  tier: MemoryTier;
+  title: string;
+  content: string;
+  lastPrompt: string;
+  tags: string[];
+  source: MemorySource;
+  importance: number;
+  confidence: number;
+  sensitive: boolean;
+  messageCount: number;
+  taskId?: string;
+  executionRecordId?: string;
+  createdAt: string;
+  updatedAt: string;
+  archivedAt?: string;
+  compressedAt?: string;
+  aliases: string[];
+  accessCount: number;
+  lastAccessedAt?: string;
+  fingerprint: string;
+}
+
+export interface MemoryListItem extends MemoryEntry {
+  redacted: boolean;
+}
+
+export interface MemoryListRequest {
+  query?: string;
+  id?: string;
+  kind?: MemoryKind;
+  tier?: MemoryTier;
+  source?: MemorySource;
+  sensitive?: boolean;
+  sensitiveVisibility?: "redacted" | "full";
+  offset?: number;
+  expectedStateFingerprint?: string;
+  limit?: number;
+}
+
+export interface MemoryGetRequest {
+  id: string;
+  sensitiveVisibility?: "redacted" | "full";
+}
+
+export interface MemoryListPage {
+  items: MemoryListItem[];
+  totalCount: number;
+  offset: number;
+  limit: number;
+  hasMore: boolean;
+  stateFingerprint: string;
+}
+
+export interface MemoryUpsertRequest {
+  id?: string;
+  expectedFingerprint?: string;
+  expectedUpdatedAt?: string;
+  kind: MemoryKind;
+  tier: MemoryTier;
+  title: string;
+  content: string;
+  tags: string[];
+  importance: number;
+  confidence: number;
+  sensitive: boolean;
+  aliases: string[];
+}
+
+export interface MemoryMutationResult {
+  entry: MemoryListItem;
+  snapshot: MemorySnapshot;
+}
+
+export interface MemoryDeleteRequest {
+  id: string;
+  expectedFingerprint?: string;
+  expectedUpdatedAt?: string;
+}
+
+export interface MemoryDeleteResult {
+  deletedId: string;
+  snapshot: MemorySnapshot;
+}
+
 export interface RuntimeSnapshot {
   kernelAbiVersion: string;
   settings: RuntimeSettings;
@@ -117,6 +303,10 @@ export interface RuntimeSnapshot {
   providerConfigured: boolean;
   events: RuntimeEvent[];
   latestEventSequence: number;
+  plugins: PluginRecord[];
+  externalSkills: ExternalSkillRecord[];
+  memory: MemorySnapshot;
+  loopEngines: LoopEngineRecord[];
 }
 
 export interface ProviderPreset {
@@ -132,11 +322,15 @@ export interface ProviderPreset {
 export interface PreviewPayload {
   name: string;
   path: string;
-  kind: "text" | "markdown" | "code" | "html" | "image" | "pdf" | "document" | "presentation" | "unsupported";
+  kind: "text" | "markdown" | "code" | "html" | "image" | "pdf" | "document" | "presentation" | "spreadsheet" | "unsupported";
   mimeType: string;
   content: string;
   sections: string[];
   sizeBytes: number;
+  revision: string;
+  renderedContent?: string;
+  renderedMimeType?: string;
+  faithful: boolean;
 }
 
-export type Page = "chat" | "threads" | "status" | "settings";
+export type Page = "chat" | "threads" | "status" | "memory" | "plugins" | "settings";

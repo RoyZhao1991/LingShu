@@ -1,13 +1,14 @@
 use libc::{c_char, c_int, c_void};
 use lingshu_runtime_core::{
-    provider_catalog, RuntimeKernel, RuntimeSettings, RuntimeStore, KERNEL_ABI_VERSION,
+    KERNEL_ABI_VERSION, MemoryImportPayload, RuntimeKernel, RuntimeSettings, RuntimeStore,
+    provider_catalog,
 };
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::ffi::{CStr, CString};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock};
-use tokio::sync::{mpsc, RwLock};
+use tokio::sync::{RwLock, mpsc};
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
@@ -75,6 +76,25 @@ struct ResumeParams {
     answer: String,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ExternalSkillImportParams {
+    path: PathBuf,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ExternalSkillIDParams {
+    id: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ExternalSkillEnabledParams {
+    id: String,
+    enabled: bool,
+}
+
 struct KernelHandle {
     input: mpsc::UnboundedSender<String>,
     shutdown: CancellationToken,
@@ -133,8 +153,28 @@ async fn process_request(
                 });
                 *api_key.write().await = key;
                 match kernel.store().update_settings(params.settings).await {
-                    Ok(()) => serde_json::to_value(kernel.snapshot(configured).await)
-                        .map_err(|error| error.to_string()),
+                    Ok(()) => {
+                        let snapshot = serde_json::to_value(kernel.snapshot(configured).await)
+                            .map_err(|error| error.to_string());
+                        if configured {
+                            let worker = kernel.clone();
+                            let worker_key = api_key.read().await.clone();
+                            tokio::spawn(async move {
+                                if let Err(error) = worker.run_queue(worker_key).await {
+                                    emit(
+                                        callback,
+                                        context,
+                                        json!({
+                                            "jsonrpc":"2.0",
+                                            "method":"kernel/runtime_error",
+                                            "params":{"message":error.to_string()}
+                                        }),
+                                    );
+                                }
+                            });
+                        }
+                        snapshot
+                    }
                     Err(error) => Err(error.to_string()),
                 }
             }
@@ -142,6 +182,50 @@ async fn process_request(
         },
         "kernel/snapshot" => match decoded::<SnapshotParams>(request.params) {
             Ok(params) => serde_json::to_value(kernel.snapshot(params.provider_configured).await)
+                .map_err(|error| error.to_string()),
+            Err(error) => Err(error),
+        },
+        "kernel/import_memory" => match decoded::<MemoryImportPayload>(request.params) {
+            Ok(payload) => kernel
+                .memory()
+                .import_legacy(payload)
+                .await
+                .and_then(|result| serde_json::to_value(result).map_err(Into::into))
+                .map_err(|error| error.to_string()),
+            Err(error) => Err(error),
+        },
+        "kernel/list_external_skills" => {
+            serde_json::to_value(kernel.external_skills().list()).map_err(|error| error.to_string())
+        }
+        "kernel/refresh_external_skills" => {
+            serde_json::to_value(kernel.external_skills().refresh())
+                .map_err(|error| error.to_string())
+        }
+        "kernel/import_external_skill" => {
+            match decoded::<ExternalSkillImportParams>(request.params) {
+                Ok(params) => kernel
+                    .external_skills()
+                    .import(params.path)
+                    .and_then(|records| serde_json::to_value(records).map_err(Into::into))
+                    .map_err(|error| error.to_string()),
+                Err(error) => Err(error),
+            }
+        }
+        "kernel/set_external_skill_enabled" => {
+            match decoded::<ExternalSkillEnabledParams>(request.params) {
+                Ok(params) => kernel
+                    .external_skills()
+                    .set_enabled(&params.id, params.enabled)
+                    .and_then(|record| serde_json::to_value(record).map_err(Into::into))
+                    .map_err(|error| error.to_string()),
+                Err(error) => Err(error),
+            }
+        }
+        "kernel/remove_external_skill" => match decoded::<ExternalSkillIDParams>(request.params) {
+            Ok(params) => kernel
+                .external_skills()
+                .remove(&params.id)
+                .map(|()| json!({"removed":true}))
                 .map_err(|error| error.to_string()),
             Err(error) => Err(error),
         },
@@ -175,10 +259,25 @@ async fn process_request(
                 let worker = kernel.clone();
                 let worker_key = api_key.read().await.clone();
                 tokio::spawn(async move {
+                    let recovery_key = worker_key.clone();
                     if let Err(error) = worker
                         .resume(params.thread_id, params.answer, worker_key)
                         .await
                     {
+                        emit(
+                            callback,
+                            context,
+                            json!({
+                                "jsonrpc":"2.0",
+                                "method":"kernel/runtime_error",
+                                "params":{
+                                    "threadId":params.thread_id,
+                                    "message":error.to_string()
+                                }
+                            }),
+                        );
+                    }
+                    if let Err(error) = worker.run_queue(recovery_key).await {
                         emit(
                             callback,
                             context,
@@ -357,7 +456,9 @@ pub extern "C" fn lingshu_kernel_runtime_stop() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lingshu_runtime_core::{AppLocale, ExecutionPermissionMode, ProviderProtocol};
+    use lingshu_runtime_core::{
+        AppLocale, ExecutionPermissionMode, LoopEngineKind, ProviderProtocol,
+    };
     use tempfile::tempdir;
 
     #[tokio::test]
@@ -376,6 +477,7 @@ mod tests {
             model: "test-model".into(),
             workspace: workspace.clone(),
             execution_permission_mode: ExecutionPermissionMode::FullAccess,
+            loop_engine: LoopEngineKind::Grok,
             first_run_complete: true,
         };
         let request = RPCRequest {
@@ -399,5 +501,137 @@ mod tests {
             "full_access"
         );
         assert_eq!(api_key.read().await.as_deref(), Some("secret"));
+
+        let import = process_request(
+            &kernel,
+            &api_key,
+            RPCRequest {
+                id: 8,
+                method: "kernel/import_memory".into(),
+                params: json!({
+                    "source":"swift-memory",
+                    "sourceVersion":"v1",
+                    "entries":[{
+                        "id":"legacy-preference",
+                        "kind":"preference",
+                        "tier":"hot",
+                        "title":"Language preference",
+                        "content":"The user prefers concise English answers."
+                    }]
+                }),
+            },
+            None,
+            0,
+        )
+        .await;
+        assert_eq!(import["result"]["imported"], 1);
+        assert_eq!(import["result"]["snapshot"]["totalCount"], 1);
+
+        let snapshot = process_request(
+            &kernel,
+            &api_key,
+            RPCRequest {
+                id: 9,
+                method: "kernel/snapshot".into(),
+                params: json!({"providerConfigured":true}),
+            },
+            None,
+            0,
+        )
+        .await;
+        assert_eq!(snapshot["result"]["memory"]["hotCount"], 1);
+
+        let skill_root = root.path().join("bridge-portable-skill");
+        std::fs::create_dir_all(&skill_root).unwrap();
+        let manifest = skill_root.join("SKILL.md");
+        std::fs::write(
+            &manifest,
+            "---\nname: bridge-portable-skill\ndescription: Verify the shared external Skill RPC bridge.\n---\nFollow the portable workflow.\n",
+        )
+        .unwrap();
+
+        let imported = process_request(
+            &kernel,
+            &api_key,
+            RPCRequest {
+                id: 10,
+                method: "kernel/import_external_skill".into(),
+                params: json!({"path":manifest}),
+            },
+            None,
+            0,
+        )
+        .await;
+        let skill_id = imported["result"][0]["id"].as_str().unwrap().to_string();
+        assert_eq!(imported["result"][0]["name"], "bridge-portable-skill");
+
+        let listed = process_request(
+            &kernel,
+            &api_key,
+            RPCRequest {
+                id: 11,
+                method: "kernel/list_external_skills".into(),
+                params: json!({}),
+            },
+            None,
+            0,
+        )
+        .await;
+        assert_eq!(listed["result"].as_array().unwrap().len(), 1);
+
+        std::fs::write(
+            &manifest,
+            "---\nname: bridge-portable-skill\ndescription: Verify refreshed external Skill metadata.\ndisable-model-invocation: true\n---\nFollow the updated portable workflow.\n",
+        )
+        .unwrap();
+        let refreshed = process_request(
+            &kernel,
+            &api_key,
+            RPCRequest {
+                id: 12,
+                method: "kernel/refresh_external_skills".into(),
+                params: json!({}),
+            },
+            None,
+            0,
+        )
+        .await;
+        assert_eq!(
+            refreshed["result"][0]["description"],
+            "Verify refreshed external Skill metadata."
+        );
+        assert_eq!(refreshed["result"][0]["modelInvocationEnabled"], false);
+
+        let disabled = process_request(
+            &kernel,
+            &api_key,
+            RPCRequest {
+                id: 13,
+                method: "kernel/set_external_skill_enabled".into(),
+                params: json!({"id":skill_id,"enabled":false}),
+            },
+            None,
+            0,
+        )
+        .await;
+        assert_eq!(disabled["result"]["enabled"], false);
+
+        let removed = process_request(
+            &kernel,
+            &api_key,
+            RPCRequest {
+                id: 14,
+                method: "kernel/remove_external_skill".into(),
+                params: json!({"id":skill_id}),
+            },
+            None,
+            0,
+        )
+        .await;
+        assert_eq!(removed["result"]["removed"], true);
+        assert!(
+            manifest.is_file(),
+            "detaching must preserve the source Skill"
+        );
     }
 }

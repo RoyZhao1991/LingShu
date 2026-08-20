@@ -1,4 +1,6 @@
-use crate::models::{AgentMessage, AgentRole, AgentToolCall, ProviderProtocol, RuntimeSettings};
+use crate::models::{
+    AgentMessage, AgentRole, AgentToolCall, ProviderProtocol, RuntimeFailureKind, RuntimeSettings,
+};
 use futures_util::StreamExt;
 use reqwest::{Client, Response, StatusCode};
 use serde_json::{json, Map, Value};
@@ -19,6 +21,26 @@ pub enum ModelError {
     Empty,
     #[error("model stream was malformed: {0}")]
     Malformed(String),
+}
+
+impl ModelError {
+    pub fn failure_kind(&self) -> RuntimeFailureKind {
+        match self {
+            Self::Request(error) if error.is_timeout() => RuntimeFailureKind::Timeout,
+            Self::Request(error) if error.is_connect() => RuntimeFailureKind::Network,
+            Self::Request(_) => RuntimeFailureKind::Network,
+            Self::Http { status, .. } => match status.as_u16() {
+                401 | 403 => RuntimeFailureKind::Authentication,
+                402 => RuntimeFailureKind::Quota,
+                408 => RuntimeFailureKind::Timeout,
+                429 => RuntimeFailureKind::RateLimited,
+                400..=499 => RuntimeFailureKind::InvalidRequest,
+                500..=599 => RuntimeFailureKind::Server,
+                _ => RuntimeFailureKind::Unknown,
+            },
+            Self::Empty | Self::Malformed(_) => RuntimeFailureKind::InvalidResponse,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -818,6 +840,38 @@ fn truncate(value: &str, max_chars: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn classifies_provider_failures_without_model_specific_rules() {
+        assert_eq!(
+            ModelError::Http {
+                status: StatusCode::UNAUTHORIZED,
+                message: "invalid token".into(),
+            }
+            .failure_kind(),
+            RuntimeFailureKind::Authentication
+        );
+        assert_eq!(
+            ModelError::Http {
+                status: StatusCode::TOO_MANY_REQUESTS,
+                message: "capacity".into(),
+            }
+            .failure_kind(),
+            RuntimeFailureKind::RateLimited
+        );
+        assert_eq!(
+            ModelError::Http {
+                status: StatusCode::BAD_GATEWAY,
+                message: "upstream".into(),
+            }
+            .failure_kind(),
+            RuntimeFailureKind::Server
+        );
+        assert_eq!(
+            ModelError::Malformed("not json".into()).failure_kind(),
+            RuntimeFailureKind::InvalidResponse
+        );
+    }
 
     #[test]
     fn parses_openai_tool_turn() {

@@ -1,8 +1,10 @@
-use crate::models::{ArtifactRecord, ArtifactSpec, SlideSpec};
+use crate::models::{ArtifactRecord, ArtifactSpec, SheetSpec, SlideSpec};
+use crate::preview::{content_revision, semantic_file_revision_cancellable};
 use chrono::{DateTime, Utc};
+use serde_json::Value;
 use std::fs;
 use std::io::{Cursor, Write};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use thiserror::Error;
 use uuid::Uuid;
 use zip::write::SimpleFileOptions;
@@ -22,19 +24,44 @@ pub fn materialize_artifacts(
     workspace: &Path,
     specs: &[ArtifactSpec],
 ) -> Result<Vec<ArtifactRecord>, ArtifactError> {
+    materialize_artifacts_cancellable(workspace, specs, &|| false)
+}
+
+pub(crate) fn materialize_artifacts_cancellable(
+    workspace: &Path,
+    specs: &[ArtifactSpec],
+    cancelled: &dyn Fn() -> bool,
+) -> Result<Vec<ArtifactRecord>, ArtifactError> {
     fs::create_dir_all(workspace).map_err(ArtifactError::CreateDirectory)?;
     let mut records = Vec::new();
     for spec in specs {
+        if cancelled() {
+            return Err(ArtifactError::Write(std::io::Error::new(
+                std::io::ErrorKind::Interrupted,
+                "artifact materialization was cancelled",
+            )));
+        }
         let file_name = safe_file_name(&spec.file_name, &spec.kind);
         let path = unique_path(workspace.join(file_name));
         let data = match spec.kind.to_ascii_lowercase().as_str() {
             "docx" | "word" => build_docx(&spec.title, &spec.content)?,
             "pptx" | "powerpoint" | "presentation" => build_pptx(&spec.title, &spec.slides)?,
+            "xlsx" | "excel" | "spreadsheet" => {
+                build_xlsx(&spec.title, &spec.content, &spec.sheets)?
+            }
             "html" => html_document(&spec.title, &spec.content).into_bytes(),
             _ => spec.content.as_bytes().to_vec(),
         };
-        fs::write(&path, data).map_err(ArtifactError::Write)?;
+        let revision = content_revision(&data);
+        fs::write(&path, &data).map_err(ArtifactError::Write)?;
         let metadata = fs::metadata(&path).map_err(ArtifactError::Write)?;
+        let semantic_revision =
+            semantic_file_revision_cancellable(&path, cancelled).map_err(|error| {
+                ArtifactError::Write(match error {
+                    crate::preview::PreviewError::Read(error) => error,
+                    other => std::io::Error::other(other.to_string()),
+                })
+            })?;
         let modified_at = metadata
             .modified()
             .ok()
@@ -47,15 +74,22 @@ pub fn materialize_artifacts(
             kind: spec.kind.clone(),
             size_bytes: metadata.len(),
             modified_at,
+            logical_key: Some(create_artifact_logical_key(&spec.file_name, &spec.kind)),
+            revision,
+            semantic_revision,
+            semantic_context: String::new(),
+            supersedes: None,
+            superseded_by: None,
         });
     }
     Ok(records)
 }
 
-fn safe_file_name(raw: &str, kind: &str) -> String {
+pub(crate) fn safe_file_name(raw: &str, kind: &str) -> String {
     let extension = match kind.to_ascii_lowercase().as_str() {
         "docx" | "word" => "docx",
         "pptx" | "powerpoint" | "presentation" => "pptx",
+        "xlsx" | "excel" | "spreadsheet" => "xlsx",
         "html" => "html",
         "markdown" | "md" => "md",
         "json" => "json",
@@ -87,6 +121,24 @@ fn safe_file_name(raw: &str, kind: &str) -> String {
     name
 }
 
+pub(crate) fn create_artifact_logical_key(file_name: &str, kind: &str) -> String {
+    format!("create:{}", safe_file_name(file_name, kind))
+}
+
+pub(crate) fn artifact_path_logical_key(path: &Path) -> String {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                normalized.pop();
+            }
+            other => normalized.push(other.as_os_str()),
+        }
+    }
+    format!("path:{}", normalized.display())
+}
+
 fn unique_path(path: PathBuf) -> PathBuf {
     if !path.exists() {
         return path;
@@ -100,7 +152,7 @@ fn unique_path(path: PathBuf) -> PathBuf {
         .extension()
         .and_then(|value| value.to_str())
         .unwrap_or("");
-    for index in 2..1000 {
+    for index in 2_u64.. {
         let suffix = if extension.is_empty() {
             format!("{stem}-{index}")
         } else {
@@ -111,7 +163,7 @@ fn unique_path(path: PathBuf) -> PathBuf {
             return candidate;
         }
     }
-    path
+    unreachable!("an unbounded numeric suffix always has another candidate")
 }
 
 fn options() -> SimpleFileOptions {
@@ -142,6 +194,195 @@ fn build_docx(title: &str, content: &str) -> Result<Vec<u8>, ArtifactError> {
         &docx_document(title, content),
     )?;
     Ok(zip.finish()?.into_inner())
+}
+
+fn build_xlsx(title: &str, content: &str, sheets: &[SheetSpec]) -> Result<Vec<u8>, ArtifactError> {
+    let sheets = normalized_sheets(title, content, sheets);
+    let mut zip = ZipWriter::new(Cursor::new(Vec::new()));
+    add_file(
+        &mut zip,
+        "[Content_Types].xml",
+        &xlsx_content_types(sheets.len()),
+    )?;
+    add_file(&mut zip, "_rels/.rels", XLSX_ROOT_RELS)?;
+    add_file(&mut zip, "docProps/app.xml", &xlsx_app(&sheets))?;
+    add_file(&mut zip, "docProps/core.xml", &core_properties(title))?;
+    add_file(&mut zip, "xl/workbook.xml", &xlsx_workbook(&sheets))?;
+    add_file(
+        &mut zip,
+        "xl/_rels/workbook.xml.rels",
+        &xlsx_workbook_rels(sheets.len()),
+    )?;
+    add_file(&mut zip, "xl/styles.xml", XLSX_STYLES)?;
+    for (index, sheet) in sheets.iter().enumerate() {
+        add_file(
+            &mut zip,
+            &format!("xl/worksheets/sheet{}.xml", index + 1),
+            &xlsx_sheet(sheet),
+        )?;
+    }
+    Ok(zip.finish()?.into_inner())
+}
+
+fn normalized_sheets(title: &str, content: &str, sheets: &[SheetSpec]) -> Vec<SheetSpec> {
+    if !sheets.is_empty() {
+        let mut used = Vec::new();
+        return sheets
+            .iter()
+            .enumerate()
+            .map(|(index, sheet)| {
+                let name = unique_sheet_name(&sheet.name, index, &used);
+                used.push(name.clone());
+                SheetSpec {
+                    name,
+                    rows: sheet.rows.clone(),
+                }
+            })
+            .collect();
+    }
+    let delimiter = if content.contains('\t') { '\t' } else { ',' };
+    let rows = content
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| {
+            line.split(delimiter)
+                .map(|cell| Value::String(cell.trim().to_string()))
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+    vec![SheetSpec {
+        name: unique_sheet_name(title, 0, &[]),
+        rows: if rows.is_empty() {
+            vec![vec![Value::String(title.to_string())]]
+        } else {
+            rows
+        },
+    }]
+}
+
+fn unique_sheet_name(raw: &str, index: usize, used: &[String]) -> String {
+    let mut base = raw
+        .chars()
+        .filter(|character| !"[]:*?/\\".contains(*character) && !character.is_control())
+        .collect::<String>();
+    base = base.trim().trim_matches('\'').chars().take(31).collect();
+    if base.is_empty() {
+        base = format!("Sheet {}", index + 1);
+    }
+    let mut candidate = base.clone();
+    let mut suffix = 2;
+    while used
+        .iter()
+        .any(|name| name.eq_ignore_ascii_case(&candidate))
+    {
+        let tail = format!(" ({suffix})");
+        let keep = 31usize.saturating_sub(tail.chars().count());
+        candidate = format!("{}{}", base.chars().take(keep).collect::<String>(), tail);
+        suffix += 1;
+    }
+    candidate
+}
+
+fn xlsx_sheet(sheet: &SheetSpec) -> String {
+    let max_columns = sheet.rows.iter().map(Vec::len).max().unwrap_or(1).max(1);
+    let max_rows = sheet.rows.len().max(1);
+    let rows = sheet
+        .rows
+        .iter()
+        .enumerate()
+        .map(|(row_index, row)| {
+            let cells = row
+                .iter()
+                .enumerate()
+                .map(|(column_index, value)| {
+                    xlsx_cell(value, column_index, row_index, row_index == 0)
+                })
+                .collect::<String>();
+            format!("<row r=\"{}\">{cells}</row>", row_index + 1)
+        })
+        .collect::<String>();
+    format!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?><worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\"><dimension ref=\"A1:{}{}\"/><sheetViews><sheetView workbookViewId=\"0\"/></sheetViews><sheetFormatPr defaultRowHeight=\"15\"/><sheetData>{rows}</sheetData><pageMargins left=\"0.7\" right=\"0.7\" top=\"0.75\" bottom=\"0.75\" header=\"0.3\" footer=\"0.3\"/></worksheet>",
+        spreadsheet_column_name(max_columns - 1),
+        max_rows
+    )
+}
+
+fn xlsx_cell(value: &Value, column: usize, row: usize, header: bool) -> String {
+    let reference = format!("{}{}", spreadsheet_column_name(column), row + 1);
+    let style = if header { " s=\"1\"" } else { "" };
+    match value {
+        Value::Null => format!("<c r=\"{reference}\"{style}/>"),
+        Value::Bool(value) => format!(
+            "<c r=\"{reference}\" t=\"b\"{style}><v>{}</v></c>",
+            if *value { 1 } else { 0 }
+        ),
+        Value::Number(value) => {
+            format!("<c r=\"{reference}\"{style}><v>{value}</v></c>")
+        }
+        Value::String(value) if value.starts_with('=') && value.len() > 1 => format!(
+            "<c r=\"{reference}\"{style}><f>{}</f><v>0</v></c>",
+            xml_escape(&value[1..])
+        ),
+        Value::String(value) => xlsx_inline_string(&reference, style, value),
+        value => xlsx_inline_string(&reference, style, &value.to_string()),
+    }
+}
+
+fn xlsx_inline_string(reference: &str, style: &str, value: &str) -> String {
+    format!(
+        "<c r=\"{reference}\" t=\"inlineStr\"{style}><is><t xml:space=\"preserve\">{}</t></is></c>",
+        xml_escape(value)
+    )
+}
+
+fn spreadsheet_column_name(mut index: usize) -> String {
+    let mut name = String::new();
+    loop {
+        name.insert(0, (b'A' + (index % 26) as u8) as char);
+        if index < 26 {
+            return name;
+        }
+        index = index / 26 - 1;
+    }
+}
+
+fn xlsx_content_types(sheet_count: usize) -> String {
+    let sheets = (1..=sheet_count)
+        .map(|number| format!("<Override PartName=\"/xl/worksheets/sheet{number}.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml\"/>"))
+        .collect::<String>();
+    format!("<?xml version=\"1.0\" encoding=\"UTF-8\"?><Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\"><Default Extension=\"rels\" ContentType=\"application/vnd.openxmlformats-package.relationships+xml\"/><Default Extension=\"xml\" ContentType=\"application/xml\"/><Override PartName=\"/xl/workbook.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml\"/><Override PartName=\"/xl/styles.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml\"/><Override PartName=\"/docProps/core.xml\" ContentType=\"application/vnd.openxmlformats-package.core-properties+xml\"/><Override PartName=\"/docProps/app.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.extended-properties+xml\"/>{sheets}</Types>")
+}
+
+fn xlsx_workbook(sheets: &[SheetSpec]) -> String {
+    let items = sheets
+        .iter()
+        .enumerate()
+        .map(|(index, sheet)| {
+            format!(
+                "<sheet name=\"{}\" sheetId=\"{}\" r:id=\"rId{}\"/>",
+                xml_escape(&sheet.name),
+                index + 1,
+                index + 1
+            )
+        })
+        .collect::<String>();
+    format!("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?><workbook xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\"><bookViews><workbookView/></bookViews><sheets>{items}</sheets><calcPr calcId=\"191029\" fullCalcOnLoad=\"1\" forceFullCalc=\"1\"/></workbook>")
+}
+
+fn xlsx_workbook_rels(sheet_count: usize) -> String {
+    let sheets = (1..=sheet_count)
+        .map(|number| format!("<Relationship Id=\"rId{number}\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet\" Target=\"worksheets/sheet{number}.xml\"/>"))
+        .collect::<String>();
+    format!("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?><Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">{sheets}<Relationship Id=\"rId{}\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles\" Target=\"styles.xml\"/></Relationships>", sheet_count + 1)
+}
+
+fn xlsx_app(sheets: &[SheetSpec]) -> String {
+    let titles = sheets
+        .iter()
+        .map(|sheet| format!("<vt:lpstr>{}</vt:lpstr>", xml_escape(&sheet.name)))
+        .collect::<String>();
+    format!("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?><Properties xmlns=\"http://schemas.openxmlformats.org/officeDocument/2006/extended-properties\" xmlns:vt=\"http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes\"><Application>LingShu</Application><Company>Roy Zhao</Company><AppVersion>1.0</AppVersion><TitlesOfParts><vt:vector size=\"{}\" baseType=\"lpstr\">{titles}</vt:vector></TitlesOfParts></Properties>", sheets.len())
 }
 
 fn docx_document(title: &str, content: &str) -> String {
@@ -303,6 +544,8 @@ fn xml_escape(value: &str) -> String {
         .replace('\'', "&apos;")
 }
 
+const XLSX_ROOT_RELS: &str = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?><Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\"><Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument\" Target=\"xl/workbook.xml\"/><Relationship Id=\"rId2\" Type=\"http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties\" Target=\"docProps/core.xml\"/><Relationship Id=\"rId3\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/extended-properties\" Target=\"docProps/app.xml\"/></Relationships>";
+const XLSX_STYLES: &str = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?><styleSheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\"><fonts count=\"2\"><font><sz val=\"11\"/><color theme=\"1\"/><name val=\"Aptos\"/><family val=\"2\"/></font><font><b/><sz val=\"11\"/><color rgb=\"FFFFFFFF\"/><name val=\"Aptos\"/><family val=\"2\"/></font></fonts><fills count=\"3\"><fill><patternFill patternType=\"none\"/></fill><fill><patternFill patternType=\"gray125\"/></fill><fill><patternFill patternType=\"solid\"><fgColor rgb=\"FF0A9B8E\"/><bgColor indexed=\"64\"/></patternFill></fill></fills><borders count=\"1\"><border><left/><right/><top/><bottom/><diagonal/></border></borders><cellStyleXfs count=\"1\"><xf numFmtId=\"0\" fontId=\"0\" fillId=\"0\" borderId=\"0\"/></cellStyleXfs><cellXfs count=\"2\"><xf numFmtId=\"0\" fontId=\"0\" fillId=\"0\" borderId=\"0\" xfId=\"0\"/><xf numFmtId=\"0\" fontId=\"1\" fillId=\"2\" borderId=\"0\" xfId=\"0\" applyFont=\"1\" applyFill=\"1\"/></cellXfs><cellStyles count=\"1\"><cellStyle name=\"Normal\" xfId=\"0\" builtinId=\"0\"/></cellStyles></styleSheet>";
 const DOCX_CONTENT_TYPES: &str = "<?xml version=\"1.0\" encoding=\"UTF-8\"?><Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\"><Default Extension=\"rels\" ContentType=\"application/vnd.openxmlformats-package.relationships+xml\"/><Default Extension=\"xml\" ContentType=\"application/xml\"/><Override PartName=\"/word/document.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml\"/><Override PartName=\"/word/styles.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml\"/><Override PartName=\"/docProps/core.xml\" ContentType=\"application/vnd.openxmlformats-package.core-properties+xml\"/><Override PartName=\"/docProps/app.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.extended-properties+xml\"/></Types>";
 const DOCX_ROOT_RELS: &str = "<?xml version=\"1.0\" encoding=\"UTF-8\"?><Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\"><Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument\" Target=\"word/document.xml\"/><Relationship Id=\"rId2\" Type=\"http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties\" Target=\"docProps/core.xml\"/><Relationship Id=\"rId3\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/extended-properties\" Target=\"docProps/app.xml\"/></Relationships>";
 const DOCX_DOCUMENT_RELS: &str = "<?xml version=\"1.0\" encoding=\"UTF-8\"?><Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\"/>";
@@ -323,6 +566,7 @@ const PPTX_TABLE_STYLES: &str = "<?xml version=\"1.0\" encoding=\"UTF-8\"?><a:tb
 mod tests {
     use super::*;
     use crate::preview::{preview_file, PreviewKind};
+    use serde_json::json;
     use tempfile::tempdir;
 
     #[test]
@@ -337,6 +581,7 @@ mod tests {
                     kind: "docx".into(),
                     content: "# Section\nBody".into(),
                     slides: vec![],
+                    sheets: vec![],
                 },
                 ArtifactSpec {
                     title: "Deck".into(),
@@ -348,11 +593,26 @@ mod tests {
                         bullets: vec!["One".into(), "Two".into()],
                         notes: String::new(),
                     }],
+                    sheets: vec![],
+                },
+                ArtifactSpec {
+                    title: "Metrics".into(),
+                    file_name: "metrics.xlsx".into(),
+                    kind: "xlsx".into(),
+                    content: String::new(),
+                    slides: vec![],
+                    sheets: vec![SheetSpec {
+                        name: "Summary".into(),
+                        rows: vec![
+                            vec![json!("Metric"), json!("Value"), json!("Verified")],
+                            vec![json!("Revenue"), json!(120), json!(true)],
+                        ],
+                    }],
                 },
             ],
         )
         .unwrap();
-        assert_eq!(records.len(), 2);
+        assert_eq!(records.len(), 3);
         assert_eq!(
             preview_file(&records[0].path).unwrap().kind,
             PreviewKind::Document
@@ -361,5 +621,40 @@ mod tests {
             preview_file(&records[1].path).unwrap().sections[0],
             "Problem\nOne\nTwo"
         );
+        let spreadsheet = preview_file(&records[2].path).unwrap();
+        assert_eq!(spreadsheet.kind, PreviewKind::Spreadsheet);
+        assert!(spreadsheet.content.contains("Summary"));
+        assert!(spreadsheet.content.contains("Revenue\t120\tTRUE"));
+    }
+
+    #[test]
+    fn office_semantic_revision_ignores_container_and_core_timestamp_noise() {
+        let dir = tempdir().unwrap();
+        let spec = ArtifactSpec {
+            title: "Stable report".into(),
+            file_name: "stable-report.docx".into(),
+            kind: "docx".into(),
+            content: "Same audience-facing content.".into(),
+            slides: vec![],
+            sheets: vec![],
+        };
+        let first = materialize_artifacts(dir.path(), std::slice::from_ref(&spec))
+            .unwrap()
+            .remove(0);
+        std::thread::sleep(std::time::Duration::from_millis(1_100));
+        let second = materialize_artifacts(dir.path(), std::slice::from_ref(&spec))
+            .unwrap()
+            .remove(0);
+
+        assert_ne!(first.path, second.path);
+        assert_ne!(first.revision, second.revision);
+        assert_eq!(first.semantic_revision, second.semantic_revision);
+
+        let mut changed = spec;
+        changed.content = "Materially changed audience-facing content.".into();
+        let changed = materialize_artifacts(dir.path(), &[changed])
+            .unwrap()
+            .remove(0);
+        assert_ne!(first.semantic_revision, changed.semantic_revision);
     }
 }

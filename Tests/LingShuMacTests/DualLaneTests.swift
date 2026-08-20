@@ -65,7 +65,7 @@ final class DualLaneTests: XCTestCase {
         XCTAssertFalse(state.canDeletePendingChatTurn(UUID()), "不在 pending 列表 → 不可删")
     }
 
-    // 卡住任务的「气泡内待输入」:标记 + 气泡内直答(直达隔离会话,不经分诊)。
+    // 卡住任务的待输入状态:问题保留在原气泡,统一输入框直达隔离会话续跑(不经分诊)。
     func testDispatchedTaskAwaitingInputInBubble() {
         let state = LingShuState()
         let rec = LingShuTaskExecutionRecord(id: "r1", title: "斐波那契", prompt: "P", status: .running, summary: "",
@@ -78,16 +78,136 @@ final class DualLaneTests: XCTestCase {
         // 卡住 → 把气泡标成「待你输入」。
         state.markDispatchedBubbleAwaitingInput(recordID: "r1", question: "选 A 还是 B?")
         let m = state.chatMessages.first { $0.id == bubble.id }
-        XCTAssertEqual(m?.awaitingInputForRecordID, "r1", "气泡标成待输入(渲染气泡内回复控件)")
+        XCTAssertEqual(m?.awaitingInputForRecordID, "r1", "问题气泡标成待输入")
         XCTAssertEqual(m?.isLoading, false, "不再 loading")
+        XCTAssertTrue(m?.text.contains("选 A 还是 B?") == true, "问题内容保留在原气泡")
         XCTAssertNil(state.dispatchedTaskBubbles["r1"], "气泡定稿,旧映射清掉(答复时新建续跑气泡)")
 
-        // 气泡内直答 → 清待输入标记 + 显示用户答复(直达隔离会话续跑)。
+        // 统一输入框直答 → 冻结原问题,用户答案与后续助手输出各自追加新气泡。
         state.agentSubTaskRecords["sub1"] = "r1"
         state.answerDispatchedTask(recordID: "r1", answer: "A")
-        XCTAssertNil(state.chatMessages.first { $0.id == bubble.id }?.awaitingInputForRecordID, "答后清除待输入(置灰)")
-        XCTAssertTrue(state.chatMessages.contains { $0.isUser && $0.text == "A" }, "用户答复A显示在气泡处")
-        XCTAssertNotNil(state.dispatchedTaskBubbles["r1"], "新建了续跑进度气泡")
+        let frozenQuestion = state.chatMessages.first { $0.id == bubble.id }
+        XCTAssertNil(frozenQuestion?.awaitingInputForRecordID, "答后冻结原问题")
+        XCTAssertTrue(frozenQuestion?.text.contains("选 A 还是 B?") == true, "答后不得改写原问题")
+
+        let answerIndexes = state.chatMessages.indices.filter {
+            state.chatMessages[$0].isUser && state.chatMessages[$0].text == "A"
+        }
+        XCTAssertEqual(answerIndexes.count, 1, "用户答案只能登记一次")
+        let continuationID = try? XCTUnwrap(state.dispatchedTaskBubbles["r1"])
+        let questionIndex = state.chatMessages.firstIndex { $0.id == bubble.id }
+        let continuationIndex = continuationID.flatMap { id in
+            state.chatMessages.firstIndex { $0.id == id }
+        }
+        XCTAssertNotNil(continuationIndex, "新建了续跑进度气泡")
+        XCTAssertTrue(
+            (questionIndex ?? .max) < (answerIndexes.first ?? .min)
+                && (answerIndexes.first ?? .max) < (continuationIndex ?? .min),
+            "时间线必须严格保持:问题 < 用户答案 < 新助手续跑"
+        )
+    }
+
+    func testUnifiedComposerDoesNotDuplicateDispatchedAnswer() {
+        let state = LingShuState()
+        let rec = LingShuTaskExecutionRecord(
+            id: "r2",
+            title: "选择任务",
+            prompt: "P",
+            status: .running,
+            summary: "",
+            participants: [],
+            createdAt: Date(),
+            updatedAt: Date(),
+            messages: []
+        )
+        state.taskExecutionRecords = [rec]
+        let question = ChatMessage(
+            speaker: "灵枢",
+            text: "请选择 1 或 2",
+            isUser: false,
+            taskRecordID: "r2",
+            awaitingInputForRecordID: "r2"
+        )
+        let answer = ChatMessage(speaker: "你", text: "2", isUser: true, taskRecordID: "r2")
+        state.chatMessages = [question, answer]
+        state.agentSubTaskRecords["sub2"] = "r2"
+
+        state.answerDispatchedTask(recordID: "r2", answer: "2", appendUserMessage: false)
+
+        XCTAssertEqual(state.chatMessages.filter { $0.isUser && $0.text == "2" }.count, 1)
+        XCTAssertEqual(state.chatMessages.first?.text, "请选择 1 或 2", "旧问题必须保持原样")
+        XCTAssertNil(state.chatMessages.first?.awaitingInputForRecordID)
+        XCTAssertEqual(state.chatMessages[1].id, answer.id, "统一输入框生成的用户气泡保持在问题下方")
+        XCTAssertFalse(state.chatMessages.last?.isUser ?? true, "恢复输出必须在用户答案下方新建助手气泡")
+    }
+
+    func testResolvedStructuredInteractionKeepsReadOnlyHistory() {
+        let state = LingShuState()
+        let recordID = "r3"
+        let request = LingShuHumanInteractionRequest(
+            id: "interaction-r3",
+            kind: .question,
+            title: "补充信息",
+            prompt: "请选择处理方式",
+            options: [
+                .init(id: "1", label: "方案一", value: "1"),
+                .init(id: "2", label: "方案二", value: "2")
+            ]
+        )
+        let question = ChatMessage(
+            speaker: "灵枢",
+            text: request.prompt,
+            isUser: false,
+            taskRecordID: recordID,
+            awaitingInputForRecordID: recordID,
+            humanInteraction: request
+        )
+        state.chatMessages = [question]
+        state.pendingDispatchedHumanInteractions[recordID] = request
+        state.agentSubTaskRecords["sub3"] = recordID
+
+        state.answerDispatchedTask(recordID: recordID, answer: "2", displayAnswer: "方案二")
+
+        let frozenQuestion = state.chatMessages.first { $0.id == question.id }
+        XCTAssertEqual(frozenQuestion?.humanInteraction, request, "结构化问题卡必须作为只读历史保留")
+        XCTAssertEqual(frozenQuestion?.resolvedChoice, "方案二")
+        XCTAssertNil(frozenQuestion?.awaitingInputForRecordID, "历史卡不得再次接收输入")
+        XCTAssertEqual(state.chatMessages.filter { $0.isUser && $0.text == "方案二" }.count, 1)
+    }
+
+    func testActiveMainTurnContinuationNeverWritesBackIntoQuestionBubble() {
+        let state = LingShuState()
+        let question = ChatMessage(
+            speaker: "灵枢",
+            text: "请选择 1 或 2",
+            isUser: false,
+            isLoading: false,
+            taskRecordID: "main-r1"
+        )
+        state.chatMessages = [question]
+        state.activeAgentTurnBubbleID = question.id
+        state.activeAgentVisibleBubbleID = question.id
+
+        state.appendInteractionUserMessage("2", recordID: "main-r1")
+        state.beginActiveMainTurnContinuation(recordID: "main-r1")
+
+        XCTAssertEqual(state.chatMessages[0].id, question.id)
+        XCTAssertEqual(state.chatMessages[0].text, "请选择 1 或 2", "主回合原问题必须冻结")
+        XCTAssertTrue(state.chatMessages[1].isUser)
+        XCTAssertEqual(state.chatMessages[1].text, "2")
+        XCTAssertFalse(state.chatMessages[2].isUser)
+        XCTAssertTrue(state.chatMessages[2].isLoading)
+        XCTAssertEqual(state.activeAgentVisibleBubbleID, state.chatMessages[2].id)
+
+        guard let visibleID = state.activeAgentVisibleBubbleID else {
+            return XCTFail("必须建立新的助手流式气泡")
+        }
+        let streamed = String(repeating: "继续处理", count: 40)
+        state.appendStreamingBubbleText(streamed, to: visibleID)
+        state.flushStreamingBubbleText(for: visibleID)
+
+        XCTAssertEqual(state.chatMessages[0].text, "请选择 1 或 2", "后续流式输出不得回写旧问题")
+        XCTAssertEqual(state.chatMessages[2].text, streamed, "后续流式输出只追加到新助手气泡")
     }
 
     func testAnswerEmptyIsNoop() {

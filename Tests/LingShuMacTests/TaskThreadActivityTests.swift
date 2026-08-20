@@ -9,6 +9,32 @@ final class TaskThreadActivityTests: XCTestCase {
         return state
     }
 
+    private func makeHierarchyRecord(
+        id: String,
+        status: LingShuTaskExecutionStatus,
+        parentID: String? = nil,
+        updatedAt: Date
+    ) -> LingShuTaskExecutionRecord {
+        var record = LingShuTaskExecutionRecord(
+            id: id,
+            title: id,
+            prompt: id,
+            status: status,
+            summary: id,
+            participants: ["LingShu"],
+            createdAt: updatedAt,
+            updatedAt: updatedAt,
+            messages: []
+        )
+        _ = record.refreshThreadCommit(
+            status: status,
+            summary: id,
+            parentTaskId: parentID,
+            now: updatedAt
+        )
+        return record
+    }
+
     func testSubthreadRunDoesNotReplaceMainTurnStateOrCreateChatBubble() {
         let state = makeState()
         let mainRecordID = state.createTaskExecutionRecord(for: "主线程正在回答")
@@ -71,6 +97,19 @@ final class TaskThreadActivityTests: XCTestCase {
         XCTAssertFalse(state.isTaskThreadUnread(recordID), "用户正在看该线程时，完成结果已经读到，不应再加未读")
     }
 
+    func testStartingNextTopLevelTaskConsumesCompletionNotices() {
+        let state = makeState()
+        let recordID = state.createTaskExecutionRecord(for: "后台任务")
+        state.beginTaskThreadRun(recordID: recordID)
+        state.finishTaskRecord(recordID, status: .completed, summary: "后台任务完成")
+        XCTAssertEqual(state.unreadTaskThreadCount, 1)
+
+        state.consumeTaskThreadCompletionNoticesForNewTask()
+
+        XCTAssertEqual(state.unreadTaskThreadCount, 0)
+        XCTAssertFalse(state.isTaskThreadUnread(recordID))
+    }
+
     func testSuccessfulStatusPartitionKeepsEveryOtherStatusInNeedsAttentionSection() {
         let successful: [LingShuTaskExecutionStatus] = [.completed, .answered, .verified]
         let needsAttention: [LingShuTaskExecutionStatus] = [
@@ -80,5 +119,63 @@ final class TaskThreadActivityTests: XCTestCase {
 
         XCTAssertTrue(successful.allSatisfy(\.isSuccessfulCompletion))
         XCTAssertTrue(needsAttention.allSatisfy { !$0.isSuccessfulCompletion })
+    }
+
+    func testTaskPoolGroupsChildThreadsUnderTheirMainTask() throws {
+        let now = Date()
+        let root = makeHierarchyRecord(id: "root", status: .completed, updatedAt: now)
+        let child = makeHierarchyRecord(
+            id: "child",
+            status: .completed,
+            parentID: root.id,
+            updatedAt: now.addingTimeInterval(2)
+        )
+        let grandchild = makeHierarchyRecord(
+            id: "grandchild",
+            status: .verified,
+            parentID: child.id,
+            updatedAt: now.addingTimeInterval(3)
+        )
+        let otherRoot = makeHierarchyRecord(
+            id: "other-root",
+            status: .running,
+            updatedAt: now.addingTimeInterval(1)
+        )
+
+        let groups = LingShuTaskThreadHierarchy.groups([child, root, grandchild, otherRoot])
+
+        XCTAssertEqual(Set(groups.map(\.id)), Set([root.id, otherRoot.id]))
+        let rootGroup = try XCTUnwrap(groups.first { $0.id == root.id })
+        XCTAssertEqual(rootGroup.descendants.map(\.id), [child.id, grandchild.id])
+        XCTAssertEqual(rootGroup.descendants.map(\.depth), [1, 2])
+    }
+
+    func testCompletedMainTaskRemainsAuthoritativeWhenChildWasSuspended() throws {
+        let now = Date()
+        let root = makeHierarchyRecord(id: "delivered", status: .completed, updatedAt: now)
+        let child = makeHierarchyRecord(
+            id: "late-child",
+            status: .suspended,
+            parentID: root.id,
+            updatedAt: now.addingTimeInterval(1)
+        )
+
+        let group = try XCTUnwrap(LingShuTaskThreadHierarchy.groups([child, root]).first)
+
+        XCTAssertEqual(group.root.status, .completed)
+        XCTAssertTrue(group.root.status.isSuccessfulCompletion)
+        XCTAssertEqual(group.descendants.map(\.record.status), [.suspended])
+    }
+
+    func testLegacyWatchdogDoesNotReapSharedKernelOwnedTask() async {
+        let state = makeState()
+        let recordID = state.createTaskExecutionRecord(for: "共享内核任务")
+        state.beginTaskThreadRun(recordID: recordID)
+        state.sharedKernelKnownThreadIDs.insert(recordID)
+
+        await state.reapOrphanedDispatchedTasks()
+
+        XCTAssertEqual(state.taskExecutionRecords.first { $0.id == recordID }?.status, .running)
+        XCTAssertTrue(state.activeTaskThreadRecordIDs.contains(recordID))
     }
 }

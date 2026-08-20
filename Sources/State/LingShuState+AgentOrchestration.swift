@@ -5,7 +5,7 @@ import Foundation
 @MainActor
 extension LingShuState {
 
-    /// 把编排器事件桥接到 UI:子任务建成独立任务记录(任务号 + 列表),结果/卡住/失败回灌对话 + 简报主线程。
+    /// 把编排器事件桥接到 UI:子任务建成独立任务记录(任务号 + 列表),结果/等待恢复/卡住回灌对话 + 简报主线程。
     func installAgentEventSinkIfNeeded() {
         guard !agentEventSinkInstalled else { return }
         agentEventSinkInstalled = true
@@ -37,9 +37,10 @@ extension LingShuState {
     }
 
     func handleOrchestratorEvent(_ event: LingShuOrchestratorEvent) {
-        // 派发任务进入终态(完成/失败/卡住/中断)→ 收掉 LOOP 相位,别让本体停在"执行中"不灭。
+        // 派发任务到达本轮停止点(完成/待恢复/暂停/卡住/中断)→ 收掉 LOOP 相位,
+        // 别让本体停在"执行中"不灭。待恢复/暂停不是目标失败,原会话仍可续跑。
         switch event {
-        case .completed, .failed, .blocked, .interrupted: setLoopPhase(.idle)
+        case .completed, .needsRecovery, .suspended, .blocked, .interrupted: setLoopPhase(.idle)
         default: break
         }
         switch event {
@@ -128,27 +129,21 @@ extension LingShuState {
                 chatMessages.append(.init(speaker: "灵枢", text: "⏸ 等待前提:子任务「\(objective)」——\(cleanQuestion)", isUser: false, choices: LingShuChoiceParsing.parse(question) ?? LingShuChoiceParsing.parse(cleanQuestion)))
             }
             briefMainThread("子任务「\(objective)」卡住,等待用户补充:\(cleanQuestion.prefix(160))")
-        case .failed(let id, let objective, let summary):
+        case .needsRecovery(let id, let objective, let summary):
             guard !isRoleAgentEventID(id) else { return }
             let recordID = agentSubTaskRecords[id]
             if recordID == blockedDispatchedRecordID { blockedDispatchedRecordID = nil }
-            if let recordID, manuallyStoppedTaskRecords.remove(recordID) != nil {
-                let stopped = "用户已手动中止该任务。"
-                appendTaskRecordMessage(recordID, actor: "用户", role: "停止", kind: .warning, text: stopped)
-                finishTaskRecord(recordID, status: .failed, summary: stopped)
-                briefMainThread("子任务「\(objective)」已由用户手动中止。")
-                return
-            }
-            // P2 真闭环:即便模型撞顶/停滞被判 failed,若完成闸早已判 waitingForUser/partial(如缺凭据需用户),
-            // 以完成闸为准——给出「需要你…」的诚实收尾,而不是笼统「异常」,并指向它便于续接。
+            // Loop 到达安全轮次边界或验收暂未通过时,保留原目标、上下文和产物进入恢复点。
+            // 完成闸若已有更具体状态(待用户/部分完成/待修订),继续以完成闸为准。
             let outcome = recordID.flatMap { rid in taskExecutionRecords.first { $0.id == rid }?.taskOutcome }
             let failedVerification = LingShuVerificationFailure.isMarked(summary)
-            let status = Self.finishStatus(for: outcome, fallback: failedVerification ? .needsRevision : .blocked)
+            let status = Self.finishStatus(for: outcome, fallback: failedVerification ? .needsRevision : .waitingForUser)
             let honest = recordID.flatMap { outcomeAwareSummary(recordID: $0, base: summary) } ?? LingShuVisibleModelText.clean(summary)
             if let notice = LingShuAgentPluginStore.unavailableNotice(from: honest, knownPlugins: LingShuAgentPluginStore.load()) {
                 if let recordID {
                     appendTaskRecordMessage(recordID, actor: notice.agentName, role: "插件不可用", kind: .warning, text: notice.message)
-                    finishTaskRecord(recordID, status: .failed, summary: notice.message)
+                    finishTaskRecord(recordID, status: .waitingForUser, summary: notice.message)
+                    blockedDispatchedRecordID = recordID
                 }
                 let head = "⚠️ \(notice.agentName) 插件不可用"
                 postOrchestratorChat(recordID: recordID, dispatched: notice.message, spawned: "\(head):子任务「\(objective)」——\(notice.message.prefix(220))")
@@ -156,16 +151,28 @@ extension LingShuState {
                 return
             }
             if let recordID {
-                let role = status == .waitingForUser ? "待用户" : (status == .needsRevision ? "验收未通过" : "失败")
+                let role = status == .needsRevision ? "待修订" : "待恢复"
                 appendTaskRecordMessage(recordID, actor: "灵枢", role: role, kind: .warning, text: honest)
                 finishTaskRecord(recordID, status: status, summary: honest)
-                if status == .waitingForUser || status == .partial || status == .needsRevision { blockedDispatchedRecordID = recordID }
+                blockedDispatchedRecordID = recordID
             }
-            let head = status == .waitingForUser ? "⏸ 等待前提"
+            let head = status == .waitingForUser ? "⏸ 等待继续"
                 : (status == .partial ? "⚠️ 部分完成"
-                   : (status == .needsRevision ? "⚠️ 验收未通过" : "⚠️ 未能自行收尾"))
+                   : (status == .needsRevision ? "⚠️ 待修订" : "⏸ 待恢复"))
             postOrchestratorChat(recordID: recordID, dispatched: honest, spawned: "\(head):子任务「\(objective)」——\(honest.prefix(220))")
             briefMainThread("子任务「\(objective)」\(head):\(honest.prefix(160))")
+        case .suspended(let id, let objective, let summary):
+            guard !isRoleAgentEventID(id) else { return }
+            let recordID = agentSubTaskRecords[id]
+            let cleaned = LingShuVisibleModelText.clean(summary)
+            let stopped = cleaned.isEmpty ? "用户已暂停该任务。" : cleaned
+            if let recordID {
+                manuallyStoppedTaskRecords.remove(recordID)
+                appendTaskRecordMessage(recordID, actor: "用户", role: "暂停", kind: .warning, text: stopped)
+                finishTaskRecord(recordID, status: .suspended, summary: stopped)
+                blockedDispatchedRecordID = recordID
+            }
+            briefMainThread("子任务「\(objective)」已暂停,可从原进度继续。")
         case .interrupted(let id, let objective, let reason):
             guard !isRoleAgentEventID(id) else { return }
             if LingShuModelServiceFailure.isNativeMultimodalUnsupportedReason(reason) {
@@ -192,7 +199,8 @@ extension LingShuState {
             }
             if LingShuModelServiceFailure.isNonRecoverableReason(reason) {
                 let message = LingShuModelServiceFailure.userFacingReason(reason)
-                let status = LingShuModelServiceFailure.decodeReason(reason)?.taskStatus ?? .failed
+                let decodedStatus = LingShuModelServiceFailure.decodeReason(reason)?.taskStatus ?? .waitingForUser
+                let status: LingShuTaskExecutionStatus = decodedStatus == .failed ? .suspended : decodedStatus
                 let recordID = agentSubTaskRecords[id]
                 if let recordID {
                     appendTaskRecordMessage(recordID, actor: "模型通道", role: "不可自动恢复", kind: .warning, text: message)

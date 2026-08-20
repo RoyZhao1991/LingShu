@@ -2,16 +2,16 @@ import Foundation
 import Security
 import CryptoKit
 
-/// Local credential store backed by macOS Keychain.
+/// Local credential store backed by an app-owned, machine-bound AES-GCM envelope.
 ///
-/// Production credentials never enter UserDefaults or a repository-visible file. Releases use a
-/// stable Apple signature, so Keychain is both the strongest available local boundary and stable
-/// across app upgrades. Older machine-bound AES files are migrated once and removed only after
-/// every value is safely written to Keychain. Supplying `directory` without `useKeychain` selects
-/// the deterministic file backend used by tests.
+/// Production credentials never enter UserDefaults or a repository-visible file. The encrypted
+/// envelope lives under Application Support with mode 0600 and does not depend on an unlocked
+/// login Keychain. Production launch never reads Keychain; legacy import and `useKeychain: true`
+/// remain explicit compatibility paths for migration tools and tests.
 final class LingShuCredentialStore: @unchecked Sendable {
     private let service: String
     private let fileURL: URL
+    private let keychainMigrationMarkerURL: URL
     private let usesKeychain: Bool
     private let isEphemeral: Bool
     private let lock = NSLock()
@@ -44,15 +44,17 @@ final class LingShuCredentialStore: @unchecked Sendable {
         service: String = "cn.lingshu.model-credentials",
         directory: URL? = nil,
         useKeychain: Bool? = nil,
-        ephemeral: Bool? = nil
+        ephemeral: Bool? = nil,
+        importLegacyKeychain: Bool? = nil
     ) {
         let isEphemeral = ephemeral ?? LingShuRuntimeEnvironment.isCleanUserSmoke
         self.service = service
         self.isEphemeral = isEphemeral
-        self.usesKeychain = !isEphemeral && (useKeychain ?? (directory == nil))
+        self.usesKeychain = !isEphemeral && (useKeychain ?? false)
         let base = directory ?? LingShuRuntimeEnvironment.homeDirectory
             .appendingPathComponent("Library/Application Support/LingShu/Credentials", isDirectory: true)
         self.fileURL = base.appendingPathComponent("credentials.json")
+        self.keychainMigrationMarkerURL = base.appendingPathComponent(".keychain-imported-v3")
         guard !isEphemeral else { return }
         try? FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
         if usesKeychain {
@@ -60,6 +62,14 @@ final class LingShuCredentialStore: @unchecked Sendable {
             migrateLegacyFileIfNeeded()
         } else {
             loadFile()
+            // Establish the app-owned backend before the optional Keychain import. A locked or
+            // unavailable legacy Keychain must never leave the setup flow without writable storage.
+            if !FileManager.default.fileExists(atPath: fileURL.path) {
+                _ = persist()
+            }
+            if importLegacyKeychain == true {
+                importKeychainOnceIfNeeded()
+            }
         }
     }
 
@@ -107,8 +117,16 @@ final class LingShuCredentialStore: @unchecked Sendable {
             return true
         }
 
+        let previous = cache[providerID]
         cache[providerID] = trimmed
-        persist()
+        guard persist() else {
+            if let previous {
+                cache[providerID] = previous
+            } else {
+                cache.removeValue(forKey: providerID)
+            }
+            return false
+        }
         return true
     }
 
@@ -127,7 +145,8 @@ final class LingShuCredentialStore: @unchecked Sendable {
         return cache.filter { !$0.value.isEmpty }
     }
 
-    /// 批量写入凭据(供「加密配置导入」一次性恢复)。生产环境写入 Keychain；测试文件后端仍使用本机绑定 AES-GCM。
+    /// 批量写入凭据(供「加密配置导入」一次性恢复)。生产环境使用本机绑定 AES-GCM；
+    /// 显式 `useKeychain: true` 的兼容测试仍写入 Keychain。
     func bulkSet(_ entries: [String: String]) {
         lock.lock()
         defer { lock.unlock() }
@@ -138,7 +157,7 @@ final class LingShuCredentialStore: @unchecked Sendable {
                 cache[id] = v
             }
         }
-        if !usesKeychain, !isEphemeral { persist() }
+        if !usesKeychain, !isEphemeral { _ = persist() }
     }
 
     var usesEphemeralBackend: Bool { isEphemeral }
@@ -158,17 +177,63 @@ final class LingShuCredentialStore: @unchecked Sendable {
     private func loadFile() {
         guard let values = Self.decodeLegacyFile(at: fileURL) else { return }
         cache = values
-        persist() // Plain v1 files are immediately rewritten as an encrypted envelope.
+        _ = persist() // Plain v1 files are immediately rewritten as an encrypted envelope.
     }
 
-    private func persist() {
+    @discardableResult
+    private func persist() -> Bool {
         let stored = cache.filter { !$0.value.isEmpty }
         guard let plain = try? JSONEncoder().encode(stored),
-              let sealed = Self.encrypt(plain) else { return }
+              let sealed = Self.encrypt(plain) else { return false }
         let envelope = Envelope(v: 2, data: sealed.base64EncodedString())
-        guard let data = try? JSONEncoder().encode(envelope) else { return }
-        try? data.write(to: fileURL, options: [.atomic])
-        try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: fileURL.path)
+        guard let data = try? JSONEncoder().encode(envelope) else { return false }
+        do {
+            try FileManager.default.createDirectory(
+                at: fileURL.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            try data.write(to: fileURL, options: [.atomic])
+            try FileManager.default.setAttributes(
+                [.posixPermissions: 0o600],
+                ofItemAtPath: fileURL.path
+            )
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    /// 从旧版本 Keychain 一次性导入应用自己的加密凭据库。读取禁用授权 UI，失败时不写
+    /// marker，下一次启动仍可重试；成功读取后只补齐缺失项，不覆盖用户已在新库保存的值。
+    private func importKeychainOnceIfNeeded() {
+        let hasMarker = FileManager.default.fileExists(atPath: keychainMigrationMarkerURL.path)
+        let hasCredentialFile = FileManager.default.fileExists(atPath: fileURL.path)
+        guard !(hasMarker && hasCredentialFile) else { return }
+        if hasMarker {
+            try? FileManager.default.removeItem(at: keychainMigrationMarkerURL)
+        }
+        let legacyValues = readAllFromKeychain()
+        guard keychainReadsAvailable else { return }
+
+        for (providerID, value) in legacyValues
+            where !value.isEmpty && cache[providerID]?.isEmpty != false {
+            cache[providerID] = value
+        }
+        guard persist() else {
+            cache = Self.decodeLegacyFile(at: fileURL) ?? [:]
+            return
+        }
+
+        let marker = Data("imported".utf8)
+        do {
+            try marker.write(to: keychainMigrationMarkerURL, options: [.atomic])
+            try FileManager.default.setAttributes(
+                [.posixPermissions: 0o600],
+                ofItemAtPath: keychainMigrationMarkerURL.path
+            )
+        } catch {
+            try? FileManager.default.removeItem(at: keychainMigrationMarkerURL)
+        }
     }
 
     private func migrateLegacyFileIfNeeded() {
@@ -239,8 +304,16 @@ final class LingShuCredentialStore: @unchecked Sendable {
         query[kSecReturnData as String] = true
         query[kSecMatchLimit as String] = kSecMatchLimitOne
         query[kSecUseAuthenticationUI as String] = kSecUseAuthenticationUISkip
-        guard let (status, item) = copyMatchingWithoutBlockingLaunch(query),
-              status == errSecSuccess,
+        guard let (status, item) = copyMatchingWithoutBlockingLaunch(query) else {
+            return nil
+        }
+        guard status == errSecSuccess else {
+            if status != errSecItemNotFound {
+                keychainReadsAvailable = false
+            }
+            return nil
+        }
+        guard
               let data = item as? Data,
               let key = String(data: data, encoding: .utf8),
               !key.isEmpty else {
@@ -252,18 +325,34 @@ final class LingShuCredentialStore: @unchecked Sendable {
     private func readAllFromKeychain() -> [String: String] {
         var query = baseQuery()
         query[kSecReturnAttributes as String] = true
-        query[kSecReturnData as String] = true
         query[kSecMatchLimit as String] = kSecMatchLimitAll
         query[kSecUseAuthenticationUI as String] = kSecUseAuthenticationUISkip
-        guard let (status, item) = copyMatchingWithoutBlockingLaunch(query),
-              status == errSecSuccess,
-              let rows = item as? [[String: Any]] else { return [:] }
+        guard let (status, item) = copyMatchingWithoutBlockingLaunch(query) else {
+            return [:]
+        }
+        if status == errSecItemNotFound {
+            return [:]
+        }
+        guard status == errSecSuccess else {
+            keychainReadsAvailable = false
+            return [:]
+        }
+        let rows: [[String: Any]]
+        if let multiple = item as? [[String: Any]] {
+            rows = multiple
+        } else if let single = item as? [String: Any] {
+            // Security.framework may return one dictionary instead of an array when only one
+            // generic-password item matches, even with kSecMatchLimitAll.
+            rows = [single]
+        } else {
+            keychainReadsAvailable = false
+            return [:]
+        }
 
         var values: [String: String] = [:]
         for row in rows {
             guard let account = row[kSecAttrAccount as String] as? String,
-                  let data = row[kSecValueData as String] as? Data,
-                  let value = String(data: data, encoding: .utf8),
+                  let value = readFromKeychain(account: account),
                   !value.isEmpty else { continue }
             values[account] = value
         }
