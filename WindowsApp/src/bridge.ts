@@ -1,8 +1,14 @@
 import { invoke as tauriInvoke } from "@tauri-apps/api/core";
 import { open as tauriOpen } from "@tauri-apps/plugin-dialog";
 import type {
-  ExternalSkillRecord, PluginRecord, PreviewPayload, ProviderPreset, RuntimeEvent, RuntimeSettings, RuntimeSnapshot, TaskRecord,
+  ExternalSkillRecord, MemoryDeleteRequest, MemoryDeleteResult, MemoryEntry, MemoryGetRequest, MemoryListItem, MemoryListPage, MemoryListRequest,
+  MemoryMutationResult, MemorySnapshot, MemoryUpsertRequest, PluginRecord, PreviewPayload, ProviderPreset, RuntimeEvent,
+  RuntimeSettings, RuntimeSnapshot, TaskRecord,
 } from "./types";
+import {
+  MANUAL_MEMORY_KINDS, MEMORY_CONTENT_MAX_CHARS, MEMORY_TAXONOMY_MAX_ITEMS, MEMORY_TITLE_MAX_CHARS,
+  memoryTextLength,
+} from "./memoryManagement.ts";
 
 export interface BootstrapPayload {
   snapshot: RuntimeSnapshot;
@@ -34,6 +40,22 @@ export function hasNativeBridge(): boolean {
 export async function runtimeInvoke<T>(command: string, args?: Record<string, unknown>): Promise<T> {
   if (hasNativeBridge()) return tauriInvoke<T>(command, args);
   return mockInvoke<T>(command, args);
+}
+
+export async function listMemory(request: MemoryListRequest = {}): Promise<MemoryListPage> {
+  return runtimeInvoke<MemoryListPage>("memory_list", { request });
+}
+
+export async function getMemory(request: MemoryGetRequest): Promise<MemoryListItem> {
+  return runtimeInvoke<MemoryListItem>("memory_get", { request });
+}
+
+export async function upsertMemory(request: MemoryUpsertRequest): Promise<MemoryMutationResult> {
+  return runtimeInvoke<MemoryMutationResult>("memory_upsert", { request });
+}
+
+export async function deleteMemory(request: MemoryDeleteRequest): Promise<MemoryDeleteResult> {
+  return runtimeInvoke<MemoryDeleteResult>("memory_delete", { request });
 }
 
 export async function chooseFiles(): Promise<string[]> {
@@ -173,6 +195,75 @@ const demoExternalSkill: ExternalSkillRecord = {
   contentFingerprint: "development-preview",
 };
 
+let demoMemories: MemoryEntry[] = [
+  {
+    id: "memory-project-aurora", kind: "fact", tier: "hot", title: "Project Aurora owner",
+    content: "Project Aurora is owned by Mira Chen. Release decisions should include her review.", lastPrompt: "Remember who owns Project Aurora.",
+    tags: ["aurora", "owner"], source: "user_explicit", importance: 0.88, confidence: 1, sensitive: false, messageCount: 1,
+    createdAt: "2026-08-18T02:12:00.000Z", updatedAt: "2026-08-20T03:42:00.000Z", aliases: ["Aurora owner"], accessCount: 4,
+    lastAccessedAt: "2026-08-20T04:02:00.000Z", fingerprint: "mock-aurora-v1",
+  },
+  {
+    id: "memory-writing-preference", kind: "preference", tier: "hot", title: "Delivery writing preference",
+    content: "Lead with the concrete result, keep the explanation concise, and include a direct download path for packaged builds.", lastPrompt: "Remember how I want release handoffs written.",
+    tags: ["writing", "delivery"], source: "user_explicit", importance: 0.92, confidence: 1, sensitive: false, messageCount: 2,
+    createdAt: "2026-08-17T08:30:00.000Z", updatedAt: "2026-08-19T09:18:00.000Z", aliases: [], accessCount: 8,
+    lastAccessedAt: "2026-08-20T02:45:00.000Z", fingerprint: "mock-writing-v2",
+  },
+  {
+    id: "memory-sensitive-api", kind: "fact", tier: "hot", title: "Finance sandbox access",
+    content: "The Finance sandbox credential is stored in Windows Credential Manager under the team account.", lastPrompt: "Remember where the Finance sandbox credential is stored.",
+    tags: ["finance", "credential"], source: "user_explicit", importance: 0.96, confidence: 1, sensitive: true, messageCount: 1,
+    createdAt: "2026-08-19T07:15:00.000Z", updatedAt: "2026-08-19T07:15:00.000Z", aliases: [], accessCount: 0,
+    fingerprint: "mock-sensitive-v1",
+  },
+  {
+    id: "memory-release-task", kind: "task", tier: "hot", title: "Windows preview release workflow",
+    content: "Run frontend, Rust, shared core, and installer checks before publishing the signed checksum manifest.", lastPrompt: "Build a new Windows technical preview.",
+    tags: ["windows", "release"], source: "task", importance: 0.82, confidence: 0.9, sensitive: false, messageCount: 6,
+    taskId: "demo-thread", executionRecordId: "demo-thread", createdAt: "2026-08-15T05:00:00.000Z", updatedAt: "2026-08-18T12:20:00.000Z",
+    aliases: ["Windows release"], accessCount: 3, lastAccessedAt: "2026-08-19T02:10:00.000Z", fingerprint: "mock-task-v3",
+  },
+  {
+    id: "memory-design-knowledge", kind: "knowledge", tier: "cold", title: "Bright presentation palette rule",
+    content: "For a bright presentation, prefer ivory surfaces with cobalt and amber accents over a deep royal-blue background.", lastPrompt: "Use a brighter presentation theme.",
+    tags: ["presentation", "design"], source: "platform", importance: 0.65, confidence: 0.78, sensitive: false, messageCount: 1,
+    createdAt: "2026-07-12T06:00:00.000Z", updatedAt: "2026-07-20T06:00:00.000Z", archivedAt: "2026-08-10T06:00:00.000Z",
+    aliases: ["bright slides"], accessCount: 1, fingerprint: "mock-knowledge-v1",
+  },
+];
+
+function demoMemorySnapshot(): MemorySnapshot {
+  const countsByKind: Record<string, number> = {};
+  for (const entry of demoMemories) countsByKind[entry.kind] = (countsByKind[entry.kind] ?? 0) + 1;
+  return {
+    schemaVersion: 1,
+    totalCount: demoMemories.length,
+    hotCount: demoMemories.filter((entry) => entry.tier === "hot").length,
+    coldCount: demoMemories.filter((entry) => entry.tier === "cold").length,
+    countsByKind,
+    latestUpdatedAt: demoMemories.map((entry) => entry.updatedAt).sort().at(-1),
+    lastConsolidatedAt: "2026-08-20T01:30:00.000Z",
+    importedSources: { macos_legacy: "1" },
+  };
+}
+
+function demoMemoryStateFingerprint(): string {
+  return demoMemories
+    .map((entry) => entry.sensitive ? `${entry.id}:${entry.updatedAt}:${entry.kind}:${entry.tier}:${entry.source}` : `${entry.id}:${entry.fingerprint}`)
+    .sort()
+    .join("|");
+}
+
+function mockMemoryPayloadIsSensitive(values: readonly string[]): boolean {
+  const combined = values.join("\n").toLocaleLowerCase();
+  return ["api key", "apikey", "token", "password", "密码", "密钥", "secret", "sk-"].some((signal) => combined.includes(signal));
+}
+
+function mockNormalizedUniqueCount(values: readonly string[]): number {
+  return new Set(values.map((value) => value.trim().toLocaleLowerCase()).filter(Boolean)).size;
+}
+
 let snapshot: RuntimeSnapshot = {
   kernelAbiVersion: "1.2.0",
   settings: {
@@ -189,14 +280,7 @@ let snapshot: RuntimeSnapshot = {
   ],
   tasks: [demoTask], activeTaskId: undefined, queuedTaskCount: 0, providerConfigured: true,
   events: demoEvents, latestEventSequence: 3, plugins: demoPlugins, externalSkills: [demoExternalSkill],
-  memory: {
-    schemaVersion: 1,
-    totalCount: 0,
-    hotCount: 0,
-    coldCount: 0,
-    countsByKind: {},
-    importedSources: {},
-  },
+  memory: demoMemorySnapshot(),
   loopEngines: [
     {
       id: "grok", name: "Grok Loop", description: "Built-in Loop harness", descriptionZh: "内置 Loop harness",
@@ -291,6 +375,118 @@ async function mockInvoke<T>(command: string, args?: Record<string, unknown>): P
       if (!task || task.status !== "needs_user_action" || task.pendingToolCallId !== expectedToolCallId || snapshot.activeTaskId) return null as T;
       snapshot = { ...snapshot, activeTaskId: id, tasks: snapshot.tasks.map((item) => item.id === id ? { ...item, status: "running", pendingQuestion: undefined, pendingToolCallId: undefined } : item) };
       return clone(snapshot) as T;
+    }
+    case "memory_list": {
+      const request = (args?.request ?? {}) as MemoryListRequest;
+      const query = request.query?.trim().toLocaleLowerCase() ?? "";
+      const offset = Math.max(0, request.offset ?? 0);
+      const limit = Math.min(100, request.limit && request.limit > 0 ? request.limit : 50);
+      const full = request.sensitiveVisibility === "full";
+      if (full && !request.id?.trim()) throw new Error("full sensitive visibility requires an exact memory id");
+      const stateFingerprint = demoMemoryStateFingerprint();
+      if (offset > 0 && !request.expectedStateFingerprint?.trim()) throw new Error("memory pagination after offset zero requires expectedStateFingerprint");
+      if (offset > 0 && request.expectedStateFingerprint !== stateFingerprint) throw new Error("memory list changed while paging; refresh from the first page");
+      const filtered = demoMemories
+        .filter((entry) => !request.id || entry.id === request.id)
+        .filter((entry) => !request.kind || entry.kind === request.kind)
+        .filter((entry) => !request.tier || entry.tier === request.tier)
+        .filter((entry) => !request.source || entry.source === request.source)
+        .filter((entry) => request.sensitive === undefined || entry.sensitive === request.sensitive)
+        .filter((entry) => {
+          if (!query) return true;
+          const searchable = entry.sensitive && !full
+            ? [entry.id, entry.kind, entry.tier, entry.source, "sensitive memory", "敏感记忆"]
+            : [entry.id, entry.kind, entry.tier, entry.source, entry.title, entry.content, entry.lastPrompt, ...entry.tags, ...entry.aliases];
+          return searchable.join(" ").toLocaleLowerCase().includes(query);
+        })
+        .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt) || left.id.localeCompare(right.id));
+      const items: MemoryListItem[] = filtered.slice(offset, offset + limit).map((entry) => entry.sensitive && !full ? {
+        ...entry,
+        title: "Sensitive memory",
+        content: "",
+        lastPrompt: "",
+        tags: [],
+        aliases: [],
+        taskId: undefined,
+        executionRecordId: undefined,
+        fingerprint: "",
+        redacted: true,
+      } : { ...entry, redacted: false });
+      return clone({ items, totalCount: filtered.length, offset, limit, hasMore: offset + items.length < filtered.length, stateFingerprint }) as T;
+    }
+    case "memory_get": {
+      const request = args?.request as MemoryGetRequest;
+      const entry = demoMemories.find((item) => item.id === request.id);
+      if (!entry) throw new Error("memory not found");
+      if (entry.sensitive && request.sensitiveVisibility !== "full") {
+        return clone({ ...entry, title: "Sensitive memory", content: "", lastPrompt: "", tags: [], aliases: [], taskId: undefined, executionRecordId: undefined, fingerprint: "", redacted: true }) as T;
+      }
+      return clone({ ...entry, redacted: false }) as T;
+    }
+    case "memory_upsert": {
+      const request = args?.request as MemoryUpsertRequest;
+      const title = request.title.trim();
+      const content = request.content.trim();
+      if (!title || !content) throw new Error("memory title and content must not be empty");
+      if (memoryTextLength(title) > MEMORY_TITLE_MAX_CHARS) throw new Error(`memory title exceeds the ${MEMORY_TITLE_MAX_CHARS}-character limit`);
+      if (memoryTextLength(content) > MEMORY_CONTENT_MAX_CHARS) throw new Error(`memory content exceeds the ${MEMORY_CONTENT_MAX_CHARS}-character limit`);
+      if (mockNormalizedUniqueCount(request.tags) > MEMORY_TAXONOMY_MAX_ITEMS) throw new Error(`memory tags exceed the ${MEMORY_TAXONOMY_MAX_ITEMS}-item limit`);
+      if (mockNormalizedUniqueCount(request.aliases) > MEMORY_TAXONOMY_MAX_ITEMS) throw new Error(`memory aliases exceed the ${MEMORY_TAXONOMY_MAX_ITEMS}-item limit`);
+      const existingIndex = request.id ? demoMemories.findIndex((entry) => entry.id === request.id) : -1;
+      const existing = existingIndex >= 0 ? demoMemories[existingIndex] : undefined;
+      if (request.id && !existing) throw new Error(`memory not found: ${request.id}`);
+      if ((!existing || request.kind !== existing.kind) && !MANUAL_MEMORY_KINDS.includes(request.kind)) {
+        throw new Error("new user-managed memory kind must be fact, preference, experience, or knowledge");
+      }
+      const hasExpectedVersion = request.expectedFingerprint !== undefined || request.expectedUpdatedAt !== undefined;
+      if (existing && (!hasExpectedVersion
+        || (request.expectedFingerprint !== undefined && request.expectedFingerprint !== existing.fingerprint)
+        || (request.expectedUpdatedAt !== undefined && request.expectedUpdatedAt !== existing.updatedAt))) {
+        throw new Error("memory changed since it was opened; refresh and retry");
+      }
+      const timestamp = new Date().toISOString();
+      const next: MemoryEntry = {
+        id: existing?.id ?? `manual-${crypto.randomUUID()}`,
+        kind: request.kind,
+        tier: request.tier,
+        title,
+        content,
+        lastPrompt: existing?.lastPrompt ?? "",
+        tags: [...request.tags],
+        source: "user_explicit",
+        importance: request.importance,
+        confidence: request.confidence,
+        sensitive: request.sensitive || mockMemoryPayloadIsSensitive([title, content, ...request.tags, ...request.aliases]),
+        messageCount: existing?.messageCount ?? 1,
+        taskId: existing?.taskId,
+        executionRecordId: existing?.executionRecordId,
+        createdAt: existing?.createdAt ?? timestamp,
+        updatedAt: timestamp,
+        archivedAt: request.tier === "cold" ? (existing?.archivedAt ?? timestamp) : undefined,
+        compressedAt: existing?.compressedAt,
+        aliases: [...request.aliases],
+        accessCount: existing?.accessCount ?? 0,
+        lastAccessedAt: existing?.lastAccessedAt,
+        fingerprint: `mock-${crypto.randomUUID()}`,
+      };
+      if (existingIndex >= 0) demoMemories[existingIndex] = next;
+      else demoMemories = [next, ...demoMemories];
+      snapshot = { ...snapshot, memory: demoMemorySnapshot() };
+      return clone({ entry: { ...next, redacted: false }, snapshot: snapshot.memory }) as T;
+    }
+    case "memory_delete": {
+      const request = args?.request as MemoryDeleteRequest;
+      const existing = demoMemories.find((entry) => entry.id === request.id);
+      if (!existing) throw new Error("memory not found");
+      const hasExpectedVersion = request.expectedFingerprint !== undefined || request.expectedUpdatedAt !== undefined;
+      if (!hasExpectedVersion
+        || (request.expectedFingerprint !== undefined && request.expectedFingerprint !== existing.fingerprint)
+        || (request.expectedUpdatedAt !== undefined && request.expectedUpdatedAt !== existing.updatedAt)) {
+        throw new Error("memory changed since it was opened; refresh and retry");
+      }
+      demoMemories = demoMemories.filter((entry) => entry.id !== request.id);
+      snapshot = { ...snapshot, memory: demoMemorySnapshot() };
+      return clone({ deletedId: request.id, snapshot: snapshot.memory }) as T;
     }
     case "list_plugins": return clone(snapshot.plugins) as T;
     case "install_plugin": return clone(snapshot.plugins[0]) as T;

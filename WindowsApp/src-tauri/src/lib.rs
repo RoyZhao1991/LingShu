@@ -1,7 +1,9 @@
 use lingshu_runtime_core::{
-    preview_file, provider_catalog, ExecutionPermissionMode, ExternalSkillRecord, PluginRecord,
-    PreviewPayload, ProviderPreset, RuntimeFailureKind, RuntimeKernel, RuntimeSettings,
-    RuntimeSnapshot, RuntimeStore, SubmitReceipt,
+    preview_file, provider_catalog, ExecutionPermissionMode, ExternalSkillRecord,
+    MemoryDeleteRequest, MemoryDeleteResult, MemoryGetRequest, MemoryListItem, MemoryListPage,
+    MemoryListRequest, MemoryMutationResult, MemoryUpsertRequest, PluginRecord, PreviewPayload,
+    ProviderPreset, RuntimeFailureKind, RuntimeKernel, RuntimeSettings, RuntimeSnapshot,
+    RuntimeStore, SubmitReceipt,
 };
 use serde::Serialize;
 use std::path::PathBuf;
@@ -145,6 +147,54 @@ async fn get_snapshot(state: State<'_, AppState>) -> Result<RuntimeSnapshot, Str
     let settings = state.kernel.store().settings().await;
     let configured = is_provider_configured(&settings).await;
     Ok(state.kernel.snapshot(configured).await)
+}
+
+#[tauri::command]
+async fn memory_list(
+    state: State<'_, AppState>,
+    request: MemoryListRequest,
+) -> Result<MemoryListPage, String> {
+    state
+        .kernel
+        .memory_list(request)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn memory_get(
+    state: State<'_, AppState>,
+    request: MemoryGetRequest,
+) -> Result<MemoryListItem, String> {
+    state
+        .kernel
+        .memory_get(request)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn memory_upsert(
+    state: State<'_, AppState>,
+    request: MemoryUpsertRequest,
+) -> Result<MemoryMutationResult, String> {
+    state
+        .kernel
+        .memory_upsert(request)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn memory_delete(
+    state: State<'_, AppState>,
+    request: MemoryDeleteRequest,
+) -> Result<MemoryDeleteResult, String> {
+    state
+        .kernel
+        .memory_delete(request)
+        .await
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -503,6 +553,10 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             bootstrap,
             get_snapshot,
+            memory_list,
+            memory_get,
+            memory_upsert,
+            memory_delete,
             save_and_validate_settings,
             update_execution_permission_mode,
             submit_message,

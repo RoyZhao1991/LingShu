@@ -177,6 +177,47 @@ jobs:
         working-directory: WindowsApp
         run: npm run tauri -- build
 
+      - name: Verify Roy Zhao publisher metadata
+        run: |
+          $expectedPublisher = "Roy Zhao"
+          $configPath = Join-Path $env:GITHUB_WORKSPACE "WindowsApp/src-tauri/tauri.conf.json"
+          $config = Get-Content $configPath -Raw | ConvertFrom-Json
+          if ($config.bundle.publisher -ne $expectedPublisher) {
+            throw "Tauri bundle publisher '$($config.bundle.publisher)' does not match '$expectedPublisher'."
+          }
+
+          $executable = Join-Path $env:GITHUB_WORKSPACE "WindowsApp/src-tauri/target/release/lingshu-windows.exe"
+          $versionInfo = (Get-Item $executable).VersionInfo
+          if ($versionInfo.CompanyName -ne $expectedPublisher) {
+            throw "Release executable CompanyName '$($versionInfo.CompanyName)' does not match '$expectedPublisher'."
+          }
+          if ($versionInfo.LegalCopyright -notlike "*$expectedPublisher*") {
+            throw "Release executable copyright '$($versionInfo.LegalCopyright)' does not identify '$expectedPublisher'."
+          }
+
+          $bundle = Join-Path $env:GITHUB_WORKSPACE "WindowsApp/src-tauri/target/release/bundle"
+          $msiInstallers = @(Get-ChildItem -Path $bundle -Recurse -File -Filter *.msi)
+          if ($msiInstallers.Count -lt 1) {
+            throw "No MSI installer was available for Manufacturer verification."
+          }
+          $windowsInstaller = New-Object -ComObject WindowsInstaller.Installer
+          try {
+            foreach ($msi in $msiInstallers) {
+              $database = $windowsInstaller.OpenDatabase($msi.FullName, 0)
+              $view = $database.OpenView("SELECT ``Value`` FROM ``Property`` WHERE ``Property``='Manufacturer'")
+              $view.Execute()
+              $record = $view.Fetch()
+              $manufacturer = if ($null -eq $record) { "" } else { $record.StringData(1) }
+              if ($manufacturer -ne $expectedPublisher) {
+                throw "MSI '$($msi.Name)' Manufacturer '$manufacturer' does not match '$expectedPublisher'."
+              }
+              $view.Close()
+            }
+          } finally {
+            [System.Runtime.InteropServices.Marshal]::FinalReleaseComObject($windowsInstaller) | Out-Null
+          }
+          Write-Host "Verified application and MSI publisher metadata for $expectedPublisher."
+
       - name: Verify release executable uses the Windows GUI subsystem
         run: |
           $executable = Join-Path $env:GITHUB_WORKSPACE "WindowsApp/src-tauri/target/release/lingshu-windows.exe"
@@ -263,11 +304,11 @@ jobs:
           $notes = @"
           Windows x64 technical preview built and tested on GitHub's Windows runner.
 
-          Conversation messages now expose familiar copy and edit-and-resend actions. Copy places only the visible text on the Windows clipboard; it neither copies attachment files nor restores attachments when pasted. Attachment reuse belongs exclusively to the separate edit-and-resend action.
+          Windows now includes a macOS-aligned Memory page backed by the actual shared Runtime Core. It supports search, kind/tier/source filters, stable pagination, create/edit/delete with optimistic concurrency protection, and explicit reveal for one sensitive record at a time. Sensitive payloads remain redacted in list/search responses and excluded from automatic model recall.
 
-          A user message can also be restored directly into the composer for editing and explicit resend, with text and attachments treated as one draft. Existing unsent content is replaced only after confirmation. Reuse never sends automatically, mutates the prior conversation, or bypasses the normal task queue; an optimistic submission cannot be edited and resent until the runtime has accepted it.
+          Installer and application metadata identify the publisher as Roy Zhao. This is descriptive package metadata, not an Authenticode signature; Windows may still show an unknown-publisher or SmartScreen warning, so verify the published SHA-256 checksums.
 
-          This release retains the shared Runtime Core external-Skill bridge, the macOS-aligned Windows interface, productive checker revision without a fixed round limit, structured handoff for subjective or unobservable judgments, durable artifact/review history, safe manual termination with preserved work, cancellation of provider and descendant process trees, headless background tools, Full Access capability recovery, DesignKB and Office Foundation generation, PDF.js preview, global memory, and independent checking. Direct Windows computer control and realtime audio/video perception are not included in this preview.
+          This release retains message copy and attachment-aware edit-and-resend, the standard Codex/Claude/Open Agent Skill bridge, the macOS-aligned Windows interface, productive checker revision without a fixed round limit, structured human handoff, durable artifact/review history, safe manual termination, cancellation of provider and descendant process trees, headless tools, DesignKB and Office generation, PDF.js preview, automatic long-term recall, and independent checking. Direct Windows computer control and realtime audio/video perception are not included in this preview.
           "@
           gh release create $tag --repo $env:GITHUB_REPOSITORY --prerelease --title "Nous (LingShu) Windows Technical Preview $version" --notes $notes
           }

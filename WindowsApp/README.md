@@ -20,4 +20,6 @@ scripts automatically.
 
 Conversation messages can be copied, while user messages can be restored with their recorded attachments into the composer for editing and explicit resend. These actions never send automatically or rewrite prior history.
 
-Prebuilt x64 preview installers are published at [windows-v0.1.0-preview.25](https://github.com/RoyZhao1991/LingShu/releases/tag/windows-v0.1.0-preview.25). The stable setup filename is [`Nous-Windows-x64-Setup.exe`](https://github.com/RoyZhao1991/LingShu/releases/download/windows-v0.1.0-preview.25/Nous-Windows-x64-Setup.exe).
+The Memory page manages the shared Runtime Core's real long-term store with search, filters, create/edit/delete, optimistic concurrency protection, and explicit reveal for one sensitive item at a time. Installer and application metadata identify the publisher as Roy Zhao; the preview remains unsigned, so Windows may still show an unknown-publisher or SmartScreen warning.
+
+Prebuilt x64 preview installers are published at [windows-v0.1.0-preview.26](https://github.com/RoyZhao1991/LingShu/releases/tag/windows-v0.1.0-preview.26). The stable setup filename is [`Nous-Windows-x64-Setup.exe`](https://github.com/RoyZhao1991/LingShu/releases/download/windows-v0.1.0-preview.26/Nous-Windows-x64-Setup.exe).

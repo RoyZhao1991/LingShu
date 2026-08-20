@@ -200,6 +200,97 @@ export interface MemorySnapshot {
   importedSources: Record<string, string>;
 }
 
+export type MemoryKind = "conversation" | "task" | "fact" | "preference" | "experience" | "artifact" | "knowledge";
+export type MemoryTier = "hot" | "cold";
+export type MemorySource = "runtime" | "user_explicit" | "task" | "legacy_swift" | "platform";
+
+export interface MemoryEntry {
+  id: string;
+  kind: MemoryKind;
+  tier: MemoryTier;
+  title: string;
+  content: string;
+  lastPrompt: string;
+  tags: string[];
+  source: MemorySource;
+  importance: number;
+  confidence: number;
+  sensitive: boolean;
+  messageCount: number;
+  taskId?: string;
+  executionRecordId?: string;
+  createdAt: string;
+  updatedAt: string;
+  archivedAt?: string;
+  compressedAt?: string;
+  aliases: string[];
+  accessCount: number;
+  lastAccessedAt?: string;
+  fingerprint: string;
+}
+
+export interface MemoryListItem extends MemoryEntry {
+  redacted: boolean;
+}
+
+export interface MemoryListRequest {
+  query?: string;
+  id?: string;
+  kind?: MemoryKind;
+  tier?: MemoryTier;
+  source?: MemorySource;
+  sensitive?: boolean;
+  sensitiveVisibility?: "redacted" | "full";
+  offset?: number;
+  expectedStateFingerprint?: string;
+  limit?: number;
+}
+
+export interface MemoryGetRequest {
+  id: string;
+  sensitiveVisibility?: "redacted" | "full";
+}
+
+export interface MemoryListPage {
+  items: MemoryListItem[];
+  totalCount: number;
+  offset: number;
+  limit: number;
+  hasMore: boolean;
+  stateFingerprint: string;
+}
+
+export interface MemoryUpsertRequest {
+  id?: string;
+  expectedFingerprint?: string;
+  expectedUpdatedAt?: string;
+  kind: MemoryKind;
+  tier: MemoryTier;
+  title: string;
+  content: string;
+  tags: string[];
+  importance: number;
+  confidence: number;
+  sensitive: boolean;
+  aliases: string[];
+}
+
+export interface MemoryMutationResult {
+  entry: MemoryListItem;
+  snapshot: MemorySnapshot;
+}
+
+export interface MemoryDeleteRequest {
+  id: string;
+  expectedFingerprint?: string;
+  expectedUpdatedAt?: string;
+}
+
+export interface MemoryDeleteResult {
+  deletedId: string;
+  snapshot: MemorySnapshot;
+}
+
 export interface RuntimeSnapshot {
   kernelAbiVersion: string;
   settings: RuntimeSettings;
@@ -242,4 +333,4 @@ export interface PreviewPayload {
   faithful: boolean;
 }
 
-export type Page = "chat" | "threads" | "status" | "plugins" | "settings";
+export type Page = "chat" | "threads" | "status" | "memory" | "plugins" | "settings";

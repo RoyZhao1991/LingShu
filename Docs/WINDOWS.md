@@ -23,6 +23,7 @@ Implemented in the Windows technical preview:
 - OpenAI Responses, OpenAI-compatible Chat Completions, and Anthropic Messages providers, including built-in presets for OpenAI, Claude, DeepSeek, MiniMax, OpenRouter, Qwen, Doubao, Ollama, LM Studio, and custom endpoints;
 - one serialized main-task queue with persistent conversation and task records;
 - copy actions for completed visible messages and an edit-and-resend action that restores a user message and its recorded attachments into the composer without auto-sending or changing history;
+- a macOS-aligned Memory page backed by the actual shared Runtime Core, with search, filters, pagination, create/edit/delete, optimistic concurrency checks, and explicit per-item reveal for sensitive records;
 - full-history GoalSpec generation without a fabricated default fallback;
 - persistent model/tool sessions with streaming response and concise reasoning-summary events;
 - isolated worker and checker sessions, including parallel child dispatch and parent-result return;
@@ -57,9 +58,9 @@ vendor-specific manual slash-command channel is not emulated in this preview.
 
 ## Download
 
-- [Windows x64 setup executable](https://github.com/RoyZhao1991/LingShu/releases/download/windows-v0.1.0-preview.25/Nous-Windows-x64-Setup.exe)
-- [Windows preview release and MSI alternatives](https://github.com/RoyZhao1991/LingShu/releases/tag/windows-v0.1.0-preview.25)
-- [SHA-256 checksums](https://github.com/RoyZhao1991/LingShu/releases/download/windows-v0.1.0-preview.25/SHA256SUMS.txt)
+- [Windows x64 setup executable](https://github.com/RoyZhao1991/LingShu/releases/download/windows-v0.1.0-preview.26/Nous-Windows-x64-Setup.exe)
+- [Windows preview release and MSI alternatives](https://github.com/RoyZhao1991/LingShu/releases/tag/windows-v0.1.0-preview.26)
+- [SHA-256 checksums](https://github.com/RoyZhao1991/LingShu/releases/download/windows-v0.1.0-preview.26/SHA256SUMS.txt)
 - [Signed and notarized macOS alpha](https://github.com/RoyZhao1991/LingShu/releases/download/v0.1.0-alpha.9/LingShu-0.1.0-12-macOS-universal.dmg)
 
 Windows preview installers are not yet Authenticode-signed. Windows may show a SmartScreen warning; verify the downloaded file against `SHA256SUMS.txt` before installing it.

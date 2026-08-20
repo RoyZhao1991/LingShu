@@ -1,18 +1,18 @@
-import { FormEvent, type DragEvent as ReactDragEvent, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, type DragEvent as ReactDragEvent, type KeyboardEvent as ReactKeyboardEvent, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { PDFDocumentLoadingTask, PDFDocumentProxy, RenderTask } from "pdfjs-dist";
 import pdfWorkerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import {
-  Activity, Bot, BrainCircuit, Check, ChevronRight, CircleAlert, Clock3, ExternalLink,
+  Activity, Archive, Bot, BrainCircuit, Check, ChevronRight, CircleAlert, Clock3, ExternalLink, Eye, EyeOff,
   Copy, FileBox, FileText, FolderOpen, Gauge, GitBranch, ListChecks, LoaderCircle, MessageCircle,
-  MessagesSquare, PackageCheck, PackagePlus, Paperclip, Pencil, Play, Puzzle, RefreshCw, Search, Send,
+  LockKeyhole, MessagesSquare, PackageCheck, PackagePlus, Paperclip, Pencil, Play, Plus, Puzzle, RefreshCw, Save, Search, Send,
   Settings, ShieldCheck, Square, Trash2, UserRound, Wrench, X,
 } from "lucide-react";
 import { executionLinkLabel, strings } from "./i18n";
 import {
-  chooseExternalSkillDirectory, chooseExternalSkillManifest, chooseFiles, choosePluginManifest,
-  hasNativeBridge, listenForWindowFileDrops, runtimeInvoke,
+  chooseExternalSkillDirectory, chooseExternalSkillManifest, chooseFiles, choosePluginManifest, deleteMemory, getMemory,
+  hasNativeBridge, listMemory, listenForWindowFileDrops, runtimeInvoke, upsertMemory,
 } from "./bridge";
 import { browserDroppedFilePaths, mergeAttachmentPaths } from "./attachments";
 import { projectChatBubble } from "./chatProjection";
@@ -20,12 +20,19 @@ import { projectConversationMessages, type PendingSubmission } from "./conversat
 import { findInteractiveActionTask, findVisibleInteractiveActionTask, interactiveActionCheckpointKey } from "./humanAction";
 import { normalizeMarkdownTables } from "./markdown";
 import { buildMessageReuseDraft, resolveMessageAttachmentPaths } from "./messageReuse";
+import {
+  emptyMemoryFilters, MEMORY_CONTENT_MAX_CHARS, MEMORY_TAXONOMY_MAX_ITEMS, MEMORY_TITLE_MAX_CHARS,
+  memoryDraftFromEntry, memoryDraftIsValid, memoryEditableKinds, memoryListPreview, memoryTaxonomyCount,
+  memoryTextLength, memoryUpsertRequest, newMemoryDraft, truncateMemoryText,
+  type MemoryEditorDraft, type MemoryFilters,
+} from "./memoryManagement";
 import { decodePdfDataUri } from "./pdf";
 import { SnapshotGate } from "./snapshotGate";
 import packageMetadata from "../package.json";
 import type {
-  ArtifactRecord, ChatMessage, ExecutionPermissionMode, ExternalSkillRecord, Locale, Page, PluginRecord, PreviewPayload, ProviderPreset, RuntimeSettings,
-  RuntimeEvent, RuntimeSnapshot, TaskRecord, TaskRole, TaskStatus,
+  ArtifactRecord, ChatMessage, ExecutionPermissionMode, ExternalSkillRecord, Locale, MemoryEntry, MemoryKind, MemoryListItem,
+  MemorySnapshot, MemorySource, MemoryTier, Page, PluginRecord, PreviewPayload, ProviderPreset, RuntimeSettings, RuntimeEvent,
+  RuntimeSnapshot, TaskRecord, TaskRole, TaskStatus,
 } from "./types";
 
 import type { BootstrapPayload, SubmitMessagePayload } from "./bridge";
@@ -91,6 +98,11 @@ export default function App() {
   const applyMutationSnapshot = useCallback((next: RuntimeSnapshot) => {
     snapshotGate.current.commitMutation();
     setSnapshot(next);
+  }, []);
+
+  const applyMemorySummary = useCallback((memory: MemorySnapshot) => {
+    snapshotGate.current.commitMutation();
+    setSnapshot((current) => current ? { ...current, memory } : current);
   }, []);
 
   const bindAttachments = useCallback((paths: readonly string[]) => {
@@ -601,6 +613,10 @@ export default function App() {
 
         {page === "status" && <StatusPage snapshot={snapshot} locale={locale} />}
 
+        {page === "memory" && (
+          <MemoryPage summary={snapshot.memory} locale={locale} onSummary={applyMemorySummary} />
+        )}
+
         {page === "plugins" && (
           <PluginsPage plugins={snapshot.plugins} externalSkills={snapshot.externalSkills} locale={locale} busy={pluginBusy} error={capabilityError || error}
             onInstall={installPlugin} onRefresh={refreshCapabilities} onProbe={probePlugin}
@@ -639,7 +655,7 @@ function Header({ page, setPage, busy, queuedCount, locale }: { page: Page; setP
   const t = strings(locale);
   const navigation: Array<[Page, typeof MessageCircle, string]> = [
     ["chat", MessageCircle, t.chat], ["threads", MessagesSquare, t.threads], ["status", Activity, t.status],
-    ["plugins", Puzzle, t.plugins], ["settings", Settings, t.settings],
+    ["memory", BrainCircuit, t.memory], ["plugins", Puzzle, t.plugins], ["settings", Settings, t.settings],
   ];
   return <header className="app-header">
     <div className="brand"><BrandMark /><div><div className="brand-title"><strong>{t.appName}</strong><span>v{appVersion}</span></div><small>{t.tagline}</small></div></div>
@@ -839,6 +855,387 @@ function StatusPage({ snapshot, locale }: { snapshot: RuntimeSnapshot; locale: L
     <div className="metrics"><div><span>{t.active}</span><strong>{snapshot.activeTaskId ? snapshot.tasks.find((task) => task.id === snapshot.activeTaskId)?.title : t.none}</strong></div><div><span>{t.queue}</span><strong>{snapshot.queuedTaskCount}</strong></div><div><span>{t.modelChannels}</span><strong>{snapshot.settings.providerName} / {snapshot.settings.model}</strong></div></div>
     <div className="capability-table"><h2>{t.capabilities}</h2>{capabilities.map(([label, enabled]) => <div key={label}><span>{enabled ? <Check /> : <X />}{label}</span><strong className={enabled ? "available" : "unavailable"}>{enabled ? t.available : t.unavailable}</strong></div>)}</div>
   </section>;
+}
+
+const memoryKinds: MemoryKind[] = ["conversation", "task", "fact", "preference", "experience", "artifact", "knowledge"];
+const memoryTiers: MemoryTier[] = ["hot", "cold"];
+const memorySources: MemorySource[] = ["runtime", "user_explicit", "task", "legacy_swift", "platform"];
+
+function MemoryPage({ summary, locale, onSummary }: { summary: MemorySnapshot; locale: Locale; onSummary: (summary: MemorySnapshot) => void }) {
+  const t = strings(locale);
+  const [filters, setFilters] = useState<MemoryFilters>(emptyMemoryFilters);
+  const [entries, setEntries] = useState<MemoryListItem[]>([]);
+  const [resultTotal, setResultTotal] = useState(0);
+  const [hasMore, setHasMore] = useState(false);
+  const [sensitiveCount, setSensitiveCount] = useState(0);
+  const [selectedId, setSelectedId] = useState<string>();
+  const [revealed, setRevealed] = useState<MemoryListItem>();
+  const [editor, setEditor] = useState<{ original?: MemoryEntry; draft: MemoryEditorDraft }>();
+  const [deleteTarget, setDeleteTarget] = useState<MemoryEntry>();
+  const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [revealing, setRevealing] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [memoryError, setMemoryError] = useState("");
+  const requestSequence = useRef(0);
+  const pageFingerprint = useRef("");
+
+  useEffect(() => {
+    const concealSensitive = () => {
+      setRevealed(undefined);
+      setEditor((current) => current?.original?.sensitive ? undefined : current);
+    };
+    const concealWhenHidden = () => { if (document.visibilityState === "hidden") concealSensitive(); };
+    window.addEventListener("blur", concealSensitive);
+    document.addEventListener("visibilitychange", concealWhenHidden);
+    return () => {
+      window.removeEventListener("blur", concealSensitive);
+      document.removeEventListener("visibilitychange", concealWhenHidden);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!revealed || editor || deleteTarget) return;
+    const concealOnEscape = (event: KeyboardEvent) => { if (event.key === "Escape") setRevealed(undefined); };
+    window.addEventListener("keydown", concealOnEscape);
+    return () => window.removeEventListener("keydown", concealOnEscape);
+  }, [deleteTarget, editor, revealed]);
+
+  const fetchMemories = useCallback(async (offset = 0) => {
+    const sequence = ++requestSequence.current;
+    if (offset === 0) setLoading(true);
+    else setLoadingMore(true);
+    setMemoryError("");
+    try {
+      const request = {
+        query: filters.query.trim(),
+        kind: filters.kind === "all" ? undefined : filters.kind,
+        tier: filters.tier === "all" ? undefined : filters.tier,
+        source: filters.source === "all" ? undefined : filters.source,
+        sensitiveVisibility: "redacted" as const,
+        offset,
+        expectedStateFingerprint: offset > 0 ? pageFingerprint.current : undefined,
+        limit: 50,
+      };
+      const [page, sensitivePage] = await Promise.all([
+        listMemory(request),
+        offset === 0 ? listMemory({ sensitive: true, sensitiveVisibility: "redacted", limit: 1 }) : Promise.resolve(undefined),
+      ]);
+      if (sequence !== requestSequence.current) return;
+      if (offset === 0) pageFingerprint.current = page.stateFingerprint;
+      setEntries((current) => {
+        const combined = offset === 0 ? page.items : [...current, ...page.items];
+        const seen = new Set<string>();
+        return combined.filter((entry) => !seen.has(entry.id) && Boolean(seen.add(entry.id)));
+      });
+      setResultTotal(page.totalCount);
+      setHasMore(page.hasMore);
+      if (sensitivePage) setSensitiveCount(sensitivePage.totalCount);
+      setSelectedId((current) => {
+        if (offset > 0) return current ?? page.items[0]?.id;
+        if (current && page.items.some((entry) => entry.id === current)) return current;
+        return page.items[0]?.id;
+      });
+      setRevealed(undefined);
+    } catch (reason) {
+      if (sequence === requestSequence.current) setMemoryError(String(reason));
+    } finally {
+      if (sequence === requestSequence.current) {
+        setLoading(false);
+        setLoadingMore(false);
+      }
+    }
+  }, [filters]);
+
+  // Query changes are slightly delayed so typing does not hammer the local IPC boundary.
+  useEffect(() => {
+    const timer = window.setTimeout(() => void fetchMemories(0), 220);
+    return () => window.clearTimeout(timer);
+  }, [fetchMemories]);
+
+  const selected = entries.find((entry) => entry.id === selectedId);
+  const selectedForDetail = revealed?.id === selected?.id ? revealed : selected;
+
+  const revealSensitive = async () => {
+    if (!selected?.sensitive || !selected.redacted || revealing) return;
+    setRevealing(true);
+    setMemoryError("");
+    try {
+      const full = await getMemory({ id: selected.id, sensitiveVisibility: "full" });
+      if (full.redacted) throw new Error(locale === "en" ? "The sensitive memory could not be revealed." : "无法显示这条敏感记忆。");
+      setRevealed(full);
+    } catch (reason) {
+      setMemoryError(String(reason));
+    } finally {
+      setRevealing(false);
+    }
+  };
+
+  const saveMemory = async (draft: MemoryEditorDraft) => {
+    if (!memoryDraftIsValid(draft) || saving) return;
+    setSaving(true);
+    setMemoryError("");
+    try {
+      const result = await upsertMemory(memoryUpsertRequest(draft, editor?.original));
+      onSummary(result.snapshot);
+      setEditor(undefined);
+      setRevealed(undefined);
+      setSelectedId(result.entry.id);
+      await fetchMemories(0);
+    } catch (reason) {
+      setMemoryError(String(reason));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const removeMemory = async () => {
+    if (!deleteTarget || deleting) return;
+    setDeleting(true);
+    setMemoryError("");
+    try {
+      const result = await deleteMemory({
+        id: deleteTarget.id,
+        ...(deleteTarget.fingerprint ? { expectedFingerprint: deleteTarget.fingerprint } : {}),
+        expectedUpdatedAt: deleteTarget.updatedAt,
+      });
+      onSummary(result.snapshot);
+      setDeleteTarget(undefined);
+      setRevealed(undefined);
+      setSelectedId(undefined);
+      await fetchMemories(0);
+    } catch (reason) {
+      setMemoryError(String(reason));
+    } finally {
+      setDeleting(false);
+    }
+  };
+
+  return <section className="memory-page">
+    <header className="memory-heading">
+      <div className="memory-heading-copy"><span className="memory-heading-icon"><BrainCircuit /></span><div><h1>{t.memoryTitle}</h1><p>{t.memorySubtitle}</p></div></div>
+      <div className="memory-primary-actions">
+        <button type="button" className="secondary-command" disabled={loading} onClick={() => void fetchMemories(0)}>
+          <RefreshCw className={loading ? "spin" : ""} />{loading ? t.memoryRefreshing : t.memoryRefresh}
+        </button>
+        <button type="button" className="primary-command compact" onClick={() => { setMemoryError(""); setEditor({ draft: newMemoryDraft() }); }}><Plus />{t.memoryNew}</button>
+      </div>
+    </header>
+
+    <div className="memory-stats" aria-label={locale === "en" ? "Memory summary" : "记忆统计摘要"}>
+      <MemoryStat label={t.memoryTotal} value={summary.totalCount} tone="teal" />
+      <MemoryStat label={t.memoryHot} value={summary.hotCount} tone="blue" />
+      <MemoryStat label={t.memoryCold} value={summary.coldCount} tone="violet" />
+      <MemoryStat label={t.memorySensitive} value={sensitiveCount} tone="orange" sensitive />
+    </div>
+
+    <div className="memory-controls">
+      <label className="memory-search"><Search /><input value={filters.query} placeholder={t.memorySearch} aria-label={t.memorySearch}
+        onChange={(event) => setFilters((current) => ({ ...current, query: event.target.value }))} />
+        {filters.query && <button type="button" title={t.close} aria-label={t.close} onClick={() => setFilters((current) => ({ ...current, query: "" }))}><X /></button>}
+      </label>
+      <MemoryFilter label={t.memoryKind} value={filters.kind} onChange={(value) => setFilters((current) => ({ ...current, kind: value as MemoryFilters["kind"] }))}>
+        <option value="all">{t.memoryAll}</option>{memoryKinds.map((kind) => <option key={kind} value={kind}>{memoryKindLabel(kind, locale)}</option>)}
+      </MemoryFilter>
+      <MemoryFilter label={t.memoryTier} value={filters.tier} onChange={(value) => setFilters((current) => ({ ...current, tier: value as MemoryFilters["tier"] }))}>
+        <option value="all">{t.memoryAll}</option>{memoryTiers.map((tier) => <option key={tier} value={tier}>{memoryTierLabel(tier, locale)}</option>)}
+      </MemoryFilter>
+      <MemoryFilter label={t.memorySource} value={filters.source} onChange={(value) => setFilters((current) => ({ ...current, source: value as MemoryFilters["source"] }))}>
+        <option value="all">{t.memoryAll}</option>{memorySources.map((source) => <option key={source} value={source}>{memorySourceLabel(source, locale)}</option>)}
+      </MemoryFilter>
+    </div>
+
+    {memoryError && <div className="memory-error error-strip"><CircleAlert />{memoryError}</div>}
+
+    <div className="memory-workbench">
+      <aside className="memory-list-panel">
+        <header><div><strong>{t.memoryVisible}</strong><span>{resultTotal} {t.memoryResults}</span></div><small>{entries.length}/{resultTotal}</small></header>
+        <div className="memory-list">
+          {loading && entries.length === 0 ? <div className="memory-list-loading"><LoaderCircle className="spin" />{t.memoryRefreshing}</div> :
+            entries.length === 0 ? <EmptyState icon={<BrainCircuit />} text={t.memoryNoItems} /> : entries.map((entry) => (
+              <button type="button" key={entry.id} className={`memory-row ${selectedId === entry.id ? "selected" : ""} ${entry.sensitive ? "sensitive" : ""}`}
+                aria-pressed={selectedId === entry.id} onClick={() => { setSelectedId(entry.id); setRevealed(undefined); }}>
+                <span className={`memory-kind-dot kind-${entry.kind}`} aria-hidden="true" />
+                <span className="memory-row-main">
+                  <span className="memory-row-title"><strong>{entry.redacted ? t.memorySensitiveHidden : entry.title}</strong>{entry.sensitive && <LockKeyhole />}</span>
+                  <span className="memory-row-preview">{memoryListPreview(entry, t.memorySensitiveHidden, t.memoryNoContent)}</span>
+                  <span className="memory-row-meta"><span>{memoryKindLabel(entry.kind, locale)}</span><span>{memoryTierLabel(entry.tier, locale)}</span><time>{formatMemoryDate(entry.updatedAt, locale)}</time></span>
+                </span>
+                <ChevronRight />
+              </button>
+            ))}
+          {hasMore && <button type="button" className="memory-load-more" disabled={loadingMore} onClick={() => void fetchMemories(entries.length)}>
+            {loadingMore ? <LoaderCircle className="spin" /> : <Plus />}{t.memoryLoadMore}
+          </button>}
+        </div>
+      </aside>
+
+      <section className="memory-detail-panel">
+        {!selectedForDetail ? <EmptyState icon={<BrainCircuit />} text={t.memorySelect} /> : <>
+          <header className="memory-detail-header">
+            <div className="memory-detail-title">
+              <div className="memory-badges"><span className={`kind-${selectedForDetail.kind}`}>{memoryKindLabel(selectedForDetail.kind, locale)}</span><span>{memoryTierLabel(selectedForDetail.tier, locale)}</span><span>{memorySourceLabel(selectedForDetail.source, locale)}</span></div>
+              <h2>{selectedForDetail.redacted ? t.memorySensitiveHidden : selectedForDetail.title}</h2>
+              <p>{t.memoryUpdated} {formatMemoryDateTime(selectedForDetail.updatedAt, locale)}</p>
+            </div>
+            <div className="memory-detail-actions">
+              {selectedForDetail.redacted ? <button type="button" title={t.memoryRedactedEditHint} disabled><Pencil />{t.memoryEdit}</button> :
+                <button type="button" onClick={() => { setMemoryError(""); setEditor({ original: selectedForDetail, draft: memoryDraftFromEntry(selectedForDetail) }); }}><Pencil />{t.memoryEdit}</button>}
+              <button type="button" className="danger" onClick={() => { setMemoryError(""); setDeleteTarget(selectedForDetail); }}><Trash2 />{t.memoryDelete}</button>
+            </div>
+          </header>
+
+          <div className="memory-detail-scroll">
+            {selectedForDetail.redacted ? <section className="memory-sensitive-guard">
+              <div className="memory-sensitive-mark"><LockKeyhole /></div><div><strong>{t.memorySensitiveHidden}</strong><p>{t.memorySensitiveListHint}</p><p>{t.memorySensitiveDetailHint}</p>
+                <button type="button" disabled={revealing} onClick={() => void revealSensitive()}>{revealing ? <LoaderCircle className="spin" /> : <Eye />}{t.memoryRevealSensitive}</button></div>
+            </section> : selectedForDetail.sensitive && <section className="memory-sensitive-guard revealed">
+              <div className="memory-sensitive-mark"><Eye /></div><div><strong>{t.memorySensitive}</strong><p>{t.memorySensitiveDetailHint}</p>
+                <button type="button" onClick={() => setRevealed(undefined)}><EyeOff />{t.memoryHideSensitive}</button></div>
+            </section>}
+
+            {!selectedForDetail.redacted && <>
+              <section className="memory-content-card"><h3><FileText />{t.memoryContent}</h3><p>{selectedForDetail.content || t.memoryNoContent}</p></section>
+              {selectedForDetail.lastPrompt && <section className="memory-content-card secondary"><h3><MessageCircle />{t.memoryLastPrompt}</h3><p>{selectedForDetail.lastPrompt}</p></section>}
+            </>}
+
+            <section className="memory-metadata-grid">
+              <MemoryMetric label={t.memoryImportance} value={`${Math.round(selectedForDetail.importance * 100)}%`} />
+              <MemoryMetric label={t.memoryConfidence} value={`${Math.round(selectedForDetail.confidence * 100)}%`} />
+              <MemoryMetric label={t.memoryAccess} value={String(selectedForDetail.accessCount)} />
+              <MemoryMetric label={t.memoryCreated} value={formatMemoryDate(selectedForDetail.createdAt, locale)} />
+            </section>
+
+            {!selectedForDetail.redacted && <section className="memory-taxonomy">
+              <MemoryTokenGroup label={t.memoryTags} values={selectedForDetail.tags.map((tag) => `#${tag}`)} empty={t.memoryNone} />
+              <MemoryTokenGroup label={t.memoryAliases} values={selectedForDetail.aliases} empty={t.memoryNone} />
+              {selectedForDetail.taskId && <MemoryTokenGroup label={t.memoryLinkedTask} values={[selectedForDetail.taskId]} empty={t.memoryNone} mono />}
+            </section>}
+          </div>
+        </>}
+      </section>
+    </div>
+
+    {editor && <MemoryEditorDialog key={editor.original?.id ?? "new-memory"} locale={locale} original={editor.original} draft={editor.draft}
+      saving={saving} error={memoryError} onCancel={() => setEditor(undefined)} onSave={saveMemory} />}
+    {deleteTarget && <div className="modal-layer memory-modal-layer" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !deleting) setDeleteTarget(undefined); }}>
+      <section className="memory-confirm-dialog" role="alertdialog" aria-modal="true" aria-labelledby="memory-delete-title" onKeyDown={(event) => handleModalKeyDown(event, deleting, () => setDeleteTarget(undefined))}>
+        <span className="memory-confirm-icon"><Trash2 /></span><h2 id="memory-delete-title">{t.memoryDeleteTitle}</h2><p>{t.memoryDeleteBody}</p>
+        <strong className="memory-delete-name">{deleteTarget.sensitive ? t.memorySensitiveHidden : deleteTarget.title}</strong>
+        {memoryError && <div className="memory-confirm-error error-strip"><CircleAlert />{memoryError}</div>}
+        <footer><button type="button" autoFocus disabled={deleting} onClick={() => setDeleteTarget(undefined)}>{t.memoryCancel}</button>
+          <button type="button" className="danger" disabled={deleting} onClick={() => void removeMemory()}>{deleting ? <LoaderCircle className="spin" /> : <Trash2 />}{deleting ? t.memoryDeleting : t.memoryDeleteConfirm}</button></footer>
+      </section>
+    </div>}
+  </section>;
+}
+
+function MemoryStat({ label, value, tone, sensitive = false }: { label: string; value: number; tone: string; sensitive?: boolean }) {
+  return <div className={`memory-stat ${tone}`}><span>{sensitive ? <LockKeyhole /> : tone === "violet" ? <Archive /> : <BrainCircuit />}{label}</span><strong>{value}</strong></div>;
+}
+
+function MemoryFilter({ label, value, onChange, children }: { label: string; value: string; onChange: (value: string) => void; children: React.ReactNode }) {
+  return <label className="memory-filter"><span>{label}</span><select value={value} onChange={(event) => onChange(event.target.value)}>{children}</select></label>;
+}
+
+function MemoryMetric({ label, value }: { label: string; value: string }) {
+  return <div><span>{label}</span><strong>{value}</strong></div>;
+}
+
+function MemoryTokenGroup({ label, values, empty, mono = false }: { label: string; values: string[]; empty: string; mono?: boolean }) {
+  return <div><strong>{label}</strong><span className={`memory-token-row ${mono ? "mono" : ""}`}>{values.length ? values.map((value) => <span key={value}>{value}</span>) : <em>{empty}</em>}</span></div>;
+}
+
+function handleModalKeyDown(event: ReactKeyboardEvent<HTMLElement>, busy: boolean, onClose: () => void) {
+  if (event.key === "Escape") {
+    if (!busy) {
+      event.preventDefault();
+      onClose();
+    }
+    return;
+  }
+  if (event.key !== "Tab") return;
+  const focusable = Array.from(event.currentTarget.querySelectorAll<HTMLElement>(
+    'button:not([disabled]), input:not([disabled]), textarea:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])',
+  )).filter((element) => element.getAttribute("aria-hidden") !== "true" && element.offsetParent !== null);
+  if (!focusable.length) {
+    event.preventDefault();
+    return;
+  }
+  const first = focusable[0];
+  const last = focusable[focusable.length - 1];
+  if (event.shiftKey && document.activeElement === first) {
+    event.preventDefault();
+    last.focus();
+  } else if (!event.shiftKey && document.activeElement === last) {
+    event.preventDefault();
+    first.focus();
+  }
+}
+
+function MemoryEditorDialog({ locale, original, draft: initialDraft, saving, error, onCancel, onSave }: {
+  locale: Locale; original?: MemoryEntry; draft: MemoryEditorDraft; saving: boolean; error: string;
+  onCancel: () => void; onSave: (draft: MemoryEditorDraft) => void;
+}) {
+  const t = strings(locale);
+  const [draft, setDraft] = useState(initialDraft);
+  const submitEditor = (event: FormEvent) => { event.preventDefault(); if (memoryDraftIsValid(draft)) onSave(draft); };
+  return <div className="modal-layer memory-modal-layer" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !saving) onCancel(); }}>
+    <form className="memory-editor-dialog" role="dialog" aria-modal="true" aria-labelledby="memory-editor-title" onSubmit={submitEditor} onKeyDown={(event) => handleModalKeyDown(event, saving, onCancel)}>
+      <header><span><BrainCircuit /></span><div><h2 id="memory-editor-title">{original ? t.memoryEditTitle : t.memoryNewTitle}</h2><p>{t.memoryEditorHint}</p></div><button type="button" className="action-close" title={t.close} aria-label={t.close} disabled={saving} onClick={onCancel}><X /></button></header>
+      <div className="memory-editor-body">
+        {error && <div className="error-strip"><CircleAlert />{error}</div>}
+        <div className="memory-editor-grid compact-fields">
+          <label>{t.memoryKind}<select value={draft.kind} onChange={(event) => setDraft((current) => ({ ...current, kind: event.target.value as MemoryKind }))}>{memoryEditableKinds(original?.kind).map((kind) => <option key={kind} value={kind}>{memoryKindLabel(kind, locale)}</option>)}</select></label>
+          <label>{t.memoryTier}<select value={draft.tier} onChange={(event) => setDraft((current) => ({ ...current, tier: event.target.value as MemoryTier }))}>{memoryTiers.map((tier) => <option key={tier} value={tier}>{memoryTierLabel(tier, locale)}</option>)}</select></label>
+        </div>
+        <label><span className="memory-field-heading"><span>{t.memoryTitleLabel}</span><output>{memoryTextLength(draft.title)}/{MEMORY_TITLE_MAX_CHARS}</output></span><input aria-label={t.memoryTitleLabel} autoFocus value={draft.title} onChange={(event) => setDraft((current) => ({ ...current, title: truncateMemoryText(event.target.value, MEMORY_TITLE_MAX_CHARS) }))} /></label>
+        <label><span className="memory-field-heading"><span>{t.memoryContentLabel}</span><output>{memoryTextLength(draft.content)}/{MEMORY_CONTENT_MAX_CHARS}</output></span><textarea aria-label={t.memoryContentLabel} value={draft.content} onChange={(event) => setDraft((current) => ({ ...current, content: truncateMemoryText(event.target.value, MEMORY_CONTENT_MAX_CHARS) }))} /></label>
+        <div className="memory-editor-grid">
+          <label><span className="memory-field-heading"><span>{t.memoryTags}</span><output>{memoryTaxonomyCount(draft.tagsText)}/{MEMORY_TAXONOMY_MAX_ITEMS}</output></span><input value={draft.tagsText} placeholder={t.memoryTagsHint} onChange={(event) => setDraft((current) => ({ ...current, tagsText: event.target.value }))} /></label>
+          <label><span className="memory-field-heading"><span>{t.memoryAliases}</span><output>{memoryTaxonomyCount(draft.aliasesText)}/{MEMORY_TAXONOMY_MAX_ITEMS}</output></span><input value={draft.aliasesText} placeholder={t.memoryAliasesHint} onChange={(event) => setDraft((current) => ({ ...current, aliasesText: event.target.value }))} /></label>
+        </div>
+        <div className="memory-editor-grid memory-sliders">
+          <label><span>{t.memoryImportance}<output>{Math.round(draft.importance * 100)}%</output></span><input type="range" min="0" max="1" step="0.05" value={draft.importance} onChange={(event) => setDraft((current) => ({ ...current, importance: Number(event.target.value) }))} /></label>
+          <label><span>{t.memoryConfidence}<output>{Math.round(draft.confidence * 100)}%</output></span><input type="range" min="0" max="1" step="0.05" value={draft.confidence} onChange={(event) => setDraft((current) => ({ ...current, confidence: Number(event.target.value) }))} /></label>
+        </div>
+        <label className={`memory-sensitive-toggle ${draft.sensitive ? "active" : ""}`}><input type="checkbox" checked={draft.sensitive} onChange={(event) => setDraft((current) => ({ ...current, sensitive: event.target.checked }))} /><LockKeyhole /><span><strong>{t.memoryMarkSensitive}</strong><small>{t.memoryMarkSensitiveHint}</small></span></label>
+        {original?.sensitive && !draft.sensitive && <div className="memory-unmask-warning"><CircleAlert /><span>{t.memoryUnmarkSensitiveWarning}</span></div>}
+      </div>
+      <footer><button type="button" disabled={saving} onClick={onCancel}>{t.memoryCancel}</button><button type="submit" className="primary" disabled={saving || !memoryDraftIsValid(draft)}>{saving ? <LoaderCircle className="spin" /> : <Save />}{saving ? t.memorySaving : t.memorySave}</button></footer>
+    </form>
+  </div>;
+}
+
+function memoryKindLabel(kind: MemoryKind, locale: Locale): string {
+  const labels: Record<MemoryKind, [string, string]> = {
+    conversation: ["对话", "Conversation"], task: ["任务", "Task"], fact: ["事实", "Fact"], preference: ["偏好", "Preference"],
+    experience: ["经验", "Experience"], artifact: ["产出物", "Artifact"], knowledge: ["知识", "Knowledge"],
+  };
+  return labels[kind][locale === "en" ? 1 : 0];
+}
+
+function memoryTierLabel(tier: MemoryTier, locale: Locale): string {
+  return tier === "hot" ? (locale === "en" ? "Hot" : "热记忆") : (locale === "en" ? "Cold" : "冷记忆");
+}
+
+function memorySourceLabel(source: MemorySource, locale: Locale): string {
+  const labels: Record<MemorySource, [string, string]> = {
+    runtime: ["运行时", "Runtime"], user_explicit: ["用户明确记录", "User explicit"], task: ["任务沉淀", "Task"],
+    legacy_swift: ["旧版 macOS 导入", "Legacy macOS import"], platform: ["平台", "Platform"],
+  };
+  return labels[source][locale === "en" ? 1 : 0];
+}
+
+function formatMemoryDate(value: string, locale: Locale): string {
+  const date = new Date(value);
+  return Number.isNaN(date.valueOf()) ? value : date.toLocaleDateString(locale === "en" ? "en-US" : "zh-CN", { month: "short", day: "numeric", year: "numeric" });
+}
+
+function formatMemoryDateTime(value: string, locale: Locale): string {
+  const date = new Date(value);
+  return Number.isNaN(date.valueOf()) ? value : date.toLocaleString(locale === "en" ? "en-US" : "zh-CN", { dateStyle: "medium", timeStyle: "short" });
 }
 
 interface SettingsProps {

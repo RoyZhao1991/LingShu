@@ -414,6 +414,41 @@ impl RuntimeKernel {
         &self.memory
     }
 
+    pub async fn memory_list(
+        &self,
+        request: MemoryListRequest,
+    ) -> Result<MemoryListPage, EngineError> {
+        Ok(self.memory.list(request).await?)
+    }
+
+    pub async fn memory_get(
+        &self,
+        request: MemoryGetRequest,
+    ) -> Result<MemoryListItem, EngineError> {
+        Ok(self.memory.get(request).await?)
+    }
+
+    pub async fn memory_upsert(
+        &self,
+        request: MemoryUpsertRequest,
+    ) -> Result<MemoryMutationResult, EngineError> {
+        Ok(self.memory.upsert(request).await?)
+    }
+
+    pub async fn memory_delete(
+        &self,
+        request: MemoryDeleteRequest,
+    ) -> Result<MemoryDeleteResult, EngineError> {
+        Ok(self.memory.delete(request).await?)
+    }
+
+    pub async fn memory_delete_filtered(
+        &self,
+        request: MemoryDeleteFilteredRequest,
+    ) -> Result<MemoryDeleteFilteredResult, EngineError> {
+        Ok(self.memory.delete_filtered(request).await?)
+    }
+
     pub fn loops(&self) -> &LoopRegistry {
         &self.loops
     }

@@ -596,6 +596,15 @@ pub enum MemoryTier {
     Cold,
 }
 
+impl MemoryTier {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Hot => "hot",
+            Self::Cold => "cold",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum MemorySource {
@@ -605,6 +614,18 @@ pub enum MemorySource {
     Task,
     LegacySwift,
     Platform,
+}
+
+impl MemorySource {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Runtime => "runtime",
+            Self::UserExplicit => "user_explicit",
+            Self::Task => "task",
+            Self::LegacySwift => "legacy_swift",
+            Self::Platform => "platform",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -637,6 +658,7 @@ pub struct MemoryEntry {
     #[serde(default)]
     pub access_count: u32,
     pub last_accessed_at: Option<DateTime<Utc>>,
+    #[serde(default)]
     pub fingerprint: String,
 }
 
@@ -671,6 +693,145 @@ pub struct MemorySnapshot {
     pub last_consolidated_at: Option<DateTime<Utc>>,
     #[serde(default)]
     pub imported_sources: std::collections::BTreeMap<String, String>,
+}
+
+/// Controls whether management APIs may return the payload of a sensitive memory.
+/// Listing is redacted unless a caller opts in explicitly for one exact id.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum MemorySensitiveVisibility {
+    #[default]
+    Redacted,
+    Full,
+}
+
+fn default_memory_page_limit() -> usize {
+    50
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryListRequest {
+    pub id: Option<String>,
+    #[serde(default)]
+    pub query: String,
+    pub kind: Option<MemoryKind>,
+    pub tier: Option<MemoryTier>,
+    pub source: Option<MemorySource>,
+    pub sensitive: Option<bool>,
+    #[serde(default)]
+    pub sensitive_visibility: MemorySensitiveVisibility,
+    #[serde(default)]
+    pub offset: usize,
+    /// Required for pages after offset zero so a concurrent insert/update cannot shift the
+    /// result window and silently omit an item.
+    pub expected_state_fingerprint: Option<String>,
+    #[serde(default = "default_memory_page_limit")]
+    pub limit: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryGetRequest {
+    pub id: String,
+    #[serde(default)]
+    pub sensitive_visibility: MemorySensitiveVisibility,
+}
+
+/// The flattened entry shape keeps the cross-platform wire contract convenient while
+/// making redaction explicit to every shell.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryListItem {
+    #[serde(flatten)]
+    pub entry: MemoryEntry,
+    pub redacted: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryListPage {
+    #[serde(default)]
+    pub items: Vec<MemoryListItem>,
+    pub total_count: usize,
+    pub offset: usize,
+    pub limit: usize,
+    pub has_more: bool,
+    /// Revision of all editable memory state, used to guard filtered deletion.
+    pub state_fingerprint: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryUpsertRequest {
+    pub id: Option<String>,
+    pub expected_fingerprint: Option<String>,
+    pub expected_updated_at: Option<DateTime<Utc>>,
+    #[serde(default)]
+    pub kind: MemoryKind,
+    #[serde(default)]
+    pub tier: MemoryTier,
+    pub title: String,
+    pub content: String,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    #[serde(default = "default_memory_importance")]
+    pub importance: f64,
+    #[serde(default = "default_memory_confidence")]
+    pub confidence: f64,
+    pub sensitive: bool,
+    #[serde(default)]
+    pub aliases: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryMutationResult {
+    pub entry: MemoryListItem,
+    pub snapshot: MemorySnapshot,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryDeleteRequest {
+    pub id: String,
+    pub expected_fingerprint: Option<String>,
+    pub expected_updated_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryDeleteResult {
+    pub deleted_id: String,
+    pub snapshot: MemorySnapshot,
+}
+
+fn default_memory_delete_limit() -> usize {
+    100
+}
+
+/// A deliberately guarded batch delete. Empty filters are rejected by the kernel and
+/// the caller must present the state revision returned by `MemoryListPage`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryDeleteFilteredRequest {
+    #[serde(default)]
+    pub query: String,
+    pub kind: Option<MemoryKind>,
+    pub tier: Option<MemoryTier>,
+    pub source: Option<MemorySource>,
+    pub sensitive: Option<bool>,
+    pub expected_state_fingerprint: String,
+    #[serde(default = "default_memory_delete_limit")]
+    pub max_delete: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryDeleteFilteredResult {
+    #[serde(default)]
+    pub deleted_ids: Vec<String>,
+    pub snapshot: MemorySnapshot,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
