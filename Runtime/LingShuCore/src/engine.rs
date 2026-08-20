@@ -728,6 +728,21 @@ impl RuntimeKernel {
         let Some(task) = self.store.prepare_resume(thread_id, answer.clone()).await? else {
             return Ok(false);
         };
+        self.run_prepared_resume(thread_id, task, answer, api_key)
+            .await?;
+        Ok(true)
+    }
+
+    /// Continue a human checkpoint already claimed atomically through `RuntimeStore::prepare_resume`.
+    /// Desktop shells use this split API so the visible checkpoint is cleared before they
+    /// acknowledge the user's click and start the longer model continuation in the background.
+    pub async fn run_prepared_resume(
+        &self,
+        thread_id: Uuid,
+        task: TaskRecord,
+        answer: String,
+        api_key: Option<String>,
+    ) -> Result<(), EngineError> {
         let locale = self.store.settings().await.locale;
         let result = self
             .run_task_operation(
@@ -736,7 +751,7 @@ impl RuntimeKernel {
             )
             .await;
         match result {
-            Ok(()) => Ok(true),
+            Ok(()) => Ok(()),
             Err(EngineError::Cancelled) => Err(EngineError::Cancelled),
             Err(error) => {
                 if self.store.task_is_cancelled(thread_id).await {

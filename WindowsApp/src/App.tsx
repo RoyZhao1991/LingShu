@@ -9,20 +9,22 @@ import {
   MessagesSquare, PackageCheck, PackagePlus, Paperclip, Play, Puzzle, RefreshCw, Search, Send,
   Settings, ShieldCheck, Square, Trash2, UserRound, Wrench, X,
 } from "lucide-react";
-import { strings } from "./i18n";
+import { executionLinkLabel, strings } from "./i18n";
 import { chooseFiles, choosePluginManifest, hasNativeBridge, listenForWindowFileDrops, runtimeInvoke } from "./bridge";
 import { browserDroppedFilePaths, mergeAttachmentPaths } from "./attachments";
 import { projectChatBubble } from "./chatProjection";
-import { findInteractiveActionTask } from "./humanAction";
+import { projectConversationMessages, type PendingSubmission } from "./conversationProjection";
+import { findInteractiveActionTask, findVisibleInteractiveActionTask, interactiveActionCheckpointKey } from "./humanAction";
 import { normalizeMarkdownTables } from "./markdown";
 import { decodePdfDataUri } from "./pdf";
+import { SnapshotGate } from "./snapshotGate";
 import packageMetadata from "../package.json";
 import type {
   ArtifactRecord, ChatMessage, ExecutionPermissionMode, Locale, Page, PluginRecord, PreviewPayload, ProviderPreset, RuntimeSettings,
   RuntimeEvent, RuntimeSnapshot, TaskRecord, TaskRole, TaskStatus,
 } from "./types";
 
-import type { BootstrapPayload } from "./bridge";
+import type { BootstrapPayload, SubmitMessagePayload } from "./bridge";
 
 const terminalStatuses = new Set<TaskStatus>(["completed", "cancelled"]);
 const recoverableStatus = (status: TaskStatus): TaskStatus => status === "failed" ? "needs_recovery" : status;
@@ -47,7 +49,8 @@ export default function App() {
   const [permissionUpdating, setPermissionUpdating] = useState(false);
   const [actionAnswer, setActionAnswer] = useState("");
   const [resuming, setResuming] = useState(false);
-  const [dismissedActionTaskId, setDismissedActionTaskId] = useState<string>();
+  const [dismissedActionCheckpointKey, setDismissedActionCheckpointKey] = useState<string>();
+  const [pendingSubmissions, setPendingSubmissions] = useState<PendingSubmission[]>([]);
   const [pluginBusy, setPluginBusy] = useState("");
   const [dragActive, setDragActive] = useState(false);
   const messageScroll = useRef<HTMLDivElement>(null);
@@ -55,14 +58,27 @@ export default function App() {
   const keepAtBottom = useRef(true);
   const previousPage = useRef<Page>(page);
   const previewRequest = useRef(0);
+  const snapshotGate = useRef(new SnapshotGate());
+  const refreshInFlight = useRef<Promise<void> | undefined>(undefined);
+  const refreshAgain = useRef(false);
 
   const locale = settingsDraft?.locale ?? snapshot?.settings.locale ?? "zh_cn";
   const t = strings(locale);
   const activeTask = snapshot?.tasks.find((task) => task.id === snapshot.activeTaskId);
-  const isBusy = Boolean(snapshot?.tasks.some((task) => ["understanding", "running", "needs_recovery", "failed"].includes(task.status))) || Boolean(snapshot?.queuedTaskCount);
+  const isBusy = Boolean(snapshot?.tasks.some((task) => ["understanding", "running", "needs_recovery", "failed"].includes(task.status))) || Boolean(snapshot?.queuedTaskCount) || pendingSubmissions.length > 0;
   const selectedTask = snapshot?.tasks.find((task) => task.id === selectedTaskId) ?? activeTask ?? snapshot?.tasks.filter((task) => !task.parentTaskId).at(-1);
   const pendingActionTask = findInteractiveActionTask(snapshot?.tasks);
-  const actionTask = pendingActionTask?.id === dismissedActionTaskId ? undefined : pendingActionTask;
+  const pendingActionCheckpointKey = interactiveActionCheckpointKey(pendingActionTask);
+  const actionTask = findVisibleInteractiveActionTask(snapshot?.tasks, dismissedActionCheckpointKey, snapshot?.activeTaskId);
+  const conversationMessages = useMemo(
+    () => snapshot ? projectConversationMessages(snapshot.messages, snapshot.tasks, pendingSubmissions, locale) : [],
+    [locale, pendingSubmissions, snapshot],
+  );
+
+  const applyMutationSnapshot = useCallback((next: RuntimeSnapshot) => {
+    snapshotGate.current.commitMutation();
+    setSnapshot(next);
+  }, []);
 
   const bindAttachments = useCallback((paths: readonly string[]) => {
     if (!paths.some((path) => path.trim())) return;
@@ -72,24 +88,39 @@ export default function App() {
   }, []);
 
   const refresh = useCallback(async () => {
+    refreshAgain.current = true;
+    if (refreshInFlight.current) return refreshInFlight.current;
+    const run = (async () => {
+      do {
+        refreshAgain.current = false;
+        const readVersion = snapshotGate.current.beginRead();
+        try {
+          const next = await runtimeInvoke<RuntimeSnapshot>("get_snapshot");
+          if (!snapshotGate.current.acceptsRead(readVersion)) continue;
+          setSnapshot(next);
+          setSettingsDraft((current) => current ?? next.settings);
+          setError("");
+        } catch (reason) {
+          if (snapshotGate.current.acceptsRead(readVersion)) setError(String(reason));
+        }
+      } while (refreshAgain.current);
+    })();
+    refreshInFlight.current = run;
     try {
-      const next = await runtimeInvoke<RuntimeSnapshot>("get_snapshot");
-      setSnapshot(next);
-      if (!settingsDraft) setSettingsDraft(next.settings);
-      setError("");
-    } catch (reason) {
-      setError(String(reason));
+      await run;
+    } finally {
+      if (refreshInFlight.current === run) refreshInFlight.current = undefined;
     }
-  }, [settingsDraft]);
+  }, []);
 
   useEffect(() => {
     void runtimeInvoke<BootstrapPayload>("bootstrap").then((payload) => {
-      setSnapshot(payload.snapshot);
+      applyMutationSnapshot(payload.snapshot);
       setProviders(payload.providers);
       setSettingsDraft(payload.snapshot.settings);
       setSelectedTaskId(payload.snapshot.activeTaskId ?? payload.snapshot.tasks.at(-1)?.id);
     }).catch((reason) => setError(String(reason)));
-  }, []);
+  }, [applyMutationSnapshot]);
 
   useEffect(() => {
     if (!snapshot) return;
@@ -99,10 +130,10 @@ export default function App() {
 
   useEffect(() => {
     setActionAnswer("");
-    if (pendingActionTask?.id !== dismissedActionTaskId) {
-      setDismissedActionTaskId(undefined);
+    if (pendingActionCheckpointKey !== dismissedActionCheckpointKey) {
+      setDismissedActionCheckpointKey(undefined);
     }
-  }, [pendingActionTask?.id]);
+  }, [pendingActionCheckpointKey]);
 
   useLayoutEffect(() => {
     const enteredChat = page === "chat" && previousPage.current !== "chat";
@@ -114,7 +145,7 @@ export default function App() {
     if (node && keepAtBottom.current) {
       node.scrollTop = node.scrollHeight;
     }
-  }, [page, snapshot?.messages.length, snapshot?.messages.at(-1)?.text, snapshot?.latestEventSequence]);
+  }, [conversationMessages.length, conversationMessages.at(-1)?.text, page, snapshot?.latestEventSequence]);
 
   useEffect(() => {
     document.title = t.appName;
@@ -159,14 +190,29 @@ export default function App() {
     event.preventDefault();
     const text = prompt.trim();
     if (!text || sending || permissionUpdating) return;
+    const submission: PendingSubmission = {
+      id: crypto.randomUUID(),
+      text,
+      attachmentPaths: [...attachments],
+      createdAt: new Date().toISOString(),
+    };
     setSending(true);
     setError("");
+    setPendingSubmissions((current) => [...current, submission]);
+    setPrompt("");
+    setAttachments([]);
     try {
-      await runtimeInvoke("submit_message", { prompt: text, attachmentPaths: attachments });
-      setPrompt("");
-      setAttachments([]);
-      await refresh();
+      const payload = await runtimeInvoke<SubmitMessagePayload>("submit_message", {
+        prompt: text,
+        attachmentPaths: submission.attachmentPaths,
+      });
+      applyMutationSnapshot(payload.snapshot);
+      setSelectedTaskId(payload.receipt.threadId);
+      setPendingSubmissions((current) => current.filter((item) => item.id !== submission.id));
     } catch (reason) {
+      setPendingSubmissions((current) => current.filter((item) => item.id !== submission.id));
+      setPrompt((current) => current.trim() ? current : text);
+      setAttachments((current) => mergeAttachmentPaths(submission.attachmentPaths, current));
       setError(`${t.requestError}: ${String(reason)}`);
     } finally {
       setSending(false);
@@ -221,7 +267,7 @@ export default function App() {
         settings: { ...settingsDraft, firstRunComplete: true },
         apiKey,
       });
-      setSnapshot(next);
+      applyMutationSnapshot(next);
       setSettingsDraft(next.settings);
       setApiKey("");
     } catch (reason) {
@@ -237,7 +283,7 @@ export default function App() {
     setError("");
     try {
       const next = await runtimeInvoke<RuntimeSnapshot>("update_execution_permission_mode", { mode });
-      setSnapshot(next);
+      applyMutationSnapshot(next);
       setSettingsDraft((draft) => draft ? { ...draft, executionPermissionMode: next.settings.executionPermissionMode } : next.settings);
     } catch (reason) {
       setError(String(reason));
@@ -251,11 +297,16 @@ export default function App() {
     setResuming(true);
     setError("");
     try {
-      const accepted = await runtimeInvoke<boolean>("resume_task", { threadId: actionTask.id, answer: actionAnswer.trim() });
-      if (!accepted) throw new Error(locale === "en" ? "The task is not ready to resume." : "当前任务暂时无法恢复执行。");
+      const checkpointKey = interactiveActionCheckpointKey(actionTask);
+      const next = await runtimeInvoke<RuntimeSnapshot | null>("resume_task", {
+        threadId: actionTask.id,
+        expectedToolCallId: actionTask.pendingToolCallId,
+        answer: actionAnswer.trim(),
+      });
+      if (!next) throw new Error(locale === "en" ? "The task is not ready to resume." : "当前任务暂时无法恢复执行。");
+      setDismissedActionCheckpointKey(checkpointKey);
+      applyMutationSnapshot(next);
       setActionAnswer("");
-      setDismissedActionTaskId(undefined);
-      await refresh();
     } catch (reason) {
       setError(String(reason));
     } finally {
@@ -342,13 +393,13 @@ export default function App() {
     <div className={`app-shell ${dragActive ? "is-file-dragging" : ""}`}
       onDragEnter={handleBrowserDrag} onDragOver={handleBrowserDrag}
       onDragLeave={handleBrowserDragLeave} onDrop={handleBrowserDrop}>
-      <Header page={page} setPage={setPage} busy={isBusy} locale={locale} />
+      <Header page={page} setPage={setPage} busy={isBusy} queuedCount={(snapshot?.queuedTaskCount ?? 0) + pendingSubmissions.length} locale={locale} />
       <main className="workspace-shell">
         {page === "chat" && (
           <section className="chat-page">
             <div className="message-scroll" ref={messageScroll} onScroll={trackMessageScroll}>
-              {snapshot.messages.length === 0 && <EmptyState icon={<MessageCircle />} text={t.noMessages} />}
-              {snapshot.messages.map((message) => {
+              {conversationMessages.length === 0 && <EmptyState icon={<MessageCircle />} text={t.noMessages} />}
+              {conversationMessages.map((message) => {
                 const messageAttachments = attachmentPathsForMessage(snapshot, message);
                 const messageTask = message.threadId
                   ? snapshot.tasks.find((task) => task.id === message.threadId)
@@ -381,10 +432,10 @@ export default function App() {
                       ))}
                     </div>
                   )}
-                  {message.threadId && message.role === "assistant"
+                  {message.threadId && message.role === "assistant" && messageTask
                     && shouldShowExecution(snapshot, message.threadId) && (
                     <button className="thread-link" onClick={() => { setSelectedTaskId(message.threadId); setPage("threads"); }}>
-                      <MessagesSquare size={16} /> {locale === "en" ? "View execution" : "查看执行过程"}
+                      <MessagesSquare size={16} /> {executionLinkLabel(aggregateTaskStatus(messageTask, snapshot.tasks), locale)}
                     </button>
                   )}
                 </article>;
@@ -407,11 +458,10 @@ export default function App() {
                 <button type="button" className="icon-button" title={t.attach} onClick={chooseAttachments}><Paperclip /></button>
                 <PermissionSelector mode={snapshot.settings.executionPermissionMode} locale={locale} compact disabled={permissionUpdating} onChange={updateExecutionPermission} />
                 <span className="channel-state"><span className={snapshot.providerConfigured ? "dot good" : "dot"} />{snapshot.settings.providerName} · {snapshot.settings.model}</span>
-                {activeTask ? (
+                {activeTask && (
                   <button type="button" className="stop-button" onClick={() => void runtimeInvoke("cancel_task", { threadId: activeTask.id }).then(refresh)}><Square size={16} />{t.stop}</button>
-                ) : (
-                  <button className="send-button" type="submit" disabled={sending || permissionUpdating || !prompt.trim()} title={t.send}><Send /></button>
                 )}
+                <button className="send-button" type="submit" disabled={sending || permissionUpdating || !prompt.trim()} title={t.send}><Send /></button>
               </div>
             </form>
           </section>
@@ -445,7 +495,7 @@ export default function App() {
       {actionTask && (
         <HumanActionDialog task={actionTask} locale={locale} value={actionAnswer} busy={resuming} error={error}
           onChange={setActionAnswer} onResume={resumeAction}
-          onDismiss={() => { setActionAnswer(""); setDismissedActionTaskId(actionTask.id); }} />
+          onDismiss={() => { setActionAnswer(""); setDismissedActionCheckpointKey(interactiveActionCheckpointKey(actionTask)); }} />
       )}
       {dragActive && (
         <div className="window-drop-overlay" role="status" aria-live="polite">
@@ -456,7 +506,7 @@ export default function App() {
   );
 }
 
-function Header({ page, setPage, busy, locale }: { page: Page; setPage: (page: Page) => void; busy: boolean; locale: Locale }) {
+function Header({ page, setPage, busy, queuedCount, locale }: { page: Page; setPage: (page: Page) => void; busy: boolean; queuedCount: number; locale: Locale }) {
   const t = strings(locale);
   const navigation: Array<[Page, typeof MessageCircle, string]> = [
     ["chat", MessageCircle, t.chat], ["threads", MessagesSquare, t.threads], ["status", Activity, t.status],
@@ -465,7 +515,7 @@ function Header({ page, setPage, busy, locale }: { page: Page; setPage: (page: P
   return <header className="app-header">
     <div className="brand"><BrandMark /><div><div className="brand-title"><strong>{t.appName}</strong><span>v{appVersion}</span></div><small>{t.tagline}</small></div></div>
     <nav>{navigation.map(([id, Icon, label]) => <button key={id} className={page === id ? "active" : ""} onClick={() => setPage(id)}><Icon />{label}</button>)}</nav>
-    <div className="runtime-state"><small>STATE</small><strong className={busy ? "active" : ""}>{busy ? t.running : t.standby}</strong></div>
+    <div className="runtime-state"><small>{queuedCount > 0 ? `${t.queued} · ${queuedCount}` : "STATE"}</small><strong className={busy ? "active" : ""}>{busy ? t.running : t.standby}</strong></div>
   </header>;
 }
 

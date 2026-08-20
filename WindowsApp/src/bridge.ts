@@ -9,6 +9,18 @@ export interface BootstrapPayload {
   providers: ProviderPreset[];
 }
 
+export interface SubmitReceipt {
+  threadId: string;
+  userMessageId: string;
+  assistantMessageId: string;
+  queued: boolean;
+}
+
+export interface SubmitMessagePayload {
+  receipt: SubmitReceipt;
+  snapshot: RuntimeSnapshot;
+}
+
 export type WindowFileDropEvent =
   | { type: "enter"; paths: string[] }
   | { type: "over" }
@@ -182,23 +194,53 @@ async function mockInvoke<T>(command: string, args?: Record<string, unknown>): P
       const prompt = String(args?.prompt ?? "").trim();
       const id = crypto.randomUUID();
       const createdAt = new Date().toISOString();
+      const userMessageId = crypto.randomUUID();
+      const assistantMessageId = crypto.randomUUID();
+      const queued = Boolean(snapshot.activeTaskId) || snapshot.tasks.some((task) => task.status === "queued");
       const task: TaskRecord & { assistantMessageId: string } = {
-        id, title: prompt, prompt, status: "understanding", createdAt, updatedAt: createdAt,
-        steps: [{ id: crypto.randomUUID(), title: "Understand the request", detail: "Generating a complete GoalSpec", status: "understanding", updatedAt: createdAt }],
-        artifacts: [], summary: "", assistantMessageId: crypto.randomUUID(), attachmentPaths: (args?.attachmentPaths as string[]) ?? [],
+        id, title: prompt, prompt, status: "queued", createdAt, updatedAt: createdAt,
+        steps: [{ id: crypto.randomUUID(), title: "Understand the request", detail: "Waiting for the shared runtime kernel", status: "queued", updatedAt: createdAt }],
+        artifacts: [], summary: "", userMessageId, assistantMessageId, attachmentPaths: (args?.attachmentPaths as string[]) ?? [],
         rootTaskId: id, role: "main", origin: "conversation", participantName: "LingShu", depth: 0,
         loopEngine: snapshot.settings.loopEngine,
       };
       const event: RuntimeEvent = { id: crypto.randomUUID(), sequence: snapshot.latestEventSequence + 1, taskId: id, kind: "model", state: "running", actor: snapshot.settings.model, title: "Understanding the goal", detail: "Compiling the current input into an executable goal.", createdAt, updatedAt: createdAt };
       snapshot = {
-        ...snapshot, activeTaskId: id, tasks: [...snapshot.tasks, task],
-        events: [...snapshot.events, event], latestEventSequence: event.sequence,
-        messages: [...snapshot.messages,
-          { id: crypto.randomUUID(), role: "user", text: prompt, createdAt, state: "complete", threadId: id, attachmentPaths: task.attachmentPaths },
-          { id: task.assistantMessageId, role: "assistant", text: "Understanding…", createdAt, state: "thinking", threadId: id, attachmentPaths: [] },
+        ...snapshot,
+        queuedTaskCount: snapshot.queuedTaskCount + 1,
+        tasks: [...snapshot.tasks, task],
+        messages: queued ? snapshot.messages : [...snapshot.messages,
+          { id: userMessageId, role: "user", text: prompt, createdAt, state: "complete", threadId: id, attachmentPaths: task.attachmentPaths },
+          { id: assistantMessageId, role: "assistant", text: "Understanding…", createdAt, state: "thinking", threadId: id, attachmentPaths: [] },
         ],
       };
-      return { threadId: id, queued: false } as T;
+      const enqueueSnapshot = clone(snapshot);
+      if (!queued) {
+        setTimeout(() => {
+          const queuedTask = snapshot.tasks.find((item) => item.id === id);
+          if (snapshot.activeTaskId || queuedTask?.status !== "queued") return;
+          snapshot = {
+            ...snapshot,
+            activeTaskId: id,
+            queuedTaskCount: Math.max(0, snapshot.queuedTaskCount - 1),
+            tasks: snapshot.tasks.map((item) => item.id === id ? {
+              ...item,
+              status: "understanding",
+              steps: item.steps.map((step, index) => index === 0 ? {
+                ...step,
+                status: "understanding",
+                detail: "Generating a complete GoalSpec",
+              } : step),
+            } : item),
+            events: [...snapshot.events, event],
+            latestEventSequence: event.sequence,
+          };
+        }, 0);
+      }
+      return {
+        receipt: { threadId: id, userMessageId, assistantMessageId, queued },
+        snapshot: enqueueSnapshot,
+      } satisfies SubmitMessagePayload as T;
     }
     case "cancel_task": {
       const id = String(args?.threadId ?? "");
@@ -207,8 +249,11 @@ async function mockInvoke<T>(command: string, args?: Record<string, unknown>): P
     }
     case "resume_task": {
       const id = String(args?.threadId ?? "");
-      snapshot = { ...snapshot, activeTaskId: id, tasks: snapshot.tasks.map((task) => task.id === id ? { ...task, status: "running", pendingQuestion: undefined } : task) };
-      return true as T;
+      const expectedToolCallId = String(args?.expectedToolCallId ?? "");
+      const task = snapshot.tasks.find((item) => item.id === id);
+      if (!task || task.status !== "needs_user_action" || task.pendingToolCallId !== expectedToolCallId || snapshot.activeTaskId) return null as T;
+      snapshot = { ...snapshot, activeTaskId: id, tasks: snapshot.tasks.map((item) => item.id === id ? { ...item, status: "running", pendingQuestion: undefined, pendingToolCallId: undefined } : item) };
+      return clone(snapshot) as T;
     }
     case "list_plugins": return clone(snapshot.plugins) as T;
     case "install_plugin": return clone(snapshot.plugins[0]) as T;

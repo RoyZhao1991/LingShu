@@ -8,10 +8,47 @@ use std::path::PathBuf;
 use tauri::{Manager, State};
 use uuid::Uuid;
 
+#[cfg(any(target_os = "windows", test))]
+use std::{
+    fs::{File, OpenOptions},
+    io,
+    path::Path,
+};
+
 const KEYRING_SERVICE: &str = "com.royzhao.lingshu";
 
 struct AppState {
     kernel: RuntimeKernel,
+    #[cfg(target_os = "windows")]
+    _runtime_owner: RuntimeOwnerGuard,
+}
+
+/// The single-instance plugin focuses ordinary second launches. This OS file lock is the final
+/// ownership fence if two processes start before the plugin's IPC window is ready.
+#[cfg(any(target_os = "windows", test))]
+#[derive(Debug)]
+struct RuntimeOwnerGuard {
+    _file: File,
+}
+
+#[cfg(any(target_os = "windows", test))]
+impl RuntimeOwnerGuard {
+    fn acquire(data_dir: &Path) -> io::Result<Self> {
+        std::fs::create_dir_all(data_dir)?;
+        let path = data_dir.join("windows-runtime-owner.lock");
+        let file = OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .open(&path)?;
+        file.try_lock().map_err(|error| {
+            io::Error::other(format!(
+                "another Nous runtime already owns {}: {error}",
+                path.display()
+            ))
+        })?;
+        Ok(Self { _file: file })
+    }
 }
 
 #[derive(Serialize)]
@@ -19,6 +56,13 @@ struct AppState {
 struct BootstrapPayload {
     snapshot: RuntimeSnapshot,
     providers: Vec<ProviderPreset>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SubmitMessagePayload {
+    receipt: SubmitReceipt,
+    snapshot: RuntimeSnapshot,
 }
 
 fn key_account(provider_id: &str) -> String {
@@ -171,7 +215,7 @@ async fn submit_message(
     state: State<'_, AppState>,
     prompt: String,
     attachment_paths: Vec<PathBuf>,
-) -> Result<SubmitReceipt, String> {
+) -> Result<SubmitMessagePayload, String> {
     if prompt.trim().is_empty() {
         return Err("message is empty".into());
     }
@@ -185,6 +229,10 @@ async fn submit_message(
         .submit(prompt, attachment_paths)
         .await
         .map_err(|error| error.to_string())?;
+    let snapshot = state
+        .kernel
+        .snapshot(is_provider_configured(&settings).await)
+        .await;
     let kernel = state.kernel.clone();
     let provider_id = settings.provider_id;
     tauri::async_runtime::spawn(async move {
@@ -198,7 +246,7 @@ async fn submit_message(
             }
         }
     });
-    Ok(receipt)
+    Ok(SubmitMessagePayload { receipt, snapshot })
 }
 
 #[tauri::command]
@@ -215,8 +263,9 @@ async fn cancel_task(state: State<'_, AppState>, thread_id: String) -> Result<bo
 async fn resume_task(
     state: State<'_, AppState>,
     thread_id: String,
+    expected_tool_call_id: String,
     answer: String,
-) -> Result<bool, String> {
+) -> Result<Option<RuntimeSnapshot>, String> {
     let id = Uuid::parse_str(&thread_id).map_err(|error| error.to_string())?;
     let task = state
         .kernel
@@ -225,18 +274,31 @@ async fn resume_task(
         .await
         .ok_or_else(|| format!("task not found: {id}"))?;
     if task.status != lingshu_runtime_core::TaskStatus::NeedsUserAction {
-        return Ok(false);
+        return Ok(None);
     }
     let settings = state.kernel.store().settings().await;
     let key = load_api_key(&settings.provider_id)?;
     if provider_needs_key(&settings.provider_id) && key.is_none() {
         return Err(format!("{} requires an API token", settings.provider_name));
     }
+    let Some(prepared) = state
+        .kernel
+        .store()
+        .prepare_resume_checkpoint(id, &expected_tool_call_id, answer.clone())
+        .await
+        .map_err(|error| error.to_string())?
+    else {
+        return Ok(None);
+    };
+    let snapshot = state
+        .kernel
+        .snapshot(is_provider_configured(&settings).await)
+        .await;
     let kernel = state.kernel.clone();
     let provider_id = settings.provider_id;
     tauri::async_runtime::spawn(async move {
         let recovery_key = key.clone();
-        if let Err(error) = kernel.resume(id, answer, key).await {
+        if let Err(error) = kernel.run_prepared_resume(id, prepared, answer, key).await {
             if error.failure_kind() == RuntimeFailureKind::Authentication {
                 let _ = delete_api_key(&provider_id);
             }
@@ -251,7 +313,7 @@ async fn resume_task(
             }
         }
     });
-    Ok(true)
+    Ok(Some(snapshot))
 }
 
 #[tauri::command]
@@ -348,10 +410,24 @@ fn probe_plugin(state: State<'_, AppState>, id: String) -> Result<PluginRecord, 
 }
 
 pub fn run() {
-    tauri::Builder::default()
+    let builder = tauri::Builder::default();
+    // RuntimeStore locking is process-local, so Windows must have exactly one runtime owner.
+    // A second launch only restores and focuses the existing window.
+    #[cfg(target_os = "windows")]
+    let builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+        if let Some(window) = app.get_webview_window("main") {
+            let _ = window.show();
+            let _ = window.unminimize();
+            let _ = window.set_focus();
+        }
+    }));
+    builder
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
-            let store = RuntimeStore::open(runtime_data_dir())?;
+            let data_dir = runtime_data_dir();
+            #[cfg(target_os = "windows")]
+            let runtime_owner = RuntimeOwnerGuard::acquire(&data_dir)?;
+            let store = RuntimeStore::open(data_dir)?;
             let resource_root = app.path().resource_dir().ok();
             let kernel = RuntimeKernel::new_with_resources(store, "windows", resource_root)?;
             let recovery_kernel = kernel.clone();
@@ -373,7 +449,11 @@ pub fn run() {
                     }
                 }
             });
-            app.manage(AppState { kernel });
+            app.manage(AppState {
+                kernel,
+                #[cfg(target_os = "windows")]
+                _runtime_owner: runtime_owner,
+            });
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -408,4 +488,25 @@ fn runtime_data_dir() -> PathBuf {
     }
     #[allow(unreachable_code)]
     RuntimeStore::default_data_dir()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn runtime_owner_lock_is_exclusive_until_the_owner_exits() {
+        let directory = std::env::temp_dir().join(format!("lingshu-owner-test-{}", Uuid::new_v4()));
+        let first = RuntimeOwnerGuard::acquire(&directory).unwrap();
+        let error = RuntimeOwnerGuard::acquire(&directory).unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("another Nous runtime already owns"));
+
+        drop(first);
+        let next = RuntimeOwnerGuard::acquire(&directory).unwrap();
+        drop(next);
+        std::fs::remove_file(directory.join("windows-runtime-owner.lock")).unwrap();
+        std::fs::remove_dir(directory).unwrap();
+    }
 }

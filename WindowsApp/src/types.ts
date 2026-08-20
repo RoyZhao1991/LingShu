@@ -83,6 +83,8 @@ export interface TaskRecord {
   artifacts: ArtifactRecord[];
   summary: string;
   error?: string;
+  userMessageId?: string;
+  assistantMessageId?: string;
   attachmentPaths: string[];
   parentTaskId?: string;
   rootTaskId?: string;

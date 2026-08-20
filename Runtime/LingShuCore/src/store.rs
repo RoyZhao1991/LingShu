@@ -1954,7 +1954,33 @@ impl RuntimeStore {
         thread_id: Uuid,
         answer: String,
     ) -> Result<Option<TaskRecord>, StoreError> {
+        self.prepare_resume_inner(thread_id, None, answer).await
+    }
+
+    /// Claim a specific human checkpoint. The expected tool-call id prevents a stale window
+    /// from applying an answer to a newer question on the same task.
+    pub async fn prepare_resume_checkpoint(
+        &self,
+        thread_id: Uuid,
+        expected_tool_call_id: &str,
+        answer: String,
+    ) -> Result<Option<TaskRecord>, StoreError> {
+        self.prepare_resume_inner(thread_id, Some(expected_tool_call_id), answer)
+            .await
+    }
+
+    async fn prepare_resume_inner(
+        &self,
+        thread_id: Uuid,
+        expected_tool_call_id: Option<&str>,
+        answer: String,
+    ) -> Result<Option<TaskRecord>, StoreError> {
+        // Keep the checkpoint claim, its durable write, and publication to readers in one
+        // transaction. If persistence fails, no caller may observe a consumed question or an
+        // active root without a continuation driver.
+        let _persist_guard = self.persist_guard.lock().await;
         let mut state = self.state.write().await;
+        let before = state.clone();
         if state.active_task_id.is_some() {
             return Ok(None);
         }
@@ -1962,6 +1988,11 @@ impl RuntimeStore {
             return Ok(None);
         };
         if task.status != TaskStatus::NeedsUserAction {
+            return Ok(None);
+        }
+        if expected_tool_call_id
+            .is_some_and(|expected| task.pending_tool_call_id.as_deref() != Some(expected))
+        {
             return Ok(None);
         }
         let Some(call_id) = task.pending_tool_call_id.take() else {
@@ -1981,8 +2012,10 @@ impl RuntimeStore {
         if resumes_main {
             state.active_task_id = Some(thread_id);
         }
-        drop(state);
-        self.persist().await?;
+        if let Err(error) = Self::write_state(&self.data_file, &state) {
+            *state = before;
+            return Err(error);
+        }
         Ok(Some(task))
     }
 
@@ -3751,6 +3784,11 @@ mod tests {
                 true,
             )
             .await;
+        assert_eq!(queued_snapshot.queued_task_count, 1);
+        assert!(queued_snapshot
+            .tasks
+            .iter()
+            .any(|task| task.id == queued.thread_id && task.status == TaskStatus::Queued));
         assert!(!queued_snapshot
             .messages
             .iter()
@@ -3780,6 +3818,7 @@ mod tests {
             .filter(|message| message.thread_id == Some(queued.thread_id))
             .collect::<Vec<_>>();
 
+        assert_eq!(promoted_snapshot.queued_task_count, 0);
         assert_eq!(promoted_messages.len(), 2);
         assert_eq!(promoted_messages[0].role, MessageRole::User);
         assert_eq!(promoted_messages[0].attachment_paths, vec![attachment]);
@@ -3978,6 +4017,103 @@ mod tests {
             Some("Confirm the prerequisite.")
         );
         assert!(reopened.next_recovery_id().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn stale_human_checkpoint_answer_cannot_claim_a_newer_question() {
+        let directory = tempdir().unwrap();
+        let store = RuntimeStore::open(directory.path()).unwrap();
+        let receipt = store
+            .enqueue("Wait for the latest confirmation".into(), Vec::new())
+            .await
+            .unwrap();
+        store
+            .set_needs_user_action(
+                receipt.thread_id,
+                "ask-user-call-2".into(),
+                "Confirm the revised artifact.".into(),
+            )
+            .await
+            .unwrap();
+
+        let stale = store
+            .prepare_resume_checkpoint(
+                receipt.thread_id,
+                "ask-user-call-1",
+                "Answer from a stale window".into(),
+            )
+            .await
+            .unwrap();
+        assert!(stale.is_none());
+        let waiting = store.task(receipt.thread_id).await.unwrap();
+        assert_eq!(waiting.status, TaskStatus::NeedsUserAction);
+        assert_eq!(
+            waiting.pending_tool_call_id.as_deref(),
+            Some("ask-user-call-2")
+        );
+        assert!(waiting.session_messages.is_empty());
+
+        let resumed = store
+            .prepare_resume_checkpoint(
+                receipt.thread_id,
+                "ask-user-call-2",
+                "Answer for the current question".into(),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(resumed.status, TaskStatus::Running);
+        assert_eq!(
+            resumed
+                .session_messages
+                .last()
+                .unwrap()
+                .tool_call_id
+                .as_deref(),
+            Some("ask-user-call-2")
+        );
+    }
+
+    #[tokio::test]
+    async fn failed_checkpoint_persist_rolls_back_the_claim_in_memory() {
+        let directory = tempdir().unwrap();
+        let store = RuntimeStore::open(directory.path()).unwrap();
+        let receipt = store
+            .enqueue("Keep the checkpoint recoverable".into(), Vec::new())
+            .await
+            .unwrap();
+        store
+            .set_needs_user_action(
+                receipt.thread_id,
+                "ask-user-call".into(),
+                "Confirm only after persistence succeeds.".into(),
+            )
+            .await
+            .unwrap();
+
+        let blocked_temporary = directory.path().join("runtime-state.json.tmp");
+        fs::create_dir(&blocked_temporary).unwrap();
+        let error = store
+            .prepare_resume_checkpoint(receipt.thread_id, "ask-user-call", "Confirmed".into())
+            .await
+            .unwrap_err();
+        assert!(matches!(error, StoreError::Persist(_)));
+
+        let waiting = store.task(receipt.thread_id).await.unwrap();
+        assert_eq!(waiting.status, TaskStatus::NeedsUserAction);
+        assert_eq!(
+            waiting.pending_tool_call_id.as_deref(),
+            Some("ask-user-call")
+        );
+        assert!(waiting.session_messages.is_empty());
+        assert!(store.state.read().await.active_task_id.is_none());
+
+        fs::remove_dir(&blocked_temporary).unwrap();
+        assert!(store
+            .prepare_resume_checkpoint(receipt.thread_id, "ask-user-call", "Confirmed".into())
+            .await
+            .unwrap()
+            .is_some());
     }
 
     #[tokio::test]

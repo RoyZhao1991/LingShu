@@ -1,4 +1,4 @@
-import type { Locale } from "./types";
+import type { Locale, TaskStatus } from "./types";
 
 const copy = {
   zh_cn: {
@@ -16,7 +16,7 @@ const copy = {
     sandboxHint: "联网和工作目录外写入需要你确认。", fullAccessHint: "本会话预授权命令、联网、安装依赖和工作目录外访问。",
     preview: "预览", openExternal: "用系统应用打开", reveal: "在文件夹中显示", close: "关闭",
     artifacts: "产出物", steps: "执行计划", goal: "核心目标", capabilities: "平台能力", kernel: "共享内核",
-    execution: "执行过程", participants: "参与方", all: "全部", mainRole: "灵枢", workerRole: "执行者", checkerRole: "审查员",
+    execution: "执行过程", viewExecution: "查看执行过程", viewExecutionResult: "查看执行结果", participants: "参与方", all: "全部", mainRole: "灵枢", workerRole: "执行者", checkerRole: "审查员",
     noEvents: "执行事件将在这里实时出现。", liveDetail: "实时明细", childThreads: "子线程", blocked: "等待操作",
     actionRequired: "需要你的操作", actionBody: "任务已安全停在当前断点，提交后会沿用原上下文继续。",
     answerPlaceholder: "输入操作结果、确认信息或补充内容", resume: "完成并继续", handleLater: "稍后处理",
@@ -50,7 +50,7 @@ const copy = {
     sandboxHint: "Network access and writes outside the Workspace require confirmation.", fullAccessHint: "Pre-authorizes commands, networking, dependency installation, and paths outside the Workspace for this session.",
     preview: "Preview", openExternal: "Open in system app", reveal: "Show in folder", close: "Close",
     artifacts: "Artifacts", steps: "Execution Plan", goal: "Core Goal", capabilities: "Platform Capabilities", kernel: "Shared Kernel",
-    execution: "Execution", participants: "Participants", all: "All", mainRole: "Nous", workerRole: "Worker", checkerRole: "Checker",
+    execution: "Execution", viewExecution: "View execution", viewExecutionResult: "View execution result", participants: "Participants", all: "All", mainRole: "Nous", workerRole: "Worker", checkerRole: "Checker",
     noEvents: "Live execution events will appear here.", liveDetail: "Live detail", childThreads: "Child threads", blocked: "Action required",
     actionRequired: "Your Action Is Required", actionBody: "The task is safely paused at this checkpoint and will resume with the same context.",
     answerPlaceholder: "Enter the result, confirmation, or requested information", resume: "Complete & Continue", handleLater: "Handle Later",
@@ -73,3 +73,7 @@ const copy = {
 
 export type Copy = typeof copy.zh_cn;
 export function strings(locale: Locale): Copy { return copy[locale] as Copy; }
+export function executionLinkLabel(status: TaskStatus, locale: Locale): string {
+  const t = strings(locale);
+  return status === "completed" ? t.viewExecutionResult : t.viewExecution;
+}

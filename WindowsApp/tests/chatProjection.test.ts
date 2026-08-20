@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { projectChatBubble } from "../src/chatProjection.ts";
-import { strings } from "../src/i18n.ts";
+import { executionLinkLabel, strings } from "../src/i18n.ts";
 import type { ChatMessage, RuntimeEvent } from "../src/types.ts";
 
 const assistantMessage = (text: string, state: ChatMessage["state"] = "thinking"): ChatMessage => ({
@@ -69,4 +69,12 @@ test("projects legacy failure state as active recovery rather than a terminal fa
   const projection = projectChatBubble(assistantMessage("", "failed"), undefined, "en");
   assert.equal(projection.text, "Recovering…");
   assert.equal(projection.isRunning, true);
+});
+
+test("switches only a completed task link from execution process to execution result", () => {
+  assert.equal(executionLinkLabel("running", "zh_cn"), "查看执行过程");
+  assert.equal(executionLinkLabel("needs_user_action", "zh_cn"), "查看执行过程");
+  assert.equal(executionLinkLabel("completed", "zh_cn"), "查看执行结果");
+  assert.equal(executionLinkLabel("running", "en"), "View execution");
+  assert.equal(executionLinkLabel("completed", "en"), "View execution result");
 });
