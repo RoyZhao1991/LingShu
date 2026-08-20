@@ -18,4 +18,6 @@ Codex, Claude Code, and Open Agent Skills `SKILL.md` directories and load their
 instructions and resources progressively; importing a Skill never executes its
 scripts automatically.
 
-Prebuilt x64 preview installers are published at [windows-v0.1.0-preview.24](https://github.com/RoyZhao1991/LingShu/releases/tag/windows-v0.1.0-preview.24). The stable setup filename is [`Nous-Windows-x64-Setup.exe`](https://github.com/RoyZhao1991/LingShu/releases/download/windows-v0.1.0-preview.24/Nous-Windows-x64-Setup.exe).
+Conversation messages can be copied, while user messages can be restored with their recorded attachments into the composer for editing and explicit resend. These actions never send automatically or rewrite prior history.
+
+Prebuilt x64 preview installers are published at [windows-v0.1.0-preview.25](https://github.com/RoyZhao1991/LingShu/releases/tag/windows-v0.1.0-preview.25). The stable setup filename is [`Nous-Windows-x64-Setup.exe`](https://github.com/RoyZhao1991/LingShu/releases/download/windows-v0.1.0-preview.25/Nous-Windows-x64-Setup.exe).

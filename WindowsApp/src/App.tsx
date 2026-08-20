@@ -5,8 +5,8 @@ import type { PDFDocumentLoadingTask, PDFDocumentProxy, RenderTask } from "pdfjs
 import pdfWorkerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import {
   Activity, Bot, BrainCircuit, Check, ChevronRight, CircleAlert, Clock3, ExternalLink,
-  FileBox, FileText, FolderOpen, Gauge, GitBranch, ListChecks, LoaderCircle, MessageCircle,
-  MessagesSquare, PackageCheck, PackagePlus, Paperclip, Play, Puzzle, RefreshCw, Search, Send,
+  Copy, FileBox, FileText, FolderOpen, Gauge, GitBranch, ListChecks, LoaderCircle, MessageCircle,
+  MessagesSquare, PackageCheck, PackagePlus, Paperclip, Pencil, Play, Puzzle, RefreshCw, Search, Send,
   Settings, ShieldCheck, Square, Trash2, UserRound, Wrench, X,
 } from "lucide-react";
 import { executionLinkLabel, strings } from "./i18n";
@@ -19,6 +19,7 @@ import { projectChatBubble } from "./chatProjection";
 import { projectConversationMessages, type PendingSubmission } from "./conversationProjection";
 import { findInteractiveActionTask, findVisibleInteractiveActionTask, interactiveActionCheckpointKey } from "./humanAction";
 import { normalizeMarkdownTables } from "./markdown";
+import { buildMessageReuseDraft, resolveMessageAttachmentPaths } from "./messageReuse";
 import { decodePdfDataUri } from "./pdf";
 import { SnapshotGate } from "./snapshotGate";
 import packageMetadata from "../package.json";
@@ -57,6 +58,7 @@ export default function App() {
   const [pluginBusy, setPluginBusy] = useState("");
   const [capabilityError, setCapabilityError] = useState("");
   const [dragActive, setDragActive] = useState(false);
+  const [messageActionFeedback, setMessageActionFeedback] = useState<{ key: string; kind: "copied" | "restored"; attachmentCount: number }>();
   const messageScroll = useRef<HTMLDivElement>(null);
   const composerInput = useRef<HTMLTextAreaElement>(null);
   const keepAtBottom = useRef(true);
@@ -65,6 +67,7 @@ export default function App() {
   const snapshotGate = useRef(new SnapshotGate());
   const refreshInFlight = useRef<Promise<void> | undefined>(undefined);
   const refreshAgain = useRef(false);
+  const messageActionFeedbackTimer = useRef<number | undefined>(undefined);
 
   const locale = settingsDraft?.locale ?? snapshot?.settings.locale ?? "zh_cn";
   const t = strings(locale);
@@ -80,6 +83,10 @@ export default function App() {
   );
 
   useEffect(() => { document.documentElement.lang = locale === "en" ? "en" : "zh-CN"; }, [locale]);
+
+  useEffect(() => () => {
+    if (messageActionFeedbackTimer.current !== undefined) window.clearTimeout(messageActionFeedbackTimer.current);
+  }, []);
 
   const applyMutationSnapshot = useCallback((next: RuntimeSnapshot) => {
     snapshotGate.current.commitMutation();
@@ -190,6 +197,38 @@ export default function App() {
     const node = messageScroll.current;
     if (!node) return;
     keepAtBottom.current = node.scrollHeight - node.scrollTop - node.clientHeight < 56;
+  };
+
+  const flashMessageAction = (key: string, kind: "copied" | "restored", attachmentCount: number) => {
+    if (messageActionFeedbackTimer.current !== undefined) window.clearTimeout(messageActionFeedbackTimer.current);
+    setMessageActionFeedback({ key, kind, attachmentCount });
+    messageActionFeedbackTimer.current = window.setTimeout(() => setMessageActionFeedback(undefined), 1_500);
+  };
+
+  const copyMessage = async (visibleText: string, key: string) => {
+    try {
+      await writeClipboardText(visibleText);
+      flashMessageAction(key, "copied", 0);
+    } catch (reason) {
+      setError(`${t.copyMessageFailed}: ${String(reason)}`);
+    }
+  };
+
+  const editAndResend = (message: ChatMessage, key: string) => {
+    const draft = buildMessageReuseDraft(message, snapshot?.tasks ?? []);
+    const hasDifferentDraft = prompt.trim() || attachments.length > 0;
+    if (hasDifferentDraft && !window.confirm(t.replaceDraftConfirm)) return;
+
+    setPrompt(draft.text);
+    setAttachments(draft.attachmentPaths);
+    setPage("chat");
+    keepAtBottom.current = true;
+    flashMessageAction(key, "restored", draft.attachmentPaths.length);
+    window.setTimeout(() => {
+      const input = composerInput.current;
+      input?.focus();
+      input?.setSelectionRange(draft.text.length, draft.text.length);
+    }, 0);
   };
 
   const submit = async (event: FormEvent) => {
@@ -462,7 +501,7 @@ export default function App() {
             <div className="message-scroll" ref={messageScroll} onScroll={trackMessageScroll}>
               {conversationMessages.length === 0 && <EmptyState icon={<MessageCircle />} text={t.noMessages} />}
               {conversationMessages.map((message) => {
-                const messageAttachments = attachmentPathsForMessage(snapshot, message);
+                const messageAttachments = resolveMessageAttachmentPaths(message, snapshot.tasks);
                 const messageTask = message.threadId
                   ? snapshot.tasks.find((task) => task.id === message.threadId)
                   : undefined;
@@ -471,6 +510,9 @@ export default function App() {
                   message.threadId ? latestEventForThread(snapshot, message.threadId) : undefined,
                   locale,
                 );
+                const pendingProjection = message.id.startsWith("pending-");
+                const actionFeedback = messageActionFeedback?.key === bubble.key ? messageActionFeedback : undefined;
+                const copyable = !bubble.isRunning && Boolean(bubble.text.trim());
                 return <article key={bubble.key} className={`message ${message.role} ${bubble.isRunning ? "running" : ""}`}>
                   <div className="message-meta">
                     <span>{message.role === "user" ? (locale === "en" ? "You" : "你") : t.appName}</span>
@@ -499,6 +541,29 @@ export default function App() {
                     <button className="thread-link" onClick={() => { setSelectedTaskId(message.threadId); setPage("threads"); }}>
                       <MessagesSquare size={16} /> {executionLinkLabel(aggregateTaskStatus(messageTask, snapshot.tasks), locale)}
                     </button>
+                  )}
+                  {(copyable || (message.role === "user" && !pendingProjection)) && (
+                    <div className="message-actions" aria-label={t.messageActions}>
+                      {copyable && (
+                        <button type="button" className="message-action" title={t.copyMessage}
+                          aria-label={t.copyMessage} onClick={() => void copyMessage(bubble.text, bubble.key)}>
+                          {actionFeedback?.kind === "copied" ? <Check /> : <Copy />}
+                        </button>
+                      )}
+                      {message.role === "user" && !pendingProjection && (
+                        <button type="button" className="message-action" title={t.editAndResend}
+                          aria-label={t.editAndResend} onClick={() => editAndResend(message, bubble.key)}>
+                          {actionFeedback?.kind === "restored" ? <Check /> : <Pencil />}
+                        </button>
+                      )}
+                      {actionFeedback && (
+                        <span className="message-action-feedback" aria-live="polite">
+                          {actionFeedback.kind === "restored"
+                            ? (actionFeedback.attachmentCount > 0 ? t.draftAndAttachmentsRestored : t.draftRestored)
+                            : t.messageCopied}
+                        </span>
+                      )}
+                    </div>
                   )}
                 </article>;
               })}
@@ -1107,10 +1172,26 @@ function StatusGlyph({ status }: { status: TaskStatus }) {
 }
 function TagList({ values }: { values: string[] }) { return <ul className="tag-list">{values.map((value) => <li key={value}>{value}</li>)}</ul>; }
 function fileName(path: string) { return path.split(/[\\/]/).at(-1) ?? path; }
-function attachmentPathsForMessage(snapshot: RuntimeSnapshot, message: ChatMessage): string[] {
-  const direct = message.attachmentPaths ?? [];
-  if (direct.length > 0 || message.role !== "user" || !message.threadId) return direct;
-  return snapshot.tasks.find((task) => task.id === message.threadId)?.attachmentPaths ?? [];
+async function writeClipboardText(text: string): Promise<void> {
+  if (navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return;
+    } catch {
+      // WebView2 can expose the Clipboard API while denying a particular write. Fall through to
+      // the selection-based path so the visible copy action still works in that configuration.
+    }
+  }
+  const fallback = document.createElement("textarea");
+  fallback.value = text;
+  fallback.setAttribute("readonly", "");
+  fallback.style.position = "fixed";
+  fallback.style.opacity = "0";
+  document.body.appendChild(fallback);
+  fallback.select();
+  const copied = document.execCommand("copy");
+  fallback.remove();
+  if (!copied) throw new Error("clipboard unavailable");
 }
 function formatBytes(value: number) { return value < 1024 ? `${value} B` : value < 1024 * 1024 ? `${(value / 1024).toFixed(1)} KB` : `${(value / 1024 / 1024).toFixed(1)} MB`; }
 function statusLabel(status: TaskStatus, locale: Locale) { const t = strings(locale); const visible = recoverableStatus(status); if (visible === "completed") return t.completed; if (visible === "cancelled") return t.cancelled; if (visible === "queued") return t.queued; if (visible === "needs_user_action") return t.blocked; if (visible === "needs_recovery") return t.recovering; return t.running; }

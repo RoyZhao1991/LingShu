@@ -105,6 +105,12 @@ svg { flex: 0 0 auto; }
 .message-meta span { color: var(--blue); font-weight: 760; }
 .message.user .message-meta { justify-content: flex-end; }
 .message.user .message-meta span { color: var(--teal-dark); }
+.message-actions { min-height: 24px; margin-top: 8px; display: flex; align-items: center; gap: 5px; }
+.message.user .message-actions { justify-content: flex-end; }
+.message-action { width: 25px; height: 25px; display: inline-grid; place-items: center; color: var(--faint); background: transparent; border: 1px solid transparent; border-radius: var(--radius-xs); }
+.message-action:hover, .message-action:focus-visible { color: var(--teal-dark); background: var(--teal-soft); border-color: rgba(13,148,136,.2); outline: 0; }
+.message-action svg { width: 14px; height: 14px; }
+.message-action-feedback { margin-left: 3px; color: var(--teal-dark); font-size: 10.5px; font-weight: 700; white-space: nowrap; }
 .markdown-body { font-size: 14.5px; line-height: 1.62; overflow-wrap: anywhere; }
 .markdown-body > :first-child { margin-top: 9px; }
 .markdown-body > :last-child { margin-bottom: 0; }
