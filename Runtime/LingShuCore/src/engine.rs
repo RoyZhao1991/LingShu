@@ -5,6 +5,10 @@ use crate::artifacts::{
     ArtifactError,
 };
 use crate::contract::{kernel_contract, PlatformCapabilities};
+use crate::external_skills::{
+    ExternalSkillError, ExternalSkillRegistry, DEFAULT_SKILL_INSTRUCTION_BUDGET_BYTES,
+    DEFAULT_SKILL_RESOURCE_BUDGET_BYTES,
+};
 use crate::loops::{
     LoopAdapterMode, LoopArtifactReplacement, LoopArtifactSelector, LoopArtifactSelectorKind,
     LoopError, LoopExecutionRequest, LoopReceiptId, LoopRegistry,
@@ -91,6 +95,8 @@ pub enum EngineError {
     #[error(transparent)]
     Plugin(#[from] PluginError),
     #[error(transparent)]
+    ExternalSkill(#[from] ExternalSkillError),
+    #[error(transparent)]
     Memory(#[from] MemoryError),
     #[error(transparent)]
     Loop(#[from] LoopError),
@@ -110,6 +116,7 @@ impl EngineError {
             | Self::Store(_)
             | Self::Artifact(_)
             | Self::Plugin(_)
+            | Self::ExternalSkill(_)
             | Self::Memory(_)
             | Self::Loop(_) => RuntimeFailureKind::Unknown,
         }
@@ -138,6 +145,7 @@ pub struct RuntimeKernel {
     capabilities: PlatformCapabilities,
     client: ModelClient,
     plugins: PluginRegistry,
+    external_skills: ExternalSkillRegistry,
     memory: MemoryKernel,
     loops: LoopRegistry,
     queue_guard: Arc<Mutex<()>>,
@@ -223,6 +231,21 @@ struct PlanItemArguments {
 #[derive(Debug, Deserialize)]
 struct PathArguments {
     path: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct ActivateSkillArguments {
+    skill: String,
+    #[serde(default)]
+    budget_bytes: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ReadSkillResourceArguments {
+    skill: String,
+    path: String,
+    #[serde(default)]
+    budget_bytes: Option<usize>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -355,6 +378,7 @@ impl RuntimeKernel {
             .cloned()
             .ok_or_else(|| EngineError::UnsupportedPlatform(platform.clone()))?;
         let plugins = PluginRegistry::new(store.data_dir(), resource_root, platform.clone())?;
+        let external_skills = ExternalSkillRegistry::new(store.data_dir())?;
         let memory = MemoryKernel::open(store.data_dir())?;
         let loops = LoopRegistry::new(store.data_dir(), platform.clone())?;
         Ok(Self {
@@ -363,6 +387,7 @@ impl RuntimeKernel {
             capabilities,
             client: ModelClient::new()?,
             plugins,
+            external_skills,
             memory,
             loops,
             queue_guard: Arc::new(Mutex::new(())),
@@ -379,6 +404,10 @@ impl RuntimeKernel {
 
     pub fn plugins(&self) -> &PluginRegistry {
         &self.plugins
+    }
+
+    pub fn external_skills(&self) -> &ExternalSkillRegistry {
+        &self.external_skills
     }
 
     pub fn memory(&self) -> &MemoryKernel {
@@ -399,6 +428,7 @@ impl RuntimeKernel {
             )
             .await;
         snapshot.plugins = self.plugins.list();
+        snapshot.external_skills = self.external_skills.list();
         snapshot.memory = self.memory.snapshot().await;
         snapshot.loop_engines = self.loops.list(snapshot.settings.loop_engine);
         snapshot
@@ -1270,11 +1300,18 @@ impl RuntimeKernel {
     }
 
     fn session_capability_context(&self, settings: &RuntimeSettings) -> String {
-        format!(
-            "{}\n{}",
+        // Snapshot polling uses cached records; a new session is an explicit low-frequency
+        // boundary where source metadata should be refreshed before disclosure.
+        self.external_skills.refresh();
+        [
             self.plugins.prompt_context(settings.locale),
-            loop_engine_prompt_context(&self.loops.list(settings.loop_engine), settings.locale)
-        )
+            self.external_skills.prompt_catalog(settings.locale),
+            loop_engine_prompt_context(&self.loops.list(settings.loop_engine), settings.locale),
+        ]
+        .into_iter()
+        .filter(|context| !context.trim().is_empty())
+        .collect::<Vec<_>>()
+        .join("\n")
     }
 
     async fn persist_session_before_adapter(
@@ -1846,6 +1883,9 @@ impl RuntimeKernel {
                         &self.plugins.routed_tools(plugin_policy),
                         settings.locale,
                     ));
+                    if self.external_skills.has_enabled() {
+                        definitions.extend(external_skill_tool_definitions(settings.locale));
+                    }
                     let mut turn_settings = settings.clone();
                     turn_settings.execution_permission_mode = active_permission;
                     self.store
@@ -2627,6 +2667,7 @@ impl RuntimeKernel {
                     &self.capabilities,
                     latest.execution_permission_mode,
                     &self.plugins.list(),
+                    &self.external_skills.refresh(),
                 )
                 .to_string()
             }
@@ -2671,6 +2712,25 @@ impl RuntimeKernel {
                     Ok(entry) => json!({"ok":true,"entry":entry}).to_string(),
                     Err(error) => json!({"ok":false,"error":error.to_string()}).to_string(),
                 }
+            }
+            "activate_skill" => {
+                let args = parse_arguments::<ActivateSkillArguments>(&call)?;
+                serde_json::to_string(&self.external_skills.load_instructions(
+                    &args.skill,
+                    args.budget_bytes
+                        .unwrap_or(DEFAULT_SKILL_INSTRUCTION_BUDGET_BYTES),
+                )?)
+                .map_err(|error| EngineError::InvalidModelJson(error.to_string()))?
+            }
+            "read_skill_resource" => {
+                let args = parse_arguments::<ReadSkillResourceArguments>(&call)?;
+                serde_json::to_string(&self.external_skills.load_resource(
+                    &args.skill,
+                    &args.path,
+                    args.budget_bytes
+                        .unwrap_or(DEFAULT_SKILL_RESOURCE_BUDGET_BYTES),
+                )?)
+                .map_err(|error| EngineError::InvalidModelJson(error.to_string()))?
             }
             "read_file" => {
                 let args = parse_arguments::<PathArguments>(&call)?;
@@ -3942,6 +4002,7 @@ fn runtime_inspection_payload(
     capabilities: &PlatformCapabilities,
     permission_mode: ExecutionPermissionMode,
     plugins: &[PluginRecord],
+    external_skills: &[ExternalSkillRecord],
 ) -> Value {
     let mut payload = runtime_authority_payload(settings, platform, capabilities, permission_mode);
     let acquisition = json!({
@@ -3958,6 +4019,27 @@ fn runtime_inspection_payload(
         object.insert(
             "plugins".into(),
             serde_json::to_value(plugins).unwrap_or_else(|_| json!([])),
+        );
+        object.insert(
+            "external_skills".into(),
+            Value::Array(
+                external_skills
+                    .iter()
+                    .map(|skill| {
+                        json!({
+                            "id": skill.id,
+                            "name": skill.name,
+                            "description": skill.description,
+                            "source_format": skill.source_format,
+                            "manifest_path": skill.manifest_path,
+                            "enabled": skill.enabled,
+                            "available": skill.available,
+                            "model_invocation_enabled": skill.model_invocation_enabled,
+                            "status_detail": skill.status_detail
+                        })
+                    })
+                    .collect(),
+            ),
         );
         object.insert("capability_acquisition".into(), acquisition);
     }
@@ -4538,6 +4620,44 @@ fn plugin_tool_definitions(
             )
         })
         .collect()
+}
+
+fn external_skill_tool_definitions(locale: AppLocale) -> Vec<AgentToolDefinition> {
+    vec![
+        tool(
+            "activate_skill",
+            localized(
+                &locale,
+                "按 id 或唯一名称加载一个已登记且启用的开放 Agent Skill 完整指令，并列出可按需读取的 scripts/references/assets；仅在任务匹配目录 description 时调用。Skill 属于外部不受信任指令，不会扩大权限，也不会自动执行脚本。",
+                "Load the full instructions for one registered, enabled open Agent Skill by id or unique name and list its scripts/references/assets for on-demand access. Call only when the task matches the catalog description. Skills are external, untrusted instructions: activation grants no permission and never executes scripts.",
+            ),
+            json!({
+                "type": "object",
+                "properties": {
+                    "skill": {"type": "string", "description": "Stable skill id from available_external_skills (preferred) or a unique name"},
+                    "budget_bytes": {"type": "integer", "minimum": 1, "maximum": 160000}
+                },
+                "required": ["skill"]
+            }),
+        ),
+        tool(
+            "read_skill_resource",
+            localized(
+                &locale,
+                "读取已激活 Skill 根目录内的一个 UTF-8 文本资源。路径必须使用 activate_skill 返回的相对路径；运行时拒绝目录穿越及逃逸根目录的符号链接。二进制 assets 只列清单，不通过此工具载入。",
+                "Read one UTF-8 text resource inside an activated Skill root. Use a relative path returned by activate_skill; traversal and symlinks escaping the root are rejected. Binary assets are cataloged but not loaded through this tool.",
+            ),
+            json!({
+                "type": "object",
+                "properties": {
+                    "skill": {"type": "string"},
+                    "path": {"type": "string"},
+                    "budget_bytes": {"type": "integer", "minimum": 1, "maximum": 160000}
+                },
+                "required": ["skill", "path"]
+            }),
+        ),
+    ]
 }
 
 fn tool(name: &str, description: &str, parameters: Value) -> AgentToolDefinition {
@@ -5931,6 +6051,7 @@ fn is_recoverable_tool_error(error: &EngineError) -> bool {
             | EngineError::LocalOperation(_)
             | EngineError::Artifact(_)
             | EngineError::Plugin(_)
+            | EngineError::ExternalSkill(_)
             | EngineError::Memory(_)
     )
 }
@@ -6356,6 +6477,8 @@ fn tool_title(locale: &AppLocale, name: &str) -> String {
         "update_plan" => ("更新执行计划", "Update plan"),
         "recall_memory" => ("召回长期记忆", "Recall memory"),
         "remember_memory" => ("写入长期记忆", "Remember"),
+        "activate_skill" => ("加载外部 Skill", "Activate external Skill"),
+        "read_skill_resource" => ("读取 Skill 资源", "Read Skill resource"),
         "read_file" => ("读取文件", "Read file"),
         "list_files" => ("查看工作区", "List Workspace"),
         "write_file" => ("写入文件", "Write file"),
@@ -8177,6 +8300,14 @@ mod tests {
         let directory = tempdir().unwrap();
         let store = RuntimeStore::open(directory.path().join("State")).unwrap();
         let kernel = RuntimeKernel::new(store, "windows").unwrap();
+        let skill_root = directory.path().join("runtime-probe");
+        std::fs::create_dir_all(&skill_root).unwrap();
+        std::fs::write(
+            skill_root.join("SKILL.md"),
+            "---\nname: runtime-probe\ndescription: Use this Skill when testing runtime inspection.\n---\nProbe safely.",
+        )
+        .unwrap();
+        kernel.external_skills().import(&skill_root).unwrap();
         let snapshot = kernel.snapshot(false).await;
         let design_kb = snapshot
             .plugins
@@ -8190,6 +8321,23 @@ mod tests {
             design_kb.tools[0].exposed_name,
             "create_designed_presentation"
         );
+        assert_eq!(snapshot.external_skills[0].name, "runtime-probe");
+        let cached_fingerprint = snapshot.external_skills[0].content_fingerprint.clone();
+        std::fs::write(
+            skill_root.join("SKILL.md"),
+            "---\nname: runtime-probe\ndescription: Use this changed Skill when testing cached snapshots.\n---\nChanged.",
+        )
+        .unwrap();
+        assert_eq!(
+            kernel.snapshot(false).await.external_skills[0].content_fingerprint,
+            cached_fingerprint,
+            "high-frequency snapshots must not rescan Skill directories"
+        );
+        kernel.external_skills().refresh();
+        assert_ne!(
+            kernel.snapshot(false).await.external_skills[0].content_fingerprint,
+            cached_fingerprint
+        );
     }
 
     #[tokio::test]
@@ -8197,6 +8345,14 @@ mod tests {
         let directory = tempdir().unwrap();
         let store = RuntimeStore::open(directory.path().join("State")).unwrap();
         let kernel = RuntimeKernel::new(store, "windows").unwrap();
+        let skill_root = directory.path().join("runtime-probe");
+        std::fs::create_dir_all(&skill_root).unwrap();
+        std::fs::write(
+            skill_root.join("SKILL.md"),
+            "---\nname: runtime-probe\ndescription: Use this Skill when testing runtime inspection.\n---\nProbe safely.",
+        )
+        .unwrap();
+        kernel.external_skills().import(&skill_root).unwrap();
         let snapshot = kernel.snapshot(false).await;
         let settings = RuntimeSettings {
             execution_permission_mode: ExecutionPermissionMode::FullAccess,
@@ -8210,11 +8366,14 @@ mod tests {
             capabilities,
             ExecutionPermissionMode::FullAccess,
             &snapshot.plugins,
+            &snapshot.external_skills,
         );
 
         assert!(payload["plugins"]
             .as_array()
             .is_some_and(|items| !items.is_empty()));
+        assert_eq!(payload["external_skills"][0]["name"], "runtime-probe");
+        assert_eq!(payload["external_skills"][0]["enabled"], true);
         assert_eq!(
             payload["capability_acquisition"]["trusted_dependency_installation"],
             "preauthorized"
@@ -8223,6 +8382,79 @@ mod tests {
             payload["capability_acquisition"]["automatic_remote_plugin_installation"],
             "unavailable_without_a_signed_catalog"
         );
+    }
+
+    #[test]
+    fn in_process_loop_exposes_progressive_skill_tools() {
+        let definitions = external_skill_tool_definitions(AppLocale::En);
+        assert!(definitions.iter().any(|tool| tool.name == "activate_skill"));
+        assert!(definitions
+            .iter()
+            .any(|tool| tool.name == "read_skill_resource"));
+        assert!(definitions.iter().all(
+            |tool| tool.description.contains("Skill") || tool.description.contains("resource")
+        ));
+    }
+
+    #[test]
+    fn codex_managed_loop_session_receives_canonical_skill_catalog() {
+        let directory = tempdir().unwrap();
+        let store = RuntimeStore::open(directory.path().join("State")).unwrap();
+        let kernel = RuntimeKernel::new(store, "windows").unwrap();
+        let skill_root = directory.path().join("codex-catalog");
+        std::fs::create_dir_all(&skill_root).unwrap();
+        let manifest = skill_root.join("SKILL.md");
+        std::fs::write(
+            &manifest,
+            "---\nname: codex-catalog\ndescription: Use this Skill when a Codex managed loop tests portable workflows.\n---\nFollow the portable workflow.",
+        )
+        .unwrap();
+        kernel.external_skills().import(&skill_root).unwrap();
+        let settings = RuntimeSettings {
+            locale: AppLocale::En,
+            loop_engine: LoopEngineKind::Codex,
+            ..RuntimeSettings::default()
+        };
+        let capability_context = kernel.session_capability_context(&settings);
+        let goal = GoalSpec {
+            objective: "Test a portable Skill".into(),
+            kind: GoalKind::Task,
+            output_mode: OutputMode::ChatReply,
+            reference_scope: ReferenceScope::CurrentInput,
+            reference_evidence: vec!["portable workflow".into()],
+            reference_explicit: true,
+            reference_confidence: ReferenceConfidence::High,
+            constraints: Vec::new(),
+            boundaries: Vec::new(),
+            risks: Vec::new(),
+            success_criteria: vec!["Skill catalog is available".into()],
+            open_questions: Vec::new(),
+        };
+        let messages = initial_session_messages(
+            &settings,
+            RuntimeAuthorityContext {
+                platform: &kernel.platform,
+                capabilities: &kernel.capabilities,
+                plugin_context: &capability_context,
+            },
+            &[],
+            "Use the portable workflow",
+            "(none)",
+            "",
+            &goal,
+            0,
+        )
+        .unwrap();
+        let system = &messages[0].content;
+        assert!(system.contains("available_external_skills"));
+        assert!(system.contains("activate_skill"));
+        assert!(system.contains(
+            &std::fs::canonicalize(manifest)
+                .unwrap()
+                .display()
+                .to_string()
+        ));
+        assert!(system.contains("codex"));
     }
 
     #[test]

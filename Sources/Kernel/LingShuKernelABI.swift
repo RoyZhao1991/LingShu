@@ -28,7 +28,7 @@ enum LingShuKernelABI {
 
     /// 内核 ABI 语义化版本。**改动任一内核协议的形状(增删/改字段、改方法签名)必须升版本 + 更新文档 + 过契约测试。**
     /// 主版本=破坏性契约改动;次版本=向后兼容新增;修订=不影响契约的内部修缮。
-    static let version = "1.1.0"
+    static let version = "1.2.0"
 
     /// 一个内核协议的稳定描述(名 + 承载文件 + 一句话职责)。契约测试与文档同引此清单,避免漂移。
     struct Contract: Equatable, Sendable {

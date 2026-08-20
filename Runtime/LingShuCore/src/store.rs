@@ -738,6 +738,7 @@ impl RuntimeStore {
             events: state.events.clone(),
             latest_event_sequence: state.next_event_sequence.saturating_sub(1),
             plugins: Vec::new(),
+            external_skills: Vec::new(),
             memory: MemorySnapshot::default(),
             loop_engines: Vec::new(),
         }

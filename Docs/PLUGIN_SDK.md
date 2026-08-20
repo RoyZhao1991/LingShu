@@ -5,6 +5,63 @@ LingShu plugins are local capability packages loaded by the shared
 plugin implementation: installed tools enter the same model tool loop,
 permission mode, task ledger, and artifact registry as built-in tools.
 
+LingShu also supports filesystem-based external Skills through the common
+`SKILL.md` format used by Codex, Claude Code, and the Open Agent Skills
+standard. Skills and executable plugins are intentionally separate:
+
+- a Skill contributes instructions, references, assets, and optional scripts;
+- a LingShu `plugin.json` package contributes model-callable executable tools;
+- vendor-only plugin hooks, marketplace metadata, and MCP configuration are not
+  silently converted into executable LingShu plugins.
+
+## External Skill Compatibility
+
+Open the **Plugins** page in the Windows client and import either a `SKILL.md`
+file, one Skill directory, or a directory containing multiple Skills. LingShu
+registers the canonical source directories without copying or taking ownership
+of them. Source edits are therefore visible after refresh, and removing a Skill
+from LingShu only removes its registration; it never deletes the source files.
+
+Portable Open Agent Skills use YAML frontmatter with a non-empty `name` and
+`description`, followed by their instructions. For compatibility with current
+Claude Code Skills, LingShu also accepts an omitted `name` (using the directory
+name) or omitted `description` (using the first body paragraph), and marks that
+registration with an explicit portability warning:
+
+```markdown
+---
+name: example-research
+description: Research a topic from local references and produce a sourced brief.
+---
+
+# Example research workflow
+
+Follow the source-verification steps in this directory.
+```
+
+The shared runtime applies progressive disclosure:
+
+1. Initial model context contains only a bounded catalog of enabled Skill names,
+   descriptions, and source paths.
+2. The model activates one relevant Skill before using it; only then does the
+   full `SKILL.md` enter the session.
+3. Files under the Skill root are read individually as needed. Canonical path
+   containment checks reject traversal and symbolic-link escapes.
+
+`scripts/`, `references/`, and `assets/` are discovered as Skill resources, but
+importing a Skill never executes a script. Any later command still passes
+through LingShu's normal execution-permission and user-action controls. Treat
+an external Skill like installed software: inspect and trust its source before
+enabling it.
+
+LingShu also honors the vendor safety switches that disable automatic model
+invocation: Claude's `disable-model-invocation: true` and Codex
+`agents/openai.yaml` with `policy.allow_implicit_invocation: false`. Those
+Skills remain visible in the registry but are excluded from model catalogs and
+cannot be activated by model tools. LingShu does not currently emulate the
+vendors' slash-command/manual-invocation channel; the Plugins page shows this
+as a compatibility warning instead of silently weakening the policy.
+
 ## Package Layout
 
 ```text
@@ -167,3 +224,11 @@ Word、WPS、LibreOffice、PowerPoint、OCR 引擎等属于宿主软件或命令
 不是灵枢插件。完整权限模式已经授权通过可信包管理器安装依赖，代理应先探测、
 安装并继续执行；只有登录、许可证、付款、管理员/UAC、物理操作或不可信来源
 才需要再次询问用户。
+
+Codex、Claude Code 与 Open Agent Skills 所使用的 `SKILL.md` 通过独立的
+“外部 Skill”桥接层接入共享内核。Windows 插件页可以选择一个 `SKILL.md`、
+单个 Skill 目录或包含多个 Skill 的目录；灵枢只登记规范化后的源路径，不复制、
+不删除源文件。模型启动时只看到有长度上限的名称、说明和路径目录，真正匹配任务后
+才按需加载完整说明与引用文件。导入不会自动执行 `scripts/`，后续命令仍受灵枢现有
+权限和人机确认规则约束。厂商专有 hooks、市场元数据或纯 MCP 插件不会被静默转换
+为可执行插件，这些能力仍应通过对应的标准适配器接入。

@@ -1,7 +1,7 @@
 import { invoke as tauriInvoke } from "@tauri-apps/api/core";
 import { open as tauriOpen } from "@tauri-apps/plugin-dialog";
 import type {
-  PluginRecord, PreviewPayload, ProviderPreset, RuntimeEvent, RuntimeSettings, RuntimeSnapshot, TaskRecord,
+  ExternalSkillRecord, PluginRecord, PreviewPayload, ProviderPreset, RuntimeEvent, RuntimeSettings, RuntimeSnapshot, TaskRecord,
 } from "./types";
 
 export interface BootstrapPayload {
@@ -64,6 +64,22 @@ export async function choosePluginManifest(): Promise<string | undefined> {
     directory: false,
     filters: [{ name: "LingShu plugin manifest", extensions: ["json"] }],
   });
+  return typeof selected === "string" ? selected : undefined;
+}
+
+export async function chooseExternalSkillManifest(): Promise<string | undefined> {
+  if (!hasNativeBridge()) return "C:\\Users\\Roy\\.codex\\skills\\presentation-review\\SKILL.md";
+  const selected = await tauriOpen({
+    multiple: false,
+    directory: false,
+    filters: [{ name: "Agent Skill manifest", extensions: ["md"] }],
+  });
+  return typeof selected === "string" ? selected : undefined;
+}
+
+export async function chooseExternalSkillDirectory(): Promise<string | undefined> {
+  if (!hasNativeBridge()) return "C:\\Users\\Roy\\.codex\\skills";
+  const selected = await tauriOpen({ multiple: false, directory: true });
   return typeof selected === "string" ? selected : undefined;
 }
 
@@ -136,8 +152,29 @@ const demoPlugins: PluginRecord[] = [
   },
 ];
 
+const demoExternalSkill: ExternalSkillRecord = {
+  id: "codex.presentation-review",
+  name: "Presentation Review",
+  description: "Review presentation structure, visual consistency, and delivery readiness.",
+  sourceFormat: "codex",
+  sourcePath: "C:\\Users\\Roy\\.codex\\skills\\presentation-review",
+  manifestPath: "C:\\Users\\Roy\\.codex\\skills\\presentation-review\\SKILL.md",
+  enabled: true,
+  available: true,
+  modelInvocationEnabled: true,
+  statusDetail: "SKILL.md is readable and registered",
+  warnings: [],
+  scripts: [{ path: "scripts\\review.mjs", kind: "script", sizeBytes: 2814 }],
+  references: [{ path: "references\\rubric.md", kind: "reference", sizeBytes: 4920 }],
+  assets: [],
+  license: "MIT",
+  compatibility: "Codex Skill",
+  allowedTools: ["read_file", "run_command"],
+  contentFingerprint: "development-preview",
+};
+
 let snapshot: RuntimeSnapshot = {
-  kernelAbiVersion: "1.1.0",
+  kernelAbiVersion: "1.2.0",
   settings: {
     locale: "en", providerId: "deepseek", providerName: "DeepSeek", protocol: "openai_chat_completions",
     endpoint: "https://api.deepseek.com", model: "deepseek-chat",
@@ -151,7 +188,7 @@ let snapshot: RuntimeSnapshot = {
     { id: "demo-assistant", role: "assistant", text: "The attached resume has been reviewed.\n\nDimension | Assessment || Delivery | Strong || Architecture | Good fit || Risk | Needs validation\n\nThe Project Aurora brief is ready and can be inspected in Nous's built-in preview.", createdAt: now, state: "complete", threadId: demoTask.id, attachmentPaths: [] },
   ],
   tasks: [demoTask], activeTaskId: undefined, queuedTaskCount: 0, providerConfigured: true,
-  events: demoEvents, latestEventSequence: 3, plugins: demoPlugins,
+  events: demoEvents, latestEventSequence: 3, plugins: demoPlugins, externalSkills: [demoExternalSkill],
   memory: {
     schemaVersion: 1,
     totalCount: 0,
@@ -270,6 +307,33 @@ async function mockInvoke<T>(command: string, args?: Record<string, unknown>): P
     case "remove_plugin": {
       const id = String(args?.id ?? "");
       snapshot = { ...snapshot, plugins: snapshot.plugins.filter((plugin) => plugin.id !== id) };
+      return undefined as T;
+    }
+    case "list_external_skills": return clone(snapshot.externalSkills) as T;
+    case "refresh_external_skills": return clone(snapshot.externalSkills) as T;
+    case "import_external_skill": {
+      const path = String(args?.path ?? "");
+      const normalized = path.toLowerCase();
+      const sourceFormat = normalized.includes(".claude") ? "claude" : normalized.includes(".codex") ? "codex" : "open_agent_skill";
+      const imported: ExternalSkillRecord = {
+        ...demoExternalSkill,
+        sourceFormat,
+        sourcePath: path.replace(/[\\/]SKILL\.md$/i, ""),
+        manifestPath: /SKILL\.md$/i.test(path) ? path : `${path}\\presentation-review\\SKILL.md`,
+        compatibility: sourceFormat === "claude" ? "Claude Skill" : sourceFormat === "codex" ? "Codex Skill" : "Open Agent Skill",
+      };
+      snapshot = { ...snapshot, externalSkills: [...snapshot.externalSkills.filter((skill) => skill.id !== imported.id), imported] };
+      return [clone(imported)] as T;
+    }
+    case "set_external_skill_enabled": {
+      const id = String(args?.id ?? "");
+      const enabled = Boolean(args?.enabled);
+      snapshot = { ...snapshot, externalSkills: snapshot.externalSkills.map((skill) => skill.id === id ? { ...skill, enabled } : skill) };
+      return clone(snapshot.externalSkills.find((skill) => skill.id === id)) as T;
+    }
+    case "remove_external_skill": {
+      const id = String(args?.id ?? "");
+      snapshot = { ...snapshot, externalSkills: snapshot.externalSkills.filter((skill) => skill.id !== id) };
       return undefined as T;
     }
     case "preview_path": return {

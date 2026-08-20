@@ -522,6 +522,8 @@ pub struct RuntimeSnapshot {
     #[serde(default)]
     pub plugins: Vec<PluginRecord>,
     #[serde(default)]
+    pub external_skills: Vec<ExternalSkillRecord>,
+    #[serde(default)]
     pub memory: MemorySnapshot,
     #[serde(default)]
     pub loop_engines: Vec<LoopEngineRecord>,
@@ -836,6 +838,96 @@ pub struct PluginScaffoldResult {
     pub manifest_path: PathBuf,
     pub entrypoint_path: PathBuf,
     pub plugin: PluginRecord,
+}
+
+/// The portable Agent Skills format is shared by Codex, Claude, and other compatible clients.
+/// `source_format` describes where LingShu discovered the referenced files; it does not imply
+/// compatibility with vendor-only hooks, MCP configuration, or marketplace lifecycle APIs.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ExternalSkillSourceFormat {
+    Codex,
+    Claude,
+    #[default]
+    OpenAgentSkill,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ExternalSkillResourceKind {
+    Script,
+    Reference,
+    Asset,
+    Other,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ExternalSkillResource {
+    /// Slash-separated path relative to the directory containing `SKILL.md`.
+    pub path: String,
+    pub kind: ExternalSkillResourceKind,
+    pub size_bytes: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ExternalSkillRecord {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    pub source_format: ExternalSkillSourceFormat,
+    /// Canonical directory containing `SKILL.md`; LingShu references it in place.
+    pub source_path: PathBuf,
+    /// Canonical `SKILL.md` path.
+    pub manifest_path: PathBuf,
+    pub enabled: bool,
+    pub available: bool,
+    /// False when a Claude-compatible Skill declares `disable-model-invocation: true`.
+    /// The source remains registered for management, but is hidden from model catalogs and tools.
+    #[serde(default = "default_true")]
+    pub model_invocation_enabled: bool,
+    pub status_detail: String,
+    #[serde(default)]
+    pub warnings: Vec<String>,
+    #[serde(default)]
+    pub scripts: Vec<ExternalSkillResource>,
+    #[serde(default)]
+    pub references: Vec<ExternalSkillResource>,
+    #[serde(default)]
+    pub assets: Vec<ExternalSkillResource>,
+    pub license: Option<String>,
+    pub compatibility: Option<String>,
+    #[serde(default)]
+    pub allowed_tools: Vec<String>,
+    #[serde(default)]
+    pub content_fingerprint: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ExternalSkillContent {
+    pub id: String,
+    pub name: String,
+    pub source_path: PathBuf,
+    pub manifest_path: PathBuf,
+    pub instructions: String,
+    pub original_bytes: u64,
+    pub truncated: bool,
+    #[serde(default)]
+    pub resources: Vec<ExternalSkillResource>,
+    pub resource_listing_truncated: bool,
+    pub security_notice: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ExternalSkillResourceContent {
+    pub skill_id: String,
+    pub path: String,
+    pub content: String,
+    pub original_bytes: u64,
+    pub truncated: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

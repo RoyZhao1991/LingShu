@@ -213,6 +213,7 @@ final class FrontendProjectionPerformanceTests: XCTestCase {
             providerConfigured: true,
             events: [event],
             latestEventSequence: 1,
+            externalSkills: [],
             memory: nil,
             loopEngines: []
         )

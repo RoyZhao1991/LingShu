@@ -1,7 +1,7 @@
 use lingshu_runtime_core::{
-    preview_file, provider_catalog, ExecutionPermissionMode, PluginRecord, PreviewPayload,
-    ProviderPreset, RuntimeFailureKind, RuntimeKernel, RuntimeSettings, RuntimeSnapshot,
-    RuntimeStore, SubmitReceipt,
+    preview_file, provider_catalog, ExecutionPermissionMode, ExternalSkillRecord, PluginRecord,
+    PreviewPayload, ProviderPreset, RuntimeFailureKind, RuntimeKernel, RuntimeSettings,
+    RuntimeSnapshot, RuntimeStore, SubmitReceipt,
 };
 use serde::Serialize;
 use std::path::PathBuf;
@@ -409,6 +409,50 @@ fn probe_plugin(state: State<'_, AppState>, id: String) -> Result<PluginRecord, 
         .map_err(|error| error.to_string())
 }
 
+#[tauri::command]
+fn list_external_skills(state: State<'_, AppState>) -> Vec<ExternalSkillRecord> {
+    state.kernel.external_skills().list()
+}
+
+#[tauri::command]
+fn refresh_external_skills(state: State<'_, AppState>) -> Vec<ExternalSkillRecord> {
+    state.kernel.external_skills().refresh()
+}
+
+#[tauri::command]
+fn import_external_skill(
+    state: State<'_, AppState>,
+    path: PathBuf,
+) -> Result<Vec<ExternalSkillRecord>, String> {
+    state
+        .kernel
+        .external_skills()
+        .import(path)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn set_external_skill_enabled(
+    state: State<'_, AppState>,
+    id: String,
+    enabled: bool,
+) -> Result<ExternalSkillRecord, String> {
+    state
+        .kernel
+        .external_skills()
+        .set_enabled(&id, enabled)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn remove_external_skill(state: State<'_, AppState>, id: String) -> Result<(), String> {
+    state
+        .kernel
+        .external_skills()
+        .remove(&id)
+        .map_err(|error| error.to_string())
+}
+
 pub fn run() {
     let builder = tauri::Builder::default();
     // RuntimeStore locking is process-local, so Windows must have exactly one runtime owner.
@@ -472,6 +516,11 @@ pub fn run() {
             set_plugin_enabled,
             remove_plugin,
             probe_plugin,
+            list_external_skills,
+            refresh_external_skills,
+            import_external_skill,
+            set_external_skill_enabled,
+            remove_external_skill,
         ])
         .run(tauri::generate_context!())
         .expect("error while running LingShu");

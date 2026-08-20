@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { RuntimeSnapshot } from "../src/types.ts";
+import type { ExternalSkillRecord, RuntimeSnapshot } from "../src/types.ts";
 
 test("browser mock returns the same enqueue boundary as the native submit command", async () => {
   Object.defineProperty(globalThis, "window", { value: {}, configurable: true });
@@ -23,4 +23,25 @@ test("browser mock returns the same enqueue boundary as the native submit comman
   assert.equal(claimed.activeTaskId, enqueued?.id);
   assert.equal(claimed.queuedTaskCount, 0);
   assert.equal(claimed.tasks.find((task) => task.id === enqueued?.id)?.status, "understanding");
+});
+
+test("browser mock mirrors the external Skill registration lifecycle", async () => {
+  Object.defineProperty(globalThis, "window", { value: {}, configurable: true });
+  const { runtimeInvoke } = await import("../src/bridge.ts");
+  const source = "C:\\Users\\Roy\\.claude\\skills\\presentation-review\\SKILL.md";
+  const imported = await runtimeInvoke<ExternalSkillRecord[]>("import_external_skill", { path: source });
+
+  assert.equal(imported.length, 1);
+  assert.equal(imported[0]?.manifestPath, source);
+  assert.equal(imported[0]?.enabled, true);
+  assert.equal(imported[0]?.modelInvocationEnabled, true);
+
+  const disabled = await runtimeInvoke<ExternalSkillRecord>("set_external_skill_enabled", { id: imported[0]?.id, enabled: false });
+  assert.equal(disabled.enabled, false);
+  const refreshed = await runtimeInvoke<ExternalSkillRecord[]>("refresh_external_skills");
+  assert.equal(refreshed.find((skill) => skill.id === imported[0]?.id)?.enabled, false);
+
+  await runtimeInvoke("remove_external_skill", { id: imported[0]?.id });
+  const remaining = await runtimeInvoke<ExternalSkillRecord[]>("list_external_skills");
+  assert.equal(remaining.some((skill) => skill.id === imported[0]?.id), false);
 });

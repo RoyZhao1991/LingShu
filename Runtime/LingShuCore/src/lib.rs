@@ -3,6 +3,7 @@
 pub mod artifacts;
 pub mod contract;
 pub mod engine;
+pub mod external_skills;
 mod loop_gateway;
 pub mod loops;
 pub mod memory;
@@ -20,6 +21,7 @@ pub use contract::{
     KERNEL_ABI_VERSION, KERNEL_CONTRACT_JSON,
 };
 pub use engine::{EngineError, RuntimeKernel};
+pub use external_skills::{ExternalSkillError, ExternalSkillRegistry};
 pub use loops::{LoopError, LoopExecution, LoopExecutionRequest, LoopRegistry};
 pub use memory::{MemoryError, MemoryKernel};
 pub use models::*;

@@ -107,6 +107,19 @@ final class SharedKernelRuntimeBridgeTests: XCTestCase {
             .appendingPathComponent("lingshu-shared-kernel-\(UUID().uuidString)", isDirectory: true)
         let stateDirectory = root.appendingPathComponent("State", isDirectory: true)
         let workspace = root.appendingPathComponent("Workspace", isDirectory: true)
+        let skillDirectory = root.appendingPathComponent("portable-bridge-skill", isDirectory: true)
+        let skillManifest = skillDirectory.appendingPathComponent("SKILL.md")
+        try FileManager.default.createDirectory(
+            at: skillDirectory,
+            withIntermediateDirectories: true
+        )
+        try """
+        ---
+        name: portable-bridge-skill
+        description: Verify that the macOS shell reaches the shared external Skill registry.
+        ---
+        Follow the portable bridge workflow.
+        """.write(to: skillManifest, atomically: true, encoding: .utf8)
         defer { try? FileManager.default.removeItem(at: root) }
 
         let runtime = LingShuSharedKernelRuntime.shared
@@ -157,6 +170,22 @@ final class SharedKernelRuntimeBridgeTests: XCTestCase {
                     ]
                 )
             )
+            let importedSkills = try await runtime.importExternalSkill(path: skillManifest.path)
+            let importedSkill = try XCTUnwrap(importedSkills.first)
+            let listedSkills = try await runtime.listExternalSkills()
+            try """
+            ---
+            name: portable-bridge-skill
+            description: Verify that explicit refresh re-reads the external Skill source.
+            disable-model-invocation: true
+            ---
+            Follow the refreshed portable bridge workflow.
+            """.write(to: skillManifest, atomically: true, encoding: .utf8)
+            let refreshedSkills = try await runtime.refreshExternalSkills()
+            let disabledSkill = try await runtime.setExternalSkillEnabled(
+                id: importedSkill.id,
+                enabled: false
+            )
             let snapshot = try await runtime.snapshot(providerConfigured: false)
 
             XCTAssertEqual(configured.kernelAbiVersion, LingShuKernelABI.version)
@@ -182,6 +211,24 @@ final class SharedKernelRuntimeBridgeTests: XCTestCase {
             XCTAssertEqual(imported.imported, 1)
             XCTAssertEqual(snapshot.memory?.totalCount, 1)
             XCTAssertEqual(snapshot.memory?.countsByKind["preference"], 1)
+            XCTAssertEqual(importedSkill.name, "portable-bridge-skill")
+            XCTAssertEqual(importedSkill.sourceFormat, .openAgentSkill)
+            XCTAssertEqual(listedSkills.map(\.id), [importedSkill.id])
+            XCTAssertEqual(
+                refreshedSkills.first?.description,
+                "Verify that explicit refresh re-reads the external Skill source."
+            )
+            XCTAssertEqual(refreshedSkills.first?.modelInvocationEnabled, false)
+            XCTAssertFalse(disabledSkill.enabled)
+            XCTAssertEqual(snapshot.externalSkills.map(\.id), [importedSkill.id])
+            XCTAssertFalse(snapshot.externalSkills[0].enabled)
+            XCTAssertFalse(snapshot.externalSkills[0].modelInvocationEnabled)
+
+            let removedSkill = try await runtime.removeExternalSkill(id: importedSkill.id)
+            let remainingSkills = try await runtime.listExternalSkills()
+            XCTAssertTrue(removedSkill)
+            XCTAssertTrue(FileManager.default.fileExists(atPath: skillManifest.path))
+            XCTAssertTrue(remainingSkills.isEmpty)
         } catch {
             await runtime.stop()
             throw error

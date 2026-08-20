@@ -76,6 +76,25 @@ struct ResumeParams {
     answer: String,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ExternalSkillImportParams {
+    path: PathBuf,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ExternalSkillIDParams {
+    id: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ExternalSkillEnabledParams {
+    id: String,
+    enabled: bool,
+}
+
 struct KernelHandle {
     input: mpsc::UnboundedSender<String>,
     shutdown: CancellationToken,
@@ -172,6 +191,41 @@ async fn process_request(
                 .import_legacy(payload)
                 .await
                 .and_then(|result| serde_json::to_value(result).map_err(Into::into))
+                .map_err(|error| error.to_string()),
+            Err(error) => Err(error),
+        },
+        "kernel/list_external_skills" => {
+            serde_json::to_value(kernel.external_skills().list()).map_err(|error| error.to_string())
+        }
+        "kernel/refresh_external_skills" => {
+            serde_json::to_value(kernel.external_skills().refresh())
+                .map_err(|error| error.to_string())
+        }
+        "kernel/import_external_skill" => {
+            match decoded::<ExternalSkillImportParams>(request.params) {
+                Ok(params) => kernel
+                    .external_skills()
+                    .import(params.path)
+                    .and_then(|records| serde_json::to_value(records).map_err(Into::into))
+                    .map_err(|error| error.to_string()),
+                Err(error) => Err(error),
+            }
+        }
+        "kernel/set_external_skill_enabled" => {
+            match decoded::<ExternalSkillEnabledParams>(request.params) {
+                Ok(params) => kernel
+                    .external_skills()
+                    .set_enabled(&params.id, params.enabled)
+                    .and_then(|record| serde_json::to_value(record).map_err(Into::into))
+                    .map_err(|error| error.to_string()),
+                Err(error) => Err(error),
+            }
+        }
+        "kernel/remove_external_skill" => match decoded::<ExternalSkillIDParams>(request.params) {
+            Ok(params) => kernel
+                .external_skills()
+                .remove(&params.id)
+                .map(|()| json!({"removed":true}))
                 .map_err(|error| error.to_string()),
             Err(error) => Err(error),
         },
@@ -486,5 +540,98 @@ mod tests {
         )
         .await;
         assert_eq!(snapshot["result"]["memory"]["hotCount"], 1);
+
+        let skill_root = root.path().join("bridge-portable-skill");
+        std::fs::create_dir_all(&skill_root).unwrap();
+        let manifest = skill_root.join("SKILL.md");
+        std::fs::write(
+            &manifest,
+            "---\nname: bridge-portable-skill\ndescription: Verify the shared external Skill RPC bridge.\n---\nFollow the portable workflow.\n",
+        )
+        .unwrap();
+
+        let imported = process_request(
+            &kernel,
+            &api_key,
+            RPCRequest {
+                id: 10,
+                method: "kernel/import_external_skill".into(),
+                params: json!({"path":manifest}),
+            },
+            None,
+            0,
+        )
+        .await;
+        let skill_id = imported["result"][0]["id"].as_str().unwrap().to_string();
+        assert_eq!(imported["result"][0]["name"], "bridge-portable-skill");
+
+        let listed = process_request(
+            &kernel,
+            &api_key,
+            RPCRequest {
+                id: 11,
+                method: "kernel/list_external_skills".into(),
+                params: json!({}),
+            },
+            None,
+            0,
+        )
+        .await;
+        assert_eq!(listed["result"].as_array().unwrap().len(), 1);
+
+        std::fs::write(
+            &manifest,
+            "---\nname: bridge-portable-skill\ndescription: Verify refreshed external Skill metadata.\ndisable-model-invocation: true\n---\nFollow the updated portable workflow.\n",
+        )
+        .unwrap();
+        let refreshed = process_request(
+            &kernel,
+            &api_key,
+            RPCRequest {
+                id: 12,
+                method: "kernel/refresh_external_skills".into(),
+                params: json!({}),
+            },
+            None,
+            0,
+        )
+        .await;
+        assert_eq!(
+            refreshed["result"][0]["description"],
+            "Verify refreshed external Skill metadata."
+        );
+        assert_eq!(refreshed["result"][0]["modelInvocationEnabled"], false);
+
+        let disabled = process_request(
+            &kernel,
+            &api_key,
+            RPCRequest {
+                id: 13,
+                method: "kernel/set_external_skill_enabled".into(),
+                params: json!({"id":skill_id,"enabled":false}),
+            },
+            None,
+            0,
+        )
+        .await;
+        assert_eq!(disabled["result"]["enabled"], false);
+
+        let removed = process_request(
+            &kernel,
+            &api_key,
+            RPCRequest {
+                id: 14,
+                method: "kernel/remove_external_skill".into(),
+                params: json!({"id":skill_id}),
+            },
+            None,
+            0,
+        )
+        .await;
+        assert_eq!(removed["result"]["removed"], true);
+        assert!(
+            manifest.is_file(),
+            "detaching must preserve the source Skill"
+        );
     }
 }

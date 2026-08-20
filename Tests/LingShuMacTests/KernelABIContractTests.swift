@@ -15,7 +15,7 @@ final class KernelABIContractTests: XCTestCase {
 
     func testKernelVersionPinned() {
         // 改了任一内核协议形状,必须同步升这个版本(并更新 Docs/灵枢内核ABI.md)。改这行=有意识的内核契约变更。
-        XCTAssertEqual(LingShuKernelABI.version, "1.1.0", "内核 ABI 版本变了:确认是有意的契约改动,并更新文档/契约测试")
+        XCTAssertEqual(LingShuKernelABI.version, "1.2.0", "内核 ABI 版本变了:确认是有意的契约改动,并更新文档/契约测试")
         XCTAssertTrue(LingShuKernelABI.selfCheck(), "内核 ABI 清单自洽校验失败(契约数/重名/空冻结面)")
     }
 
@@ -44,6 +44,9 @@ final class KernelABIContractTests: XCTestCase {
         XCTAssertEqual(object["providerProtocols"] as? [String], [
             "openai_responses", "openai_chat_completions", "anthropic_messages"
         ])
+        XCTAssertTrue(
+            (object["runtimeFeatures"] as? [String])?.contains("external_agent_skills") == true
+        )
         let platforms = try XCTUnwrap(object["platformCapabilities"] as? [String: Any])
         let windows = try XCTUnwrap(platforms["windows"] as? [String: Any])
         XCTAssertEqual(windows["computerControl"] as? Bool, false)
@@ -86,8 +89,23 @@ final class KernelABIContractTests: XCTestCase {
         XCTAssertTrue(windowsHost.contains("RuntimeKernel::new_with_resources(store, \"windows\", resource_root)"))
         XCTAssertTrue(macHostCargo.contains("lingshu-runtime-core = { path = \"../../../../LingShuCore\" }"))
         XCTAssertTrue(macHost.contains("RuntimeKernel::new(store, config.platform)"))
+        XCTAssertTrue(windowsHost.contains("fn list_external_skills"))
+        XCTAssertTrue(windowsHost.contains("fn refresh_external_skills"))
+        XCTAssertTrue(windowsHost.contains("fn import_external_skill"))
+        XCTAssertTrue(windowsHost.contains("fn set_external_skill_enabled"))
+        XCTAssertTrue(windowsHost.contains("fn remove_external_skill"))
+        XCTAssertTrue(macHost.contains("kernel/list_external_skills"))
+        XCTAssertTrue(macHost.contains("kernel/refresh_external_skills"))
+        XCTAssertTrue(macHost.contains("kernel/import_external_skill"))
+        XCTAssertTrue(macHost.contains("kernel/set_external_skill_enabled"))
+        XCTAssertTrue(macHost.contains("kernel/remove_external_skill"))
         XCTAssertTrue(macBridge.contains("lingshu_kernel_runtime_start"))
         XCTAssertTrue(macBridge.contains("lingshu_kernel_runtime_send"))
+        XCTAssertTrue(macBridge.contains("func listExternalSkills()"))
+        XCTAssertTrue(macBridge.contains("func refreshExternalSkills()"))
+        XCTAssertTrue(macBridge.contains("func importExternalSkill(path:"))
+        XCTAssertTrue(macBridge.contains("func setExternalSkillEnabled("))
+        XCTAssertTrue(macBridge.contains("func removeExternalSkill(id:"))
         XCTAssertTrue(macMainState.contains("submitSharedKernelTurn("))
         XCTAssertTrue(macMainState.contains("if LingShuRuntimeEnvironment.usesSharedRuntimeKernel"))
     }

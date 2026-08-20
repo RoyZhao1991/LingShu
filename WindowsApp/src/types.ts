@@ -160,6 +160,35 @@ export interface PluginRecord {
   statusDetail: string;
 }
 
+export type ExternalSkillSourceFormat = "open_agent_skill" | "codex" | "claude";
+
+export interface ExternalSkillResource {
+  path: string;
+  kind: "script" | "reference" | "asset" | "other";
+  sizeBytes: number;
+}
+
+export interface ExternalSkillRecord {
+  id: string;
+  name: string;
+  description: string;
+  sourceFormat: ExternalSkillSourceFormat;
+  sourcePath: string;
+  manifestPath: string;
+  enabled: boolean;
+  available: boolean;
+  modelInvocationEnabled: boolean;
+  statusDetail: string;
+  warnings: string[];
+  scripts: ExternalSkillResource[];
+  references: ExternalSkillResource[];
+  assets: ExternalSkillResource[];
+  license?: string;
+  compatibility?: string;
+  allowedTools: string[];
+  contentFingerprint: string;
+}
+
 export interface MemorySnapshot {
   schemaVersion: number;
   totalCount: number;
@@ -184,6 +213,7 @@ export interface RuntimeSnapshot {
   events: RuntimeEvent[];
   latestEventSequence: number;
   plugins: PluginRecord[];
+  externalSkills: ExternalSkillRecord[];
   memory: MemorySnapshot;
   loopEngines: LoopEngineRecord[];
 }

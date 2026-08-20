@@ -10,7 +10,10 @@ import {
   Settings, ShieldCheck, Square, Trash2, UserRound, Wrench, X,
 } from "lucide-react";
 import { executionLinkLabel, strings } from "./i18n";
-import { chooseFiles, choosePluginManifest, hasNativeBridge, listenForWindowFileDrops, runtimeInvoke } from "./bridge";
+import {
+  chooseExternalSkillDirectory, chooseExternalSkillManifest, chooseFiles, choosePluginManifest,
+  hasNativeBridge, listenForWindowFileDrops, runtimeInvoke,
+} from "./bridge";
 import { browserDroppedFilePaths, mergeAttachmentPaths } from "./attachments";
 import { projectChatBubble } from "./chatProjection";
 import { projectConversationMessages, type PendingSubmission } from "./conversationProjection";
@@ -20,7 +23,7 @@ import { decodePdfDataUri } from "./pdf";
 import { SnapshotGate } from "./snapshotGate";
 import packageMetadata from "../package.json";
 import type {
-  ArtifactRecord, ChatMessage, ExecutionPermissionMode, Locale, Page, PluginRecord, PreviewPayload, ProviderPreset, RuntimeSettings,
+  ArtifactRecord, ChatMessage, ExecutionPermissionMode, ExternalSkillRecord, Locale, Page, PluginRecord, PreviewPayload, ProviderPreset, RuntimeSettings,
   RuntimeEvent, RuntimeSnapshot, TaskRecord, TaskRole, TaskStatus,
 } from "./types";
 
@@ -52,6 +55,7 @@ export default function App() {
   const [dismissedActionCheckpointKey, setDismissedActionCheckpointKey] = useState<string>();
   const [pendingSubmissions, setPendingSubmissions] = useState<PendingSubmission[]>([]);
   const [pluginBusy, setPluginBusy] = useState("");
+  const [capabilityError, setCapabilityError] = useState("");
   const [dragActive, setDragActive] = useState(false);
   const messageScroll = useRef<HTMLDivElement>(null);
   const composerInput = useRef<HTMLTextAreaElement>(null);
@@ -74,6 +78,8 @@ export default function App() {
     () => snapshot ? projectConversationMessages(snapshot.messages, snapshot.tasks, pendingSubmissions, locale) : [],
     [locale, pendingSubmissions, snapshot],
   );
+
+  useEffect(() => { document.documentElement.lang = locale === "en" ? "en" : "zh-CN"; }, [locale]);
 
   const applyMutationSnapshot = useCallback((next: RuntimeSnapshot) => {
     snapshotGate.current.commitMutation();
@@ -318,12 +324,12 @@ export default function App() {
     const manifestPath = await choosePluginManifest();
     if (!manifestPath) return;
     setPluginBusy("install");
-    setError("");
+    setCapabilityError("");
     try {
       await runtimeInvoke<PluginRecord>("install_plugin", { manifestPath });
       await refresh();
     } catch (reason) {
-      setError(String(reason));
+      setCapabilityError(String(reason));
     } finally {
       setPluginBusy("");
     }
@@ -331,12 +337,12 @@ export default function App() {
 
   const setPluginEnabled = async (plugin: PluginRecord, enabled: boolean) => {
     setPluginBusy(plugin.id);
-    setError("");
+    setCapabilityError("");
     try {
       await runtimeInvoke<PluginRecord>("set_plugin_enabled", { id: plugin.id, enabled });
       await refresh();
     } catch (reason) {
-      setError(String(reason));
+      setCapabilityError(String(reason));
     } finally {
       setPluginBusy("");
     }
@@ -344,12 +350,12 @@ export default function App() {
 
   const probePlugin = async (plugin: PluginRecord) => {
     setPluginBusy(plugin.id);
-    setError("");
+    setCapabilityError("");
     try {
       await runtimeInvoke<PluginRecord>("probe_plugin", { id: plugin.id });
       await refresh();
     } catch (reason) {
-      setError(String(reason));
+      setCapabilityError(String(reason));
     } finally {
       setPluginBusy("");
     }
@@ -359,12 +365,68 @@ export default function App() {
     const confirmed = window.confirm(locale === "en" ? `Remove ${plugin.name}?` : `确认卸载 ${plugin.name}？`);
     if (!confirmed) return;
     setPluginBusy(plugin.id);
-    setError("");
+    setCapabilityError("");
     try {
       await runtimeInvoke("remove_plugin", { id: plugin.id });
       await refresh();
     } catch (reason) {
-      setError(String(reason));
+      setCapabilityError(String(reason));
+    } finally {
+      setPluginBusy("");
+    }
+  };
+
+  const importExternalSkill = async (selection: "manifest" | "directory") => {
+    const path = selection === "manifest" ? await chooseExternalSkillManifest() : await chooseExternalSkillDirectory();
+    if (!path) return;
+    setPluginBusy(`skill-import:${selection}`);
+    setCapabilityError("");
+    try {
+      await runtimeInvoke<ExternalSkillRecord[]>("import_external_skill", { path });
+      await refresh();
+    } catch (reason) {
+      setCapabilityError(String(reason));
+    } finally {
+      setPluginBusy("");
+    }
+  };
+
+  const setExternalSkillEnabled = async (skill: ExternalSkillRecord, enabled: boolean) => {
+    setPluginBusy(`skill:${skill.id}`);
+    setCapabilityError("");
+    try {
+      await runtimeInvoke<ExternalSkillRecord>("set_external_skill_enabled", { id: skill.id, enabled });
+      await refresh();
+    } catch (reason) {
+      setCapabilityError(String(reason));
+    } finally {
+      setPluginBusy("");
+    }
+  };
+
+  const removeExternalSkill = async (skill: ExternalSkillRecord) => {
+    const confirmed = window.confirm(`${skill.name}\n\n${t.skillDetachConfirm}`);
+    if (!confirmed) return;
+    setPluginBusy(`skill:${skill.id}`);
+    setCapabilityError("");
+    try {
+      await runtimeInvoke("remove_external_skill", { id: skill.id });
+      await refresh();
+    } catch (reason) {
+      setCapabilityError(String(reason));
+    } finally {
+      setPluginBusy("");
+    }
+  };
+
+  const refreshCapabilities = async () => {
+    setPluginBusy("refresh");
+    setCapabilityError("");
+    try {
+      await runtimeInvoke<ExternalSkillRecord[]>("refresh_external_skills");
+      await refresh();
+    } catch (reason) {
+      setCapabilityError(String(reason));
     } finally {
       setPluginBusy("");
     }
@@ -409,7 +471,7 @@ export default function App() {
                   message.threadId ? latestEventForThread(snapshot, message.threadId) : undefined,
                   locale,
                 );
-                return <article key={bubble.key} className={`message ${message.role}`}>
+                return <article key={bubble.key} className={`message ${message.role} ${bubble.isRunning ? "running" : ""}`}>
                   <div className="message-meta">
                     <span>{message.role === "user" ? (locale === "en" ? "You" : "你") : t.appName}</span>
                     <time>{new Date(message.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</time>
@@ -453,7 +515,8 @@ export default function App() {
                 </div>
               )}
               <textarea ref={composerInput} value={prompt} onChange={(event) => setPrompt(event.target.value)} placeholder={t.placeholder}
-                onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); event.currentTarget.form?.requestSubmit(); } }} />
+                aria-label={t.placeholder}
+                onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); event.currentTarget.form?.requestSubmit(); } }} />
               <div className="composer-actions">
                 <button type="button" className="icon-button" title={t.attach} onClick={chooseAttachments}><Paperclip /></button>
                 <PermissionSelector mode={snapshot.settings.executionPermissionMode} locale={locale} compact disabled={permissionUpdating} onChange={updateExecutionPermission} />
@@ -474,9 +537,10 @@ export default function App() {
         {page === "status" && <StatusPage snapshot={snapshot} locale={locale} />}
 
         {page === "plugins" && (
-          <PluginsPage plugins={snapshot.plugins} locale={locale} busy={pluginBusy} error={error}
-            onInstall={installPlugin} onRefresh={refresh} onProbe={probePlugin}
-            onEnabled={setPluginEnabled} onRemove={removePlugin} />
+          <PluginsPage plugins={snapshot.plugins} externalSkills={snapshot.externalSkills} locale={locale} busy={pluginBusy} error={capabilityError || error}
+            onInstall={installPlugin} onRefresh={refreshCapabilities} onProbe={probePlugin}
+            onEnabled={setPluginEnabled} onRemove={removePlugin} onImportSkill={importExternalSkill}
+            onSkillEnabled={setExternalSkillEnabled} onSkillRemove={removeExternalSkill} />
         )}
 
         {page === "settings" && (
@@ -514,8 +578,12 @@ function Header({ page, setPage, busy, queuedCount, locale }: { page: Page; setP
   ];
   return <header className="app-header">
     <div className="brand"><BrandMark /><div><div className="brand-title"><strong>{t.appName}</strong><span>v{appVersion}</span></div><small>{t.tagline}</small></div></div>
-    <nav>{navigation.map(([id, Icon, label]) => <button key={id} className={page === id ? "active" : ""} onClick={() => setPage(id)}><Icon />{label}</button>)}</nav>
-    <div className="runtime-state"><small>{queuedCount > 0 ? `${t.queued} · ${queuedCount}` : "STATE"}</small><strong className={busy ? "active" : ""}>{busy ? t.running : t.standby}</strong></div>
+    <nav aria-label={locale === "en" ? "Primary navigation" : "主导航"}>{navigation.map(([id, Icon, label]) => <button key={id} className={page === id ? "active" : ""}
+      aria-current={page === id ? "page" : undefined} aria-label={label} title={label} onClick={() => setPage(id)}><Icon /><span>{label}</span></button>)}</nav>
+    <div className={`runtime-state ${busy ? "active" : ""}`}>
+      <span className="runtime-pulse" aria-hidden="true" />
+      <div><small>{queuedCount > 0 ? `${t.queued} · ${queuedCount}` : "STATE"}</small><strong>{busy ? t.running : t.standby}</strong></div>
+    </div>
   </header>;
 }
 
@@ -574,10 +642,12 @@ function ThreadsPage({ tasks, events, selected, locale, onSelect, onPreview }: {
   </section>;
 }
 
-function PluginsPage({ plugins, locale, busy, error, onInstall, onRefresh, onProbe, onEnabled, onRemove }: {
-  plugins: PluginRecord[]; locale: Locale; busy: string; error: string;
+function PluginsPage({ plugins, externalSkills, locale, busy, error, onInstall, onRefresh, onProbe, onEnabled, onRemove, onImportSkill, onSkillEnabled, onSkillRemove }: {
+  plugins: PluginRecord[]; externalSkills: ExternalSkillRecord[]; locale: Locale; busy: string; error: string;
   onInstall: () => void; onRefresh: () => void; onProbe: (plugin: PluginRecord) => void;
   onEnabled: (plugin: PluginRecord, enabled: boolean) => void; onRemove: (plugin: PluginRecord) => void;
+  onImportSkill: (selection: "manifest" | "directory") => void;
+  onSkillEnabled: (skill: ExternalSkillRecord, enabled: boolean) => void; onSkillRemove: (skill: ExternalSkillRecord) => void;
 }) {
   const t = strings(locale);
   return <section className="plugins-page">
@@ -586,52 +656,100 @@ function PluginsPage({ plugins, locale, busy, error, onInstall, onRefresh, onPro
       <div><h1>{t.pluginTitle}</h1><p>{t.pluginSubtitle}</p></div>
       <div className="page-commands">
         <button onClick={onRefresh} disabled={Boolean(busy)}><RefreshCw />{t.refreshPlugins}</button>
+        <button onClick={() => onImportSkill("manifest")} disabled={Boolean(busy)}><FileText />{t.importSkillFile}</button>
+        <button onClick={() => onImportSkill("directory")} disabled={Boolean(busy)}><FolderOpen />{t.importSkillFolder}</button>
         <button className="primary" onClick={onInstall} disabled={Boolean(busy)}><PackagePlus />{t.installPlugin}</button>
       </div>
     </div>
     {error && <div className="error-strip plugin-error"><CircleAlert size={16} />{error}</div>}
-    <div className="plugin-callout"><BrainCircuit /><span>{t.designKbActive}</span></div>
-    {!plugins.length ? <EmptyState icon={<Puzzle />} text={t.noPlugins} /> : (
-      <div className="plugin-grid">
-        {plugins.map((plugin) => {
-          const description = locale === "zh_cn" && plugin.descriptionZh ? plugin.descriptionZh : plugin.description;
-          const state = !plugin.available ? t.pluginUnavailable : !plugin.runtimeReady ? t.pluginDegraded : t.pluginReady;
-          const permissions = pluginPermissionLabels(plugin, locale);
-          return <article className={`plugin-card ${plugin.enabled ? "" : "disabled"}`} key={plugin.id}>
-            <header>
-              <span className="plugin-icon">{plugin.id === "lingshu.design-kb" ? <PackageCheck /> : <Puzzle />}</span>
-              <div><div className="plugin-name"><h2>{plugin.name}</h2><code>v{plugin.version}</code></div><p>{description}</p></div>
-              <span className={`plugin-state ${plugin.available && plugin.runtimeReady ? "ready" : "warning"}`}>
-                <span className="dot" />{state}
-              </span>
-            </header>
-            <div className="plugin-meta">
-              <span>{plugin.source === "built_in" ? t.builtIn : t.userPlugin}</span>
-              <span>{plugin.enabled ? t.pluginEnabled : t.pluginDisabled}</span>
-              <code>{plugin.id}</code>
-            </div>
-            <section>
-              <h3>{t.modelTools}</h3>
-              <div className="tool-list">{plugin.tools.map((tool) => <div key={tool.exposedName}><Wrench /><span><strong>{tool.exposedName}</strong><small>{locale === "zh_cn" && tool.descriptionZh ? tool.descriptionZh : tool.description}</small></span></div>)}</div>
-            </section>
-            <section>
-              <h3>{t.pluginPermissions}</h3>
-              <div className="permission-tags">{permissions.length ? permissions.map((label) => <span key={label}><ShieldCheck />{label}</span>) : <span>{t.permissionNone}</span>}</div>
-            </section>
-            <footer>
-              <div className="plugin-path" title={plugin.rootPath}><small>{t.pluginLocation}</small><code>{plugin.rootPath || plugin.statusDetail}</code></div>
-              <div className="plugin-actions">
-                <button onClick={() => onProbe(plugin)} disabled={busy === plugin.id}>{busy === plugin.id ? <LoaderCircle className="spin" /> : <RefreshCw />}{t.pluginProbe}</button>
-                {plugin.source === "user" && <button onClick={() => onEnabled(plugin, !plugin.enabled)} disabled={busy === plugin.id}>{plugin.enabled ? t.pluginDisable : t.pluginEnable}</button>}
-                {plugin.source === "user" && <button className="danger" onClick={() => onRemove(plugin)} disabled={busy === plugin.id}><Trash2 />{t.pluginRemove}</button>}
+    <div className="plugin-callout skill-bridge-callout"><BrainCircuit /><span>{t.skillBridgeActive}<small>{t.skillBridgeBoundary}</small></span></div>
+
+    <section className="capability-section">
+      <div className="capability-section-heading"><div><h2>{t.externalSkillsTitle}</h2><p>{t.externalSkillsSubtitle}</p></div><span>{externalSkills.length}</span></div>
+      {!externalSkills.length ? <EmptyState icon={<BrainCircuit />} text={t.noExternalSkills} /> : (
+        <div className="external-skill-grid">
+          {externalSkills.map((skill) => {
+            const state = !skill.available ? t.skillUnavailable : !skill.enabled ? t.skillDisabled : !skill.modelInvocationEnabled ? t.skillModelInvocationOff : t.skillReady;
+            const busyKey = `skill:${skill.id}`;
+            return <article className={`external-skill-card ${skill.enabled ? "" : "disabled"}`} key={skill.id}>
+              <header>
+                <span className={`skill-source-icon ${skill.sourceFormat}`}><BrainCircuit /></span>
+                <div><div className="plugin-name"><h2>{skill.name}</h2><span className={`skill-source ${skill.sourceFormat}`}>{externalSkillSourceLabel(skill, locale)}</span></div><p>{skill.description || skill.statusDetail}</p></div>
+                <span className={`plugin-state ${skill.available && skill.enabled && skill.modelInvocationEnabled ? "ready" : "warning"}`}><span className="dot" />{state}</span>
+              </header>
+              <div className="plugin-meta skill-meta">
+                {skill.compatibility && <span>{t.skillCompatibility}: {skill.compatibility}</span>}
+                {skill.license && <span>{t.skillLicense}: {skill.license}</span>}
+                <code>{skill.id}</code>
               </div>
-            </footer>
-          </article>;
-        })}
-      </div>
-    )}
-    <p className="plugin-install-hint">{t.pluginInstallHint}</p>
+              <section>
+                <h3>{t.skillAllowedTools}</h3>
+                <div className="permission-tags skill-tool-tags">{skill.allowedTools.length ? skill.allowedTools.map((tool) => <span key={tool}><ShieldCheck />{tool}</span>) : <span>{t.skillNoTools}</span>}</div>
+              </section>
+              <section>
+                <h3>{t.skillResources}</h3>
+                <div className="skill-resource-summary">
+                  <span><Wrench />{t.skillScripts}<strong>{skill.scripts.length}</strong></span>
+                  <span><FileText />{t.skillReferences}<strong>{skill.references.length}</strong></span>
+                  <span><FileBox />{t.skillAssets}<strong>{skill.assets.length}</strong></span>
+                </div>
+              </section>
+              {!skill.modelInvocationEnabled && <section className="skill-warnings"><h3>{t.skillModelInvocationOff}</h3><p><CircleAlert />{t.skillModelInvocationOffHint}</p></section>}
+              {skill.warnings.length > 0 && <section className="skill-warnings"><h3>{t.skillWarnings}</h3>{skill.warnings.map((warning) => <p key={warning}><CircleAlert />{warning}</p>)}</section>}
+              <footer>
+                <div className="plugin-path" title={skill.manifestPath}><small>{t.skillManifest}</small><code>{skill.manifestPath}</code></div>
+                <div className="plugin-actions">
+                  <button onClick={() => onSkillEnabled(skill, !skill.enabled)} disabled={busy === busyKey}>{busy === busyKey ? <LoaderCircle className="spin" /> : <RefreshCw />}{skill.enabled ? t.skillDisable : t.skillEnable}</button>
+                  <button className="danger" onClick={() => onSkillRemove(skill)} disabled={busy === busyKey}><Trash2 />{t.skillDetach}</button>
+                </div>
+              </footer>
+            </article>;
+          })}
+        </div>
+      )}
+      <p className="plugin-install-hint">{t.skillImportHint}</p>
+    </section>
+
+    <section className="capability-section native-plugin-section">
+      <div className="capability-section-heading"><div><h2>{t.nativePluginsTitle}</h2><p>{t.nativePluginsSubtitle}</p></div><span>{plugins.length}</span></div>
+      {plugins.some((plugin) => plugin.id === "lingshu.design-kb" && plugin.available) && <div className="plugin-callout"><PackageCheck /><span>{t.designKbActive}</span></div>}
+      {!plugins.length ? <EmptyState icon={<Puzzle />} text={t.noPlugins} /> : (
+        <div className="plugin-grid">
+          {plugins.map((plugin) => {
+            const description = locale === "zh_cn" && plugin.descriptionZh ? plugin.descriptionZh : plugin.description;
+            const state = !plugin.available ? t.pluginUnavailable : !plugin.runtimeReady ? t.pluginDegraded : t.pluginReady;
+            const permissions = pluginPermissionLabels(plugin, locale);
+            return <article className={`plugin-card ${plugin.enabled ? "" : "disabled"}`} key={plugin.id}>
+              <header>
+                <span className="plugin-icon">{plugin.id === "lingshu.design-kb" ? <PackageCheck /> : <Puzzle />}</span>
+                <div><div className="plugin-name"><h2>{plugin.name}</h2><code>v{plugin.version}</code></div><p>{description}</p></div>
+                <span className={`plugin-state ${plugin.available && plugin.runtimeReady ? "ready" : "warning"}`}><span className="dot" />{state}</span>
+              </header>
+              <div className="plugin-meta"><span>{plugin.source === "built_in" ? t.builtIn : t.userPlugin}</span><span>{plugin.enabled ? t.pluginEnabled : t.pluginDisabled}</span><code>{plugin.id}</code></div>
+              <section><h3>{t.modelTools}</h3><div className="tool-list">{plugin.tools.map((tool) => <div key={tool.exposedName}><Wrench /><span><strong>{tool.exposedName}</strong><small>{locale === "zh_cn" && tool.descriptionZh ? tool.descriptionZh : tool.description}</small></span></div>)}</div></section>
+              <section><h3>{t.pluginPermissions}</h3><div className="permission-tags">{permissions.length ? permissions.map((label) => <span key={label}><ShieldCheck />{label}</span>) : <span>{t.permissionNone}</span>}</div></section>
+              <footer>
+                <div className="plugin-path" title={plugin.rootPath}><small>{t.pluginLocation}</small><code>{plugin.rootPath || plugin.statusDetail}</code></div>
+                <div className="plugin-actions">
+                  <button onClick={() => onProbe(plugin)} disabled={busy === plugin.id}>{busy === plugin.id ? <LoaderCircle className="spin" /> : <RefreshCw />}{t.pluginProbe}</button>
+                  {plugin.source === "user" && <button onClick={() => onEnabled(plugin, !plugin.enabled)} disabled={busy === plugin.id}>{plugin.enabled ? t.pluginDisable : t.pluginEnable}</button>}
+                  {plugin.source === "user" && <button className="danger" onClick={() => onRemove(plugin)} disabled={busy === plugin.id}><Trash2 />{t.pluginRemove}</button>}
+                </div>
+              </footer>
+            </article>;
+          })}
+        </div>
+      )}
+      <p className="plugin-install-hint">{t.pluginInstallHint}</p>
+    </section>
   </section>;
+}
+
+function externalSkillSourceLabel(skill: ExternalSkillRecord, locale: Locale): string {
+  const t = strings(locale);
+  if (skill.sourceFormat === "codex") return t.skillSourceCodex;
+  if (skill.sourceFormat === "claude") return t.skillSourceClaude;
+  return t.skillSourceOpen;
 }
 
 function pluginPermissionLabels(plugin: PluginRecord, locale: Locale): string[] {
@@ -709,8 +827,8 @@ function PermissionSelector({ mode, locale, compact = false, disabled, onChange 
 
 function SetupDialog(props: SettingsProps & { error: string }) {
   const t = strings(props.locale);
-  return <div className="modal-layer setup-layer"><div className="setup-dialog">
-    <div className="setup-mark"><BrandMark /></div><h1>{t.firstRunTitle}</h1><p>{t.firstRunBody}</p>
+  return <div className="modal-layer setup-layer"><div className="setup-dialog" role="dialog" aria-modal="true" aria-labelledby="setup-title">
+    <div className="setup-mark"><BrandMark /></div><h1 id="setup-title">{t.firstRunTitle}</h1><p>{t.firstRunBody}</p>
     <SettingsForm {...props} />
     {props.error && <div className="error-strip"><CircleAlert />{props.error}</div>}
   </div></div>;
@@ -800,8 +918,13 @@ function localizedActor(actor: string | undefined, locale: Locale): string {
 
 function PreviewDialog({ payload, locale, onClose }: { payload: PreviewPayload; locale: Locale; onClose: () => void }) {
   const t = strings(locale);
-  return <div className="modal-layer"><div className="preview-dialog">
-    <header><div><FileText /><strong>{payload.name}</strong></div><div className="preview-actions"><button onClick={() => void runtimeInvoke("open_external", { path: payload.path })}><ExternalLink />{t.openExternal}</button><button onClick={() => void runtimeInvoke("reveal_path", { path: payload.path })}><FolderOpen />{t.reveal}</button><button className="icon-button" title={t.close} onClick={onClose}><X /></button></div></header>
+  useEffect(() => {
+    const closeOnEscape = (event: KeyboardEvent) => { if (event.key === "Escape") onClose(); };
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [onClose]);
+  return <div className="modal-layer"><div className="preview-dialog" role="dialog" aria-modal="true" aria-labelledby="preview-title">
+    <header><div><FileText /><strong id="preview-title">{payload.name}</strong></div><div className="preview-actions"><button onClick={() => void runtimeInvoke("open_external", { path: payload.path })}><ExternalLink />{t.openExternal}</button><button onClick={() => void runtimeInvoke("reveal_path", { path: payload.path })}><FolderOpen />{t.reveal}</button><button className="icon-button" title={t.close} aria-label={t.close} onClick={onClose}><X /></button></div></header>
     <div className="preview-content"><PreviewBody payload={payload} unsupported={t.unsupported} presentationOutline={t.presentationOutline}
       previewLoading={t.previewLoading} previewRenderFailed={t.previewRenderFailed} /></div>
   </div></div>;
