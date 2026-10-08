@@ -96,7 +96,7 @@ jobs:
           Get-ChildItem $output -File | Format-Table Name, Length
 
       - name: Upload Windows installers
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: Nous-Windows-x64
           path: dist/windows/*
